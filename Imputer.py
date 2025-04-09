@@ -181,36 +181,10 @@ class Imputer(nn.Module):
         if hasattr(self.variables[name], 'observed_value'):
             delattr(self.variables[name], 'observed_value')
     
-    def _prepare_input_features(self, variables: List[str]) -> torch.Tensor:
-        device = next(self.parameters()).device
-        batch_size = len(variables)
-        features = torch.zeros(batch_size, self.embedding_dimension, device=device)
-        
-        for i, name in enumerate(variables):
-            var = self.variables[name]
-            embedding = self.variable_embeddings[name]
-            var_dim = var.param_dim()
-            
-            # Copy embedding part for all variables at once
-            features[i, :self.embedding_dimension - var_dim] = embedding
-            
-            # Handle observed vs unobserved efficiently
-            if hasattr(var, 'observed_value'):
-                observed_value = var.observed_value
-                if not isinstance(observed_value, torch.Tensor):
-                    observed_value = torch.tensor(observed_value, device=device)
-                features[i, -var_dim:] = observed_value.to(device)
-            else:
-                features[i, -var_dim:] = var.get_mask_value().to(device)
-        
-        return features
-    
-    def forward(self, inputs: torch.Tensor, questions: torch.Tensor) -> torch.Tensor:
+    def _prepare_input_features(self, inputs, questions, device) -> torch.Tensor:
         batch_size = inputs.shape[0]
         var_num = inputs.shape[1]
         device = inputs.device
-        
-        # Create a mapping from question ID to variable info once
         q_to_var_info = {}
         for q_id in questions.unique().tolist():
             if q_id not in self.question_num_to_question_name:
@@ -238,11 +212,7 @@ class Imputer(nn.Module):
         
         # Pre-allocate x tensor
         x = torch.zeros(batch_size, var_num, self.embedding_dimension, device=device)
-        
-        # Prepare all variable features at once
-        observed_vars = set()  # Track which variables were observed
-        
-        # Populate initial embeddings and handle observations
+    
         for i in range(batch_size):
             for j in range(var_num):
                 q_id = questions[i, j].item()
@@ -257,10 +227,37 @@ class Imputer(nn.Module):
                 
                 # Handle observation
                 if inputs[i, j, 0] == 0:  # Observed
-                    observed_vars.add((i, j, var_name))
                     x[i, j, -var_dim:] = inputs[i, j, 1:]
                 else:  # Unobserved
                     x[i, j, -var_dim:] = var.get_mask_value().to(device)
+        return x, q_to_var_info
+    
+    def forward(self, inputs: torch.Tensor, questions: torch.Tensor, prepared=False) -> torch.Tensor:
+        batch_size = inputs.shape[0]
+        var_num = inputs.shape[1]
+        device = inputs.device
+        
+        if not prepared:
+            x, q_to_var_info = self._prepare_input_features(inputs, questions, device)
+        else:
+            x = inputs
+            q_to_var_info = {}
+        for q_id in questions.unique().tolist():
+            assert(q_id in self.question_num_to_question_name.keys())
+            
+            var_name = self.question_num_to_question_name[q_id]
+            var = self.variables[var_name]
+            var_dim = var.param_dim()
+            embedding = self.variable_embeddings[var_name]
+            norm_layer = self.norm_layers[var_name]
+            
+            q_to_var_info[q_id] = {
+                'name': var_name,
+                'var': var,
+                'dim': var_dim,
+                'embedding': embedding,
+                'norm': norm_layer
+            }
         
         # Process through encoder layers
         for layer_idx, layer in enumerate(self.layers):
@@ -392,10 +389,10 @@ class Imputer(nn.Module):
         
         return loss
     
-    def compute_voi(self, query_variable: str, candidate_variable: str, 
-                   inputs: torch.Tensor, labels: torch.Tensor, questions: torch.Tensor, 
-                   device: torch.device, added_variables: Optional[List[str]] = None, 
-                   oracle: bool = False) -> float:
+    def compute_voi(self, query_variable, candidate_variable, 
+                   inputs, labels, questions, 
+                   device, added_variables, 
+                   oracle=False) -> float:
         
         self.eval()
         
@@ -536,3 +533,157 @@ class Imputer(nn.Module):
                 voi = initial_loss_mean - expected_loss
 
         return voi
+    
+    def compute_fast_voi(self, query_variable, inputs, labels, questions,
+                    device, added_variables) -> Tuple[str, float]:
+
+        self.eval()
+        
+        # Find indices for query variable
+        query_idx = self.var_to_index.get(query_variable)
+        
+        if query_idx is None:
+            raise ValueError(f"Could not find index for query variable {query_variable}")
+        
+        # Track which positions in the batch correspond to our query variable
+        query_pos = None
+        
+        for j in range(inputs.shape[1]):
+            if questions[0, j].item() == query_idx:
+                query_pos = j
+                break
+        
+        if query_pos is None:
+            raise ValueError(f"Could not find position for query variable {query_variable}")
+        
+
+        candidate_variables = [v for v in self.variable_order if v != query_variable]
+        if added_variables:
+            candidate_variables = [v for v in candidate_variables if v not in added_variables]
+        
+        # Create mapping of variable positions
+        var_positions = {}
+        for j in range(inputs.shape[1]):
+            q_id = questions[0, j].item()
+            var_name = self.question_num_to_question_name.get(q_id)
+            if var_name:
+                var_positions[var_name] = j
+        
+        # Add known variables to the input if any
+        if added_variables:
+            inputs_copy = inputs.clone()
+            for var_name in added_variables:
+                if var_name in var_positions:
+                    pos = var_positions[var_name]
+                    inputs_copy[0, pos, 0] = 0  # Mark as observed
+                    inputs_copy[0, pos, 1:] = labels[0, pos]  # Set to true value
+            inputs = inputs_copy
+        
+        # Temporarily enable gradient tracking
+        with torch.enable_grad():
+            inputs.requires_grad = True
+            
+            # Forward pass
+            x, _ = self._prepare_input_features(inputs, questions, device)
+            outputs = self(x, questions, prepared=True)
+
+            
+            # Get query variable info
+            var = self.variables[query_variable]
+            num_classes = var.param_dim()
+            
+            # Get the raw outputs for the query variable
+            query_outputs_raw = outputs[0, query_pos, -num_classes:]
+            
+            # Convert to probability distribution
+            query_outputs = var.to_features(query_outputs_raw)
+            query_outputs = query_outputs.unsqueeze(0)  # [1, num_classes]
+            
+            # Generate possible label values
+            possible_labels = torch.arange(1, num_classes + 1, dtype=torch.float, device=device)
+            
+            # Calculate expected rating
+            expected_rating = torch.sum(query_outputs * possible_labels, dim=1)
+            
+            # Calculate squared errors for each possible true label
+            squared_errors = torch.zeros(1, num_classes, device=device)
+            for i in range(num_classes):
+                true_label = i + 1 
+                squared_errors[0, i] = (expected_rating - true_label) ** 2
+            
+            # Initial expected loss
+            initial_loss = torch.sum(query_outputs * squared_errors, dim=1)
+            initial_loss_mean = initial_loss.item()
+            
+            # Compute gradients of target distribution w.r.t. all variable inputs
+            grads = torch.autograd.grad(
+                outputs=query_outputs_raw,
+                inputs=x,
+                grad_outputs=torch.ones_like(query_outputs_raw),
+                retain_graph=True,
+            )[0]
+        
+        # Approximate effect of modifying each candidate variable's probability distribution
+        best_voi = float("-inf")
+        best_variable = None
+        
+        for candidate_var_name in candidate_variables:
+            if candidate_var_name not in var_positions:
+                continue  # Skip variables not in the current batch
+                
+            candidate_pos = var_positions[candidate_var_name]
+            candidate_var = self.variables[candidate_var_name]
+            candidate_dim = candidate_var.param_dim()
+            
+            # Get the raw outputs and distribution for the candidate variable
+            candidate_output_raw = outputs[0, candidate_pos, -candidate_dim:]
+            candidate_distribution = candidate_var.to_features(candidate_output_raw)
+            candidate_distribution = candidate_distribution.unsqueeze(0)  # [1, candidate_dim]
+            
+            # Get the gradients for this candidate variable
+            candidate_gradients = grads[0, candidate_pos, 1:1+candidate_dim]
+            
+            # Initialize loss accumulator for this candidate
+            predicted_loss = 0.0
+            
+            for i in range(candidate_dim):
+                # Create hypothetical one-hot distribution
+                pk_prime = torch.zeros(1, candidate_dim, device=device)
+                pk_prime[0, i] = 1.0
+                
+                # Change in probability distribution
+                delta_pk = pk_prime - candidate_distribution
+                
+                # Compute approximate effect on query outputs
+                effect = torch.matmul(delta_pk[0], candidate_gradients)
+                
+                # Apply effect to get approximate new query outputs
+                approx_query_outputs_raw = query_outputs_raw + effect
+                
+                # Convert to probability distribution
+                approx_query_outputs = var.to_features(approx_query_outputs_raw)
+                approx_query_outputs = approx_query_outputs.unsqueeze(0)  # [1, num_classes]
+                
+                # Calculate updated expected rating
+                expected_rating_updated = torch.sum(approx_query_outputs * possible_labels, dim=1)
+                
+                # Calculate updated squared errors
+                squared_errors_updated = torch.zeros(1, num_classes, device=device)
+                for j in range(num_classes):
+                    true_label = j + 1
+                    squared_errors_updated[0, j] = (expected_rating_updated - true_label) ** 2
+                
+                # Calculate loss for this hypothetical answer
+                class_loss = torch.sum(approx_query_outputs * squared_errors_updated, dim=1).item()
+                
+                # Weight by probability of this answer
+                predicted_loss += candidate_distribution[0, i].item() * class_loss
+            
+            # Calculate VOI for this candidate
+            voi = initial_loss_mean - predicted_loss
+            
+            if voi > best_voi:
+                best_voi = voi
+                best_variable = candidate_var_name
+        
+        return best_variable, best_voi

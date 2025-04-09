@@ -164,6 +164,139 @@ def myopic_policy_imputer(imputer, dataset, target_question, policy_question):
     
     return all_predictions, all_true_scores, all_metrics
 
+
+
+def myopic_policy_imputer_fast(imputer, dataset, target_question, policy_question):
+
+    all_predictions = {}
+    all_true_scores = {}
+    
+    with torch.no_grad():
+        device = next(imputer.parameters()).device
+        dataloader = DataLoader(dataset, batch_size=1, shuffle=False)
+        
+        # Convert question names to indices if needed
+        target_idx = imputer.var_to_index.get(target_question, target_question)
+        policy_idx = imputer.var_to_index.get(policy_question, policy_question)
+        
+        all_question_vars = [q for q in list(imputer.question_num_to_question_name.values()) 
+                             if q != target_question]
+        max_questions = len(all_question_vars)
+        print(f"Max question: {max_questions}")
+        
+        for i in range(max_questions + 1):  # +1 because we include 0 questions
+            all_predictions[i] = []
+            all_true_scores[i] = []
+        
+        # Process each instance separately
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Processing instances")):
+            inputs = batch[1].to(device)
+            labels = batch[2].to(device)
+            annotators = batch[3].to(device)
+            questions = batch[4].to(device)
+            
+            # Find target question position
+            target_pos = None
+            for j in range(inputs.shape[1]):
+                if questions[0, j].item() == target_idx:
+                    target_pos = j
+                    break
+            
+            # Skip this instance if target not found or already observed
+            if target_pos is None or inputs[0, target_pos, 0] == 0:
+                continue
+            
+            # Get the target variable info
+            target_var_name = imputer.question_num_to_question_name[target_idx]
+            target_var = imputer.variables[target_var_name]
+            var_dim = target_var.param_dim()
+            
+            possible_labels = torch.arange(1, var_dim + 1, dtype=torch.float, device=device)
+            true_score = torch.sum(labels[0, target_pos] * possible_labels).item()
+            
+            # Make copy of inputs to modify for this instance
+            instance_inputs = inputs.clone()
+            
+            # Add questions one by one
+            added_questions = set()
+            
+            # Calculate and store prediction with 0 questions
+            outputs_0 = imputer(instance_inputs, questions)
+            pred_features_0 = target_var.to_features(outputs_0[0, target_pos, -var_dim:])
+            possible_labels = torch.arange(1, var_dim + 1, dtype=torch.float, device=device)
+            pred_score_0 = torch.sum(pred_features_0 * possible_labels).item()
+            
+            all_predictions[0].append(pred_score_0)
+            all_true_scores[0].append(true_score)
+            
+            # Get unknown questions for this instance (excluding target)
+            instance_questions = set()
+            for j in range(inputs.shape[1]):
+                q_idx = questions[0, j].item()
+                if q_idx != target_idx:
+                    q_name = imputer.question_num_to_question_name[q_idx]
+                    instance_questions.add(q_name)
+            
+            # Add questions one by one until all are added
+            question_count = 0
+            available_questions = [q for q in instance_questions if q not in added_questions]
+            
+            while available_questions:
+                question_count += 1
+                
+                # Use fast VOI to find the best question to add
+                best_question, max_voi = imputer.compute_fast_voi(
+                    policy_question,
+                    instance_inputs,
+                    labels,
+                    questions,
+                    device,
+                    added_variables=list(added_questions)
+                )
+                
+                # Add the best question
+                if best_question:
+                    print(f"Add {best_question} (VOI: {max_voi})")
+                    added_questions.add(best_question)
+                    best_question_idx = imputer.var_to_index.get(best_question)
+                    
+                    # Update inputs to mark question as observed
+                    for j in range(instance_inputs.shape[1]):
+                        if questions[0, j].item() == best_question_idx:
+                            instance_inputs[0, j, 0] = 0  # Mark as observed
+                            instance_inputs[0, j, 1:] = labels[0, j]  # Set to true value
+                    
+                    # Make prediction with current set of questions
+                    outputs = imputer(instance_inputs, questions)
+                    pred_features = target_var.to_features(outputs[0, target_pos, -var_dim:])
+                    pred_score = torch.sum(pred_features * possible_labels).item()
+                    
+                    # Store prediction for this question count
+                    all_predictions[question_count].append(pred_score)
+                    all_true_scores[question_count].append(true_score)
+                
+                # Update available questions
+                available_questions = [q for q in instance_questions if q not in added_questions]
+    
+    # Calculate metrics for all question counts
+    all_metrics = {}
+    for question_count, preds in all_predictions.items():
+        if not preds:  # Skip if no predictions
+            continue
+            
+        true_scores = all_true_scores[question_count]
+        metrics = {
+            'rmse': np.sqrt(np.mean((np.array(preds) - np.array(true_scores)) ** 2)),
+            'pearson': pearsonr(preds, true_scores)[0] if len(set(preds)) > 1 else 0.0,
+            'spearman': spearmanr(preds, true_scores)[0] if len(set(preds)) > 1 else 0.0,
+            'kendall': kendalltau(preds, true_scores)[0] if len(set(preds)) > 1 else 0.0
+        }
+        
+        all_metrics[question_count] = metrics
+        print(f"Question count {question_count}, metrics: {metrics}")
+    
+    return all_predictions, all_true_scores, all_metrics
+
 model_path = "imputer_model_20.pth"
 print(f"Loading imputer model from {model_path}")
 imputer = Imputer(
@@ -185,7 +318,7 @@ for target_question in range(1, 6):
     target_question = f"Q{target_question}"
     policy_question = target_question
     print(f"Running myopic policy imputer with target={target_question}, policy={policy_question}")
-    all_predictions, all_true_scores, all_metrics = myopic_policy_imputer(
+    all_predictions, all_true_scores, all_metrics = myopic_policy_imputer_fast(
         imputer=imputer,
         dataset=dataset,
         target_question=target_question,
