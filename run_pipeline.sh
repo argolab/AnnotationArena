@@ -16,4 +16,4 @@ module load cuda/12.1
 
 conda activate llm_rubric_env
 
-python /export/fs06/psingh54/LLMRubric/annotationArena.py --cycles 7 --examples_per_cycle 20 --features_per_example 5 --experiment all
+python /export/fs06/psingh54/ActiveRubric-Internal/annotationArena.py --cycles 7 --examples_per_cycle 20 --features_per_example 5 --experiment all --loss_type l2 --resample_validation

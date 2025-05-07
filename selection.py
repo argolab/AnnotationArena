@@ -348,21 +348,22 @@ class VOICalculator:
 
 class FastVOICalculator(VOICalculator):
     """
-    Fast VOI calculator that optimizes the VOI computation.
+    Fast VOI calculator that uses gradient-based approximation for efficiency.
     
-    Approximates VOI by sampling a subset of possible outcomes,
-    making it more computationally efficient for large problems.
+    Approximates VOI by calculating gradients of query outputs with respect to inputs,
+    making VOI computation much faster for large problems.
     """
     
-    def __init__(self, model, device=None):
+    def __init__(self, model, device=None, loss_type="cross_entropy"):
         """Initialize Fast VOI calculator."""
         super().__init__(model, device)
+        self.loss_type = loss_type
     
     def compute_fast_voi(self, model, inputs, annotators, questions, known_questions, 
-                         candidate_idx, target_indices, loss_type="cross_entropy", 
+                         candidate_idx, target_indices, loss_type=None, 
                          num_samples=3, cost=1.0):
         """
-        Compute VOI using fast approximation by sampling a subset of possible answers.
+        Compute VOI using gradient-based approximation.
         
         Args:
             model: Model to use for predictions
@@ -372,7 +373,7 @@ class FastVOICalculator(VOICalculator):
             known_questions: Mask indicating known questions [batch_size, sequence_length]
             candidate_idx: Index of candidate annotation to evaluate
             target_indices: Target indices to compute loss on
-            loss_type: Type of loss to compute
+            loss_type: Type of loss to compute ("cross_entropy", "l2", or "0-1")
             num_samples: Number of samples to use for approximation
             cost: Cost of annotating this position
             
@@ -380,97 +381,119 @@ class FastVOICalculator(VOICalculator):
             tuple: (voi_value, voi/cost_ratio, expected_posterior_loss, most_informative_class)
         """
         model.eval()
-
-        with torch.no_grad():
-            # Get initial outputs and compute initial loss
-            outputs = model(inputs, annotators, questions)
+        loss_type = loss_type or self.loss_type
+        batch_size = inputs.shape[0]
+        
+        # Enable gradients temporarily for approximation
+        with torch.enable_grad():
+            inputs_grad = inputs.clone().requires_grad_(True)
+            
+            # Forward pass
+            outputs = model(inputs_grad, annotators, questions)
             
             # Extract predictions for target indices
             if isinstance(target_indices, list) and len(target_indices) == 1:
                 target_idx = target_indices[0]
                 target_preds = outputs[:, target_idx, :]
             else:
-                # Handle multiple target indices
+                # Handle multiple target indices - concatenate predictions
                 target_preds = torch.cat([outputs[:, idx, :].unsqueeze(1) for idx in target_indices], dim=1)
             
-            # Compute initial loss
-            loss_initial = self.compute_loss(target_preds, loss_type)
-            
-            # Get prediction for candidate
+            # Get candidate variable distribution
             candidate_pred = outputs[:, candidate_idx, :]
             candidate_probs = F.softmax(candidate_pred, dim=-1)
+            num_classes = candidate_probs.shape[-1]
             
-            batch_size = inputs.shape[0]
-            num_classes = candidate_probs.shape[-1]  # Usually 5 for our case
+            # Compute initial loss
+            initial_loss = self.compute_loss(target_preds, loss_type)
             
-            # Sample a subset of classes based on probabilities
-            if num_samples < num_classes:
-                # Sample based on probabilities
-                sampled_classes = torch.multinomial(
-                    candidate_probs[0], num_samples, replacement=False
-                ).tolist()
-            else:
-                # Use all classes
-                sampled_classes = list(range(num_classes))
+            # Compute gradients of target predictions with respect to inputs
+            target_grads = []
+            for dim in range(target_preds.shape[-1]):
+                # For each dimension of the target prediction
+                grad = torch.autograd.grad(
+                    outputs=target_preds[0, dim],
+                    inputs=inputs_grad,
+                    grad_outputs=torch.ones_like(target_preds[0, dim]),
+                    retain_graph=True
+                )[0]
+                target_grads.append(grad)
             
-            # Process sampled classes
-            all_losses = {}
-            
-            for class_idx in sampled_classes:
-                # Create a copy of inputs with candidate set to class_idx
-                input_with_answer = inputs.clone()
-                one_hot = F.one_hot(torch.tensor(class_idx), num_classes=num_classes).float().to(self.device)
-                input_with_answer[:, candidate_idx, 1:] = one_hot
-                input_with_answer[:, candidate_idx, 0] = 0  # Mark as observed
-                
-                # Get predictions
-                class_outputs = model(input_with_answer, annotators, questions)
-                
-                # Extract predictions for target indices
-                if isinstance(target_indices, list) and len(target_indices) == 1:
-                    target_idx = target_indices[0]
-                    class_target_preds = class_outputs[:, target_idx, :]
-                else:
-                    # Handle multiple target indices
-                    class_target_preds = torch.cat([
-                        class_outputs[:, idx, :].unsqueeze(1) for idx in target_indices
-                    ], dim=1)
-                
-                # Compute loss for this class assignment
-                class_loss = self.compute_loss(class_target_preds, loss_type)
-                all_losses[class_idx] = class_loss
-            
-            # Compute expected posterior loss (weighted average of per-class losses)
+            # Approximate effect of each possible value of candidate variable
             expected_posterior_loss = 0.0
-            sampled_prob_sum = 0.0
+            class_losses = []
             
-            for class_idx, class_loss in all_losses.items():
-                class_prob = candidate_probs[0, class_idx].item()
-                expected_posterior_loss += class_prob * class_loss
-                sampled_prob_sum += class_prob
+            for class_idx in range(num_classes):
+                # Create one-hot distribution for this class
+                one_hot = torch.zeros(num_classes, device=self.device)
+                one_hot[class_idx] = 1.0
+                
+                # Calculate change in distribution
+                delta_prob = one_hot - candidate_probs[0]
+                
+                # Calculate approximate effect on target predictions
+                approx_target_preds = target_preds.clone()
+                for dim in range(target_preds.shape[-1]):
+                    effect = delta_prob * target_grads[dim][0, candidate_idx, 1:1+num_classes, dim]
+                    approx_target_preds[0, dim] += torch.sum(effect)
+                
+                # Compute loss with this approximation
+                class_loss = self.compute_loss(approx_target_preds, loss_type)
+                class_losses.append(class_loss)
+                
+                # Weight by probability of this class
+                expected_posterior_loss += candidate_probs[0, class_idx].item() * class_loss
+        
+        # VOI is the expected reduction in loss
+        voi = initial_loss - expected_posterior_loss
+        
+        # Find most informative class (highest individual VOI)
+        class_vois = [initial_loss - loss for loss in class_losses]
+        most_informative_class = int(np.argmax(class_vois))
+        
+        # Compute benefit/cost ratio
+        voi_cost_ratio = voi / max(cost, 1e-10)
+        
+        return voi, voi_cost_ratio, expected_posterior_loss, most_informative_class
+    
+    def compute_loss(self, pred, loss_type="cross_entropy"):
+        """
+        Compute loss for prediction.
+        
+        Args:
+            pred: Prediction logits
+            loss_type: Type of loss to compute ("cross_entropy", "l2", or "0-1")
             
-            # Normalize by total probability mass of sampled classes
-            if sampled_prob_sum > 0:
-                expected_posterior_loss /= sampled_prob_sum
+        Returns:
+            float: Loss value
+        """
+        if loss_type == "cross_entropy" or loss_type == "nll":
+            # Entropy of the distribution (uncertainty)
+            probs = F.softmax(pred, dim=-1)
+            return -torch.sum(probs * torch.log(probs + 1e-10), dim=-1).mean().item()
             
-            # VOI is the expected reduction in loss
-            voi = loss_initial - expected_posterior_loss
+        elif loss_type == "l2":
+            # L2 loss (squared error) between expected rating and possible true ratings
+            probs = F.softmax(pred, dim=-1)
+            scores = torch.arange(1, 6, device=self.device).float()
             
-            # Compute benefit/cost ratio
-            voi_cost_ratio = voi / max(cost, 1e-10)
+            # Calculate expected rating
+            expected_rating = torch.sum(probs * scores, dim=-1)
             
-            # Find most informative class (highest individual VOI)
-            class_vois = {}
-            for class_idx, class_loss in all_losses.items():
-                class_vois[class_idx] = loss_initial - class_loss
+            # Calculate squared errors for each possible true rating
+            squared_errors = torch.zeros_like(probs)
+            for i in range(scores.shape[0]):
+                true_rating = scores[i]
+                squared_errors[:, i] = (expected_rating - true_rating) ** 2
             
-            if class_vois:
-                most_informative_class = max(class_vois, key=class_vois.get)
-            else:
-                most_informative_class = 0
+            # Expected squared error
+            return torch.sum(probs * squared_errors, dim=-1).mean().item()
             
-            return voi, voi_cost_ratio, expected_posterior_loss, most_informative_class
-
+        elif loss_type == "0-1":
+            # 1 - maximum probability (uncertainty in classification)
+            probs = F.softmax(pred, dim=-1)
+            max_prob = probs.max(dim=-1)[0].mean().item()
+            return 1 - max_prob
 
 class VOISelectionStrategy(FeatureSelectionStrategy):
     """
@@ -556,31 +579,31 @@ class VOISelectionStrategy(FeatureSelectionStrategy):
         # Return top selections
         return position_vois[:num_to_select]
 
-
 class FastVOISelectionStrategy(FeatureSelectionStrategy):
     """
     Fast VOI-based feature selection strategy for Active Feature Acquisition.
     
-    Uses sampling to approximate VOI calculations, making it more
-    computationally efficient while still providing good selections.
+    Uses gradient-based approximation to estimate VOI, making it 
+    computationally efficient while providing accurate selections.
     """
     
-    def __init__(self, model, device=None):
+    def __init__(self, model, device=None, loss_type="cross_entropy"):
         """Initialize Fast VOI selection strategy."""
         super().__init__("fast_voi", model, device)
-        self.voi_calculator = FastVOICalculator(model, device)
+        self.voi_calculator = FastVOICalculator(model, device, loss_type)
+        self.loss_type = loss_type
     
     def select_features(self, example_idx, dataset, num_to_select=1, target_questions=None, 
-                       loss_type="cross_entropy", num_samples=3, costs=None, **kwargs):
+                       loss_type=None, num_samples=3, costs=None, **kwargs):
         """
-        Select features (positions) using Fast VOI approximation within a given example.
+        Select features (positions) using gradient-based VOI approximation.
         
         Args:
             example_idx: Index of the example to select features from
             dataset: Dataset containing the example
             num_to_select: Number of features to select
             target_questions: Target questions to compute VOI for
-            loss_type: Type of loss to compute
+            loss_type: Type of loss to compute ("cross_entropy", "l2")
             num_samples: Number of samples to use for approximation
             costs: Dictionary mapping positions to their annotation costs
             **kwargs: Additional arguments
@@ -588,6 +611,8 @@ class FastVOISelectionStrategy(FeatureSelectionStrategy):
         Returns:
             list: Tuples of (position_idx, benefit, cost, benefit/cost_ratio, class_idx) for selected positions
         """
+        loss_type = loss_type or self.loss_type
+        
         if target_questions is None:
             # Default to first question (Q0)
             target_questions = [0]
@@ -641,7 +666,6 @@ class FastVOISelectionStrategy(FeatureSelectionStrategy):
         
         # Return top selections
         return position_vois[:num_to_select]
-
 
 class GradientSelector:
     """

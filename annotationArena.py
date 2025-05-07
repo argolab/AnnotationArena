@@ -182,7 +182,7 @@ class AnnotationArena:
         
         return mbr_decision, expected_loss
         
-    def suggest(self, candidate_variables=None, target_variables=None, strategy="voi", **kwargs):
+    def suggest(self, candidate_variables=None, target_variables=None, strategy="voi", loss_type="cross_entropy", **kwargs):
         """
         Recommend variables to observe next, considering benefit/cost ratio.
         
@@ -190,6 +190,7 @@ class AnnotationArena:
             candidate_variables: List of candidate variables to consider
             target_variables: List of target variables to optimize for
             strategy: Selection strategy to use ("voi", "fast_voi", "gradient", etc.)
+            loss_type: Type of loss to use ("cross_entropy", "l2")
             **kwargs: Additional arguments for the selection strategy
             
         Returns:
@@ -220,6 +221,11 @@ class AnnotationArena:
         
         if strategy in ["voi", "fast_voi"]:
             feature_strategy = SelectionFactory.create_feature_strategy(strategy, self.model, self.device)
+            if hasattr(feature_strategy, 'loss_type'):
+                feature_strategy.loss_type = loss_type
+            elif hasattr(feature_strategy, 'voi_calculator') and hasattr(feature_strategy.voi_calculator, 'loss_type'):
+                feature_strategy.voi_calculator.loss_type = loss_type
+                
             suggestions = []
             
             for example_idx, positions in candidate_mapping.items():
@@ -231,7 +237,8 @@ class AnnotationArena:
                     
                 selections = feature_strategy.select_features(
                     example_idx, self.dataset, num_to_select=len(positions),
-                    target_questions=kwargs.get('target_questions', [0])
+                    target_questions=kwargs.get('target_questions', [0]),
+                    loss_type=loss_type
                 )
                 
                 position_to_var = {p: v for p, v in positions}
@@ -256,9 +263,8 @@ class AnnotationArena:
                             cost = self.variables[var_id]["cost"]
                             suggestions.append((var_id, 0.0, cost, 0.0))
             
-            # Sort by benefit/cost ratio
             suggestions.sort(key=lambda x: x[3], reverse=True)
-                
+                                
         elif strategy == "gradient":
             example_strategy = SelectionFactory.create_example_strategy(strategy, self.model, self.device)
             example_indices = list(candidate_mapping.keys())
@@ -535,7 +541,7 @@ def run_experiment(dataset_train, dataset_val, dataset_test,
                   example_strategy, feature_strategy, model,
                   cycles=5, examples_per_cycle=10, features_per_example=5,
                   epochs_per_cycle=3, batch_size=8, lr=1e-4,
-                  device=None):
+                  device=None, resample_validation=False, loss_type="cross_entropy"):
     """
     Run an active learning experiment with the given strategy.
     
@@ -553,6 +559,8 @@ def run_experiment(dataset_train, dataset_val, dataset_test,
         batch_size: Batch size for training
         lr: Learning rate for training
         device: Device to use for computations
+        resample_validation: Whether to resample validation set on each cycle
+        loss_type: Type of loss to use for VOI calculations
         
     Returns:
         dict: Experiment results
@@ -574,6 +582,8 @@ def run_experiment(dataset_train, dataset_val, dataset_test,
     
     # Register examples in the active pool
     active_pool = list(range(len(dataset_train)))
+    # Track annotated examples
+    annotated_examples = []
     
     # Initial evaluation
     arena.set_dataset(dataset_val)
@@ -586,6 +596,19 @@ def run_experiment(dataset_train, dataset_val, dataset_test,
         print(f"=== Cycle {cycle+1}/{cycles} ===")
         arena.set_dataset(dataset_train)
         
+        # Resample validation set if requested
+        if resample_validation and cycle > 0:
+            # Create a new validation set from active pool and annotated examples
+            remaining_active = [idx for idx in active_pool if idx not in annotated_examples]
+            val_size = min(len(dataset_val), len(remaining_active) // 4)  # Use 25% of remaining data
+            if val_size > 0:
+                new_val_indices = random.sample(remaining_active, val_size)
+                active_pool = [idx for idx in active_pool if idx not in new_val_indices]
+                new_val_data = [dataset_train.get_data_entry(idx) for idx in new_val_indices]
+                dataset_val = AnnotationDataset(new_val_data)
+                
+                print(f"Resampled validation set with {len(dataset_val)} examples")
+        
         if example_strategy == "random":
             selected_examples = random.sample(active_pool, min(examples_per_cycle, len(active_pool)))
         elif example_strategy == "gradient":
@@ -594,9 +617,12 @@ def run_experiment(dataset_train, dataset_val, dataset_test,
                 dataset_train, num_to_select=examples_per_cycle,
                 val_dataset=dataset_val, num_samples=3, batch_size=batch_size
             )
-            selected_examples = selected_indices
+            selected_examples = [idx for idx in selected_indices if idx in active_pool]
         else:
             raise ValueError(f"Unknown example strategy: {example_strategy}")
+            
+        active_pool = [idx for idx in active_pool if idx not in selected_examples]
+        annotated_examples.extend(selected_examples)
             
         total_features_annotated = 0
         cycle_benefit_cost_ratios = []
@@ -623,7 +649,7 @@ def run_experiment(dataset_train, dataset_val, dataset_test,
                 feature_suggestions = arena.suggest(
                     candidate_variables=candidate_variables,
                     strategy="voi",
-                    loss_type="cross_entropy"
+                    loss_type=loss_type
                 )
                 feature_benefit_costs = feature_suggestions[:features_to_annotate]
                 selected_variables = [var for var, _, _, _ in feature_benefit_costs]
@@ -631,7 +657,7 @@ def run_experiment(dataset_train, dataset_val, dataset_test,
                 feature_suggestions = arena.suggest(
                     candidate_variables=candidate_variables,
                     strategy="fast_voi",
-                    loss_type="cross_entropy",
+                    loss_type=loss_type,
                     num_samples=3
                 )
                 feature_benefit_costs = feature_suggestions[:features_to_annotate]
@@ -695,31 +721,10 @@ def run_experiment(dataset_train, dataset_val, dataset_test,
     
     return metrics
 
-
 def run_gradient_all_observe_experiment(dataset_train, dataset_val, dataset_test, 
-                                      model,
-                                      cycles=5, examples_per_cycle=10,
+                                      model, cycles=5, examples_per_cycle=10,
                                       epochs_per_cycle=3, batch_size=8, lr=1e-4,
-                                      device=None):
-    """
-    Run experiment using gradient alignment selection with all positions observed.
-    
-    Args:
-        dataset_train: Training dataset
-        dataset_val: Validation dataset
-        dataset_test: Test dataset
-        model: Model to use for predictions
-        cycles: Number of active learning cycles
-        examples_per_cycle: Number of examples to select per cycle
-        epochs_per_cycle: Number of training epochs per cycle
-        batch_size: Batch size for training
-        lr: Learning rate for training
-        device: Device to use for computations
-        
-    Returns:
-        dict: Experiment results
-    """
-    
+                                      device=None, resample_validation=False):
     # Create Annotation Arena
     arena = AnnotationArena(model, device)
     arena.set_dataset(dataset_train)
@@ -735,6 +740,8 @@ def run_gradient_all_observe_experiment(dataset_train, dataset_val, dataset_test
     }
     
     active_pool = list(range(len(dataset_train)))
+    # Track annotated examples
+    annotated_examples = []
     
     arena.set_dataset(dataset_val)
     val_metrics = arena.evaluate(list(range(len(dataset_val))))
@@ -747,13 +754,29 @@ def run_gradient_all_observe_experiment(dataset_train, dataset_val, dataset_test
         print(f"=== Cycle {cycle+1}/{cycles} ===")
         arena.set_dataset(dataset_train)
         
-        # 1. Select examples using gradient alignment
+        # Resample validation set if requested
+        if resample_validation and cycle > 0:
+            remaining_active = [idx for idx in active_pool if idx not in annotated_examples]
+            val_size = min(len(dataset_val), len(remaining_active) // 4)
+            if val_size > 0:
+                new_val_indices = random.sample(remaining_active, val_size)
+                
+                active_pool = [idx for idx in active_pool if idx not in new_val_indices]
+                
+                new_val_data = [dataset_train.get_data_entry(idx) for idx in new_val_indices]
+                dataset_val = AnnotationDataset(new_val_data)
+                
+                print(f"Resampled validation set with {len(dataset_val)} examples")
+        
         gradient_strategy = GradientSelectionStrategy(model, device)
         selected_indices, alignment_scores = gradient_strategy.select_examples(
             dataset_train, num_to_select=examples_per_cycle,
             val_dataset=dataset_val, num_samples=3, batch_size=batch_size
         )
-        selected_examples = selected_indices
+        selected_examples = [idx for idx in selected_indices if idx in active_pool]
+            
+        active_pool = [idx for idx in active_pool if idx not in selected_examples]
+        annotated_examples.extend(selected_examples)
             
         # 2. Observe all positions for each example
         total_features_annotated = 0
@@ -817,31 +840,11 @@ def run_gradient_all_observe_experiment(dataset_train, dataset_val, dataset_test
     
     return metrics
 
-
 def run_all_observe_experiment(dataset_train, dataset_val, dataset_test, 
                               example_strategy, model,
                               cycles=5, examples_per_cycle=10,
                               epochs_per_cycle=3, batch_size=8, lr=1e-4,
-                              device=None):
-    """
-    Run experiment where all positions are observed for selected examples.
-    
-    Args:
-        dataset_train: Training dataset
-        dataset_val: Validation dataset
-        dataset_test: Test dataset
-        example_strategy: Strategy for selecting examples ("random", "gradient", etc.)
-        model: Model to use for predictions
-        cycles: Number of active learning cycles
-        examples_per_cycle: Number of examples to select per cycle
-        epochs_per_cycle: Number of training epochs per cycle
-        batch_size: Batch size for training
-        lr: Learning rate for training
-        device: Device to use for computations
-        
-    Returns:
-        dict: Experiment results
-    """
+                              device=None, resample_validation=False):
     # Create Annotation Arena
     arena = AnnotationArena(model, device)
     arena.set_dataset(dataset_train)
@@ -859,6 +862,8 @@ def run_all_observe_experiment(dataset_train, dataset_val, dataset_test,
     
     # Register examples in the active pool
     active_pool = list(range(len(dataset_train)))
+    # Track annotated examples
+    annotated_examples = []
     
     # Initial evaluation
     arena.set_dataset(dataset_val)
@@ -872,6 +877,20 @@ def run_all_observe_experiment(dataset_train, dataset_val, dataset_test,
         print(f"=== Cycle {cycle+1}/{cycles} ===")
         arena.set_dataset(dataset_train)
         
+        # Resample validation set if requested
+        if resample_validation and cycle > 0:
+            remaining_active = [idx for idx in active_pool if idx not in annotated_examples]
+            val_size = min(len(dataset_val), len(remaining_active) // 4)
+            if val_size > 0:
+                new_val_indices = random.sample(remaining_active, val_size)
+                
+                active_pool = [idx for idx in active_pool if idx not in new_val_indices]
+                
+                new_val_data = [dataset_train.get_data_entry(idx) for idx in new_val_indices]
+                dataset_val = AnnotationDataset(new_val_data)
+                
+                print(f"Resampled validation set with {len(dataset_val)} examples")
+        
         # 1. Select examples
         if example_strategy == "random":
             selected_examples = random.sample(active_pool, min(examples_per_cycle, len(active_pool)))
@@ -882,9 +901,14 @@ def run_all_observe_experiment(dataset_train, dataset_val, dataset_test,
                 dataset_train, num_to_select=examples_per_cycle,
                 val_dataset=dataset_val, num_samples=3, batch_size=batch_size
             )
-            selected_examples = selected_indices
+            selected_examples = [idx for idx in selected_indices if idx in active_pool]
         else:
             raise ValueError(f"Unknown example strategy: {example_strategy}")
+            
+        # Remove selected examples from active pool
+        active_pool = [idx for idx in active_pool if idx not in selected_examples]
+        # Add to annotated examples list
+        annotated_examples.extend(selected_examples)
             
         # 2. Observe all positions for each example
         total_features_annotated = 0
@@ -1053,7 +1077,10 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for training")
     parser.add_argument("--experiment", type=str, default="all", 
                        help="Experiment to run ('all', 'random_all', 'random_5', 'gradient_all', 'gradient_sequential', 'gradient_voi', 'gradient_fast_voi')")
+    parser.add_argument("--resample_validation", action="store_true", help="Resample validation set on each cycle")
+    parser.add_argument("--loss_type", type=str, default="cross_entropy", help="Type of loss to use (cross_entropy, l2)")
     args = parser.parse_args()
+    
     
     # Set up paths
     base_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs"
@@ -1098,7 +1125,7 @@ def main():
             example_strategy="random", model=model_copy,
             cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
             epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-            device=device
+            device=device, resample_validation=args.resample_validation
         )
         experiment_results["random_all"] = results
         
@@ -1114,7 +1141,7 @@ def main():
             model=model_copy,
             cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
             epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-            device=device
+            device=device, resample_validation=args.resample_validation
         )
         experiment_results["gradient_all"] = results
         
@@ -1131,7 +1158,7 @@ def main():
             cycles=args.cycles, examples_per_cycle=args.examples_per_cycle, 
             features_per_example=args.features_per_example,
             epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-            device=device
+            device=device, resample_validation=args.resample_validation
         )
         experiment_results["random_5"] = results
         
@@ -1148,7 +1175,7 @@ def main():
             cycles=args.cycles, examples_per_cycle=args.examples_per_cycle, 
             features_per_example=args.features_per_example,
             epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-            device=device
+            device=device, resample_validation=args.resample_validation
         )
         experiment_results["gradient_sequential"] = results
         
@@ -1165,7 +1192,7 @@ def main():
             cycles=args.cycles, examples_per_cycle=args.examples_per_cycle, 
             features_per_example=args.features_per_example,
             epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-            device=device
+            device=device, resample_validation=args.resample_validation
         )
         experiment_results["gradient_voi"] = results
         
@@ -1183,7 +1210,7 @@ def main():
             cycles=args.cycles, examples_per_cycle=args.examples_per_cycle, 
             features_per_example=args.features_per_example,
             epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-            device=device
+            device=device, resample_validation=args.resample_validation
         )
         experiment_results["gradient_fast_voi"] = results
         

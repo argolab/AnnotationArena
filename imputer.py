@@ -592,7 +592,7 @@ class Imputer(nn.Module):
         
         for i in range(batch_size):
             for j in range(var_num):
-                if inputs[i, j, 0] == 0 or full_supervision:
+                if inputs[i, j, 0] == 0 and full_supervision:
                     target_idx = torch.argmax(labels[i, j]).item()
                     target = torch.tensor([target_idx], device=device)
                     position_loss = F.cross_entropy(outputs[i:i+1, j], target)
