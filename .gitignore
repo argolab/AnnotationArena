@@ -1,2 +1,3 @@
 outputs/data/results/*.json
 outputs/models/*
+__pycache__/*

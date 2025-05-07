@@ -360,8 +360,8 @@ class FastVOICalculator(VOICalculator):
         self.loss_type = loss_type
     
     def compute_fast_voi(self, model, inputs, annotators, questions, known_questions, 
-                         candidate_idx, target_indices, loss_type=None, 
-                         num_samples=3, cost=1.0):
+                      candidate_idx, target_indices, loss_type=None, 
+                      num_samples=3, cost=1.0):
         """
         Compute VOI using gradient-based approximation.
         
@@ -383,6 +383,7 @@ class FastVOICalculator(VOICalculator):
         model.eval()
         loss_type = loss_type or self.loss_type
         batch_size = inputs.shape[0]
+        input_dim = inputs.shape[2]
         
         # Enable gradients temporarily for approximation
         with torch.enable_grad():
@@ -407,8 +408,10 @@ class FastVOICalculator(VOICalculator):
             # Compute initial loss
             initial_loss = self.compute_loss(target_preds, loss_type)
             
-            # Compute gradients of target predictions with respect to inputs
-            target_grads = []
+            # For each target dimension, compute gradient with respect to candidate input
+            # This tells us how changing candidate affects target predictions
+            target_gradients = []
+            
             for dim in range(target_preds.shape[-1]):
                 # For each dimension of the target prediction
                 grad = torch.autograd.grad(
@@ -417,7 +420,12 @@ class FastVOICalculator(VOICalculator):
                     grad_outputs=torch.ones_like(target_preds[0, dim]),
                     retain_graph=True
                 )[0]
-                target_grads.append(grad)
+
+                grad_slice = grad[0, candidate_idx, 1:1+num_classes]
+                target_gradients.append(grad_slice)
+            
+            # Stack gradients to form a matrix of shape [target_dims, candidate_dims]
+            gradient_matrix = torch.stack(target_gradients)
             
             # Approximate effect of each possible value of candidate variable
             expected_posterior_loss = 0.0
@@ -431,11 +439,12 @@ class FastVOICalculator(VOICalculator):
                 # Calculate change in distribution
                 delta_prob = one_hot - candidate_probs[0]
                 
-                # Calculate approximate effect on target predictions
+                effects = torch.matmul(gradient_matrix, delta_prob)
+                
+                # Apply effect to get approximate new target predictions
                 approx_target_preds = target_preds.clone()
                 for dim in range(target_preds.shape[-1]):
-                    effect = delta_prob * target_grads[dim][0, candidate_idx, 1:1+num_classes, dim]
-                    approx_target_preds[0, dim] += torch.sum(effect)
+                    approx_target_preds[0, dim] += effects[dim]
                 
                 # Compute loss with this approximation
                 class_loss = self.compute_loss(approx_target_preds, loss_type)

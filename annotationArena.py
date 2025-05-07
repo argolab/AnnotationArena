@@ -18,6 +18,115 @@ from selection import (
     GradientSelectionStrategy
 )
 
+def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotated_examples, 
+                               strategy="balanced", update_percentage=25):
+    """
+    Resample the validation dataset using annotated examples and active pool.
+    
+    Args:
+        dataset_train: Training dataset (source of data)
+        dataset_val: Current validation dataset
+        active_pool: List of indices available in the active pool
+        annotated_examples: List of indices of examples that have been annotated
+        strategy: Strategy for resampling ("balanced", "add_only", "replace_all")
+        update_percentage: Percentage of validation set to update (default: 25%)
+        
+    Returns:
+        tuple: (new_validation_dataset, updated_active_pool)
+    """
+    current_val_size = len(dataset_val)
+    
+    if strategy == "balanced":
+        num_to_update = max(1, int(current_val_size * update_percentage / 100))
+        new_val_indices = []
+        
+        if annotated_examples:
+            num_from_annotated = min(len(annotated_examples), num_to_update // 2)
+            if num_from_annotated > 0:
+                annotated_sample = random.sample(annotated_examples, num_from_annotated)
+                new_val_indices.extend(annotated_sample)
+        
+        remaining_needed = num_to_update - len(new_val_indices)
+        if remaining_needed > 0 and active_pool:
+            remaining_active = [idx for idx in active_pool if idx not in annotated_examples]
+            num_from_pool = min(len(remaining_active), remaining_needed)
+            if num_from_pool > 0:
+                pool_sample = random.sample(remaining_active, num_from_pool)
+                new_val_indices.extend(pool_sample)
+        
+        if new_val_indices:
+            keep_size = current_val_size - len(new_val_indices)
+            
+            # Create new validation dataset
+            new_val_data = []
+            if keep_size > 0:
+                for i in range(min(keep_size, current_val_size)):
+                    new_val_data.append(dataset_val.get_data_entry(i))
+            
+            # Add new examples
+            for idx in new_val_indices:
+                new_val_data.append(dataset_train.get_data_entry(idx))
+            
+            # Create new dataset
+            new_dataset_val = AnnotationDataset(new_val_data)
+            
+            # Update active pool
+            updated_active_pool = [idx for idx in active_pool if idx not in new_val_indices]
+            
+            print(f"Resampled validation set: {len(new_dataset_val)} examples ({len(new_val_indices)} new)")
+            return new_dataset_val, updated_active_pool
+    
+    elif strategy == "add_only":
+
+        max_to_add = max(1, int(current_val_size * update_percentage / 100))
+        num_to_add = min(len(annotated_examples), max_to_add)
+        
+        if num_to_add > 0:
+            # Get examples to add
+            examples_to_add = random.sample(annotated_examples, num_to_add)
+            
+            # Create new validation dataset
+            new_val_data = []
+            
+            # Keep all existing validation examples
+            for i in range(current_val_size):
+                new_val_data.append(dataset_val.get_data_entry(i))
+            
+            # Add new examples
+            for idx in examples_to_add:
+                new_val_data.append(dataset_train.get_data_entry(idx))
+            
+            # Create new dataset
+            new_dataset_val = AnnotationDataset(new_val_data)
+            
+            # No need to update active pool as we're only adding already annotated examples
+            print(f"Added {num_to_add} annotated examples to validation set (now {len(new_dataset_val)} examples)")
+            return new_dataset_val, active_pool
+    
+    elif strategy == "replace_all":
+
+        val_size = min(current_val_size, len(active_pool))
+        if val_size > 0:
+            # Get examples to use
+            new_val_indices = random.sample(active_pool, val_size)
+            
+            # Create new validation dataset
+            new_val_data = []
+            for idx in new_val_indices:
+                new_val_data.append(dataset_train.get_data_entry(idx))
+            
+            # Create new dataset
+            new_dataset_val = AnnotationDataset(new_val_data)
+            
+            # Update active pool
+            updated_active_pool = [idx for idx in active_pool if idx not in new_val_indices]
+            
+            print(f"Completely replaced validation set with {len(new_dataset_val)} new examples")
+            return new_dataset_val, updated_active_pool
+    
+    # If we get here, no resampling was done
+    return dataset_val, active_pool
+
 class AnnotationArena:
     """
     Core class for Annotation Arena framework.
@@ -598,16 +707,10 @@ def run_experiment(dataset_train, dataset_val, dataset_test,
         
         # Resample validation set if requested
         if resample_validation and cycle > 0:
-            # Create a new validation set from active pool and annotated examples
-            remaining_active = [idx for idx in active_pool if idx not in annotated_examples]
-            val_size = min(len(dataset_val), len(remaining_active) // 4)  # Use 25% of remaining data
-            if val_size > 0:
-                new_val_indices = random.sample(remaining_active, val_size)
-                active_pool = [idx for idx in active_pool if idx not in new_val_indices]
-                new_val_data = [dataset_train.get_data_entry(idx) for idx in new_val_indices]
-                dataset_val = AnnotationDataset(new_val_data)
-                
-                print(f"Resampled validation set with {len(dataset_val)} examples")
+            dataset_val, active_pool = resample_validation_dataset(
+                dataset_train, dataset_val, active_pool, annotated_examples, 
+                strategy="add_only", update_percentage=20
+            )
         
         if example_strategy == "random":
             selected_examples = random.sample(active_pool, min(examples_per_cycle, len(active_pool)))
@@ -756,17 +859,10 @@ def run_gradient_all_observe_experiment(dataset_train, dataset_val, dataset_test
         
         # Resample validation set if requested
         if resample_validation and cycle > 0:
-            remaining_active = [idx for idx in active_pool if idx not in annotated_examples]
-            val_size = min(len(dataset_val), len(remaining_active) // 4)
-            if val_size > 0:
-                new_val_indices = random.sample(remaining_active, val_size)
-                
-                active_pool = [idx for idx in active_pool if idx not in new_val_indices]
-                
-                new_val_data = [dataset_train.get_data_entry(idx) for idx in new_val_indices]
-                dataset_val = AnnotationDataset(new_val_data)
-                
-                print(f"Resampled validation set with {len(dataset_val)} examples")
+            dataset_val, active_pool = resample_validation_dataset(
+                dataset_train, dataset_val, active_pool, annotated_examples, 
+                strategy="add_only", update_percentage=20
+            )
         
         gradient_strategy = GradientSelectionStrategy(model, device)
         selected_indices, alignment_scores = gradient_strategy.select_examples(
@@ -879,17 +975,10 @@ def run_all_observe_experiment(dataset_train, dataset_val, dataset_test,
         
         # Resample validation set if requested
         if resample_validation and cycle > 0:
-            remaining_active = [idx for idx in active_pool if idx not in annotated_examples]
-            val_size = min(len(dataset_val), len(remaining_active) // 4)
-            if val_size > 0:
-                new_val_indices = random.sample(remaining_active, val_size)
-                
-                active_pool = [idx for idx in active_pool if idx not in new_val_indices]
-                
-                new_val_data = [dataset_train.get_data_entry(idx) for idx in new_val_indices]
-                dataset_val = AnnotationDataset(new_val_data)
-                
-                print(f"Resampled validation set with {len(dataset_val)} examples")
+            dataset_val, active_pool = resample_validation_dataset(
+                dataset_train, dataset_val, active_pool, annotated_examples, 
+                strategy="add_only", update_percentage=20
+            )
         
         # 1. Select examples
         if example_strategy == "random":
@@ -1132,6 +1221,23 @@ def main():
         torch.save(model_copy.state_dict(), os.path.join(models_path, "random_all.pth"))
         with open(os.path.join(results_path, "random_all.json"), "w") as f:
             json.dump(results, f, indent=4)
+
+    if args.experiment == "all" or args.experiment == "gradient_fast_voi":
+        print("\n=== Running Gradient-FastVOI Experiment ===")
+        model_copy = copy.deepcopy(model)
+        results = run_experiment(
+            active_pool_dataset, val_dataset, test_dataset, 
+            example_strategy="gradient", feature_strategy="fast_voi", model=model_copy,
+            cycles=args.cycles, examples_per_cycle=args.examples_per_cycle, 
+            features_per_example=args.features_per_example,
+            epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+            device=device, resample_validation=args.resample_validation
+        )
+        experiment_results["gradient_fast_voi"] = results
+        
+        torch.save(model_copy.state_dict(), os.path.join(models_path, "gradient_fast_voi.pth"))
+        with open(os.path.join(results_path, "gradient_fast_voi.json"), "w") as f:
+            json.dump(results, f, indent=4)
     
     if args.experiment == "all" or args.experiment == "gradient_all":
         print("\n=== Running Gradient-All Experiment ===")
@@ -1199,23 +1305,6 @@ def main():
         # Save model and results
         torch.save(model_copy.state_dict(), os.path.join(models_path, "gradient_voi.pth"))
         with open(os.path.join(results_path, "gradient_voi.json"), "w") as f:
-            json.dump(results, f, indent=4)
-    
-    if args.experiment == "all" or args.experiment == "gradient_fast_voi":
-        print("\n=== Running Gradient-FastVOI Experiment ===")
-        model_copy = copy.deepcopy(model)
-        results = run_experiment(
-            active_pool_dataset, val_dataset, test_dataset, 
-            example_strategy="gradient", feature_strategy="fast_voi", model=model_copy,
-            cycles=args.cycles, examples_per_cycle=args.examples_per_cycle, 
-            features_per_example=args.features_per_example,
-            epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-            device=device, resample_validation=args.resample_validation
-        )
-        experiment_results["gradient_fast_voi"] = results
-        
-        torch.save(model_copy.state_dict(), os.path.join(models_path, "gradient_fast_voi.pth"))
-        with open(os.path.join(results_path, "gradient_fast_voi.json"), "w") as f:
             json.dump(results, f, indent=4)
     
     if experiment_results:
