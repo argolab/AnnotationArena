@@ -103,25 +103,28 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
             print(f"Added {num_to_add} annotated examples to validation set (now {len(new_dataset_val)} examples)")
             return new_dataset_val, active_pool
     
-    elif strategy == "replace_all":
-
+    if strategy == "replace_all":
         val_size = min(current_val_size, len(active_pool))
         if val_size > 0:
-            # Get examples to use
+
             new_val_indices = random.sample(active_pool, val_size)
             
-            # Create new validation dataset
+            current_val_indices = [i for i in range(len(dataset_val))]
+            
             new_val_data = []
             for idx in new_val_indices:
                 new_val_data.append(dataset_train.get_data_entry(idx))
             
-            # Create new dataset
             new_dataset_val = AnnotationDataset(new_val_data)
             
-            # Update active pool
             updated_active_pool = [idx for idx in active_pool if idx not in new_val_indices]
             
+            for old_val_idx in current_val_indices:
+                if old_val_idx not in annotated_examples and old_val_idx not in updated_active_pool:
+                    updated_active_pool.append(old_val_idx)
+            
             print(f"Completely replaced validation set with {len(new_dataset_val)} new examples")
+            print(f"Active pool size: {len(updated_active_pool)}")
             return new_dataset_val, updated_active_pool
     
     # If we get here, no resampling was done
@@ -645,92 +648,89 @@ class AnnotationArena:
             ]
         }
 
-
 def run_experiment(dataset_train, dataset_val, dataset_test, 
                   example_strategy, feature_strategy, model,
                   cycles=5, examples_per_cycle=10, features_per_example=5,
                   epochs_per_cycle=3, batch_size=8, lr=1e-4,
-                  device=None, resample_validation=False, loss_type="cross_entropy"):
-    """
-    Run an active learning experiment with the given strategy.
-    
-    Args:
-        dataset_train: Training dataset
-        dataset_val: Validation dataset
-        dataset_test: Test dataset
-        example_strategy: Strategy for selecting examples ("random", "gradient", etc.)
-        feature_strategy: Strategy for selecting features ("random", "voi", "fast_voi", etc.)
-        model: Model to use for predictions
-        cycles: Number of active learning cycles
-        examples_per_cycle: Number of examples to select per cycle
-        features_per_example: Number of features to select per example
-        epochs_per_cycle: Number of training epochs per cycle
-        batch_size: Batch size for training
-        lr: Learning rate for training
-        device: Device to use for computations
-        resample_validation: Whether to resample validation set on each cycle
-        loss_type: Type of loss to use for VOI calculations
-        
-    Returns:
-        dict: Experiment results
-    """
-    # Create Annotation Arena
+                  device=None, resample_validation=False, loss_type="cross_entropy",
+                  run_until_exhausted=False):
+    """Run active learning experiment with the given strategy."""
     arena = AnnotationArena(model, device)
     arena.set_dataset(dataset_train)
     
-    # Track metrics
     metrics = {
         'training_losses': [],
         'val_losses': [],
         'examples_annotated': [],
         'features_annotated': [],
         'val_metrics': [],
+        'test_expected_losses': [],     # Expected loss on unannotated test set
+        'test_annotated_losses': [],    # Loss if we annotate overlap with test set
         'benefit_cost_ratios': [],
-        'observation_costs': []
+        'observation_costs': [],
+        'remaining_pool_size': []
     }
     
-    # Register examples in the active pool
     active_pool = list(range(len(dataset_train)))
-    # Track annotated examples
     annotated_examples = []
+    test_overlap_annotations = {}  # Track test set examples that would be annotated
+    cycle_count = 0
     
     # Initial evaluation
     arena.set_dataset(dataset_val)
     val_metrics = arena.evaluate(list(range(len(dataset_val))))
     metrics['val_metrics'].append(val_metrics)
     metrics['val_losses'].append(val_metrics["avg_expected_loss"])
-    print(f"Initial validation metrics: {val_metrics}")
     
-    for cycle in range(cycles):
-        print(f"=== Cycle {cycle+1}/{cycles} ===")
+    # Initial test set evaluation
+    arena.set_dataset(dataset_test)
+    test_metrics = arena.evaluate(list(range(len(dataset_test))))
+    metrics['test_expected_losses'].append(test_metrics["avg_expected_loss"])
+    metrics['test_annotated_losses'].append(test_metrics["avg_expected_loss"])  # No annotations yet
+    
+    max_cycles = float('inf') if run_until_exhausted else cycles
+    
+    while cycle_count < max_cycles:
+        if not active_pool:
+            print(f"Active pool exhausted after {cycle_count} cycles")
+            break
+            
+        print(f"=== Cycle {cycle_count+1}/{cycles if not run_until_exhausted else 'until exhausted'} ===")
         arena.set_dataset(dataset_train)
         
-        # Resample validation set if requested
-        if resample_validation and cycle > 0:
+        if resample_validation and cycle_count > 0:
             dataset_val, active_pool = resample_validation_dataset(
                 dataset_train, dataset_val, active_pool, annotated_examples, 
-                strategy="replace_all", update_percentage=20
+                strategy="add_only", update_percentage=20
             )
         
+        # Select examples
         if example_strategy == "random":
             selected_examples = random.sample(active_pool, min(examples_per_cycle, len(active_pool)))
         elif example_strategy == "gradient":
             gradient_strategy = GradientSelectionStrategy(model, device)
+
+            active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_pool]
+            active_pool_subset = AnnotationDataset(active_pool_examples)
+
             selected_indices, _ = gradient_strategy.select_examples(
-                dataset_train, num_to_select=examples_per_cycle,
+                active_pool_subset, num_to_select=min(examples_per_cycle, len(active_pool)),
                 val_dataset=dataset_val, num_samples=3, batch_size=batch_size
             )
-            selected_examples = [idx for idx in selected_indices if idx in active_pool]
+
+            selected_examples = [active_pool[idx] for idx in selected_indices]
         else:
             raise ValueError(f"Unknown example strategy: {example_strategy}")
             
         active_pool = [idx for idx in active_pool if idx not in selected_examples]
         annotated_examples.extend(selected_examples)
+        metrics['remaining_pool_size'].append(len(active_pool))
             
         total_features_annotated = 0
         cycle_benefit_cost_ratios = []
         cycle_observation_costs = []
         
+        # Annotate selected examples
         for example_idx in selected_examples:
             arena.register_example(example_idx, add_all_positions=False)
             
@@ -751,17 +751,14 @@ def run_experiment(dataset_train, dataset_val, dataset_test,
             elif feature_strategy == "voi":
                 feature_suggestions = arena.suggest(
                     candidate_variables=candidate_variables,
-                    strategy="voi",
-                    loss_type=loss_type
+                    strategy="voi", loss_type=loss_type
                 )
                 feature_benefit_costs = feature_suggestions[:features_to_annotate]
                 selected_variables = [var for var, _, _, _ in feature_benefit_costs]
             elif feature_strategy == "fast_voi":
                 feature_suggestions = arena.suggest(
                     candidate_variables=candidate_variables,
-                    strategy="fast_voi",
-                    loss_type=loss_type,
-                    num_samples=3
+                    strategy="fast_voi", loss_type=loss_type, num_samples=3
                 )
                 feature_benefit_costs = feature_suggestions[:features_to_annotate]
                 selected_variables = [var for var, *_ in feature_benefit_costs]
@@ -771,64 +768,99 @@ def run_experiment(dataset_train, dataset_val, dataset_test,
             else:
                 raise ValueError(f"Unknown feature strategy: {feature_strategy}")
             
+            # Check for overlaps with test set
+            test_example_idx = example_idx % len(dataset_test)
+            if test_example_idx not in test_overlap_annotations:
+                test_overlap_annotations[test_example_idx] = []
+                
             for i, variable_id in enumerate(selected_variables):
                 example_idx, position = arena._parse_variable_id(variable_id)
                 arena.observe_position(example_idx, position)
                 total_features_annotated += 1
                 
-                # Record benefit/cost if available
+                # Record benefit/cost
                 if i < len(feature_benefit_costs):
                     var_id, benefit, cost, ratio, *_ = feature_benefit_costs[i]
                     cycle_benefit_cost_ratios.append(ratio)
                     cycle_observation_costs.append(cost)
                 
-                # Make a prediction on this position for training
+                # Check for position overlap with test set
+                test_positions = dataset_test.get_masked_positions(test_example_idx)
+                if position in test_positions:
+                    test_overlap_annotations[test_example_idx].append(position)
+                
+                # Make a prediction for training
                 variable_id = f"example_{example_idx}_position_{position}"
                 arena.predict(variable_id, train=True)
         
+        # Training step
         if total_features_annotated > 0:
             training_metrics = arena.train(
-                epochs=epochs_per_cycle, 
-                batch_size=batch_size, 
-                lr=lr,
+                epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, 
                 revisit_examples=True
             )
-            
             metrics['training_losses'].append(training_metrics["avg_loss"])
-            print(f"Training metrics: {training_metrics}")
         else:
             metrics['training_losses'].append(0.0)
         
+        # Validation evaluation
         arena.set_dataset(dataset_val)
         val_metrics = arena.evaluate(list(range(len(dataset_val))))
         metrics['val_metrics'].append(val_metrics)
         metrics['val_losses'].append(val_metrics["avg_expected_loss"])
         
+        # Test set evaluation - expected loss without annotations
+        arena.set_dataset(dataset_test)
+        test_metrics = arena.evaluate(list(range(len(dataset_test))))
+        metrics['test_expected_losses'].append(test_metrics["avg_expected_loss"])
+        
+        # Create a clone of the test set with overlap annotations applied
+        annotated_test_dataset = copy.deepcopy(dataset_test)
+        annotations_applied = 0
+        
+        # Temporarily set up an arena for the annotated test set
+        test_arena = AnnotationArena(model, device)
+        test_arena.set_dataset(annotated_test_dataset)
+        
+        # Apply annotations to overlapping examples
+        for test_idx, positions in test_overlap_annotations.items():
+            for pos in positions:
+                if test_arena.observe_position(test_idx, pos):
+                    annotations_applied += 1
+        
+        # Evaluate with overlap annotations
+        if annotations_applied > 0:
+            test_arena.set_dataset(annotated_test_dataset)
+            annotated_test_metrics = test_arena.evaluate(list(range(len(annotated_test_dataset))))
+            metrics['test_annotated_losses'].append(annotated_test_metrics["avg_expected_loss"])
+        else:
+            metrics['test_annotated_losses'].append(test_metrics["avg_expected_loss"])
+        
+        # Update metrics
         metrics['examples_annotated'].append(len(selected_examples))
         metrics['features_annotated'].append(total_features_annotated)
         metrics['benefit_cost_ratios'].append(np.mean(cycle_benefit_cost_ratios) if cycle_benefit_cost_ratios else 0.0)
         metrics['observation_costs'].append(np.sum(cycle_observation_costs) if cycle_observation_costs else 0.0)
         
-        print(f"Cycle {cycle+1} metrics: {val_metrics}")
+        cycle_count += 1
         
-    arena.set_dataset(dataset_test)
-    test_metrics = arena.evaluate(list(range(len(dataset_test))))
+    # Final test evaluation
     metrics['test_metrics'] = test_metrics
     
+    # Get arena metrics history
     arena_metrics = arena.get_metrics_history()
     metrics['arena_training_losses'] = arena_metrics["training_losses"]
     metrics['observation_history'] = arena_metrics["observation_history"]
     metrics['prediction_history'] = arena_metrics["prediction_history"]
-    
-    print(f"Final test metrics: {test_metrics}")
     
     return metrics
 
 def run_gradient_all_observe_experiment(dataset_train, dataset_val, dataset_test, 
                                       model, cycles=5, examples_per_cycle=10,
                                       epochs_per_cycle=3, batch_size=8, lr=1e-4,
-                                      device=None, resample_validation=False):
-    # Create Annotation Arena
+                                      device=None, resample_validation=False,
+                                      run_until_exhausted=False):
+    """Run gradient selection with all positions observed."""
     arena = AnnotationArena(model, device)
     arena.set_dataset(dataset_train)
     
@@ -838,101 +870,146 @@ def run_gradient_all_observe_experiment(dataset_train, dataset_val, dataset_test
         'examples_annotated': [],
         'features_annotated': [],
         'val_metrics': [],
+        'test_expected_losses': [],     # Expected loss on unannotated test set
+        'test_annotated_losses': [],    # Loss if we annotate overlap with test set
         'benefit_cost_ratios': [],
-        'observation_costs': []
+        'observation_costs': [],
+        'remaining_pool_size': []
     }
     
     active_pool = list(range(len(dataset_train)))
-    # Track annotated examples
     annotated_examples = []
+    test_overlap_annotations = {}
+    cycle_count = 0
     
+    # Initial evaluation
     arena.set_dataset(dataset_val)
     val_metrics = arena.evaluate(list(range(len(dataset_val))))
     metrics['val_metrics'].append(val_metrics)
     metrics['val_losses'].append(val_metrics["avg_expected_loss"])
-    print(f"Initial validation metrics: {val_metrics}")
     
-    # Active learning loop
-    for cycle in range(cycles):
-        print(f"=== Cycle {cycle+1}/{cycles} ===")
+    # Initial test set evaluation
+    arena.set_dataset(dataset_test)
+    test_metrics = arena.evaluate(list(range(len(dataset_test))))
+    metrics['test_expected_losses'].append(test_metrics["avg_expected_loss"])
+    metrics['test_annotated_losses'].append(test_metrics["avg_expected_loss"])
+    
+    max_cycles = float('inf') if run_until_exhausted else cycles
+    
+    while cycle_count < max_cycles:
+        if not active_pool:
+            print(f"Active pool exhausted after {cycle_count} cycles")
+            break
+            
+        print(f"=== Cycle {cycle_count+1}/{cycles if not run_until_exhausted else 'until exhausted'} ===")
         arena.set_dataset(dataset_train)
         
-        # Resample validation set if requested
-        if resample_validation and cycle > 0:
+        if resample_validation and cycle_count > 0:
             dataset_val, active_pool = resample_validation_dataset(
                 dataset_train, dataset_val, active_pool, annotated_examples, 
-                strategy="replace_all", update_percentage=20
+                strategy="add_only", update_percentage=20
             )
+
+
+        active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_pool]
+        active_pool_subset = AnnotationDataset(active_pool_examples)
         
+        # Select examples using gradient alignment
         gradient_strategy = GradientSelectionStrategy(model, device)
         selected_indices, alignment_scores = gradient_strategy.select_examples(
-            dataset_train, num_to_select=examples_per_cycle,
+            active_pool_subset, num_to_select=min(examples_per_cycle, len(active_pool)),
             val_dataset=dataset_val, num_samples=3, batch_size=batch_size
         )
-        selected_examples = [idx for idx in selected_indices if idx in active_pool]
-            
+        selected_examples = [active_pool[idx] for idx in selected_indices]
+        
         active_pool = [idx for idx in active_pool if idx not in selected_examples]
         annotated_examples.extend(selected_examples)
-            
-        # 2. Observe all positions for each example
+        metrics['remaining_pool_size'].append(len(active_pool))
+        
         total_features_annotated = 0
         cycle_observation_costs = []
         
         for example_idx in selected_examples:
-            # Register variables for this example
             arena.register_example(example_idx, add_all_positions=False)
-            
-            # Get masked positions for this example
             masked_positions = dataset_train.get_masked_positions(example_idx)
             
-            # Observe all positions
+            # Check for overlaps with test set
+            test_example_idx = example_idx % len(dataset_test)
+            if test_example_idx not in test_overlap_annotations:
+                test_overlap_annotations[test_example_idx] = []
+            
             for position in masked_positions:
                 arena.observe_position(example_idx, position)
                 total_features_annotated += 1
-                cycle_observation_costs.append(arena.variables[f"example_{example_idx}_position_{position}"]["cost"])
+                cycle_observation_costs.append(1.0)
 
+                # Check for position overlap with test set
+                test_positions = dataset_test.get_masked_positions(test_example_idx)
+                if position in test_positions:
+                    test_overlap_annotations[test_example_idx].append(position)
+                
                 variable_id = f"example_{example_idx}_position_{position}"
                 arena.predict(variable_id, train=True)
         
-        # 3. Train model
+        # Training step
         if total_features_annotated > 0:
             training_metrics = arena.train(
-                epochs=epochs_per_cycle, 
-                batch_size=batch_size, 
-                lr=lr,
+                epochs=epochs_per_cycle, batch_size=batch_size, lr=lr,
                 revisit_examples=True
             )
             metrics['training_losses'].append(training_metrics["avg_loss"])
-            print(f"Training metrics: {training_metrics}")
         else:
             metrics['training_losses'].append(0.0)
         
-        # 4. Evaluate on validation set
+        # Validation evaluation
         arena.set_dataset(dataset_val)
         val_metrics = arena.evaluate(list(range(len(dataset_val))))
         metrics['val_metrics'].append(val_metrics)
         metrics['val_losses'].append(val_metrics["avg_expected_loss"])
         
+        # Test set evaluation - expected loss without annotations
+        arena.set_dataset(dataset_test)
+        test_metrics = arena.evaluate(list(range(len(dataset_test))))
+        metrics['test_expected_losses'].append(test_metrics["avg_expected_loss"])
+        
+        # Create a clone of the test set with overlap annotations applied
+        annotated_test_dataset = copy.deepcopy(dataset_test)
+        annotations_applied = 0
+        
+        # Temporarily set up an arena for the annotated test set
+        test_arena = AnnotationArena(model, device)
+        test_arena.set_dataset(annotated_test_dataset)
+        
+        # Apply annotations to overlapping examples
+        for test_idx, positions in test_overlap_annotations.items():
+            for pos in positions:
+                if test_arena.observe_position(test_idx, pos):
+                    annotations_applied += 1
+        
+        # Evaluate with overlap annotations
+        if annotations_applied > 0:
+            test_arena.set_dataset(annotated_test_dataset)
+            annotated_test_metrics = test_arena.evaluate(list(range(len(annotated_test_dataset))))
+            metrics['test_annotated_losses'].append(annotated_test_metrics["avg_expected_loss"])
+        else:
+            metrics['test_annotated_losses'].append(test_metrics["avg_expected_loss"])
+        
         # Update metrics
         metrics['examples_annotated'].append(len(selected_examples))
         metrics['features_annotated'].append(total_features_annotated)
-        metrics['benefit_cost_ratios'].append(1.0)  # For all-observe, just set to 1.0
-        metrics['observation_costs'].append(np.sum(cycle_observation_costs) if cycle_observation_costs else 0.0)
+        metrics['benefit_cost_ratios'].append(1.0)
+        metrics['observation_costs'].append(np.sum(cycle_observation_costs))
         
-        print(f"Cycle {cycle+1} metrics: {val_metrics}")
+        cycle_count += 1
         
-    # Final evaluation on test set
-    arena.set_dataset(dataset_test)
-    test_metrics = arena.evaluate(list(range(len(dataset_test))))
+    # Final test evaluation
     metrics['test_metrics'] = test_metrics
     
-    # Get internal metrics history
+    # Get arena metrics history
     arena_metrics = arena.get_metrics_history()
     metrics['arena_training_losses'] = arena_metrics["training_losses"]
     metrics['observation_history'] = arena_metrics["observation_history"]
     metrics['prediction_history'] = arena_metrics["prediction_history"]
-    
-    print(f"Final test metrics: {test_metrics}")
     
     return metrics
 
@@ -940,127 +1017,167 @@ def run_all_observe_experiment(dataset_train, dataset_val, dataset_test,
                               example_strategy, model,
                               cycles=5, examples_per_cycle=10,
                               epochs_per_cycle=3, batch_size=8, lr=1e-4,
-                              device=None, resample_validation=False):
-    # Create Annotation Arena
+                              device=None, resample_validation=False,
+                              run_until_exhausted=False):
+    """Run experiment with all positions observed."""
     arena = AnnotationArena(model, device)
     arena.set_dataset(dataset_train)
     
-    # Track metrics
     metrics = {
         'training_losses': [],
         'val_losses': [],
         'examples_annotated': [],
         'features_annotated': [],
         'val_metrics': [],
+        'test_expected_losses': [],     # Expected loss on unannotated test set
+        'test_annotated_losses': [],    # Loss if we annotate overlap with test set
         'benefit_cost_ratios': [],
-        'observation_costs': []
+        'observation_costs': [],
+        'remaining_pool_size': []
     }
     
-    # Register examples in the active pool
     active_pool = list(range(len(dataset_train)))
-    # Track annotated examples
     annotated_examples = []
+    test_overlap_annotations = {}
+    cycle_count = 0
     
     # Initial evaluation
     arena.set_dataset(dataset_val)
     val_metrics = arena.evaluate(list(range(len(dataset_val))))
     metrics['val_metrics'].append(val_metrics)
     metrics['val_losses'].append(val_metrics["avg_expected_loss"])
-    print(f"Initial validation metrics: {val_metrics}")
     
-    # Active learning loop
-    for cycle in range(cycles):
-        print(f"=== Cycle {cycle+1}/{cycles} ===")
+    # Initial test set evaluation
+    arena.set_dataset(dataset_test)
+    test_metrics = arena.evaluate(list(range(len(dataset_test))))
+    metrics['test_expected_losses'].append(test_metrics["avg_expected_loss"])
+    metrics['test_annotated_losses'].append(test_metrics["avg_expected_loss"])
+    
+    max_cycles = float('inf') if run_until_exhausted else cycles
+    
+    while cycle_count < max_cycles:
+        if not active_pool:
+            print(f"Active pool exhausted after {cycle_count} cycles")
+            break
+            
+        print(f"=== Cycle {cycle_count+1}/{cycles if not run_until_exhausted else 'until exhausted'} ===")
         arena.set_dataset(dataset_train)
         
-        # Resample validation set if requested
-        if resample_validation and cycle > 0:
+        if resample_validation and cycle_count > 0:
             dataset_val, active_pool = resample_validation_dataset(
                 dataset_train, dataset_val, active_pool, annotated_examples, 
-                strategy="replace_all", update_percentage=20
+                strategy="add_only", update_percentage=20
             )
         
-        # 1. Select examples
+        # Select examples based on strategy
         if example_strategy == "random":
             selected_examples = random.sample(active_pool, min(examples_per_cycle, len(active_pool)))
         elif example_strategy == "gradient":
-            # Use gradient alignment for example selection
             gradient_strategy = GradientSelectionStrategy(model, device)
+
+            active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_pool]
+            active_pool_subset = AnnotationDataset(active_pool_examples)
+    
             selected_indices, _ = gradient_strategy.select_examples(
-                dataset_train, num_to_select=examples_per_cycle,
+                active_pool_subset, num_to_select=min(examples_per_cycle, len(active_pool)),
                 val_dataset=dataset_val, num_samples=3, batch_size=batch_size
             )
-            selected_examples = [idx for idx in selected_indices if idx in active_pool]
+            selected_examples = [active_pool[idx] for idx in selected_indices]
         else:
             raise ValueError(f"Unknown example strategy: {example_strategy}")
-            
-        # Remove selected examples from active pool
+        
         active_pool = [idx for idx in active_pool if idx not in selected_examples]
-        # Add to annotated examples list
         annotated_examples.extend(selected_examples)
-            
-        # 2. Observe all positions for each example
+        metrics['remaining_pool_size'].append(len(active_pool))
+        
         total_features_annotated = 0
         cycle_observation_costs = []
         
         for example_idx in selected_examples:
-            # Register variables for this example
             arena.register_example(example_idx, add_all_positions=False)
-            
-            # Get masked positions for this example
             masked_positions = dataset_train.get_masked_positions(example_idx)
             
-            # Observe all positions
+            # Check for overlaps with test set
+            test_example_idx = example_idx % len(dataset_test)
+            if test_example_idx not in test_overlap_annotations:
+                test_overlap_annotations[test_example_idx] = []
+            
             for position in masked_positions:
                 arena.observe_position(example_idx, position)
                 total_features_annotated += 1
-                cycle_observation_costs.append(arena.variables[f"example_{example_idx}_position_{position}"]["cost"])
-
+                
                 variable_id = f"example_{example_idx}_position_{position}"
+                cost = arena.variables.get(variable_id, {}).get("cost", 1.0)
+                cycle_observation_costs.append(cost)
+
+                # Check for position overlap with test set
+                test_positions = dataset_test.get_masked_positions(test_example_idx)
+                if position in test_positions:
+                    test_overlap_annotations[test_example_idx].append(position)
+                
                 arena.predict(variable_id, train=True)
         
-        # 3. Train model
+        # Training step
         if total_features_annotated > 0:
             training_metrics = arena.train(
-                epochs=epochs_per_cycle, 
-                batch_size=batch_size, 
-                lr=lr,
+                epochs=epochs_per_cycle, batch_size=batch_size, lr=lr,
                 revisit_examples=True
             )
             metrics['training_losses'].append(training_metrics["avg_loss"])
-            print(f"Training metrics: {training_metrics}")
         else:
             metrics['training_losses'].append(0.0)
         
-        # 4. Evaluate on validation set
+        # Validation evaluation
         arena.set_dataset(dataset_val)
         val_metrics = arena.evaluate(list(range(len(dataset_val))))
         metrics['val_metrics'].append(val_metrics)
         metrics['val_losses'].append(val_metrics["avg_expected_loss"])
         
+        # Test set evaluation - expected loss without annotations
+        arena.set_dataset(dataset_test)
+        test_metrics = arena.evaluate(list(range(len(dataset_test))))
+        metrics['test_expected_losses'].append(test_metrics["avg_expected_loss"])
+        
+        # Create a clone of the test set with overlap annotations applied
+        annotated_test_dataset = copy.deepcopy(dataset_test)
+        annotations_applied = 0
+        
+        # Temporarily set up an arena for the annotated test set
+        test_arena = AnnotationArena(model, device)
+        test_arena.set_dataset(annotated_test_dataset)
+        
+        # Apply annotations to overlapping examples
+        for test_idx, positions in test_overlap_annotations.items():
+            for pos in positions:
+                if test_arena.observe_position(test_idx, pos):
+                    annotations_applied += 1
+        
+        # Evaluate with overlap annotations
+        if annotations_applied > 0:
+            test_arena.set_dataset(annotated_test_dataset)
+            annotated_test_metrics = test_arena.evaluate(list(range(len(annotated_test_dataset))))
+            metrics['test_annotated_losses'].append(annotated_test_metrics["avg_expected_loss"])
+        else:
+            metrics['test_annotated_losses'].append(test_metrics["avg_expected_loss"])
+        
         # Update metrics
         metrics['examples_annotated'].append(len(selected_examples))
         metrics['features_annotated'].append(total_features_annotated)
-        metrics['benefit_cost_ratios'].append(1.0)  # For all-observe, just set to 1.0
-        metrics['observation_costs'].append(np.sum(cycle_observation_costs) if cycle_observation_costs else 0.0)
+        metrics['benefit_cost_ratios'].append(1.0)
+        metrics['observation_costs'].append(np.sum(cycle_observation_costs))
         
-        print(f"Cycle {cycle+1} metrics: {val_metrics}")
+        cycle_count += 1
         
-    # Final evaluation on test set
-    arena.set_dataset(dataset_test)
-    test_metrics = arena.evaluate(list(range(len(dataset_test))))
+    # Final test evaluation
     metrics['test_metrics'] = test_metrics
     
-    # Get internal metrics history
+    # Get arena metrics history
     arena_metrics = arena.get_metrics_history()
     metrics['arena_training_losses'] = arena_metrics["training_losses"]
     metrics['observation_history'] = arena_metrics["observation_history"]
     metrics['prediction_history'] = arena_metrics["prediction_history"]
     
-    print(f"Final test metrics: {test_metrics}")
-    
     return metrics
-
 
 def plot_loss_reduction(results_dict, save_path):
     """
@@ -1154,9 +1271,73 @@ def plot_loss_reduction(results_dict, save_path):
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
 
+def plot_loss_cycles(results_dict, save_path=None):
+    """
+    Plot losses over cycles for both expected and annotated evaluations.
+    
+    Args:
+        results_dict: Dictionary with strategy names as keys and experiment results as values
+        save_path: Path to save the plot
+    """
+    fig, ax = plt.subplots(figsize=(12, 8))
+    
+    # Define colors and markers
+    colors = ['blue', 'red', 'green', 'purple', 'orange', 'brown']
+    markers = ['o', 's', '^', 'D', 'X', '*']
+    
+    for i, (strategy, results) in enumerate(results_dict.items()):
+        # Plot expected loss on test set (solid line)
+        if 'test_expected_losses' in results:
+            expected_losses = results['test_expected_losses']
+            cycles = list(range(len(expected_losses)))
+            
+            ax.plot(cycles, expected_losses, 
+                    linestyle='-', 
+                    color=colors[i % len(colors)],
+                    marker=markers[i % len(markers)], 
+                    label=f"{strategy} (Expected)",
+                    linewidth=2,
+                    markersize=6)
+            
+            # Plot annotated loss on test set (dotted line)
+            if 'test_annotated_losses' in results:
+                annotated_losses = results['test_annotated_losses']
+                
+                # Find where the lines diverge
+                for c in range(1, len(cycles)):
+                    if expected_losses[c] != annotated_losses[c]:
+                        # Draw a vertical line to show the drop
+                        ax.plot([cycles[c], cycles[c]], 
+                                [expected_losses[c], annotated_losses[c]],
+                                linestyle='-', 
+                                color=colors[i % len(colors)],
+                                linewidth=1,
+                                alpha=0.6)
+                
+                ax.plot(cycles, annotated_losses, 
+                        linestyle=':', 
+                        color=colors[i % len(colors)],
+                        marker=markers[i % len(markers)], 
+                        label=f"{strategy} (Annotated)",
+                        linewidth=2,
+                        markersize=6,
+                        alpha=0.8)
+    
+    ax.set_title('Loss on Test Set Over Cycles', fontsize=14)
+    ax.set_xlabel('Cycles', fontsize=12)
+    ax.set_ylabel('Loss', fontsize=12)
+    ax.grid(True, linestyle='--', alpha=0.7)
+    ax.legend(loc='upper right')
+    
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    else:
+        return fig, ax
 
 def main():
-    # Parse arguments
+    
     parser = argparse.ArgumentParser(description="Run Annotation Arena experiments")
     parser.add_argument("--cycles", type=int, default=5, help="Number of active learning cycles")
     parser.add_argument("--examples_per_cycle", type=int, default=20, help="Number of examples to select per cycle")
@@ -1168,21 +1349,20 @@ def main():
                        help="Experiment to run ('all', 'random_all', 'random_5', 'gradient_all', 'gradient_sequential', 'gradient_voi', 'gradient_fast_voi')")
     parser.add_argument("--resample_validation", action="store_true", help="Resample validation set on each cycle")
     parser.add_argument("--loss_type", type=str, default="cross_entropy", help="Type of loss to use (cross_entropy, l2)")
+    parser.add_argument("--run_until_exhausted", action="store_true", help="Run until annotation pool is exhausted")
     args = parser.parse_args()
     
-    
-    # Set up paths
+    # Set up paths and device
     base_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs"
     data_path = os.path.join(base_path, "data")
     models_path = os.path.join(base_path, "models")
     results_path = os.path.join(base_path, "results")
     os.makedirs(results_path, exist_ok=True)
     
-    # Set up device
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     
-    # Set up data manager and load datasets
+    # Load datasets
     data_manager = DataManager()
     data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0)
     
@@ -1193,18 +1373,31 @@ def main():
     
     print(f"Loaded datasets: Train={len(train_dataset)}, Val={len(val_dataset)}, Test={len(test_dataset)}, Active Pool={len(active_pool_dataset)}")
     
+    # Initialize model
     model = Imputer(
-        question_num=7, 
-        max_choices=5, 
-        encoder_layers_num=6,
-        attention_heads=4, 
-        hidden_dim=64, 
-        num_annotator=18, 
-        annotator_embedding_dim=19, 
-        dropout=0.1
+        question_num=7, max_choices=5, encoder_layers_num=6,
+        attention_heads=4, hidden_dim=64, num_annotator=18, 
+        annotator_embedding_dim=19, dropout=0.1
     ).to(device)
     
     experiment_results = {}
+
+    if args.experiment == "all" or args.experiment == "gradient_all":
+        print("\n=== Running Gradient-All Experiment ===")
+        model_copy = copy.deepcopy(model)
+        results = run_gradient_all_observe_experiment(
+            active_pool_dataset, val_dataset, test_dataset,
+            model=model_copy,
+            cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
+            epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+            device=device, resample_validation=args.resample_validation,
+            run_until_exhausted=args.run_until_exhausted
+        )
+        experiment_results["gradient_all"] = results
+        
+        torch.save(model_copy.state_dict(), os.path.join(models_path, "gradient_all.pth"))
+        with open(os.path.join(results_path, "gradient_all.json"), "w") as f:
+            json.dump(results, f, indent=4)
     
     if args.experiment == "all" or args.experiment == "random_all":
         print("\n=== Running Random-All Experiment ===")
@@ -1214,7 +1407,8 @@ def main():
             example_strategy="random", model=model_copy,
             cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
             epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-            device=device, resample_validation=args.resample_validation
+            device=device, resample_validation=args.resample_validation,
+            run_until_exhausted=args.run_until_exhausted
         )
         experiment_results["random_all"] = results
         
@@ -1231,28 +1425,13 @@ def main():
             cycles=args.cycles, examples_per_cycle=args.examples_per_cycle, 
             features_per_example=args.features_per_example,
             epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-            device=device, resample_validation=args.resample_validation
+            device=device, resample_validation=args.resample_validation,
+            run_until_exhausted=args.run_until_exhausted
         )
         experiment_results["gradient_fast_voi"] = results
         
         torch.save(model_copy.state_dict(), os.path.join(models_path, "gradient_fast_voi.pth"))
         with open(os.path.join(results_path, "gradient_fast_voi.json"), "w") as f:
-            json.dump(results, f, indent=4)
-    
-    if args.experiment == "all" or args.experiment == "gradient_all":
-        print("\n=== Running Gradient-All Experiment ===")
-        model_copy = copy.deepcopy(model)
-        results = run_gradient_all_observe_experiment(
-            active_pool_dataset, val_dataset, test_dataset,
-            model=model_copy,
-            cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
-            epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-            device=device, resample_validation=args.resample_validation
-        )
-        experiment_results["gradient_all"] = results
-        
-        torch.save(model_copy.state_dict(), os.path.join(models_path, "gradient_all.pth"))
-        with open(os.path.join(results_path, "gradient_all.json"), "w") as f:
             json.dump(results, f, indent=4)
     
     if args.experiment == "all" or args.experiment == "random_5":
@@ -1264,7 +1443,8 @@ def main():
             cycles=args.cycles, examples_per_cycle=args.examples_per_cycle, 
             features_per_example=args.features_per_example,
             epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-            device=device, resample_validation=args.resample_validation
+            device=device, resample_validation=args.resample_validation,
+            run_until_exhausted=args.run_until_exhausted
         )
         experiment_results["random_5"] = results
         
@@ -1281,7 +1461,8 @@ def main():
             cycles=args.cycles, examples_per_cycle=args.examples_per_cycle, 
             features_per_example=args.features_per_example,
             epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-            device=device, resample_validation=args.resample_validation
+            device=device, resample_validation=args.resample_validation,
+            run_until_exhausted=args.run_until_exhausted
         )
         experiment_results["gradient_sequential"] = results
         
@@ -1298,7 +1479,8 @@ def main():
             cycles=args.cycles, examples_per_cycle=args.examples_per_cycle, 
             features_per_example=args.features_per_example,
             epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-            device=device, resample_validation=args.resample_validation
+            device=device, resample_validation=args.resample_validation,
+            run_until_exhausted=args.run_until_exhausted
         )
         experiment_results["gradient_voi"] = results
         
@@ -1308,7 +1490,10 @@ def main():
             json.dump(results, f, indent=4)
     
     if experiment_results:
+
+        plot_loss_cycles(experiment_results, os.path.join(results_path, "loss_cycles.png"))
         plot_loss_reduction(experiment_results, os.path.join(results_path, "loss_reduction.png"))
+        
         with open(os.path.join(results_path, "combined_results.json"), "w") as f:
             json.dump(experiment_results, f, indent=4)
             
