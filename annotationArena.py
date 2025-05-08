@@ -709,7 +709,7 @@ def run_experiment(dataset_train, dataset_val, dataset_test,
         if resample_validation and cycle > 0:
             dataset_val, active_pool = resample_validation_dataset(
                 dataset_train, dataset_val, active_pool, annotated_examples, 
-                strategy="add_only", update_percentage=20
+                strategy="replace_all", update_percentage=20
             )
         
         if example_strategy == "random":
@@ -861,7 +861,7 @@ def run_gradient_all_observe_experiment(dataset_train, dataset_val, dataset_test
         if resample_validation and cycle > 0:
             dataset_val, active_pool = resample_validation_dataset(
                 dataset_train, dataset_val, active_pool, annotated_examples, 
-                strategy="add_only", update_percentage=20
+                strategy="replace_all", update_percentage=20
             )
         
         gradient_strategy = GradientSelectionStrategy(model, device)
@@ -977,7 +977,7 @@ def run_all_observe_experiment(dataset_train, dataset_val, dataset_test,
         if resample_validation and cycle > 0:
             dataset_val, active_pool = resample_validation_dataset(
                 dataset_train, dataset_val, active_pool, annotated_examples, 
-                strategy="add_only", update_percentage=20
+                strategy="replace_all", update_percentage=20
             )
         
         # 1. Select examples

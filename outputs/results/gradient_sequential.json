@@ -1,0 +1,1348 @@
+{
+    "training_losses": [
+        19.882815678914387,
+        15.170605818430582,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+    ],
+    "val_losses": [
+        1.5684840659300485,
+        1.380272367927763,
+        1.3449871321519216,
+        1.3472458560157705,
+        1.3472458560157705,
+        1.3472458560157705,
+        1.3472458560157705,
+        1.3472458560157705
+    ],
+    "examples_annotated": [
+        20,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0
+    ],
+    "features_annotated": [
+        82,
+        17,
+        0,
+        0,
+        0,
+        0,
+        0
+    ],
+    "val_metrics": [
+        {
+            "rmse": 1.002773930432755,
+            "mae": 0.7444444444444445,
+            "pearson": 0.6270296428642088,
+            "spearman": 0.6418109732679096,
+            "kendall": 0.5621685467007835,
+            "accuracy": 0.37222222222222223,
+            "avg_expected_loss": 1.5684840659300485
+        },
+        {
+            "rmse": 1.3364546797819636,
+            "mae": 1.0638888888888889,
+            "pearson": 0.12855400988220944,
+            "spearman": 0.12737291669812062,
+            "kendall": 0.11615259887365773,
+            "accuracy": 0.26944444444444443,
+            "avg_expected_loss": 1.380272367927763
+        },
+        {
+            "rmse": 1.481365736219265,
+            "mae": 1.1888888888888889,
+            "pearson": 0.40752615268249737,
+            "spearman": 0.437975516322793,
+            "kendall": 0.3834666038477789,
+            "accuracy": 0.25555555555555554,
+            "avg_expected_loss": 1.3449871321519216
+        },
+        {
+            "rmse": 1.5153535218873173,
+            "mae": 1.2407407407407407,
+            "pearson": 0.32867714053567787,
+            "spearman": 0.3487867634435167,
+            "kendall": 0.3059398372747281,
+            "accuracy": 0.2222222222222222,
+            "avg_expected_loss": 1.3472458560157705
+        },
+        {
+            "rmse": 1.5153535218873173,
+            "mae": 1.2407407407407407,
+            "pearson": 0.32867714053567787,
+            "spearman": 0.3487867634435167,
+            "kendall": 0.3059398372747281,
+            "accuracy": 0.2222222222222222,
+            "avg_expected_loss": 1.3472458560157705
+        },
+        {
+            "rmse": 1.5153535218873173,
+            "mae": 1.2407407407407407,
+            "pearson": 0.32867714053567787,
+            "spearman": 0.3487867634435167,
+            "kendall": 0.3059398372747281,
+            "accuracy": 0.2222222222222222,
+            "avg_expected_loss": 1.3472458560157705
+        },
+        {
+            "rmse": 1.5153535218873173,
+            "mae": 1.2407407407407407,
+            "pearson": 0.32867714053567787,
+            "spearman": 0.3487867634435167,
+            "kendall": 0.3059398372747281,
+            "accuracy": 0.2222222222222222,
+            "avg_expected_loss": 1.3472458560157705
+        },
+        {
+            "rmse": 1.5153535218873173,
+            "mae": 1.2407407407407407,
+            "pearson": 0.32867714053567787,
+            "spearman": 0.3487867634435167,
+            "kendall": 0.3059398372747281,
+            "accuracy": 0.2222222222222222,
+            "avg_expected_loss": 1.3472458560157705
+        }
+    ],
+    "benefit_cost_ratios": [
+        1.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+    ],
+    "observation_costs": [
+        82.0,
+        17.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0
+    ],
+    "test_metrics": {
+        "rmse": 1.3102162671355697,
+        "mae": 0.8833333333333333,
+        "pearson": 0.4103994434096625,
+        "spearman": 0.41075171212096184,
+        "kendall": 0.35976556584439356,
+        "accuracy": 0.4708333333333333,
+        "avg_expected_loss": 1.2881837318340936
+    },
+    "arena_training_losses": [
+        19.882815678914387,
+        15.170605818430582
+    ],
+    "observation_history": [
+        {
+            "variable_id": "example_296_position_10",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 0,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_296_position_12",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 1,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_428_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 2,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_428_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 3,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_428_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 4,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_428_position_10",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 5,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_428_position_11",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 6,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_228_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 7,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_228_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 8,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_228_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 9,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_228_position_10",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 10,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_228_position_11",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 11,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_254_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 12,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_254_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 13,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_254_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 14,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_254_position_10",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 15,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_254_position_11",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 16,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_356_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 17,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_356_position_13",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 18,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_564_position_8",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 19,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_564_position_10",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 20,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_505_position_10",
+            "value": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 21,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_505_position_12",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 22,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_43_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 23,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_43_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 24,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_43_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 25,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_43_position_10",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 26,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_43_position_11",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 27,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_148_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 28,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_148_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 29,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_148_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 30,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_148_position_10",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 31,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_148_position_11",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 32,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_104_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 33,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_104_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 34,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_104_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 35,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_104_position_10",
+            "value": [
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 36,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_104_position_11",
+            "value": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 37,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_534_position_10",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 38,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_534_position_12",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 39,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_178_position_7",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 40,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_178_position_8",
+            "value": [
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 41,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_178_position_9",
+            "value": [
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 42,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_178_position_10",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 43,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_178_position_11",
+            "value": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 44,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_337_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 45,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_337_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 46,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_337_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 47,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_337_position_10",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 48,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_337_position_11",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 49,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_32_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 50,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_32_position_12",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 51,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_401_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 52,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_401_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 53,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_401_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 54,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_401_position_10",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 55,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_401_position_11",
+            "value": [
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 56,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_502_position_7",
+            "value": [
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 57,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_502_position_8",
+            "value": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 58,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_502_position_9",
+            "value": [
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 59,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_502_position_10",
+            "value": [
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 60,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_502_position_11",
+            "value": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 61,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_367_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 62,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_367_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 63,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_367_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 64,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_367_position_10",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 65,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_367_position_11",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 66,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_230_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 67,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_230_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 68,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_230_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 69,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_230_position_10",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 70,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_230_position_11",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 71,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_85_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 72,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_85_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 73,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_85_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 74,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_85_position_10",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 75,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_85_position_11",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 76,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_160_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 77,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_160_position_8",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 78,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_160_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 79,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_160_position_10",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 80,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_160_position_11",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 81,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_263_position_7",
+            "value": [
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 82,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_263_position_8",
+            "value": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 83,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_263_position_9",
+            "value": [
+                0.0,
+                1.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 84,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_263_position_10",
+            "value": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 85,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_263_position_11",
+            "value": [
+                1.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 86,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_42_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 87,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_42_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 88,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_42_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 89,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_42_position_10",
+            "value": [
+                0.0,
+                0.0,
+                1.0,
+                0.0,
+                0.0
+            ],
+            "timestamp": 90,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_42_position_11",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 91,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_238_position_7",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 92,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_238_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 93,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_238_position_9",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 94,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_238_position_10",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 95,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_238_position_11",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 96,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_138_position_8",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                1.0,
+                0.0
+            ],
+            "timestamp": 97,
+            "cost": 1.0
+        },
+        {
+            "variable_id": "example_138_position_13",
+            "value": [
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                1.0
+            ],
+            "timestamp": 98,
+            "cost": 1.0
+        }
+    ],
+    "prediction_history": [
+        {
+            "timestamp": 0,
+            "loss": 16.98839406967163
+        },
+        {
+            "timestamp": 1,
+            "loss": 19.576848602294923
+        },
+        {
+            "timestamp": 2,
+            "loss": 18.278753089904786
+        }
+    ]
+}
