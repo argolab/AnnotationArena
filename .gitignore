@@ -1,4 +1,4 @@
-outputs/data/results/*.json
+outputs/data/results
 outputs/models
 __pycache__/
 slurm*
