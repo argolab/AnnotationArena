@@ -7,14 +7,16 @@ def load_experiment_results(results_path):
     """Load all experiment results from JSON files."""
     experiment_results = {}
     
-    # List of possible experiment files
+    # List of possible experiment files - UPDATED to include entropy experiments
     experiment_files = [
         "gradient_all.json", 
         "random_all.json", 
         "random_5.json", 
         "gradient_sequential.json", 
         "gradient_voi.json", 
-        "gradient_fast_voi.json"
+        "gradient_fast_voi.json",
+        "entropy_all.json",  # Added new entropy experiment
+        "entropy_5.json"     # Added new entropy experiment
     ]
     
     for filename in experiment_files:
@@ -31,9 +33,9 @@ def load_experiment_results(results_path):
     return experiment_results
 
 def plot_observe_all_experiments(results_dict, save_path):
-    """Plot 'observe all' experiments (gradient_all, random_all)."""
-    # Filter only the relevant experiments
-    observe_all_results = {k: v for k, v in results_dict.items() if k in ['gradient_all', 'random_all']}
+    """Plot 'observe all' experiments (gradient_all, random_all, entropy_all)."""
+    # Filter only the relevant experiments - UPDATED to include entropy_all
+    observe_all_results = {k: v for k, v in results_dict.items() if k in ['gradient_all', 'random_all', 'entropy_all']}
     
     if not observe_all_results:
         print("No 'observe all' experiment results found")
@@ -41,14 +43,18 @@ def plot_observe_all_experiments(results_dict, save_path):
     
     fig, ax = plt.subplots(figsize=(14, 10))
     
+    # UPDATED to include entropy_all
     colors = {
         'gradient_all': 'red',
-        'random_all': 'green'
+        'random_all': 'green',
+        'entropy_all': 'blue'  # New color for entropy
     }
     
+    # UPDATED to include entropy_all
     markers = {
         'gradient_all': 'o',
-        'random_all': '^'
+        'random_all': '^',
+        'entropy_all': 's'  # New marker for entropy
     }
     
     for strategy, results in observe_all_results.items():
@@ -105,10 +111,10 @@ def plot_observe_all_experiments(results_dict, save_path):
     print(f"Saved 'observe all' plot to {save_path}")
 
 def plot_observe_5_experiments(results_dict, save_path):
-    """Plot 'observe 5' experiments (random_5, gradient_sequential, gradient_voi)."""
-    # Filter only the relevant experiments (excluding gradient_fast_voi)
+    """Plot 'observe 5' experiments (random_5, gradient_sequential, gradient_voi, entropy_5)."""
+    # Filter only the relevant experiments - UPDATED to include entropy_5
     observe_5_results = {k: v for k, v in results_dict.items() 
-                         if k in ['random_5', 'gradient_sequential', 'gradient_voi']}
+                         if k in ['random_5', 'gradient_sequential', 'gradient_voi', 'entropy_5']}
     
     if not observe_5_results:
         print("No 'observe 5' experiment results found")
@@ -116,16 +122,20 @@ def plot_observe_5_experiments(results_dict, save_path):
     
     fig, ax = plt.subplots(figsize=(14, 10))
     
+    # UPDATED to include entropy_5
     colors = {
         'random_5': 'purple',
         'gradient_sequential': 'orange',
-        'gradient_voi': 'brown'
+        'gradient_voi': 'brown',
+        'entropy_5': 'darkgreen'  # New color for entropy
     }
     
+    # UPDATED to include entropy_5
     markers = {
         'random_5': 'D',
         'gradient_sequential': 's',
-        'gradient_voi': '*'
+        'gradient_voi': '*',
+        'entropy_5': 'X'  # New marker for entropy
     }
     
     for strategy, results in observe_5_results.items():
@@ -260,22 +270,28 @@ def plot_feature_counts(results_dict, save_path):
     """Plot the number of features annotated per cycle for each method."""
     fig, ax = plt.subplots(figsize=(14, 10))
     
+    # UPDATED to include entropy methods
     colors = {
         'gradient_all': 'red',
         'random_all': 'green',
         'random_5': 'purple',
         'gradient_sequential': 'orange',
         'gradient_voi': 'brown',
-        'gradient_fast_voi': 'blue'
+        'gradient_fast_voi': 'blue',
+        'entropy_all': 'darkblue',  # New color for entropy_all
+        'entropy_5': 'darkgreen'    # New color for entropy_5
     }
     
+    # UPDATED to include entropy methods
     markers = {
         'gradient_all': 'o',
         'random_all': '^',
         'random_5': 'D',
         'gradient_sequential': 's',
         'gradient_voi': '*',
-        'gradient_fast_voi': 'X'
+        'gradient_fast_voi': 'X',
+        'entropy_all': 's',  # New marker for entropy_all
+        'entropy_5': 'P'     # New marker for entropy_5
     }
     
     for strategy, results in results_dict.items():
@@ -303,7 +319,6 @@ def plot_feature_counts(results_dict, save_path):
     print(f"Saved feature counts plot to {save_path}")
 
 def create_plots():
-
     base_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs"
     results_path = os.path.join(base_path, "results")
     plots_path = os.path.join(results_path, "plots")
