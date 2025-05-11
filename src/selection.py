@@ -1048,6 +1048,170 @@ class GradientSelectionStrategy(ExampleSelectionStrategy):
         
         return selected_indices, selected_scores
 
+class EntropyExampleSelectionStrategy(ExampleSelectionStrategy):
+    """
+    Entropy-based example selection strategy for Active Learning.
+    
+    Selects examples with the highest predictive entropy, indicating
+    the model is most uncertain about these examples.
+    """
+    
+    def __init__(self, model, device=None):
+        """Initialize entropy example selection strategy."""
+        super().__init__("entropy", model, device)
+    
+    def select_examples(self, dataset, num_to_select=1, costs=None, **kwargs):
+        """
+        Select examples with highest prediction entropy.
+        
+        Args:
+            dataset: Dataset to select from
+            num_to_select: Number of examples to select
+            costs: Dictionary mapping example indices to their annotation costs
+            **kwargs: Additional arguments
+            
+        Returns:
+            list: Indices of selected examples
+            list: Entropy scores for selected examples
+        """
+        self.model.eval()
+        
+        # Calculate entropy for all examples
+        entropies = []
+        valid_indices = []
+        
+        for idx in range(len(dataset)):
+            masked_positions = dataset.get_masked_positions(idx)
+            if not masked_positions:
+                continue
+                
+            valid_indices.append(idx)
+            
+            # Get data for this example
+            known_questions, inputs, answers, annotators, questions = dataset[idx]
+            inputs = inputs.unsqueeze(0).to(self.device)
+            answers = answers.unsqueeze(0).to(self.device)
+            annotators = annotators.unsqueeze(0).to(self.device)
+            questions = questions.unsqueeze(0).to(self.device)
+            
+            # Make predictions
+            with torch.no_grad():
+                outputs = self.model(inputs, annotators, questions)
+                
+                # Calculate entropy for all masked positions
+                total_entropy = 0.0
+                count = 0
+                
+                for pos in masked_positions:
+                    # Get probabilities for this position
+                    logits = outputs[0, pos]
+                    probs = F.softmax(logits, dim=0)
+                    
+                    # Calculate entropy: -sum(p_i * log(p_i))
+                    entropy = -torch.sum(probs * torch.log(probs + 1e-10)).item()
+                    total_entropy += entropy
+                    count += 1
+                
+                # Average entropy across all masked positions
+                avg_entropy = total_entropy / max(1, count)
+                entropies.append(avg_entropy)
+        
+        if not valid_indices:
+            return [], []
+            
+        # Adjust for costs if provided
+        if costs:
+            adjusted_scores = []
+            for i, idx in enumerate(valid_indices):
+                cost = costs.get(idx, 1.0)
+                adjusted_scores.append(entropies[i] / max(cost, 1e-10))
+                
+            # Sort by adjusted scores
+            sorted_indices = [x for _, x in sorted(zip(adjusted_scores, valid_indices), reverse=True)]
+            sorted_scores = sorted(adjusted_scores, reverse=True)
+        else:
+            # Sort by entropy
+            sorted_indices = [x for _, x in sorted(zip(entropies, valid_indices), reverse=True)]
+            sorted_scores = sorted(entropies, reverse=True)
+        
+        # Select top examples
+        selected_indices = sorted_indices[:num_to_select]
+        selected_scores = sorted_scores[:num_to_select]
+        
+        return selected_indices, selected_scores
+
+
+class EntropyFeatureSelectionStrategy(FeatureSelectionStrategy):
+    """
+    Entropy-based feature selection strategy for Active Feature Acquisition.
+    
+    Selects features with the highest predictive entropy, indicating
+    the model is most uncertain about these features.
+    """
+    
+    def __init__(self, model, device=None):
+        """Initialize entropy feature selection strategy."""
+        super().__init__("entropy", model, device)
+    
+    def select_features(self, example_idx, dataset, num_to_select=1, costs=None, **kwargs):
+        """
+        Select features with highest prediction entropy within an example.
+        
+        Args:
+            example_idx: Index of the example to select features from
+            dataset: Dataset containing the example
+            num_to_select: Number of features to select
+            costs: Dictionary mapping positions to their annotation costs
+            **kwargs: Additional arguments
+            
+        Returns:
+            list: Tuples of (position_idx, entropy, cost, entropy/cost_ratio) for selected positions
+        """
+        self.model.eval()
+        
+        # Get masked positions for this example
+        masked_positions = dataset.get_masked_positions(example_idx)
+        
+        if not masked_positions:
+            return []
+            
+        # Get data for this example
+        known_questions, inputs, answers, annotators, questions = dataset[example_idx]
+        inputs = inputs.unsqueeze(0).to(self.device)
+        answers = answers.unsqueeze(0).to(self.device)
+        annotators = annotators.unsqueeze(0).to(self.device)
+        questions = questions.unsqueeze(0).to(self.device)
+        
+        # Make predictions
+        with torch.no_grad():
+            outputs = self.model(inputs, annotators, questions)
+            
+            # Calculate entropy for each masked position
+            position_entropies = []
+            
+            for position in masked_positions:
+                # Get probabilities for this position
+                logits = outputs[0, position]
+                probs = F.softmax(logits, dim=0)
+                
+                # Calculate entropy: -sum(p_i * log(p_i))
+                entropy = -torch.sum(probs * torch.log(probs + 1e-10)).item()
+                
+                # Get cost for this position
+                cost = 1.0  # Default cost
+                if costs and position in costs:
+                    cost = costs[position]
+                    
+                # Calculate benefit/cost ratio
+                ratio = entropy / max(cost, 1e-10)
+                
+                position_entropies.append((position, entropy, cost, ratio))
+        
+        # Sort by entropy/cost ratio (highest first)
+        position_entropies.sort(key=lambda x: x[3], reverse=True)
+        
+        # Return top selections
+        return position_entropies[:num_to_select]
 
 class CombinedSelectionStrategy:
     """
@@ -1165,6 +1329,8 @@ class SelectionFactory:
             return RandomExampleSelectionStrategy(model, device)
         elif strategy_name == "gradient":
             return GradientSelectionStrategy(model, device)
+        elif strategy_name == "entropy":
+            return EntropyExampleSelectionStrategy(model, device)
         else:
             raise ValueError(f"Unknown example selection strategy: {strategy_name}")
     
@@ -1188,8 +1354,9 @@ class SelectionFactory:
         elif strategy_name == "fast_voi":
             return FastVOISelectionStrategy(model, device)
         elif strategy_name == "sequential":
-            # Create a simple strategy that selects positions sequentially
-            return RandomFeatureSelectionStrategy(model, device)  # Reuse random but override select_features
+            return RandomFeatureSelectionStrategy(model, device)
+        elif strategy_name == "entropy":
+            return EntropyFeatureSelectionStrategy(model, device)
         else:
             raise ValueError(f"Unknown feature selection strategy: {strategy_name}")
     
