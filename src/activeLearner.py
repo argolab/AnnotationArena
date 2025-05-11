@@ -133,7 +133,7 @@ def run_experiment(
         if resample_validation and cycle_count > 0:
             dataset_val, active_pool = resample_validation_dataset(
                 dataset_train, dataset_val, active_pool, annotated_examples, 
-                strategy="add_only", update_percentage=20
+                strategy="add_selected", update_percentage=20
             )
         
         # Select examples based on strategy

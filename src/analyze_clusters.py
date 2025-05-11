@@ -573,68 +573,19 @@ def main():
     selections_by_strategy = track_selections_by_cycle(strategy_results)
     
     # Calculate diversity metrics for each strategy and cycle
-    # print("Computing diversity metrics...")
-    # diversity_by_strategy = {}
-    # for strategy, selections_by_cycle in selections_by_strategy.items():
-    #     diversity_by_strategy[strategy] = {}
-    #     for cycle, selected_indices in selections_by_cycle.items():
-    #         diversity_by_strategy[strategy][cycle] = compute_diversity_metrics(
-    #             feature_vectors, list(selected_indices)
-    #         )
+    print("Computing diversity metrics...")
+    diversity_by_strategy = {}
+    for strategy, selections_by_cycle in selections_by_strategy.items():
+        diversity_by_strategy[strategy] = {}
+        for cycle, selected_indices in selections_by_cycle.items():
+            diversity_by_strategy[strategy][cycle] = compute_diversity_metrics(
+                feature_vectors, list(selected_indices)
+            )
     
     # Visualize selections for each strategy
-    # print("Generating visualizations...")
-    # for strategy, selections_by_cycle in selections_by_strategy.items():
-    #     print(f"Visualizing {strategy}...")
-    #     embedded = visualize_selections(
-    #         feature_vectors, 
-    #         selections_by_cycle, 
-    #         strategy, 
-    #         save_path=os.path.join(plots_path, f'{strategy}_tsne.png')
-    #     )
-        
-    #     # Create animation of selection evolution
-    #     create_cycle_animation(
-    #         feature_vectors,
-    #         selections_by_cycle,
-    #         strategy,
-    #         save_path=os.path.join(plots_path, f'{strategy}_evolution.gif')
-    #     )
-    
-    # Plot diversity trends
-    # print("Plotting diversity trends...")
-    # plot_diversity_trends(strategy_results.keys(), diversity_by_strategy)
-    
-    # Save diversity metrics to CSV
-    # diversity_data = []
-    # for strategy in diversity_by_strategy:
-    #     for cycle in diversity_by_strategy[strategy]:
-    #         metrics = diversity_by_strategy[strategy][cycle]
-    #         row = {'strategy': strategy, 'cycle': cycle}
-    #         row.update(metrics)
-    #         diversity_data.append(row)
-    
-    # diversity_df = pd.DataFrame(diversity_data)
-    # diversity_df.to_csv(os.path.join(plots_path, 'diversity_metrics.csv'), index=False)
-    
-    # print(f"Analysis complete! Results saved to {plots_path}")
-
-    print("Performing clustering analysis...")
-    clustering_results, cluster_centers = analyze_clustering_by_cycle(
-        feature_vectors, selections_by_strategy
-    )
-    
-    print("Fitting Gaussian Mixture Models...")
-    gmm_results = fit_gaussian_mixture(feature_vectors, selections_by_strategy)
-    
-    print("Analyzing cycle transitions...")
-    transition_results = analyze_cycle_transitions(
-        feature_vectors, selections_by_strategy, clustering_results
-    )
-    
-    print("Generating cluster evolution visualizations...")
+    print("Generating visualizations...")
     for strategy, selections_by_cycle in selections_by_strategy.items():
-        # Get t-SNE embeddings for this strategy
+        print(f"Visualizing {strategy}...")
         embedded = visualize_selections(
             feature_vectors, 
             selections_by_cycle, 
@@ -642,43 +593,31 @@ def main():
             save_path=os.path.join(plots_path, f'{strategy}_tsne.png')
         )
         
-        # Visualize cluster evolution
-        if strategy in clustering_results:
-            visualize_cluster_evolution(
-                {strategy: clustering_results[strategy]},
-                feature_vectors,
-                embedded,
-                save_path=plots_path
-            )
+        # Create animation of selection evolution
+        create_cycle_animation(
+            feature_vectors,
+            selections_by_cycle,
+            strategy,
+            save_path=os.path.join(plots_path, f'{strategy}_evolution.gif')
+        )
     
-    print("Generating density maps...")
-    # Use first strategy's embeddings as reference for all
-    first_strategy = list(selections_by_strategy.keys())[0]
-    reference_embedded = visualize_selections(
-        feature_vectors, 
-        selections_by_strategy[first_strategy],
-        first_strategy,
-        save_path=None
-    )
+    # Plot diversity trends
+    print("Plotting diversity trends...")
+    plot_diversity_trends(strategy_results.keys(), diversity_by_strategy)
     
-    plot_density_maps(
-        feature_vectors,
-        selections_by_strategy,
-        reference_embedded,
-        save_path=plots_path
-    )
+    # Save diversity metrics to CSV
+    diversity_data = []
+    for strategy in diversity_by_strategy:
+        for cycle in diversity_by_strategy[strategy]:
+            metrics = diversity_by_strategy[strategy][cycle]
+            row = {'strategy': strategy, 'cycle': cycle}
+            row.update(metrics)
+            diversity_data.append(row)
     
-    # Save transition metrics to CSV
-    transition_data = []
-    for strategy, transitions in transition_results.items():
-        for transition in transitions:
-            row = {'strategy': strategy}
-            row.update(transition)
-            transition_data.append(row)
+    diversity_df = pd.DataFrame(diversity_data)
+    diversity_df.to_csv(os.path.join(plots_path, 'diversity_metrics.csv'), index=False)
     
-    if transition_data:
-        transition_df = pd.DataFrame(transition_data)
-        transition_df.to_csv(os.path.join(plots_path, 'transition_metrics.csv'), index=False)
+    print(f"Analysis complete! Results saved to {plots_path}")
 
 if __name__ == "__main__":
     main()
