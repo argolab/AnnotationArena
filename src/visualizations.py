@@ -302,29 +302,22 @@ def plot_feature_counts(results_dict, save_path):
     plt.close()
     print(f"Saved feature counts plot to {save_path}")
 
-def main():
-    # Set up paths
+def create_plots():
+
     base_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs"
     results_path = os.path.join(base_path, "results")
     plots_path = os.path.join(results_path, "plots")
     os.makedirs(plots_path, exist_ok=True)
     
-    # Load experiment results
     experiment_results = load_experiment_results(results_path)
     
     if not experiment_results:
         print("No experiment results found.")
         return
     
-    # Create separate visualizations
     plot_observe_all_experiments(experiment_results, os.path.join(plots_path, "observe_all_experiments.png"))
     plot_observe_5_experiments(experiment_results, os.path.join(plots_path, "observe_5_experiments.png"))
     plot_voi_comparison(experiment_results, os.path.join(plots_path, "voi_comparison.png"))
-    
-    # Also plot feature counts for additional insight
     plot_feature_counts(experiment_results, os.path.join(plots_path, "feature_counts.png"))
     
     print(f"All plots saved to {plots_path}")
-
-if __name__ == "__main__":
-    main()

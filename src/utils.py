@@ -381,202 +381,6 @@ def compute_metrics(preds, true):
     }
 
 
-def plot_metrics_over_time(metrics_dict, save_path=None):
-    """
-    Plot metrics over time with confidence intervals.
-    
-    Args:
-        metrics_dict: Dictionary of metrics over time
-        save_path: Path to save the plot
-    """
-    fig, ax = plt.subplots(figsize=(12, 8))
-    
-    for metric_name, values in metrics_dict.items():
-        timestamps = list(range(len(values)))
-        mean_values = [v['mean'] for v in values]
-        
-        # Plot mean line
-        ax.plot(timestamps, mean_values, label=metric_name, linewidth=2, marker='o')
-        
-        # Plot confidence interval if available
-        if 'lower' in values[0] and 'upper' in values[0]:
-            lower_values = [v['lower'] for v in values]
-            upper_values = [v['upper'] for v in values]
-            ax.fill_between(timestamps, lower_values, upper_values, alpha=0.2)
-    
-    ax.set_xlabel('Time', fontsize=12)
-    ax.set_ylabel('Metric Value', fontsize=12)
-    ax.set_title('Metrics Over Time', fontsize=14)
-    ax.legend(loc='best')
-    ax.grid(True, linestyle='--', alpha=0.7)
-    
-    if save_path:
-        plt.tight_layout()
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-    else:
-        return fig, ax
-
-
-def plot_loss_and_metrics(results_dict, save_path=None):
-    """
-    Plot training losses and evaluation metrics over time for all strategies.
-    
-    Args:
-        results_dict: Dictionary with strategy names as keys and experiment results as values
-        save_path: Base path to save the plots
-    """
-    # Create figure with multiple subplots
-    fig, axes = plt.subplots(2, 2, figsize=(20, 16))
-    
-    # Define colors and markers
-    colors = ['blue', 'red', 'green', 'purple', 'orange']
-    markers = ['o', 's', '^', 'D', 'X']
-    
-    # 1. Training Losses
-    ax1 = axes[0, 0]
-    for i, (strategy, results) in enumerate(results_dict.items()):
-        if 'training_losses' in results:
-            losses = results['training_losses']
-            cycles = list(range(len(losses)))
-            
-            ax1.plot(cycles, losses, 
-                    linestyle='-', 
-                    color=colors[i % len(colors)],
-                    marker=markers[i % len(markers)], 
-                    label=strategy,
-                    linewidth=2,
-                    markersize=8)
-    
-    ax1.set_title('Training Loss Over Cycles', fontsize=14)
-    ax1.set_xlabel('Cycle', fontsize=12)
-    ax1.set_ylabel('Training Loss', fontsize=12)
-    ax1.grid(True, linestyle='--', alpha=0.7)
-    ax1.legend(loc='upper right')
-    
-    # 2. Validation Losses
-    ax2 = axes[0, 1]
-    for i, (strategy, results) in enumerate(results_dict.items()):
-        if 'val_losses' in results:
-            losses = results['val_losses']
-            cycles = list(range(len(losses)))
-            
-            ax2.plot(cycles, losses, 
-                    linestyle='-', 
-                    color=colors[i % len(colors)],
-                    marker=markers[i % len(markers)], 
-                    label=strategy,
-                    linewidth=2,
-                    markersize=8)
-    
-    ax2.set_title('Validation Loss Over Cycles', fontsize=14)
-    ax2.set_xlabel('Cycle', fontsize=12)
-    ax2.set_ylabel('Validation Loss', fontsize=12)
-    ax2.grid(True, linestyle='--', alpha=0.7)
-    ax2.legend(loc='upper right')
-    
-    # 3. RMSE Evolution
-    ax3 = axes[1, 0]
-    for i, (strategy, results) in enumerate(results_dict.items()):
-        if 'val_metrics' in results:
-            rmse_values = [metrics['rmse'] for metrics in results['val_metrics']]
-            cycles = list(range(len(rmse_values)))
-            
-            ax3.plot(cycles, rmse_values, 
-                    linestyle='-', 
-                    color=colors[i % len(colors)],
-                    marker=markers[i % len(markers)], 
-                    label=strategy,
-                    linewidth=2,
-                    markersize=8)
-    
-    ax3.set_title('RMSE Over Cycles', fontsize=14)
-    ax3.set_xlabel('Cycle', fontsize=12)
-    ax3.set_ylabel('RMSE', fontsize=12)
-    ax3.grid(True, linestyle='--', alpha=0.7)
-    ax3.legend(loc='upper right')
-    
-    # 4. Correlation Evolution
-    ax4 = axes[1, 1]
-    for i, (strategy, results) in enumerate(results_dict.items()):
-        if 'val_metrics' in results:
-            pearson_values = [metrics['pearson'] for metrics in results['val_metrics']]
-            cycles = list(range(len(pearson_values)))
-            
-            ax4.plot(cycles, pearson_values, 
-                    linestyle='-', 
-                    color=colors[i % len(colors)],
-                    marker=markers[i % len(markers)], 
-                    label=strategy,
-                    linewidth=2,
-                    markersize=8)
-    
-    ax4.set_title('Pearson Correlation Over Cycles', fontsize=14)
-    ax4.set_xlabel('Cycle', fontsize=12)
-    ax4.set_ylabel('Pearson Correlation', fontsize=12)
-    ax4.grid(True, linestyle='--', alpha=0.7)
-    ax4.legend(loc='lower right')
-    
-    # Save the combined plot
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(f"{save_path}_combined.png", dpi=300, bbox_inches='tight')
-    
-    # Create additional plot for benefit/cost analysis
-    fig2, axes2 = plt.subplots(1, 2, figsize=(20, 8))
-    
-    # 5. Benefit/Cost Ratios
-    ax5 = axes2[0]
-    for i, (strategy, results) in enumerate(results_dict.items()):
-        if 'benefit_cost_ratios' in results:
-            bc_ratios = results['benefit_cost_ratios']
-            cycles = list(range(len(bc_ratios)))
-            
-            ax5.plot(cycles, bc_ratios, 
-                    linestyle='-', 
-                    color=colors[i % len(colors)],
-                    marker=markers[i % len(markers)], 
-                    label=strategy,
-                    linewidth=2,
-                    markersize=8)
-    
-    ax5.set_title('Benefit/Cost Ratio Over Cycles', fontsize=14)
-    ax5.set_xlabel('Cycle', fontsize=12)
-    ax5.set_ylabel('Benefit/Cost Ratio', fontsize=12)
-    ax5.grid(True, linestyle='--', alpha=0.7)
-    ax5.legend(loc='upper right')
-    
-    # 6. Cumulative Annotation Cost
-    ax6 = axes2[1]
-    for i, (strategy, results) in enumerate(results_dict.items()):
-        if 'observation_costs' in results:
-            costs = results['observation_costs']
-            cumulative_costs = np.cumsum(costs)
-            cycles = list(range(len(costs)))
-            
-            ax6.plot(cycles, cumulative_costs, 
-                    linestyle='-', 
-                    color=colors[i % len(colors)],
-                    marker=markers[i % len(markers)], 
-                    label=strategy,
-                    linewidth=2,
-                    markersize=8)
-    
-    ax6.set_title('Cumulative Annotation Cost', fontsize=14)
-    ax6.set_xlabel('Cycle', fontsize=12)
-    ax6.set_ylabel('Cumulative Cost', fontsize=12)
-    ax6.grid(True, linestyle='--', alpha=0.7)
-    ax6.legend(loc='upper left')
-    
-    # Save the benefit/cost plot
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(f"{save_path}_benefit_cost.png", dpi=300, bbox_inches='tight')
-        plt.close()
-    
-    return True
-
-
 def minimum_bayes_risk_l2(distribution):
     """
     Compute the minimum Bayes risk decision for L2 loss.
@@ -615,3 +419,127 @@ def minimum_bayes_risk_ce(distribution):
     if isinstance(distribution, torch.Tensor):
         return torch.argmax(distribution).item()
     return np.argmax(distribution)
+
+def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotated_examples, 
+                               strategy="balanced", update_percentage=25, selected_examples = None):
+    """
+    Resample the validation dataset using annotated examples and active pool.
+    
+    Args:
+        dataset_train: Training dataset (source of data)
+        dataset_val: Current validation dataset
+        active_pool: List of indices available in the active pool
+        annotated_examples: List of indices of examples that have been annotated
+        strategy: Strategy for resampling ("balanced", "add_only", "replace_all")
+        update_percentage: Percentage of validation set to update (default: 25%)
+        
+    Returns:
+        tuple: (new_validation_dataset, updated_active_pool)
+    """
+    current_val_size = len(dataset_val)
+    
+    if strategy == "balanced":
+        num_to_update = max(1, int(current_val_size * update_percentage / 100))
+        new_val_indices = []
+        
+        if annotated_examples:
+            num_from_annotated = min(len(annotated_examples), num_to_update // 2)
+            if num_from_annotated > 0:
+                annotated_sample = random.sample(annotated_examples, num_from_annotated)
+                new_val_indices.extend(annotated_sample)
+        
+        remaining_needed = num_to_update - len(new_val_indices)
+        if remaining_needed > 0 and active_pool:
+            remaining_active = [idx for idx in active_pool if idx not in annotated_examples]
+            num_from_pool = min(len(remaining_active), remaining_needed)
+            if num_from_pool > 0:
+                pool_sample = random.sample(remaining_active, num_from_pool)
+                new_val_indices.extend(pool_sample)
+        
+        if new_val_indices:
+            keep_size = current_val_size - len(new_val_indices)
+            
+            # Create new validation dataset
+            new_val_data = []
+            if keep_size > 0:
+                for i in range(min(keep_size, current_val_size)):
+                    new_val_data.append(dataset_val.get_data_entry(i))
+            
+            # Add new examples
+            for idx in new_val_indices:
+                new_val_data.append(dataset_train.get_data_entry(idx))
+            
+            # Create new dataset
+            new_dataset_val = AnnotationDataset(new_val_data)
+            updated_active_pool = [idx for idx in active_pool if idx not in new_val_indices]
+            
+            print(f"Resampled validation set: {len(new_dataset_val)} examples ({len(new_val_indices)} new)")
+            return new_dataset_val, updated_active_pool
+    
+    elif strategy == "add_only":
+
+        max_to_add = max(1, int(current_val_size * update_percentage / 100))
+        num_to_add = min(len(annotated_examples), max_to_add)
+        
+        if num_to_add > 0:
+            # Get examples to add
+            examples_to_add = random.sample(annotated_examples, num_to_add)
+            
+            # Create new validation dataset
+            new_val_data = []
+            
+            # Keep all existing validation examples
+            for i in range(current_val_size):
+                new_val_data.append(dataset_val.get_data_entry(i))
+            
+            # Add new examples
+            for idx in examples_to_add:
+                new_val_data.append(dataset_train.get_data_entry(idx))
+            
+            new_dataset_val = AnnotationDataset(new_val_data)
+            
+            print(f"Added {num_to_add} annotated examples to validation set (now {len(new_dataset_val)} examples)")
+            return new_dataset_val, active_pool
+    
+    if strategy == "replace_all":
+        val_size = min(current_val_size, len(active_pool))
+        if val_size > 0:
+
+            new_val_indices = random.sample(active_pool, val_size)
+            
+            current_val_indices = [i for i in range(len(dataset_val))]
+            
+            new_val_data = []
+            for idx in new_val_indices:
+                new_val_data.append(dataset_train.get_data_entry(idx))
+            
+            new_dataset_val = AnnotationDataset(new_val_data)
+            
+            updated_active_pool = [idx for idx in active_pool if idx not in new_val_indices]
+            
+            for old_val_idx in current_val_indices:
+                if old_val_idx not in annotated_examples and old_val_idx not in updated_active_pool:
+                    updated_active_pool.append(old_val_idx)
+            
+            print(f"Completely replaced validation set with {len(new_dataset_val)} new examples")
+            print(f"Active pool size: {len(updated_active_pool)}")
+            return new_dataset_val, updated_active_pool
+        
+    elif strategy == "add_selected" and selected_examples:
+
+        new_val_data = []
+        
+        for i in range(current_val_size):
+            new_val_data.append(dataset_val.get_data_entry(i))
+        
+        examples_added = 0
+        for idx in selected_examples:
+            new_val_data.append(dataset_train.get_data_entry(idx))
+            examples_added += 1
+        
+        new_dataset_val = AnnotationDataset(new_val_data)
+        
+        print(f"Added {examples_added} selected examples to validation set (now {len(new_dataset_val)} examples)")
+        return new_dataset_val, active_pool
+    
+    return dataset_val, active_pool
