@@ -17,7 +17,7 @@ torch.manual_seed(90)
 np.random.seed(90)
 
 # Base paths
-BASE_PATH = "/export/fs06/psingh54/ActiveRubric-Internal/outputs"
+BASE_PATH = "outputs"
 DATA_PATH = os.path.join(BASE_PATH, "data")
 MODELS_PATH = os.path.join(BASE_PATH, "models")
 RESULTS_PATH = os.path.join(BASE_PATH, "results")
@@ -52,7 +52,7 @@ class DataManager:
         os.makedirs(self.paths['gradient_alignment'], exist_ok=True)
         os.makedirs(self.paths['random'], exist_ok=True)
     
-    def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0):
+    def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, dataset="hanna"):
         """
         Prepare data splits for active learning experiments.
         
@@ -73,7 +73,10 @@ class DataManager:
             return False
         
         text_ids = list(human_data.keys())
-        question_list = ['Q0', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6']
+        if dataset == "hanna":
+            question_list = ['Q0', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6']
+        elif dataset == "llm_rubric":
+            question_list = ['Q0', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'Q8']
         question_indices = {q: i for i, q in enumerate(question_list)}
         
         random.seed(42)
@@ -95,10 +98,10 @@ class DataManager:
         test_data = []
         active_pool_data = []
         
-        self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val)
-        self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val)
-        self._prepare_entries(test_texts, test_data, 'test', llm_data, human_data, question_list, question_indices, known_human_questions_val)
-        self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val)
+        self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset)
+        self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset)
+        self._prepare_entries(test_texts, test_data, 'test', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset)
+        self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset)
         
         for key, data in zip(['train', 'validation', 'test', 'active_pool', 'original_train', 'original_validation', 'original_test', 'original_active_pool'],
                              [initial_train_data, validation_data, test_data, active_pool_data, initial_train_data, validation_data, test_data, active_pool_data]):
@@ -108,93 +111,183 @@ class DataManager:
         
         return True
     
-    def _prepare_entries(self, texts, data_list, split_type, llm_data, human_data, question_list, question_indices, known_human_questions_val):
+    def _prepare_entries(self, texts, data_list, split_type, llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset):
         """Prepare data entries for a specific split."""
-        for text_id in texts:
-            if text_id not in llm_data:
-                continue
-            
-            entry = {
-                "known_questions": [], 
-                "input": [], 
-                "answers": [], 
-                "annotators": [],
-                "questions": [],
-                "orig_split": split_type,
-                "observation_history": []  # Track history of observations for this entry
-            }
-            
-            annotators = list(human_data[text_id].keys())
-            
-            for q_idx, question in enumerate(question_list):
-                true_prob = llm_data[text_id][question]
+        if dataset == "hanna":
+            for text_id in texts:
+                if text_id not in llm_data:
+                    continue
                 
-                mask_bit = 0 
-                combined_input = [mask_bit] + true_prob
+                entry = {
+                    "known_questions": [], 
+                    "input": [], 
+                    "answers": [], 
+                    "annotators": [],
+                    "questions": [],
+                    "orig_split": split_type,
+                    "observation_history": []  # Track history of observations for this entry
+                }
                 
-                entry["known_questions"].append(1)
-                entry["input"].append(combined_input)
-                entry["answers"].append(true_prob)
-                entry["annotators"].append(-1)
-                entry["questions"].append(question_indices[question])
-
-            for judge_id in annotators:
+                annotators = list(human_data[text_id].keys())
+                
                 for q_idx, question in enumerate(question_list):
-                    true_score = human_data[text_id][judge_id][question]
-                    true_prob = [0.0] * 5
+                    true_prob = llm_data[text_id][question]
                     
-                    if isinstance(true_score, (int, float)):
-                        if true_score % 1 != 0:  
-                            rounded_score = math.ceil(true_score)
-                            rounded_score = max(min(rounded_score, 5), 1)
-                            index = rounded_score - 1
-                            true_prob[index] = 1.0
-                        else:
-                            true_score = max(min(int(true_score), 5), 1)
-                            index = true_score - 1
-                            true_prob[index] = 1.0
-                    else:
-                        raise ValueError(f"Unexpected score type: {true_score}")
+                    mask_bit = 0 
+                    combined_input = [mask_bit] + true_prob
                     
-                    if split_type == 'active_pool':
-                        mask_bit = 1  # Masked
-                        combined_input = [mask_bit] + [0.0] * 5
-                        entry["known_questions"].append(0)
-                        entry["input"].append(combined_input)
+                    entry["known_questions"].append(1)
+                    entry["input"].append(combined_input)
+                    entry["answers"].append(true_prob)
+                    entry["annotators"].append(-1)
+                    entry["questions"].append(question_indices[question])
+
+                for judge_id in annotators:
+                    for q_idx, question in enumerate(question_list):
+                        true_score = human_data[text_id][judge_id][question]
+                        true_prob = [0.0] * 5
                         
-                    elif split_type == 'train':
-                        mask_bit = 0  # Observed
+                        if isinstance(true_score, (int, float)):
+                            if true_score % 1 != 0:  
+                                rounded_score = math.ceil(true_score)
+                                rounded_score = max(min(rounded_score, 5), 1)
+                                index = rounded_score - 1
+                                true_prob[index] = 1.0
+                            else:
+                                true_score = max(min(int(true_score), 5), 1)
+                                index = true_score - 1
+                                true_prob[index] = 1.0
+                        else:
+                            raise ValueError(f"Unexpected score type: {true_score}")
+                        
+                        if split_type == 'active_pool':
+                            mask_bit = 1  # Masked
+                            combined_input = [mask_bit] + [0.0] * 5
+                            entry["known_questions"].append(0)
+                            entry["input"].append(combined_input)
+                            
+                        elif split_type == 'train':
+                            mask_bit = 0  # Observed
+                            combined_input = [mask_bit] + true_prob
+                            entry["known_questions"].append(1)
+                            entry["input"].append(combined_input)
+
+                        elif split_type == 'validation':
+                            if q_idx < known_human_questions_val:
+                                mask_bit = 0  # Observed
+                                combined_input = [mask_bit] + true_prob
+                                entry["known_questions"].append(1)
+                            else:
+                                mask_bit = 1  # Masked
+                                combined_input = [mask_bit] + [0.0] * 5
+                                entry["known_questions"].append(0)
+                            entry["input"].append(combined_input)
+
+                        elif split_type == 'test':
+                            if random.random() < 0.5:
+                                mask_bit = 1  # Masked
+                                combined_input = [mask_bit] + [0.0] * 5
+                                entry["known_questions"].append(0)
+                            else:
+                                mask_bit = 0  # Observed
+                                combined_input = [mask_bit] + true_prob
+                                entry["known_questions"].append(1)
+                            entry["input"].append(combined_input)
+                            
+                        entry["answers"].append(true_prob)   
+                        entry["annotators"].append(int(judge_id))
+                        entry["questions"].append(question_indices[question])
+                
+                data_list.append(entry)
+        elif dataset == "llm_rubric":
+            for text_id in texts:
+
+
+                
+                
+                annotators = list(human_data[text_id].keys())
+
+                for annotator in annotators:
+
+                    entry = {
+                        "known_questions": [], 
+                        "input": [], 
+                        "answers": [], 
+                        "annotators": [],
+                        "questions": [],
+                        "orig_split": split_type,
+                        "observation_history": []  # Track history of observations for this entry
+                    }
+                
+                    for q_idx, question in enumerate(question_list):
+                        true_prob = llm_data[text_id][question]
+                        
+                        mask_bit = 0 
                         combined_input = [mask_bit] + true_prob
+                        
                         entry["known_questions"].append(1)
                         entry["input"].append(combined_input)
+                        entry["answers"].append(true_prob)
+                        entry["annotators"].append(-1)
+                        entry["questions"].append(question_indices[question])
 
-                    elif split_type == 'validation':
-                        if q_idx < known_human_questions_val:
-                            mask_bit = 0  # Observed
-                            combined_input = [mask_bit] + true_prob
-                            entry["known_questions"].append(1)
-                        else:
-                            mask_bit = 1  # Masked
-                            combined_input = [mask_bit] + [0.0] * 5
-                            entry["known_questions"].append(0)
-                        entry["input"].append(combined_input)
-
-                    elif split_type == 'test':
-                        if random.random() < 0.5:
-                            mask_bit = 1  # Masked
-                            combined_input = [mask_bit] + [0.0] * 5
-                            entry["known_questions"].append(0)
-                        else:
-                            mask_bit = 0  # Observed
-                            combined_input = [mask_bit] + true_prob
-                            entry["known_questions"].append(1)
-                        entry["input"].append(combined_input)
+                    for q_idx, question in enumerate(question_list):
+                        true_score = human_data[text_id][annotator][question]
+                        true_prob = [0.0] * 4
                         
-                    entry["answers"].append(true_prob)   
-                    entry["annotators"].append(int(judge_id))
-                    entry["questions"].append(question_indices[question])
-            
-            data_list.append(entry)
+                        if isinstance(true_score, (int, float)):
+                            if true_score % 1 != 0:  
+                                rounded_score = math.ceil(true_score)
+                                rounded_score = max(min(rounded_score, 5), 1)
+                                index = rounded_score - 1
+                                true_prob[index] = 1.0
+                            else:
+                                true_score = max(min(int(true_score), 5), 1)
+                                index = true_score - 1
+                                true_prob[index] = 1.0
+                        else:
+                            raise ValueError(f"Unexpected score type: {true_score}")
+                        
+                        if split_type == 'active_pool':
+                            mask_bit = 1  # Masked
+                            combined_input = [mask_bit] + [0.0] * 4
+                            entry["known_questions"].append(0)
+                            entry["input"].append(combined_input)
+                            
+                        elif split_type == 'train':
+                            mask_bit = 0  # Observed
+                            combined_input = [mask_bit] + true_prob
+                            entry["known_questions"].append(1)
+                            entry["input"].append(combined_input)
+
+                        elif split_type == 'validation':
+                            if q_idx < known_human_questions_val:
+                                mask_bit = 0  # Observed
+                                combined_input = [mask_bit] + true_prob
+                                entry["known_questions"].append(1)
+                            else:
+                                mask_bit = 1  # Masked
+                                combined_input = [mask_bit] + [0.0] * 4
+                                entry["known_questions"].append(0)
+                            entry["input"].append(combined_input)
+
+                        elif split_type == 'test':
+                            if random.random() < 0.5:
+                                mask_bit = 1  # Masked
+                                combined_input = [mask_bit] + [0.0] *4
+                                entry["known_questions"].append(0)
+                            else:
+                                mask_bit = 0  # Observed
+                                combined_input = [mask_bit] + true_prob
+                                entry["known_questions"].append(1)
+                            entry["input"].append(combined_input)
+                            
+                        entry["answers"].append(true_prob)   
+                        entry["annotators"].append(int(annotator))
+                        entry["questions"].append(question_indices[question])
+                    
+                    data_list.append(entry)
+
 
 
 class AnnotationDataset(Dataset):
@@ -300,11 +393,14 @@ class AnnotationDataset(Dataset):
         # Check if already observed
         if item['input'][position][0] == 0:
             return False
-        
+        num_class = len(item["answers"][position])
         # Update input tensor
         item['input'][position][0] = 0  # Mark as observed
-        for i in range(5):  # Assuming 5 classes
-            item['input'][position][i+1] = item['answers'][position][i]
+        for i in range(num_class):  # Assuming 5 classes
+            try:
+                item['input'][position][i+1] = item['answers'][position][i]
+            except IndexError:
+                continue
         
         # Update known_questions
         item['known_questions'][position] = 1

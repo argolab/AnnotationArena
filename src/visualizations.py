@@ -319,7 +319,7 @@ def plot_feature_counts(results_dict, save_path):
     print(f"Saved feature counts plot to {save_path}")
 
 def create_plots():
-    base_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs"
+    base_path = "outputs"
     results_path = os.path.join(base_path, "results")
     plots_path = os.path.join(results_path, "plots")
     os.makedirs(plots_path, exist_ok=True)

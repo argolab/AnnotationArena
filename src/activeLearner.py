@@ -344,11 +344,12 @@ def main():
     parser.add_argument("--resample_validation", action="store_true", help="Resample validation set on each cycle")
     parser.add_argument("--loss_type", type=str, default="cross_entropy", help="Type of loss to use (cross_entropy, l2)")
     parser.add_argument("--run_until_exhausted", action="store_true", help="Run until annotation pool is exhausted")
+    parser.add_argument("--dataset", type=str, default="hanna", help="Dataset to run the experiment")
     args = parser.parse_args()
     
     # Set up paths and device
-    base_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs"
-    data_path = os.path.join(base_path, "data")
+    base_path = "outputs"
+    dataset = args.dataset
     models_path = os.path.join(base_path, "models")
     results_path = os.path.join(base_path, "results")
     os.makedirs(results_path, exist_ok=True)
@@ -357,11 +358,18 @@ def main():
     print(f"Using device: {device}")
     
     # Initialize model
-    model = Imputer(
-        question_num=7, max_choices=5, encoder_layers_num=6,
-        attention_heads=4, hidden_dim=64, num_annotator=18, 
-        annotator_embedding_dim=19, dropout=0.1
-    ).to(device)
+    if dataset == "hanna":
+        model = Imputer(
+            question_num=7, max_choices=5, encoder_layers_num=6,
+            attention_heads=4, hidden_dim=64, num_annotator=18, 
+            annotator_embedding_dim=19, dropout=0.1
+        ).to(device)
+    else:
+        model = Imputer(
+            question_num=9, max_choices=4, encoder_layers_num=6,
+            attention_heads=4, hidden_dim=64, num_annotator=24, 
+            annotator_embedding_dim=24, dropout=0.1
+        ).to(device)
     
     experiment_results = {}
     
@@ -377,8 +385,13 @@ def main():
     for experiment in experiments_to_run:
         print(f"\n=== Running {experiment} Experiment ===")
         
-        data_manager = DataManager()
-        data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0)
+        data_manager = DataManager(os.path.join("outputs", f"data_{dataset}"))
+        if dataset == "hanna":
+            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset)
+        elif dataset == "llm_rubric":
+            data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset)
+        else:
+            raise ValueError("Unsupported dataset")
         model_copy = copy.deepcopy(model)
 
         if experiment == "random_all":
