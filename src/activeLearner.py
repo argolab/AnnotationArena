@@ -384,13 +384,14 @@ def main():
     # Configure experiments to run
     experiments_to_run = []
     if args.experiment == "all":
-        experiments_to_run = ["gradient_all", "random_all", "random_5", "gradient_sequential", 
-                             "gradient_voi", "gradient_fast_voi", "entropy_all", "entropy_5"]
+        experiments_to_run = ["entropy_all", "entropy_5", "random_all", "random_5", "gradient_all", "gradient_sequential", 
+                             "gradient_voi", "gradient_fast_voi"]
     else:
         experiments_to_run = [args.experiment]
     
     # Run each selected experiment
     for experiment in experiments_to_run:
+        
         print(f"\n=== Running {experiment} Experiment ===")
         
         data_manager = DataManager(base_path + '/data/')
@@ -400,6 +401,7 @@ def main():
             data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset)
         else:
             raise ValueError("Unsupported dataset")
+        
         model_copy = copy.deepcopy(model)
 
         if experiment == "random_all":
