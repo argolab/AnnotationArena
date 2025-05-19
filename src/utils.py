@@ -64,6 +64,8 @@ class DataManager:
         Returns:
             bool: Success status
         """
+        if dataset == "gaussian":
+            pass
         try:
             with open(os.path.join(self.base_path, "gpt-3.5-turbo-data-new.json"), "r") as f:
                 llm_data = json.load(f)

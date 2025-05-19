@@ -364,11 +364,17 @@ def main():
             attention_heads=4, hidden_dim=64, num_annotator=18, 
             annotator_embedding_dim=19, dropout=0.1
         ).to(device)
-    else:
+    elif dataset == "llm_rubric":
         model = Imputer(
             question_num=9, max_choices=4, encoder_layers_num=6,
             attention_heads=4, hidden_dim=64, num_annotator=24, 
             annotator_embedding_dim=24, dropout=0.1
+        ).to(device)
+    else:
+        model = Imputer(
+            question_num=5, max_choices=5, encoder_layers_num=6,
+            attention_heads=4, hidden_dim=64, num_annotator=1, 
+            annotator_embedding_dim=19, dropout=0.1
         ).to(device)
     
     experiment_results = {}
@@ -390,6 +396,8 @@ def main():
             data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset)
         elif dataset == "llm_rubric":
             data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset)
+        elif dataset == "gaussian":
+            data_manager.prepare_data(dataset=dataset)
         else:
             raise ValueError("Unsupported dataset")
         model_copy = copy.deepcopy(model)
