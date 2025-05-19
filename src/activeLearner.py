@@ -42,7 +42,8 @@ def run_experiment(
     device=None, 
     resample_validation=False, 
     loss_type="cross_entropy",
-    run_until_exhausted=False
+    run_until_exhausted=False,
+    gradient_top_only=False,
 ):
     """
     Unified experiment runner for all active learning strategies.
@@ -142,7 +143,7 @@ def run_experiment(
 
         elif example_strategy == "gradient" or example_strategy == "entropy":
 
-            strategy_class = SelectionFactory.create_example_strategy(example_strategy, model, device)
+            strategy_class = SelectionFactory.create_example_strategy(example_strategy, model, device, gradient_top_only=gradient_top_only)
             active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_pool]
             active_pool_subset = AnnotationDataset(active_pool_examples)
             
@@ -382,14 +383,20 @@ def main():
             attention_heads=4, hidden_dim=64, num_annotator=1, 
             annotator_embedding_dim=19, dropout=0.1
         ).to(device)
+
+    for name, param in model.named_parameters():
+        print(f"Parameter: {name}, Shape: {param.shape}")
+    
+    print("\n=== Model Module Names ===")
+    for name, module in model.named_modules():
+        print(f"Module: {name}, Type: {type(module).__name__}")
     
     experiment_results = {}
     
     # Configure experiments to run
     experiments_to_run = []
     if args.experiment == "all":
-        experiments_to_run = ["entropy_all", "entropy_5", "random_all", "random_5", "gradient_all", "gradient_sequential", 
-                             "gradient_voi", "gradient_fast_voi"]
+        experiments_to_run = ["entropy_all", "entropy_5", "random_all", "random_5", "gradient_all", "gradient_sequential", "gradient_voi", "gradient_fast_voi", "gradient_all_top_only", "gradient_sequential_top_only", "gradient_voi_top_only", "gradient_fast_voi_top_only"]
     else:
         experiments_to_run = [args.experiment]
     
@@ -398,7 +405,10 @@ def main():
         
         print(f"\n=== Running {experiment} Experiment ===")
         
-        data_manager = DataManager(base_path + '/data/')
+        if args.runner == "prabhav":
+            data_manager = DataManager(base_path + '/data/')
+        else:
+            data_manager = DataManager(base_path + f'/data_{dataset}/')
         if dataset == "hanna":
             data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset)
         elif dataset == "llm_rubric":
@@ -470,6 +480,27 @@ def main():
                 run_until_exhausted=args.run_until_exhausted
             )
 
+        elif experiment == "gradient_all_top_only":
+
+            train_dataset = AnnotationDataset(data_manager.paths['train'])
+            val_dataset = AnnotationDataset(data_manager.paths['validation'])
+            test_dataset = AnnotationDataset(data_manager.paths['test'])
+            active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
+            
+            print(f"Loaded datasets: Train={len(train_dataset)}, Val={len(val_dataset)}, "
+                f"Test={len(test_dataset)}, Active Pool={len(active_pool_dataset)}")
+        
+            results = run_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="gradient", model=model_copy,
+                observe_all_features=True,
+                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
+                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+                device=device, resample_validation=args.resample_validation,
+                run_until_exhausted=args.run_until_exhausted,
+                gradient_top_only=True
+            )
+
         elif experiment == "random_5":
 
             train_dataset = AnnotationDataset(data_manager.paths['train'])
@@ -507,6 +538,23 @@ def main():
                 run_until_exhausted=args.run_until_exhausted
             )
 
+        elif experiment == "gradient_sequential_top_only":
+            train_dataset = AnnotationDataset(data_manager.paths['train'])
+            val_dataset = AnnotationDataset(data_manager.paths['validation'])
+            test_dataset = AnnotationDataset(data_manager.paths['test'])
+            active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
+
+            results = run_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="gradient", feature_strategy="sequential", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
+                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+                device=device, resample_validation=args.resample_validation,
+                run_until_exhausted=args.run_until_exhausted,
+                gradient_top_only=True
+            )
+
         elif experiment == "gradient_voi":
 
             train_dataset = AnnotationDataset(data_manager.paths['train'])
@@ -524,6 +572,24 @@ def main():
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted
             )
 
+        elif experiment == "gradient_voi_top_only":
+
+            train_dataset = AnnotationDataset(data_manager.paths['train'])
+            val_dataset = AnnotationDataset(data_manager.paths['validation'])
+            test_dataset = AnnotationDataset(data_manager.paths['test'])
+            active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
+
+            results = run_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="gradient", feature_strategy="voi", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
+                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+                device=device, resample_validation=args.resample_validation,
+                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
+                gradient_top_only=True
+            )
+
         elif experiment == "gradient_fast_voi":
             results = run_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
@@ -533,6 +599,18 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted
+            )
+
+        elif experiment == "gradient_fast_voi_top_only":
+            results = run_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="gradient", feature_strategy="fast_voi", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
+                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+                device=device, resample_validation=args.resample_validation,
+                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
+                gradient_top_only=True
             )
 
         elif experiment == "entropy_5":

@@ -926,6 +926,194 @@ class GradientSelector:
                 grad_samples.append(normalized_grad_dict)
         
         return grad_samples
+       
+
+class GradientTopOnlySelector(GradientSelector):
+    """
+    Helper class for gradient-based selection.
+    
+    Computes and compares gradients for active learning,
+    selecting examples that would provide the most training benefit.
+    """
+    
+    def __init__(self, model, device=None):
+        """
+        Initialize gradient selector.
+        
+        Args:
+            model: Model to use for predictions
+            device: Device to use for computations
+        """
+        super().__init__(model, device)
+
+
+    def _is_top_layer_param(self, param_name):
+        """
+        Helper method to identify if a parameter belongs to the top layer.
+        Customize this method based on your model's architecture naming conventions.
+        
+        Args:
+            param_name: Name of the parameter
+            
+        Returns:
+            bool: True if the parameter belongs to the top layer, False otherwise
+        """
+        top_layer_identifiers = ['encoder.layers.5.out']
+        return any(identifier in param_name.lower() for identifier in top_layer_identifiers)
+    
+    
+    def compute_sample_gradient(self, model, inputs, labels, annotators, questions):
+        """
+        Compute gradient for a single example using autoregressive sampling.
+        
+        Args:
+            model: Model to use for predictions
+            inputs: Input tensor
+            labels: Label tensor
+            annotators: Annotator indices
+            questions: Question indices
+            
+        Returns:
+            dict: Gradient dictionary
+        """
+        model.train()
+        grad_dict = {}
+        
+        # Identify masked positions
+        masked_positions = []
+        for j in range(inputs.shape[1]):
+            if inputs[0, j, 0] == 1:
+                masked_positions.append(j)
+        
+        if not masked_positions:
+            for name, param in model.named_parameters():
+                if param.requires_grad:
+                    grad_dict[name] = torch.zeros_like(param)
+            return grad_dict
+        
+        temp_inputs = inputs.clone()
+        temp_labels = labels.clone()
+        
+        for pos in masked_positions:
+            with torch.no_grad():
+                current_outputs = model(temp_inputs, annotators, questions)
+                var_outputs = current_outputs[0, pos]
+                var_probs = F.softmax(var_outputs, dim=0)
+            
+            sampled_class = torch.multinomial(var_probs, 1).item()
+            
+            one_hot = torch.zeros(model.max_choices, device=self.device)
+            one_hot[sampled_class] = 1.0
+            
+            temp_inputs[0, pos, 0] = 0
+            temp_inputs[0, pos, 1:1+model.max_choices] = one_hot
+            
+            temp_labels[0, pos] = one_hot
+        
+        # Compute loss with full supervision
+        model.zero_grad()
+        
+        outputs = model(temp_inputs, annotators, questions)
+        loss = model.compute_total_loss(
+            outputs, temp_labels, temp_inputs, questions,
+            full_supervision=True
+        )
+        
+        # Compute gradients
+        loss.backward()
+        
+        # Collect gradients
+        for name, param in model.named_parameters():
+            if param.requires_grad and param.grad is not None and self._is_top_layer_param(name):
+                grad_dict[name] = param.grad.detach().clone()
+        
+        model.zero_grad()
+        
+        return grad_dict
+    
+    
+    def compute_validation_gradient_sampled(self, model, val_dataloader, num_samples=5):
+        """
+        Compute validation gradients using sampling approach.
+        
+        Args:
+            model: Model to use for predictions
+            val_dataloader: Validation dataloader
+            num_samples: Number of samples to compute
+            
+        Returns:
+            list: List of gradient dictionaries
+        """
+        model.train()
+        grad_samples = []
+        
+        for _ in tqdm(range(num_samples), desc="Computing validation gradients"):
+            temp_grad_dict = {}
+            sample_count = 0
+            
+            for batch in val_dataloader:
+                known_questions, inputs, labels, annotators, questions = batch
+                inputs, labels, annotators, questions = (
+                    inputs.to(self.device), labels.to(self.device), 
+                    annotators.to(self.device), questions.to(self.device)
+                )
+                
+                batch_size = inputs.shape[0]
+                
+                temp_inputs = inputs.clone()
+                
+                for i in range(batch_size):
+                    masked_positions = []
+                    for j in range(inputs.shape[1]):
+                        if temp_inputs[i, j, 0] == 1:
+                            masked_positions.append(j)
+                    
+                    # Sample values for masked positions
+                    for pos in masked_positions:
+                        with torch.no_grad():
+                            current_outputs = model(temp_inputs, annotators, questions)
+                            var_outputs = current_outputs[i, pos]
+                            var_probs = F.softmax(var_outputs, dim=0)
+                        
+                        # Sample a class
+                        sampled_class = torch.multinomial(var_probs, 1).item()
+                        
+                        # Create one-hot encoding
+                        one_hot = torch.zeros(model.max_choices, device=self.device)
+                        one_hot[sampled_class] = 1.0
+                        
+                        # Update input
+                        temp_inputs[i, pos, 0] = 0
+                        temp_inputs[i, pos, 1:1+model.max_choices] = one_hot
+                
+                # Compute loss with full supervision
+                model.zero_grad()
+                
+                outputs = model(temp_inputs, annotators, questions)
+                batch_loss = model.compute_total_loss(
+                    outputs, labels, temp_inputs, questions, 
+                    full_supervision=True
+                )
+                
+                if batch_loss > 0:
+                    batch_loss.backward()
+                    sample_count += 1
+                    
+                    for name, param in model.named_parameters():
+                        if param.grad is not None and self._is_top_layer_param(name):
+                            if name not in temp_grad_dict:
+                                temp_grad_dict[name] = param.grad.detach().clone()
+                            else:
+                                temp_grad_dict[name] += param.grad.detach().clone()
+            
+            if sample_count > 0:
+                for name in temp_grad_dict:
+                    temp_grad_dict[name] /= sample_count
+                
+                normalized_grad_dict = self.normalize_gradient(temp_grad_dict)
+                grad_samples.append(normalized_grad_dict)
+        
+        return grad_samples
 
 
 class GradientSelectionStrategy(ExampleSelectionStrategy):
@@ -937,10 +1125,14 @@ class GradientSelectionStrategy(ExampleSelectionStrategy):
     for improving model performance on the validation set.
     """
     
-    def __init__(self, model, device=None):
+    def __init__(self, model, device=None, gradient_top_only=False):
         """Initialize gradient selection strategy."""
         super().__init__("gradient", model, device)
-        self.selector = GradientSelector(model, device)
+        if gradient_top_only:
+            print("Debug: initialized top only selector here")
+            self.selector = GradientTopOnlySelector(model, device)
+        else:
+            self.selector = GradientSelector(model, device)
     
     def select_examples(self, dataset, num_to_select=1, val_dataset=None, 
                         num_samples=5, batch_size=8, costs=None, **kwargs):
@@ -1313,7 +1505,7 @@ class SelectionFactory:
     """
     
     @staticmethod
-    def create_example_strategy(strategy_name, model, device=None):
+    def create_example_strategy(strategy_name, model, device=None, gradient_top_only=False):
         """
         Create example selection strategy.
         
@@ -1328,7 +1520,7 @@ class SelectionFactory:
         if strategy_name == "random":
             return RandomExampleSelectionStrategy(model, device)
         elif strategy_name == "gradient":
-            return GradientSelectionStrategy(model, device)
+            return GradientSelectionStrategy(model, device, gradient_top_only=gradient_top_only)
         elif strategy_name == "entropy":
             return EntropyExampleSelectionStrategy(model, device)
         else:
