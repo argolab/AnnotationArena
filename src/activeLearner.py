@@ -396,7 +396,7 @@ def main():
     # Configure experiments to run
     experiments_to_run = []
     if args.experiment == "all":
-        experiments_to_run = ["entropy_all", "entropy_5", "random_all", "random_5", "gradient_all", "gradient_sequential", "gradient_voi", "gradient_fast_voi", "gradient_all_top_only", "gradient_sequential_top_only", "gradient_voi_top_only", "gradient_fast_voi_top_only"]
+        experiments_to_run = ["gradient_all_top_only", "gradient_sequential_top_only", "gradient_voi_top_only", "gradient_fast_voi_top_only", "entropy_all", "entropy_5", "random_all", "random_5", "gradient_all", "gradient_sequential", "gradient_voi", "gradient_fast_voi", ]
     else:
         experiments_to_run = [args.experiment]
     
