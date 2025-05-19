@@ -6,259 +6,35 @@ from matplotlib.animation import FuncAnimation
 import seaborn as sns
 from sklearn.manifold import TSNE
 from sklearn.decomposition import PCA
-from sklearn.metrics.pairwise import cosine_similarity
 import torch
-from scipy.stats import entropy
 import glob
 from collections import defaultdict
 from tqdm import tqdm
 import pandas as pd
 from sklearn.cluster import KMeans
 from sklearn.mixture import GaussianMixture
-from sklearn.metrics import silhouette_score
-from scipy.spatial.distance import jensenshannon
-from scipy.stats import wasserstein_distance
-import matplotlib.gridspec as gridspec
 from sklearn.neighbors import KernelDensity
+import matplotlib.gridspec as gridspec
+from mpl_toolkits.mplot3d import Axes3D
 
 # Path configuration - adjust these to your environment
 base_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs"
 data_path = os.path.join(base_path, "data")
 results_path = os.path.join(base_path, "results")
 plots_path = os.path.join(base_path, "plots")
-os.makedirs(plots_path, exist_ok=True)
 
-def analyze_clustering_by_cycle(feature_vectors, selections_by_strategy, n_clusters=3):
-    """Perform K-means clustering on selections for each cycle and strategy"""
-    clustering_results = {}
-    
-    for strategy, selections_by_cycle in selections_by_strategy.items():
-        clustering_results[strategy] = {}
-        
-        # Collect all selections for this strategy
-        all_selected = []
-        for cycle in selections_by_cycle:
-            all_selected.extend(list(selections_by_cycle[cycle]))
-        
-        if len(all_selected) < n_clusters:
-            continue
-            
-        # Run clustering on all selections to establish global clusters
-        global_kmeans = KMeans(n_clusters=n_clusters, random_state=42)
-        global_kmeans.fit(feature_vectors[all_selected])
-        
-        # For each cycle, analyze distribution across these global clusters
-        for cycle, selected in selections_by_cycle.items():
-            selected_list = list(selected)
-            if len(selected_list) < 2:
-                continue
-                
-            selected_features = feature_vectors[selected_list]
-            
-            # Assign to global clusters
-            cluster_labels = global_kmeans.predict(selected_features)
-            
-            # Calculate cluster distribution
-            cluster_distribution = np.bincount(cluster_labels, minlength=n_clusters) / len(cluster_labels)
-            
-            # Calculate silhouette score if possible
-            if len(np.unique(cluster_labels)) > 1 and len(cluster_labels) > 1:
-                silhouette = silhouette_score(selected_features, cluster_labels)
-            else:
-                silhouette = 0
-                
-            clustering_results[strategy][cycle] = {
-                'cluster_distribution': cluster_distribution,
-                'silhouette_score': silhouette,
-                'labels': cluster_labels,
-                'selected_indices': selected_list
-            }
-    
-    return clustering_results, global_kmeans.cluster_centers_
+# Create separate folders for different visualization types
+viz_folders = {
+    '2d_tsne': os.path.join(plots_path, '2d_tsne'),
+    '3d_tsne': os.path.join(plots_path, '3d_tsne'),
+    'animations': os.path.join(plots_path, 'animations'),
+    'kde': os.path.join(plots_path, 'kde'),
+    'loss_viz': os.path.join(plots_path, 'loss_viz'),
+    'parallel_coords': os.path.join(plots_path, 'parallel_coords')
+}
 
-def fit_gaussian_mixture(feature_vectors, selections_by_strategy, n_components=3):
-    """Fit Gaussian Mixture Models to selection distributions"""
-    gmm_results = {}
-    
-    for strategy, selections_by_cycle in selections_by_strategy.items():
-        # Collect all selected examples for this strategy
-        all_selected = []
-        for cycle in selections_by_cycle:
-            all_selected.extend(list(selections_by_cycle[cycle]))
-            
-        if len(all_selected) < n_components * 2:  # Need enough data
-            continue
-            
-        # Fit GMM to all selections
-        gmm = GaussianMixture(n_components=n_components, random_state=42)
-        selected_features = feature_vectors[all_selected]
-        gmm.fit(selected_features)
-        
-        # For each cycle, compute the probability distribution over components
-        cycle_distributions = {}
-        for cycle, selected in selections_by_cycle.items():
-            selected_list = list(selected)
-            if len(selected_list) < 2:
-                continue
-                
-            cycle_features = feature_vectors[selected_list]
-            probs = gmm.predict_proba(cycle_features)
-            avg_probs = np.mean(probs, axis=0)
-            
-            cycle_distributions[cycle] = {
-                'component_distribution': avg_probs,
-                'log_likelihood': gmm.score(cycle_features)
-            }
-            
-        gmm_results[strategy] = {
-            'gmm': gmm,
-            'cycle_distributions': cycle_distributions,
-            'means': gmm.means_,
-            'covariances': gmm.covariances_
-        }
-    
-    return gmm_results
-
-def analyze_cycle_transitions(feature_vectors, selections_by_strategy, clustering_results):
-    """Analyze how selection transitions between regions across cycles"""
-    transition_results = {}
-    
-    for strategy in selections_by_strategy:
-        if strategy not in clustering_results:
-            continue
-            
-        strategy_clusters = clustering_results[strategy]
-        cycles = sorted(strategy_clusters.keys())
-        
-        if len(cycles) < 2:
-            continue
-            
-        # Calculate distribution distances between consecutive cycles
-        distances = []
-        for i in range(len(cycles)-1):
-            cycle1 = cycles[i]
-            cycle2 = cycles[i+1]
-            
-            if cycle1 not in strategy_clusters or cycle2 not in strategy_clusters:
-                continue
-                
-            dist1 = strategy_clusters[cycle1]['cluster_distribution']
-            dist2 = strategy_clusters[cycle2]['cluster_distribution']
-            
-            # Jensen-Shannon divergence (symmetric KL divergence)
-            js_distance = jensenshannon(dist1, dist2)
-            
-            # Earth Mover's Distance (1D Wasserstein)
-            emd = wasserstein_distance(dist1, dist2)
-            
-            distances.append({
-                'from_cycle': cycle1,
-                'to_cycle': cycle2,
-                'js_distance': js_distance,
-                'emd': emd
-            })
-            
-        transition_results[strategy] = distances
-    
-    return transition_results
-
-def visualize_cluster_evolution(clustering_results, feature_vectors, tsne_embeddings, save_path=None):
-    """Visualize how clusters evolve over cycles"""
-    strategies = list(clustering_results.keys())
-    
-    for strategy in strategies:
-        cycles = sorted(clustering_results[strategy].keys())
-        
-        if not cycles:
-            continue
-            
-        n_cycles = len(cycles)
-        n_cols = min(3, n_cycles)
-        n_rows = (n_cycles + n_cols - 1) // n_cols
-        
-        fig = plt.figure(figsize=(6*n_cols, 5*n_rows))
-        gs = gridspec.GridSpec(n_rows, n_cols)
-        
-        for i, cycle in enumerate(cycles):
-            ax = plt.subplot(gs[i//n_cols, i%n_cols])
-            
-            # Plot all points in light gray
-            ax.scatter(tsne_embeddings[:, 0], tsne_embeddings[:, 1], 
-                      c='lightgray', alpha=0.2, s=5)
-            
-            # Get data for this cycle
-            cycle_data = clustering_results[strategy][cycle]
-            selected = cycle_data['selected_indices']
-            labels = cycle_data['labels']
-            
-            # Plot points colored by cluster
-            ax.scatter(tsne_embeddings[selected, 0], tsne_embeddings[selected, 1],
-                      c=labels, cmap='viridis', s=100, alpha=0.8, edgecolors='black')
-            
-            ax.set_title(f'Cycle {cycle} - Silhouette: {cycle_data["silhouette_score"]:.3f}')
-            
-        plt.suptitle(f'Cluster Evolution for {strategy}', fontsize=16)
-        plt.tight_layout()
-        
-        if save_path:
-            plt.savefig(f"{save_path}/{strategy}_cluster_evolution.png", dpi=300, bbox_inches='tight')
-            plt.close()
-        else:
-            plt.show()
-
-def plot_density_maps(feature_vectors, selections_by_strategy, tsne_embeddings, save_path=None):
-    """Generate density maps using Kernel Density Estimation"""
-    strategies = list(selections_by_strategy.keys())
-    
-    # Create a figure with subplots for each strategy
-    fig, axes = plt.subplots(1, len(strategies), figsize=(7*len(strategies), 6))
-    if len(strategies) == 1:
-        axes = [axes]
-    
-    for i, strategy in enumerate(strategies):
-        ax = axes[i]
-        
-        # Collect all selections for this strategy
-        all_selected = []
-        for cycle in selections_by_strategy[strategy]:
-            all_selected.extend(list(selections_by_strategy[strategy][cycle]))
-            
-        if not all_selected:
-            continue
-            
-        # Get embedded coordinates for selected points
-        selected_coords = tsne_embeddings[all_selected]
-        
-        # Create a meshgrid for the KDE
-        x_min, x_max = selected_coords[:, 0].min() - 10, selected_coords[:, 0].max() + 10
-        y_min, y_max = selected_coords[:, 1].min() - 10, selected_coords[:, 1].max() + 10
-        xx, yy = np.meshgrid(np.linspace(x_min, x_max, 100), 
-                             np.linspace(y_min, y_max, 100))
-        xy_sample = np.vstack([xx.ravel(), yy.ravel()]).T
-        
-        # Fit the KDE
-        kde = KernelDensity(bandwidth=5.0, kernel='gaussian')
-        kde.fit(selected_coords)
-        
-        # Score samples and reshape
-        z = np.exp(kde.score_samples(xy_sample))
-        z = z.reshape(xx.shape)
-        
-        # Plot density map
-        ax.scatter(tsne_embeddings[:, 0], tsne_embeddings[:, 1], 
-                  c='lightgray', alpha=0.1, s=5)
-        ax.contourf(xx, yy, z, levels=50, cmap='viridis', alpha=0.8)
-        ax.scatter(selected_coords[:, 0], selected_coords[:, 1], 
-                  c='red', alpha=0.6, s=20, edgecolors='black')
-        
-        ax.set_title(f'Density Map - {strategy}', fontsize=14)
-    
-    plt.tight_layout()
-    if save_path:
-        plt.savefig(f"{save_path}/density_maps.png", dpi=300, bbox_inches='tight')
-        plt.close()
-    else:
-        plt.show()
+for folder in viz_folders.values():
+    os.makedirs(folder, exist_ok=True)
 
 class AnnotationDataset:
     """Minimal loader for the dataset"""
@@ -373,101 +149,13 @@ def track_selections_by_cycle(strategy_results):
     
     return selections
 
-def compute_diversity_metrics(feature_vectors, selected_indices):
-    """Compute diversity metrics for selected examples"""
-    if len(selected_indices) <= 1:
-        return {
-            'avg_cosine_distance': 0,
-            'std_cosine_distance': 0,
-            'feature_entropy': 0,
-            'spatial_spread': 0
-        }
-    
-    selected_features = feature_vectors[selected_indices]
-    
-    # Compute pairwise cosine similarities
-    sim_matrix = cosine_similarity(selected_features)
-    
-    # Convert to distances: distance = 1 - similarity
-    dist_matrix = 1 - sim_matrix
-    
-    # Compute metrics
-    # Exclude self-similarities (diagonal)
-    mask = ~np.eye(dist_matrix.shape[0], dtype=bool)
-    avg_distance = np.mean(dist_matrix[mask])
-    std_distance = np.std(dist_matrix[mask])
-    
-    # Feature entropy - normalize features first
-    normalized = selected_features / (np.sum(selected_features, axis=1)[:, np.newaxis] + 1e-10)
-    feature_entropy = np.mean(entropy(normalized.T))
-    
-    # Spatial spread - mean euclidean distance from centroid
-    centroid = np.mean(selected_features, axis=0)
-    spatial_spread = np.mean(np.linalg.norm(selected_features - centroid, axis=1))
-    
-    return {
-        'avg_cosine_distance': avg_distance,
-        'std_cosine_distance': std_distance,
-        'feature_entropy': feature_entropy,
-        'spatial_spread': spatial_spread
-    }
-
-def visualize_selections(feature_vectors, selections_by_cycle, strategy, save_path=None):
-    """Visualize selections for a strategy using t-SNE"""
+def create_2d_tsne_animation(feature_vectors, selections_by_cycle, strategy, save_path):
+    """Create animated GIF of 2D t-SNE visualization evolving over cycles"""
     # Prepare data for t-SNE
     tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(feature_vectors)-1))
     pca = PCA(n_components=min(50, feature_vectors.shape[1]))
     
-    # First reduce dimensionality with PCA to make t-SNE more stable
-    reduced_features = pca.fit_transform(feature_vectors)
-    embedded = tsne.fit_transform(reduced_features)
-    
-    # Create plot
-    plt.figure(figsize=(12, 10))
-    
-    # Plot all examples as background in light gray
-    plt.scatter(embedded[:, 0], embedded[:, 1], c='lightgray', alpha=0.3, s=10)
-    
-    # Plot selected examples by cycle with different colors
-    cmap = plt.cm.jet
-    cycle_indices = sorted(selections_by_cycle.keys())
-    
-    for i, cycle in enumerate(cycle_indices):
-        if cycle not in selections_by_cycle:
-            continue
-        
-        selected = list(selections_by_cycle[cycle])
-        if not selected:
-            continue
-        
-        color = cmap(i / max(1, len(cycle_indices) - 1))
-        plt.scatter(
-            embedded[selected, 0], 
-            embedded[selected, 1], 
-            c=[color], 
-            label=f'Cycle {cycle}',
-            s=80, alpha=0.8, edgecolors='black'
-        )
-    
-    plt.title(f'Selection Visualization for {strategy} (t-SNE)', fontsize=16)
-    plt.legend(loc='best')
-    plt.tight_layout()
-    
-    if save_path:
-        plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.close()
-    else:
-        plt.show()
-    
-    return embedded
-
-def create_cycle_animation(feature_vectors, selections_by_cycle, strategy, save_path=None):
-    """Create an animation showing selection evolution over cycles"""
-    # Prepare data for t-SNE
-    tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(feature_vectors)-1))
-    pca = PCA(n_components=min(50, feature_vectors.shape[1]))
-    
-    # Reduce dimensionality
+    # Reduce dimensionality 
     reduced_features = pca.fit_transform(feature_vectors)
     embedded = tsne.fit_transform(reduced_features)
     
@@ -513,41 +201,504 @@ def create_cycle_animation(feature_vectors, selections_by_cycle, strategy, save_
         init_func=init, blit=True, interval=1000
     )
     
-    if save_path:
-        anim.save(save_path, writer='pillow', fps=1, dpi=100)
-        plt.close()
-    else:
-        plt.show()
+    anim.save(save_path, writer='pillow', fps=1, dpi=100)
+    plt.close()
+    
+    return embedded
 
-def plot_diversity_trends(strategy_names, diversity_by_cycle):
-    """Plot how diversity metrics change over cycles for different strategies"""
-    metrics = ['avg_cosine_distance', 'spatial_spread', 'feature_entropy']
+def create_3d_tsne_animation(feature_vectors, selections_by_cycle, strategy, save_path):
+    """Create animated GIF of 3D t-SNE visualization evolving over cycles"""
+    # Prepare data for t-SNE with 3 components
+    tsne = TSNE(n_components=3, random_state=42, perplexity=min(30, len(feature_vectors)-1))
+    pca = PCA(n_components=min(50, feature_vectors.shape[1]))
     
-    fig, axes = plt.subplots(len(metrics), 1, figsize=(14, 4*len(metrics)))
+    # Reduce dimensionality
+    reduced_features = pca.fit_transform(feature_vectors)
+    embedded = tsne.fit_transform(reduced_features)
     
-    for i, metric in enumerate(metrics):
-        ax = axes[i]
+    # Create animation
+    fig = plt.figure(figsize=(12, 10))
+    
+    def update(frame):
+        plt.clf()
+        ax = fig.add_subplot(111, projection='3d')
         
-        for strategy in strategy_names:
-            if strategy not in diversity_by_cycle:
+        # Plot all examples as background in light gray
+        ax.scatter(embedded[:, 0], embedded[:, 1], embedded[:, 2], 
+                  c='lightgray', alpha=0.2, s=10)
+        
+        # Plot selected examples up to current cycle
+        cmap = plt.cm.jet
+        all_selected = []
+        
+        for i in range(frame + 1):
+            if i in selections_by_cycle:
+                selected = list(selections_by_cycle[i])
+                all_selected.extend(selected)
+                
+                color = cmap(i / max(1, len(selections_by_cycle) - 1))
+                ax.scatter(
+                    embedded[selected, 0], 
+                    embedded[selected, 1], 
+                    embedded[selected, 2], 
+                    c=[color], 
+                    label=f'Cycle {i}',
+                    s=80, alpha=0.8, edgecolors='black'
+                )
+        
+        ax.set_title(f'3D Selection Evolution for {strategy} - Cycle {frame}', fontsize=16)
+        ax.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
+        ax.view_init(elev=30, azim=45 + frame * 15)  # Rotate view for better animation
+        plt.tight_layout()
+        
+        return []
+    
+    cycles = max(selections_by_cycle.keys()) + 1
+    frames = []
+    
+    # Save individual frames for GIF creation
+    temp_dir = os.path.join(viz_folders['animations'], 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    for frame in range(cycles):
+        update(frame)
+        frame_path = os.path.join(temp_dir, f'frame_{frame:03d}.png')
+        plt.savefig(frame_path, dpi=100, bbox_inches='tight')
+        frames.append(frame_path)
+    
+    plt.close()
+    
+    # Create GIF from frames using pillow
+    from PIL import Image
+    images = [Image.open(f) for f in frames]
+    images[0].save(
+        save_path,
+        save_all=True,
+        append_images=images[1:],
+        duration=1000,
+        loop=0
+    )
+    
+    # Clean up temporary files
+    import shutil
+    shutil.rmtree(temp_dir)
+    
+    return embedded
+
+def create_rotating_3d_tsne(feature_vectors, selections_by_cycle, strategy, save_path):
+    """Create a 3D t-SNE visualization with rotating view"""
+    # Prepare data for t-SNE with 3 components
+    tsne = TSNE(n_components=3, random_state=42, perplexity=min(30, len(feature_vectors)-1))
+    pca = PCA(n_components=min(50, feature_vectors.shape[1]))
+    
+    # Reduce dimensionality
+    reduced_features = pca.fit_transform(feature_vectors)
+    embedded = tsne.fit_transform(reduced_features)
+    
+    # Create figure
+    fig = plt.figure(figsize=(12, 10))
+    
+    def update(frame):
+        plt.clf()
+        ax = fig.add_subplot(111, projection='3d')
+        
+        # Plot all examples as background in light gray
+        ax.scatter(embedded[:, 0], embedded[:, 1], embedded[:, 2], 
+                  c='lightgray', alpha=0.2, s=10)
+        
+        # Plot all selected examples
+        cmap = plt.cm.jet
+        cycle_indices = sorted(selections_by_cycle.keys())
+        
+        for i, cycle in enumerate(cycle_indices):
+            selected = list(selections_by_cycle[cycle])
+            if not selected:
+                continue
+            
+            color = cmap(i / max(1, len(cycle_indices) - 1))
+            ax.scatter(
+                embedded[selected, 0], 
+                embedded[selected, 1], 
+                embedded[selected, 2], 
+                c=[color], 
+                label=f'Cycle {cycle}',
+                s=80, alpha=0.8, edgecolors='black'
+            )
+        
+        ax.set_title(f'3D Selection Visualization for {strategy}', fontsize=16)
+        ax.legend(loc='upper left', bbox_to_anchor=(1.05, 1))
+        
+        # Rotate view for animation
+        ax.view_init(elev=30, azim=frame * 10)
+        plt.tight_layout()
+        
+        return []
+    
+    # Save individual frames for GIF creation
+    temp_dir = os.path.join(viz_folders['animations'], 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    frames = []
+    for frame in range(36):  # 36 frames for 360-degree rotation
+        update(frame)
+        frame_path = os.path.join(temp_dir, f'rotate_{frame:03d}.png')
+        plt.savefig(frame_path, dpi=100, bbox_inches='tight')
+        frames.append(frame_path)
+    
+    plt.close()
+    
+    # Create GIF from frames using pillow
+    from PIL import Image
+    images = [Image.open(f) for f in frames]
+    images[0].save(
+        save_path,
+        save_all=True,
+        append_images=images[1:],
+        duration=100,
+        loop=0
+    )
+    
+    # Clean up temporary files
+    import shutil
+    shutil.rmtree(temp_dir)
+    
+    return embedded
+
+def create_kde_animation(feature_vectors, selections_by_cycle, strategy, save_path):
+    """Create animated GIF of KDE density evolution over cycles"""
+    # Prepare data for t-SNE
+    tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(feature_vectors)-1))
+    pca = PCA(n_components=min(50, feature_vectors.shape[1]))
+    
+    # Reduce dimensionality
+    reduced_features = pca.fit_transform(feature_vectors)
+    embedded = tsne.fit_transform(reduced_features)
+    
+    # Create animation frames
+    fig = plt.figure(figsize=(12, 10))
+    
+    def update(frame):
+        plt.clf()
+        ax = fig.add_subplot(111)
+        
+        # Plot all examples as background in light gray
+        ax.scatter(embedded[:, 0], embedded[:, 1], c='lightgray', alpha=0.1, s=5)
+        
+        # Collect all selections up to current cycle
+        all_selected = []
+        for i in range(frame + 1):
+            if i in selections_by_cycle:
+                all_selected.extend(list(selections_by_cycle[i]))
+        
+        if all_selected:
+            # Get embedded coordinates for selected points
+            selected_coords = embedded[all_selected]
+            
+            # Create a meshgrid for the KDE
+            x_min, x_max = embedded[:, 0].min() - 10, embedded[:, 0].max() + 10
+            y_min, y_max = embedded[:, 1].min() - 10, embedded[:, 1].max() + 10
+            xx, yy = np.meshgrid(np.linspace(x_min, x_max, 100), 
+                                np.linspace(y_min, y_max, 100))
+            xy_sample = np.vstack([xx.ravel(), yy.ravel()]).T
+            
+            # Fit the KDE
+            kde = KernelDensity(bandwidth=5.0, kernel='gaussian')
+            kde.fit(selected_coords)
+            
+            # Score samples and reshape
+            z = np.exp(kde.score_samples(xy_sample))
+            z = z.reshape(xx.shape)
+            
+            # Plot density map
+            contour = ax.contourf(xx, yy, z, levels=50, cmap='viridis', alpha=0.7)
+            plt.colorbar(contour, ax=ax)
+            
+            # Plot selected points
+            current_cycle_selected = list(selections_by_cycle.get(frame, []))
+            if current_cycle_selected:
+                current_coords = embedded[current_cycle_selected]
+                ax.scatter(current_coords[:, 0], current_coords[:, 1], 
+                          c='red', alpha=0.8, s=40, edgecolors='black',
+                          label=f'Cycle {frame}')
+            
+            # Plot previous selections
+            prev_selected = []
+            for i in range(frame):
+                if i in selections_by_cycle:
+                    prev_selected.extend(list(selections_by_cycle[i]))
+            
+            if prev_selected:
+                prev_coords = embedded[prev_selected]
+                ax.scatter(prev_coords[:, 0], prev_coords[:, 1], 
+                          c='blue', alpha=0.4, s=20, edgecolors='black',
+                          label='Previous Cycles')
+        
+        ax.set_title(f'Density Evolution for {strategy} - Cycle {frame}', fontsize=16)
+        ax.legend(loc='best')
+        plt.tight_layout()
+        
+        return []
+    
+    # Save individual frames for GIF creation
+    temp_dir = os.path.join(viz_folders['animations'], 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    cycles = max(selections_by_cycle.keys()) + 1
+    frames = []
+    
+    for frame in range(cycles):
+        update(frame)
+        frame_path = os.path.join(temp_dir, f'kde_{frame:03d}.png')
+        plt.savefig(frame_path, dpi=100, bbox_inches='tight')
+        frames.append(frame_path)
+    
+    plt.close()
+    
+    # Create GIF from frames using pillow
+    from PIL import Image
+    images = [Image.open(f) for f in frames]
+    images[0].save(
+        save_path,
+        save_all=True,
+        append_images=images[1:],
+        duration=1000,
+        loop=0
+    )
+    
+    # Clean up temporary files
+    import shutil
+    shutil.rmtree(temp_dir)
+    
+    return embedded
+
+def create_loss_animation(strategy_results, strategy, save_path):
+    """Create animated GIF showing loss curves evolving over cycles"""
+    if strategy not in strategy_results:
+        return
+        
+    # Get loss curves
+    expected_losses = strategy_results[strategy].get('test_expected_losses', [])
+    annotated_losses = strategy_results[strategy].get('test_annotated_losses', [])
+    
+    if not expected_losses:
+        return
+    
+    # Create animation frames
+    fig, ax = plt.figure(figsize=(10, 6)), plt.gca()
+    
+    def update(frame):
+        ax.clear()
+        
+        # Plot expected loss curve up to current frame
+        cycles = list(range(frame + 1))
+        current_expected_losses = expected_losses[:frame + 1]
+        current_annotated_losses = annotated_losses[:frame + 1]
+        
+        ax.plot(cycles, current_expected_losses, 'b-', marker='o', label='Expected Loss')
+        ax.plot(cycles, current_annotated_losses, 'r--', marker='s', label='Annotated Loss')
+        
+        ax.set_title(f'Loss Evolution for {strategy} - Cycle {frame}', fontsize=14)
+        ax.set_xlabel('Cycle')
+        ax.set_ylabel('Loss')
+        ax.grid(True, alpha=0.3)
+        
+        # Set y-axis limits to keep visualization stable
+        ax.set_ylim(0, max(expected_losses) * 1.1)
+        
+        # Set x-axis limits
+        ax.set_xlim(0, len(expected_losses) - 1)
+        
+        ax.legend()
+        plt.tight_layout()
+        
+        return []
+    
+    # Save individual frames for GIF creation
+    temp_dir = os.path.join(viz_folders['animations'], 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    cycles = len(expected_losses)
+    frames = []
+    
+    for frame in range(cycles):
+        update(frame)
+        frame_path = os.path.join(temp_dir, f'loss_{frame:03d}.png')
+        plt.savefig(frame_path, dpi=100, bbox_inches='tight')
+        frames.append(frame_path)
+    
+    plt.close()
+    
+    # Create GIF from frames using pillow
+    from PIL import Image
+    images = [Image.open(f) for f in frames]
+    images[0].save(
+        save_path,
+        save_all=True,
+        append_images=images[1:],
+        duration=500,
+        loop=0
+    )
+    
+    # Clean up temporary files
+    import shutil
+    shutil.rmtree(temp_dir)
+
+def create_loss_gradient_animation(feature_vectors, selections_by_cycle, strategy, expected_losses, save_path):
+    """Create animated GIF showing loss gradient visualization evolving over cycles"""
+    # Create t-SNE embedding
+    tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(feature_vectors)-1))
+    pca = PCA(n_components=min(50, feature_vectors.shape[1]))
+    reduced_features = pca.fit_transform(feature_vectors)
+    embedded = tsne.fit_transform(reduced_features)
+    
+    # Calculate loss gradients
+    loss_gradients = []
+    for i in range(len(expected_losses) - 1):
+        loss_gradients.append(expected_losses[i] - expected_losses[i+1])
+    loss_gradients.append(0)  # Last cycle has no gradient
+    
+    max_gradient = max(max(loss_gradients), 0.001) * 1.1  # Ensure non-zero
+    
+    # Create animation frames
+    temp_dir = os.path.join(viz_folders['animations'], 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    cycles = len(expected_losses)
+    frames = []
+    
+    for frame in range(cycles):
+        fig, ax = plt.subplots(figsize=(12, 10))
+        
+        # Plot all examples as background in light gray
+        ax.scatter(embedded[:, 0], embedded[:, 1], c='lightgray', alpha=0.3, s=10)
+        
+        # Create a normalization for consistent color scaling
+        import matplotlib.colors as colors
+        norm = colors.Normalize(vmin=0, vmax=max_gradient)
+        
+        # Keep track of the scatter plot for colorbar
+        scatter = None
+        
+        # Plot selections colored by gradient up to current frame
+        for i in range(frame + 1):
+            if i not in selections_by_cycle or i >= len(loss_gradients):
                 continue
                 
-            cycles = sorted(diversity_by_cycle[strategy].keys())
-            values = [diversity_by_cycle[strategy][cycle][metric] 
-                      for cycle in cycles if metric in diversity_by_cycle[strategy][cycle]]
+            selected = list(selections_by_cycle[i])
+            if not selected:
+                continue
             
-            if values:
-                ax.plot(cycles[:len(values)], values, marker='o', label=strategy)
+            # Use gradient color - the higher the gradient, the more impact
+            gradient = max(0, loss_gradients[i])  # Ensure non-negative
+            
+            scatter = ax.scatter(
+                embedded[selected, 0], 
+                embedded[selected, 1], 
+                c=[gradient] * len(selected),  # Uniform color for a cycle
+                label=f'Cycle {i} (Δ{gradient:.4f})',
+                s=80, alpha=0.8, edgecolors='black',
+                cmap='viridis_r',  # Reversed colormap to make higher values stand out
+                norm=norm
+            )
         
-        ax.set_title(f'Evolution of {metric.replace("_", " ").title()}', fontsize=14)
-        ax.set_xlabel('Cycle', fontsize=12)
-        ax.set_ylabel(metric.replace("_", " ").title(), fontsize=12)
-        ax.grid(True, alpha=0.3)
+        # Add colorbar only once if we have data to plot
+        if scatter is not None:
+            cbar = plt.colorbar(scatter, ax=ax)
+            cbar.set_label('Loss Reduction')
+        
+        ax.set_title(f'Selection Impact for {strategy} - Cycle {frame}', fontsize=16)
         ax.legend(loc='best')
+        plt.tight_layout()
+        
+        # Save frame
+        frame_path = os.path.join(temp_dir, f'gradient_{frame:03d}.png')
+        plt.savefig(frame_path, dpi=100, bbox_inches='tight')
+        plt.close()
+        frames.append(frame_path)
     
-    plt.tight_layout()
-    plt.savefig(os.path.join(plots_path, 'diversity_trends.png'), dpi=300, bbox_inches='tight')
-    plt.close()
+    # Create GIF from frames using pillow
+    from PIL import Image
+    images = [Image.open(f) for f in frames]
+    images[0].save(
+        save_path,
+        save_all=True,
+        append_images=images[1:],
+        duration=500,
+        loop=0
+    )
+    
+    # Clean up temporary files
+    import shutil
+    shutil.rmtree(temp_dir)
+
+def create_parallel_coordinates_animation(feature_vectors, selections_by_strategy, strategy, save_path):
+    """Create animated GIF of parallel coordinates visualization evolving over cycles"""
+    from pandas.plotting import parallel_coordinates
+    
+    # Get the selections for this strategy
+    selections_by_cycle = selections_by_strategy[strategy]
+    
+    # Get feature names (or create generic ones)
+    n_features = feature_vectors.shape[1]
+    feature_names = [f'Feature_{i}' for i in range(n_features)]
+    
+    # Create DataFrame with all examples
+    df_all = pd.DataFrame(feature_vectors, columns=feature_names)
+    df_all['Type'] = 'Background'
+    
+    # Save individual frames for GIF creation
+    temp_dir = os.path.join(viz_folders['animations'], 'temp')
+    os.makedirs(temp_dir, exist_ok=True)
+    
+    cycles = max(selections_by_cycle.keys()) + 1
+    frames = []
+    
+    for frame in range(cycles):
+        plt.figure(figsize=(15, 8))
+        
+        # Copy the DataFrame for this frame
+        df = df_all.copy()
+        
+        # Add data for cycles up to current frame
+        for i in range(frame + 1):
+            if i in selections_by_cycle:
+                selected_list = list(selections_by_cycle[i])
+                for idx in selected_list:
+                    df.loc[idx, 'Type'] = f'Cycle {i}'
+        
+        # Sample background points to avoid overcrowding
+        bg_indices = df[df['Type'] == 'Background'].index
+        if len(bg_indices) > 100:
+            sample_indices = np.random.choice(bg_indices, 100, replace=False)
+            keep_indices = list(sample_indices) + list(df[df['Type'] != 'Background'].index)
+            df = df.loc[keep_indices]
+        
+        # Create plot
+        parallel_coordinates(df, 'Type', colormap=plt.cm.jet)
+        plt.title(f'Parallel Coordinates Plot - {strategy} - Cycle {frame}', fontsize=14)
+        plt.xticks(rotation=45)
+        plt.tight_layout()
+        
+        # Save frame
+        frame_path = os.path.join(temp_dir, f'parallel_{frame:03d}.png')
+        plt.savefig(frame_path, dpi=100, bbox_inches='tight')
+        plt.close()
+        frames.append(frame_path)
+    
+    # Create GIF from frames using pillow
+    from PIL import Image
+    images = [Image.open(f) for f in frames]
+    images[0].save(
+        save_path,
+        save_all=True,
+        append_images=images[1:],
+        duration=1000,
+        loop=0
+    )
+    
+    # Clean up temporary files
+    import shutil
+    shutil.rmtree(temp_dir)
 
 def main():
     print("Loading datasets and results...")
@@ -572,50 +723,75 @@ def main():
     print("Tracking selections by cycle...")
     selections_by_strategy = track_selections_by_cycle(strategy_results)
     
-    # Calculate diversity metrics for each strategy and cycle
-    print("Computing diversity metrics...")
-    diversity_by_strategy = {}
+    # Create visualizations for each strategy
     for strategy, selections_by_cycle in selections_by_strategy.items():
-        diversity_by_strategy[strategy] = {}
-        for cycle, selected_indices in selections_by_cycle.items():
-            diversity_by_strategy[strategy][cycle] = compute_diversity_metrics(
-                feature_vectors, list(selected_indices)
-            )
-    
-    # Visualize selections for each strategy
-    print("Generating visualizations...")
-    for strategy, selections_by_cycle in selections_by_strategy.items():
-        print(f"Visualizing {strategy}...")
-        embedded = visualize_selections(
-            feature_vectors, 
-            selections_by_cycle, 
-            strategy, 
-            save_path=os.path.join(plots_path, f'{strategy}_tsne.png')
-        )
+        print(f"Creating visualizations for {strategy}...")
         
-        # Create animation of selection evolution
-        create_cycle_animation(
+        # Create 2D t-SNE animation
+        print(f"  - Creating 2D t-SNE animation...")
+        create_2d_tsne_animation(
             feature_vectors,
             selections_by_cycle,
             strategy,
-            save_path=os.path.join(plots_path, f'{strategy}_evolution.gif')
+            save_path=os.path.join(viz_folders['animations'], f'{strategy}_2d_tsne.gif')
         )
-    
-    # Plot diversity trends
-    print("Plotting diversity trends...")
-    plot_diversity_trends(strategy_results.keys(), diversity_by_strategy)
-    
-    # Save diversity metrics to CSV
-    diversity_data = []
-    for strategy in diversity_by_strategy:
-        for cycle in diversity_by_strategy[strategy]:
-            metrics = diversity_by_strategy[strategy][cycle]
-            row = {'strategy': strategy, 'cycle': cycle}
-            row.update(metrics)
-            diversity_data.append(row)
-    
-    diversity_df = pd.DataFrame(diversity_data)
-    diversity_df.to_csv(os.path.join(plots_path, 'diversity_metrics.csv'), index=False)
+        
+        # Create 3D t-SNE animation
+        print(f"  - Creating 3D t-SNE animation...")
+        create_3d_tsne_animation(
+            feature_vectors,
+            selections_by_cycle,
+            strategy,
+            save_path=os.path.join(viz_folders['animations'], f'{strategy}_3d_tsne.gif')
+        )
+        
+        # Create rotating 3D t-SNE visualization
+        print(f"  - Creating rotating 3D t-SNE visualization...")
+        create_rotating_3d_tsne(
+            feature_vectors,
+            selections_by_cycle,
+            strategy,
+            save_path=os.path.join(viz_folders['animations'], f'{strategy}_3d_rotating.gif')
+        )
+        
+        # Create KDE density animation
+        print(f"  - Creating KDE density animation...")
+        create_kde_animation(
+            feature_vectors,
+            selections_by_cycle,
+            strategy,
+            save_path=os.path.join(viz_folders['animations'], f'{strategy}_kde.gif')
+        )
+        
+        # Create loss curve animation
+        if strategy in strategy_results:
+            print(f"  - Creating loss curve animation...")
+            create_loss_animation(
+                strategy_results,
+                strategy,
+                save_path=os.path.join(viz_folders['animations'], f'{strategy}_loss.gif')
+            )
+            
+            # Create loss gradient animation
+            print(f"  - Creating loss gradient animation...")
+            expected_losses = strategy_results[strategy].get('test_expected_losses', [])
+            if expected_losses:
+                create_loss_gradient_animation(
+                    feature_vectors,
+                    selections_by_cycle,
+                    strategy,
+                    expected_losses,
+                    save_path=os.path.join(viz_folders['animations'], f'{strategy}_loss_gradient.gif')
+                )
+        
+        # Create parallel coordinates animation
+        print(f"  - Creating parallel coordinates animation...")
+        create_parallel_coordinates_animation(
+            feature_vectors,
+            selections_by_cycle,
+            strategy,
+            save_path=os.path.join(viz_folders['animations'], f'{strategy}_parallel_coords.gif')
+        )
     
     print(f"Analysis complete! Results saved to {plots_path}")
 

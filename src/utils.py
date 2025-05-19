@@ -16,23 +16,12 @@ random.seed(90)
 torch.manual_seed(90)
 np.random.seed(90)
 
-# Base paths
-BASE_PATH = "outputs"
-DATA_PATH = os.path.join(BASE_PATH, "data")
-MODELS_PATH = os.path.join(BASE_PATH, "models")
-RESULTS_PATH = os.path.join(BASE_PATH, "results")
-
-# Create directories
-os.makedirs(DATA_PATH, exist_ok=True)
-os.makedirs(MODELS_PATH, exist_ok=True)
-os.makedirs(RESULTS_PATH, exist_ok=True)
-
 class DataManager:
     """
     Manages data preparation and handling for annotation experiments.
     """
     
-    def __init__(self, base_path=DATA_PATH):
+    def __init__(self, base_path):
         """Initialize data manager with paths for data storage."""
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -115,7 +104,9 @@ class DataManager:
     
     def _prepare_entries(self, texts, data_list, split_type, llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset):
         """Prepare data entries for a specific split."""
+
         if dataset == "hanna":
+
             for text_id in texts:
                 if text_id not in llm_data:
                     continue
@@ -201,12 +192,11 @@ class DataManager:
                         entry["questions"].append(question_indices[question])
                 
                 data_list.append(entry)
+
         elif dataset == "llm_rubric":
+
             for text_id in texts:
 
-
-                
-                
                 annotators = list(human_data[text_id].keys())
 
                 for annotator in annotators:
@@ -289,8 +279,6 @@ class DataManager:
                         entry["questions"].append(question_indices[question])
                     
                     data_list.append(entry)
-
-
 
 class AnnotationDataset(Dataset):
     """
