@@ -396,7 +396,7 @@ def main():
     # Configure experiments to run
     experiments_to_run = []
     if args.experiment == "all":
-        experiments_to_run = ["gradient_all_top_only", "gradient_sequential_top_only", "gradient_voi_top_only", "gradient_fast_voi_top_only", "entropy_all", "entropy_5", "random_all", "random_5", "gradient_all", "gradient_sequential", "gradient_voi", "gradient_fast_voi", ]
+        experiments_to_run = ["gradient_all_top_only", "gradient_sequential_top_only", "gradient_voi_top_only", "gradient_fast_voi_top_only", "gradient_random_top_only", "entropy_all", "entropy_5", "random_all", "random_5", "gradient_all", "gradient_sequential", "gradient_voi", "gradient_fast_voi", "gradient_random"]
     else:
         experiments_to_run = [args.experiment]
     
@@ -547,6 +547,40 @@ def main():
             results = run_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="gradient", feature_strategy="sequential", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
+                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+                device=device, resample_validation=args.resample_validation,
+                run_until_exhausted=args.run_until_exhausted,
+                gradient_top_only=True
+            )
+
+        elif experiment == "gradient_random":
+            train_dataset = AnnotationDataset(data_manager.paths['train'])
+            val_dataset = AnnotationDataset(data_manager.paths['validation'])
+            test_dataset = AnnotationDataset(data_manager.paths['test'])
+            active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
+
+            results = run_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="gradient", feature_strategy="random", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
+                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+                device=device, resample_validation=args.resample_validation,
+                run_until_exhausted=args.run_until_exhausted,
+                gradient_top_only=False
+            )
+
+        elif experiment == "gradient_random_top_only":
+            train_dataset = AnnotationDataset(data_manager.paths['train'])
+            val_dataset = AnnotationDataset(data_manager.paths['validation'])
+            test_dataset = AnnotationDataset(data_manager.paths['test'])
+            active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
+
+            results = run_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="gradient", feature_strategy="random", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,

@@ -26,7 +26,7 @@ plots_path = os.path.join(base_path, "plots")'''
 base_path = "../outputs"
 data_path = os.path.join(base_path, "data_hanna")
 results_path = os.path.join(base_path, "results_l2")
-plots_path = os.path.join(base_path, "plots")
+plots_path = os.path.join(results_path, "plots")
 
 # Create separate folders for different visualization types
 viz_folders = {
@@ -759,14 +759,14 @@ def main():
             save_path=os.path.join(viz_folders['animations'], f'{strategy}_3d_rotating.gif')
         )
         
-        '''# Create KDE density animation
+        # Create KDE density animation
         print(f"  - Creating KDE density animation...")
         create_kde_animation(
             feature_vectors,
             selections_by_cycle,
             strategy,
             save_path=os.path.join(viz_folders['animations'], f'{strategy}_kde.gif')
-        )'''
+        )
         
         # Create loss curve animation
         if strategy in strategy_results:
