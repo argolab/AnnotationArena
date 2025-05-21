@@ -1129,13 +1129,12 @@ class GradientSelectionStrategy(ExampleSelectionStrategy):
         """Initialize gradient selection strategy."""
         super().__init__("gradient", model, device)
         if gradient_top_only:
-            print("Debug: initialized top only selector here")
             self.selector = GradientTopOnlySelector(model, device)
         else:
             self.selector = GradientSelector(model, device)
     
     def select_examples(self, dataset, num_to_select=1, val_dataset=None, 
-                        num_samples=5, batch_size=8, costs=None, **kwargs):
+                        num_samples=5, batch_size=32, costs=None, **kwargs):
         """
         Select examples using gradient alignment.
         
