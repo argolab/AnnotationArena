@@ -41,7 +41,7 @@ class DataManager:
         os.makedirs(self.paths['gradient_alignment'], exist_ok=True)
         os.makedirs(self.paths['random'], exist_ok=True)
     
-    def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, dataset="hanna"):
+    def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, dataset="hanna", cold_start=False):
         """
         Prepare data splits for active learning experiments.
         
@@ -49,6 +49,8 @@ class DataManager:
             num_partition: Total number of examples to use
             known_human_questions_val: Number of human questions to keep observed in validation set
             initial_train_ratio: Ratio of data to use for initial training (cold start = 0.0)
+            dataset: Dataset to use ("hanna" or "llm_rubric")
+            cold_start: If True, both LLM and human questions will be unknown in active pool
             
         Returns:
             bool: Success status
@@ -89,10 +91,10 @@ class DataManager:
         test_data = []
         active_pool_data = []
         
-        self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset)
-        self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset)
-        self._prepare_entries(test_texts, test_data, 'test', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset)
-        self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset)
+        self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start)
+        self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start)
+        self._prepare_entries(test_texts, test_data, 'test', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start)
+        self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start)
         
         for key, data in zip(['train', 'validation', 'test', 'active_pool', 'original_train', 'original_validation', 'original_test', 'original_active_pool'],
                              [initial_train_data, validation_data, test_data, active_pool_data, initial_train_data, validation_data, test_data, active_pool_data]):
@@ -102,9 +104,22 @@ class DataManager:
         
         return True
     
-    def _prepare_entries(self, texts, data_list, split_type, llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset):
-        """Prepare data entries for a specific split."""
-
+    def _prepare_entries(self, texts, data_list, split_type, llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset, cold_start=False):
+        """
+        Prepare data entries for a specific split.
+        
+        Args:
+            texts: List of text IDs to process
+            data_list: List to append prepared entries to
+            split_type: Type of data split ('train', 'validation', 'test', 'active_pool')
+            llm_data: Dictionary of LLM-generated answers
+            human_data: Dictionary of human-provided answers
+            question_list: List of question IDs
+            question_indices: Dictionary mapping question IDs to indices
+            known_human_questions_val: Number of human questions to keep observed in validation set
+            dataset: Dataset to use ("hanna" or "llm_rubric")
+            cold_start: If True, both LLM and human questions will be unknown in active pool
+        """
         if dataset == "hanna":
 
             for text_id in texts:
@@ -123,18 +138,28 @@ class DataManager:
                 
                 annotators = list(human_data[text_id].keys())
                 
+                # Process LLM questions
                 for q_idx, question in enumerate(question_list):
                     true_prob = llm_data[text_id][question]
                     
-                    mask_bit = 0 
-                    combined_input = [mask_bit] + true_prob
+                    # Determine if this LLM question should be masked based on cold_start and split_type
+                    if cold_start and split_type == 'active_pool':
+                        # In cold start mode, mask LLM questions in active pool
+                        mask_bit = 1  # Masked
+                        combined_input = [mask_bit] + [0.0] * 5
+                        entry["known_questions"].append(0)
+                    else:
+                        # Default behavior: LLM questions are known
+                        mask_bit = 0  # Observed
+                        combined_input = [mask_bit] + true_prob
+                        entry["known_questions"].append(1)
                     
-                    entry["known_questions"].append(1)
                     entry["input"].append(combined_input)
                     entry["answers"].append(true_prob)
                     entry["annotators"].append(-1)
                     entry["questions"].append(question_indices[question])
 
+                # Process human questions
                 for judge_id in annotators:
                     for q_idx, question in enumerate(question_list):
                         true_score = human_data[text_id][judge_id][question]
@@ -211,30 +236,40 @@ class DataManager:
                         "observation_history": []  # Track history of observations for this entry
                     }
                 
+                    # Process LLM questions
                     for q_idx, question in enumerate(question_list):
                         true_prob = llm_data[text_id][question]
                         
-                        mask_bit = 0 
-                        combined_input = [mask_bit] + true_prob
+                        # Determine if this LLM question should be masked based on cold_start and split_type
+                        if cold_start and split_type in ['active_pool', 'validation']:
+                            # In cold start mode, mask LLM questions in active pool
+                            mask_bit = 1  # Masked
+                            combined_input = [mask_bit] + [0.0] * 4  # Note: llm_rubric uses 4 values
+                            entry["known_questions"].append(0)
+                        else:
+                            # Default behavior: LLM questions are known
+                            mask_bit = 0  # Observed
+                            combined_input = [mask_bit] + true_prob
+                            entry["known_questions"].append(1)
                         
-                        entry["known_questions"].append(1)
                         entry["input"].append(combined_input)
                         entry["answers"].append(true_prob)
                         entry["annotators"].append(-1)
                         entry["questions"].append(question_indices[question])
 
+                    # Process human questions
                     for q_idx, question in enumerate(question_list):
                         true_score = human_data[text_id][annotator][question]
-                        true_prob = [0.0] * 4
+                        true_prob = [0.0] * 4  # Note: llm_rubric uses 4 values
                         
                         if isinstance(true_score, (int, float)):
                             if true_score % 1 != 0:  
                                 rounded_score = math.ceil(true_score)
-                                rounded_score = max(min(rounded_score, 5), 1)
+                                rounded_score = max(min(rounded_score, 4), 1)  # Adjusted for 4 values
                                 index = rounded_score - 1
                                 true_prob[index] = 1.0
                             else:
-                                true_score = max(min(int(true_score), 5), 1)
+                                true_score = max(min(int(true_score), 4), 1)  # Adjusted for 4 values
                                 index = true_score - 1
                                 true_prob[index] = 1.0
                         else:
@@ -266,7 +301,7 @@ class DataManager:
                         elif split_type == 'test':
                             if random.random() < 0.5:
                                 mask_bit = 1  # Masked
-                                combined_input = [mask_bit] + [0.0] *4
+                                combined_input = [mask_bit] + [0.0] * 4
                                 entry["known_questions"].append(0)
                             else:
                                 mask_bit = 0  # Observed
@@ -506,8 +541,9 @@ def minimum_bayes_risk_ce(distribution):
         return torch.argmax(distribution).item()
     return np.argmax(distribution)
 
+
 def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotated_examples, 
-                               strategy="balanced", update_percentage=25, selected_examples = None):
+                               strategy="balanced", update_percentage=25, selected_examples=None):
     """
     Resample the validation dataset using annotated examples and active pool.
     
@@ -516,13 +552,17 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
         dataset_val: Current validation dataset
         active_pool: List of indices available in the active pool
         annotated_examples: List of indices of examples that have been annotated
-        strategy: Strategy for resampling ("balanced", "add_only", "replace_all")
+        strategy: Strategy for resampling ("balanced", "add_only", "replace_all", "add_selected")
         update_percentage: Percentage of validation set to update (default: 25%)
+        selected_examples: List of specific examples to add to validation set (for "add_selected")
         
     Returns:
-        tuple: (new_validation_dataset, updated_active_pool)
+        tuple: (new_validation_dataset, updated_active_pool, validation_example_indices)
     """
     current_val_size = len(dataset_val)
+    validation_example_indices = []
+    
+
     
     if strategy == "balanced":
         num_to_update = max(1, int(current_val_size * update_percentage / 100))
@@ -547,23 +587,27 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
             
             # Create new validation dataset
             new_val_data = []
+            kept_val_indices = []
             if keep_size > 0:
                 for i in range(min(keep_size, current_val_size)):
                     new_val_data.append(dataset_val.get_data_entry(i))
+                    kept_val_indices.append(validation_example_indices[i])
             
             # Add new examples
             for idx in new_val_indices:
                 new_val_data.append(dataset_train.get_data_entry(idx))
+            
+            # Update validation example indices
+            validation_example_indices = kept_val_indices + new_val_indices
             
             # Create new dataset
             new_dataset_val = AnnotationDataset(new_val_data)
             updated_active_pool = [idx for idx in active_pool if idx not in new_val_indices]
             
             print(f"Resampled validation set: {len(new_dataset_val)} examples ({len(new_val_indices)} new)")
-            return new_dataset_val, updated_active_pool
+            return new_dataset_val, updated_active_pool, validation_example_indices
     
     elif strategy == "add_only":
-
         max_to_add = max(1, int(current_val_size * update_percentage / 100))
         num_to_add = min(len(annotated_examples), max_to_add)
         
@@ -582,50 +626,81 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
             for idx in examples_to_add:
                 new_val_data.append(dataset_train.get_data_entry(idx))
             
+            # Update validation example indices
+            validation_example_indices.extend(examples_to_add)
+            
             new_dataset_val = AnnotationDataset(new_val_data)
             
             print(f"Added {num_to_add} annotated examples to validation set (now {len(new_dataset_val)} examples)")
-            return new_dataset_val, active_pool
+            return new_dataset_val, active_pool, validation_example_indices
     
-    if strategy == "replace_all":
+    elif strategy == "replace_all":
         val_size = min(current_val_size, len(active_pool))
         if val_size > 0:
-
             new_val_indices = random.sample(active_pool, val_size)
-            
-            current_val_indices = [i for i in range(len(dataset_val))]
             
             new_val_data = []
             for idx in new_val_indices:
                 new_val_data.append(dataset_train.get_data_entry(idx))
             
+            # Update validation example indices
+            validation_example_indices = new_val_indices
+            
             new_dataset_val = AnnotationDataset(new_val_data)
             
             updated_active_pool = [idx for idx in active_pool if idx not in new_val_indices]
             
+            # Return current validation examples to active pool if they're not already annotated
+            current_val_indices = [i for i in range(len(dataset_val))]
             for old_val_idx in current_val_indices:
                 if old_val_idx not in annotated_examples and old_val_idx not in updated_active_pool:
                     updated_active_pool.append(old_val_idx)
             
             print(f"Completely replaced validation set with {len(new_dataset_val)} new examples")
             print(f"Active pool size: {len(updated_active_pool)}")
-            return new_dataset_val, updated_active_pool
+            return new_dataset_val, updated_active_pool, validation_example_indices
         
     elif strategy == "add_selected" and selected_examples:
-
         new_val_data = []
         
+        # Keep all existing validation examples
         for i in range(current_val_size):
             new_val_data.append(dataset_val.get_data_entry(i))
         
+        # Add new examples
         examples_added = 0
         for idx in selected_examples:
             new_val_data.append(dataset_train.get_data_entry(idx))
             examples_added += 1
+            # Add to validation example indices if not already there
+            if idx not in validation_example_indices:
+                validation_example_indices.append(idx)
         
         new_dataset_val = AnnotationDataset(new_val_data)
         
         print(f"Added {examples_added} selected examples to validation set (now {len(new_dataset_val)} examples)")
-        return new_dataset_val, active_pool
+        return new_dataset_val, active_pool, validation_example_indices
+
+    elif strategy == "add_selected_partial" and selected_examples:
+        new_val_data = []
+        
+        # Keep all existing validation examples
+        for i in range(current_val_size):
+            new_val_data.append(dataset_val.get_data_entry(i))
+        
+        # Add new examples
+        examples_added = 0
+        for idx in selected_examples:
+            # Add to validation example indices if not already there
+            if idx not in validation_example_indices and random.random() > 0.5:
+                new_val_data.append(dataset_train.get_data_entry(idx))
+                validation_example_indices.append(idx)
+                examples_added += 1
+        
+            new_dataset_val = AnnotationDataset(new_val_data)
+        
+        print(f"Added {examples_added} selected examples to validation set (now {len(new_dataset_val)} examples)")
+        return new_dataset_val, active_pool, validation_example_indices
     
-    return dataset_val, active_pool
+    # Default return if no changes were made
+    return dataset_val, active_pool, validation_example_indices

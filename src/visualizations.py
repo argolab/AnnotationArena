@@ -62,7 +62,7 @@ def extract_costs_per_cycle(experiment_results):
             cost = obs.get('cost', 0.0)
             
             # Apply special cost for position_7
-            if '_position_7' in variable_id:
+            if '_position_9' in variable_id:
                 cost = 1.5
             
             cycle_costs[experiment_name][cycle] += cost
@@ -157,11 +157,11 @@ def plot_observe_all_experiments(results_dict, save_path):
     plt.close()
     print(f"Saved 'observe all' plot to {save_path}")
 
-def plot_observe_5_experiments(results_dict, save_path):
+def plot_observe_5_experiments(results_dict, save_path, feature_num):
     """Plot 'observe 5' experiments (random_5, gradient_sequential, gradient_voi, entropy_5)."""
     # Filter only the relevant experiments - UPDATED to include entropy_5
     observe_5_results = {k: v for k, v in results_dict.items() 
-                         if k in ['random_5', 'gradient_sequential', 'gradient_voi', 'entropy_5']}
+                         if k in ['random_5', 'gradient_sequential', 'gradient_voi', 'entropy_5', "gradient_random"]}
     
     if not observe_5_results:
         print("No 'observe 5' experiment results found")
@@ -174,7 +174,8 @@ def plot_observe_5_experiments(results_dict, save_path):
         'random_5': 'purple',
         'gradient_sequential': 'orange',
         'gradient_voi': 'brown',
-        'entropy_5': 'darkgreen'  # New color for entropy
+        'entropy_5': 'darkgreen',
+        'gradient_random': "cyan"  # New color for entropy
     }
     
     # UPDATED to include entropy_5
@@ -182,7 +183,8 @@ def plot_observe_5_experiments(results_dict, save_path):
         'random_5': 'D',
         'gradient_sequential': 's',
         'gradient_voi': '*',
-        'entropy_5': 'X'  # New marker for entropy
+        'entropy_5': 'X',  # New marker for entropy
+        "gradient_random": "v"
     }
     
     for strategy, results in observe_5_results.items():
@@ -195,7 +197,7 @@ def plot_observe_5_experiments(results_dict, save_path):
                     linestyle='-', 
                     color=colors[strategy],
                     marker=markers[strategy], 
-                    label=f"{strategy} (Expected)",
+                    label=f"{strategy.replace('5', str(feature_num))} (Expected)",
                     linewidth=2,
                     markersize=8)
             
@@ -218,7 +220,7 @@ def plot_observe_5_experiments(results_dict, save_path):
                         linestyle=':', 
                         color=colors[strategy],
                         marker=markers[strategy], 
-                        label=f"{strategy} (Annotated)",
+                        label=f"{strategy.replace('5', str(feature_num))} (Annotated)",
                         linewidth=2,
                         markersize=8,
                         alpha=0.8)
@@ -230,7 +232,7 @@ def plot_observe_5_experiments(results_dict, save_path):
     ax.legend(loc='upper right', fontsize=12)
     
     # Set y-axis to start from 0 and have some headroom
-    max_loss = max([max(r.get('test_expected_losses', [0])) for r in observe_5_results.values()])
+    max_loss = max([max(r.get('test_annotated_losses', [0])) for r in observe_5_results.values()])
     ax.set_ylim(0, max_loss * 1.1)
     
     plt.tight_layout()
@@ -389,7 +391,8 @@ def plot_top_only_comparison(results_dict, save_path):
         'gradient_all': 'red',
         'gradient_sequential': 'orange',
         'gradient_voi': 'brown',
-        'gradient_fast_voi': 'blue'
+        'gradient_fast_voi': 'blue',
+        'gradient_random': 'cyan'  # <- New entry added
     }
     
     # Create plot with solid lines for regular and dashed lines for top_only
@@ -398,8 +401,8 @@ def plot_top_only_comparison(results_dict, save_path):
         color = base_colors.get(reg, 'black')
         
         # Plot regular version (solid line)
-        if 'test_expected_losses' in results_dict[reg]:
-            expected_losses = results_dict[reg]['test_expected_losses']
+        if 'test_annotated_losses' in results_dict[reg]:
+            expected_losses = results_dict[reg]['test_annotated_losses']
             cycles = list(range(len(expected_losses)))
             
             ax.plot(cycles, expected_losses, 
@@ -411,8 +414,8 @@ def plot_top_only_comparison(results_dict, save_path):
                     markersize=8)
         
         # Plot top_only version (dashed line)
-        if 'test_expected_losses' in results_dict[top]:
-            expected_losses = results_dict[top]['test_expected_losses']
+        if 'test_annotated_losses' in results_dict[top]:
+            expected_losses = results_dict[top]['test_annotated_losses']
             cycles = list(range(len(expected_losses)))
             
             ax.plot(cycles, expected_losses, 
@@ -425,7 +428,7 @@ def plot_top_only_comparison(results_dict, save_path):
     
     ax.set_title('Regular vs Top Only Experiments Comparison', fontsize=16)
     ax.set_xlabel('Cycles', fontsize=14)
-    ax.set_ylabel('Expected Loss', fontsize=14)
+    ax.set_ylabel('Annotated Loss', fontsize=14)
     ax.grid(True, linestyle='--', alpha=0.7)
     ax.legend(loc='upper right', fontsize=12)
     
@@ -445,7 +448,7 @@ def plot_top_only_comparison(results_dict, save_path):
     plt.close()
     print(f"Saved Regular vs Top Only comparison plot to {save_path}")
 
-def plot_loss_vs_cost(results_dict, costs_dict, save_path):
+def plot_loss_vs_cost(results_dict, costs_dict, save_path, feature_num):
     """Plot loss vs cumulative cost for all experiments."""
     fig, ax = plt.subplots(figsize=(14, 10))
     
@@ -458,7 +461,8 @@ def plot_loss_vs_cost(results_dict, costs_dict, save_path):
         'gradient_voi': 'brown',
         'gradient_fast_voi': 'blue',
         'entropy_all': 'pink',
-        'entropy_5': 'darkgreen'
+        'entropy_5': 'darkgreen',
+        'gradient_random': 'cyan'
     }
     
     markers = {
@@ -469,7 +473,8 @@ def plot_loss_vs_cost(results_dict, costs_dict, save_path):
         'gradient_voi': '*',
         'gradient_fast_voi': 'X',
         'entropy_all': 's',
-        'entropy_5': 'P'
+        'entropy_5': 'P',
+        'gradient_random': 'v'
     }
     
     # Define line styles
@@ -491,7 +496,7 @@ def plot_loss_vs_cost(results_dict, costs_dict, save_path):
                 linestyle=linestyles.get(experiment_name, '-'), 
                 color=colors.get(experiment_name, 'black'),
                 marker=markers.get(experiment_name, 'o'), 
-                label=experiment_name,
+                label=experiment_name.replace("5", str(feature_num)),
                 linewidth=2,
                 markersize=8)
     
@@ -509,9 +514,9 @@ def plot_loss_vs_cost(results_dict, costs_dict, save_path):
     plt.close()
     print(f"Saved Loss vs Cost plot to {save_path}")
 
-def create_plots():
+def create_plots(feature_num):
     base_path = "../outputs"
-    results_path = os.path.join(base_path, "results_l2")
+    results_path = os.path.join(base_path, "results-rubric")
     plots_path = os.path.join(results_path, "plots")
     os.makedirs(plots_path, exist_ok=True)
     
@@ -526,15 +531,16 @@ def create_plots():
     
     # Create original plots
     plot_observe_all_experiments(experiment_results, os.path.join(plots_path, "observe_all_experiments.png"))
-    plot_observe_5_experiments(experiment_results, os.path.join(plots_path, "observe_5_experiments.png"))
+    plot_observe_5_experiments(experiment_results, os.path.join(plots_path, f"observe_{feature_num}_experiments.png"), feature_num)
     plot_voi_comparison(experiment_results, os.path.join(plots_path, "voi_comparison.png"))
     plot_feature_counts(experiment_results, os.path.join(plots_path, "feature_counts.png"))
     plot_top_only_comparison(experiment_results, os.path.join(plots_path, "top_only_comparison.png"))
     
     # Create new cost-based plot
-    plot_loss_vs_cost(experiment_results, cumulative_costs, os.path.join(plots_path, "loss_vs_cost.png"))
+    plot_loss_vs_cost(experiment_results, cumulative_costs, os.path.join(plots_path, "loss_vs_cost.png"), feature_num)
     
     print(f"All plots saved to {plots_path}")
 
 if __name__ == "__main__":
-    create_plots()
+    feature_num = 3
+    create_plots(feature_num)

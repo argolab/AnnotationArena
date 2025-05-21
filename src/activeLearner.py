@@ -44,6 +44,7 @@ def run_experiment(
     loss_type="cross_entropy",
     run_until_exhausted=False,
     gradient_top_only=False,
+    cold_start=False,
 ):
     """
     Unified experiment runner for all active learning strategies.
@@ -66,6 +67,8 @@ def run_experiment(
         resample_validation: Whether to resample validation set during training
         loss_type: Type of loss to use for VOI calculation
         run_until_exhausted: Whether to run until the active pool is exhausted
+        gradient_top_only: Whether to use only the top gradient for example selection
+        cold_start: If True, keep annotated examples in the active pool for potential reselection
         
     Returns:
         dict: Metrics and results from the experiment
@@ -114,6 +117,9 @@ def run_experiment(
         print(f"=== Cycle {cycle_count+1}/{cycles if not run_until_exhausted else 'until exhausted'} ===")
         print(f"Active pool size: {len(active_pool)}")
         arena.set_dataset(dataset_train)
+
+        train_observe_num = [len(dataset_train.get_masked_positions(idx)) for idx in range(len(dataset_train)) if idx in active_pool]
+        val_observe_num = [len(dataset_train.get_masked_positions(idx)) for idx in range(len(dataset_val))]
         
         # Filter active pool to remove examples with no masked positions
         valid_active_pool = []
@@ -132,10 +138,10 @@ def run_experiment(
             break
         
         if resample_validation and cycle_count > 0:
-            dataset_val, active_pool = resample_validation_dataset(
-                dataset_train, dataset_val, active_pool, annotated_examples, 
+            dataset_val, active_pool, val_indices = resample_validation_dataset(
+                dataset_train, dataset_val, active_pool, list(set(annotated_examples)), 
                 strategy="add_selected", update_percentage=20
-            )
+            ) 
         
         # Select examples based on strategy
         if example_strategy == "random":
@@ -151,6 +157,7 @@ def run_experiment(
                 active_pool_subset, num_to_select=min(examples_per_cycle, len(active_pool)),
                 val_dataset=dataset_val, num_samples=3, batch_size=batch_size
             )
+
             
             selected_examples = [active_pool[idx] for idx in selected_indices]
 
@@ -159,17 +166,39 @@ def run_experiment(
         
         print(f"Selected {len(selected_examples)} examples")
         
-        # Remove selected examples from active pool
         active_pool = [idx for idx in active_pool if idx not in selected_examples]
-        annotated_examples.extend(selected_examples)
-        metrics['remaining_pool_size'].append(len(active_pool))
+        
+        # Add selected examples to annotated_examples list
+        for example in selected_examples:
+            if example not in annotated_examples:
+                annotated_examples.append(example)
+        
+        
         
         # Add selected examples to validation set if requested
         if resample_validation:
-            dataset_val, _ = resample_validation_dataset(
-                dataset_train, dataset_val, active_pool, annotated_examples, 
-                strategy="add_selected", selected_examples=selected_examples
-            )
+            if cold_start:
+                dataset_val, active_pool_after_resample, val_examples = resample_validation_dataset(
+                    dataset_train, dataset_val, active_pool, annotated_examples, 
+                    strategy="add_selected_partial", selected_examples=selected_examples
+                )
+            else:
+                dataset_val, active_pool_after_resample, val_examples = resample_validation_dataset(
+                    dataset_train, dataset_val, active_pool, annotated_examples, 
+                    strategy="add_selected", selected_examples=selected_examples
+                )
+            # In cold_start mode, we need to ensure that examples added to validation set
+            # are removed from active pool to avoid duplicates
+            if cold_start:
+                
+                # Re-add selected examples that are not in validation set to active pool
+                for idx in selected_examples:
+                    if idx not in val_examples:
+                        print(f"Debug: readd example {idx} to the active pool")
+                        active_pool.append(idx)
+            else:
+                active_pool = active_pool_after_resample
+        metrics['remaining_pool_size'].append(len(active_pool))
         
         total_features_annotated = 0
         cycle_benefit_cost_ratios = []
@@ -305,7 +334,7 @@ def run_experiment(
             for pos in positions:
                 if test_arena.observe_position(test_idx, pos):
                     annotations_applied += 1
-        
+
         # Evaluate with overlap annotations
         if annotations_applied > 0:
             test_arena.set_dataset(annotated_test_dataset)
@@ -347,6 +376,7 @@ def main():
     parser.add_argument("--run_until_exhausted", action="store_true", help="Run until annotation pool is exhausted")
     parser.add_argument("--dataset", type=str, default="hanna", help="Dataset to run the experiment")
     parser.add_argument("--runner", type=str, default="prabhav", help="Pass name to change directory paths! (prabhav/haojun)")
+    parser.add_argument("--cold_start", type=bool, default=False, help="Start with no annotation (true) or partial annotation (false)")
     args = parser.parse_args()
     
     # Set up paths and device
@@ -384,12 +414,6 @@ def main():
             annotator_embedding_dim=19, dropout=0.1
         ).to(device)
 
-    for name, param in model.named_parameters():
-        print(f"Parameter: {name}, Shape: {param.shape}")
-    
-    print("\n=== Model Module Names ===")
-    for name, module in model.named_modules():
-        print(f"Module: {name}, Type: {type(module).__name__}")
     
     experiment_results = {}
     
@@ -410,9 +434,10 @@ def main():
         else:
             data_manager = DataManager(base_path + f'/data_{dataset}/')
         if dataset == "hanna":
-            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset)
+            #change this back later
+            data_manager.prepare_data(num_partition=100, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start)
         elif dataset == "llm_rubric":
-            data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset)
+            data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start)
         elif dataset == "gaussian":
             data_manager.prepare_data(dataset=dataset)
         else:
@@ -437,7 +462,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "entropy_all":
@@ -457,7 +482,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_all":
@@ -477,7 +502,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_all_top_only":
@@ -498,7 +523,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted,
-                gradient_top_only=True
+                gradient_top_only=True, cold_start=args.cold_start
             )
 
         elif experiment == "random_5":
@@ -518,7 +543,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_sequential":
@@ -535,7 +560,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_sequential_top_only":
@@ -552,7 +577,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted,
-                gradient_top_only=True
+                gradient_top_only=True, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_random":
@@ -569,7 +594,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted,
-                gradient_top_only=False
+                gradient_top_only=False, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_random_top_only":
@@ -586,7 +611,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted,
-                gradient_top_only=True
+                gradient_top_only=True, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_voi":
@@ -603,7 +628,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted
+                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_voi_top_only":
@@ -621,10 +646,16 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
-                gradient_top_only=True
+                gradient_top_only=True, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_fast_voi":
+
+            train_dataset = AnnotationDataset(data_manager.paths['train'])
+            val_dataset = AnnotationDataset(data_manager.paths['validation'])
+            test_dataset = AnnotationDataset(data_manager.paths['test'])
+            active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
+
             results = run_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="gradient", feature_strategy="fast_voi", model=model_copy,
@@ -632,10 +663,16 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted
+                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_fast_voi_top_only":
+
+            train_dataset = AnnotationDataset(data_manager.paths['train'])
+            val_dataset = AnnotationDataset(data_manager.paths['validation'])
+            test_dataset = AnnotationDataset(data_manager.paths['test'])
+            active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
+            
             results = run_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="gradient", feature_strategy="fast_voi", model=model_copy,
@@ -644,7 +681,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
-                gradient_top_only=True
+                gradient_top_only=True, cold_start=args.cold_start
             )
 
         elif experiment == "entropy_5":
@@ -661,7 +698,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted
+                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         else:

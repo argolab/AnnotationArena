@@ -25,7 +25,7 @@ plots_path = os.path.join(base_path, "plots")'''
 
 base_path = "../outputs"
 data_path = os.path.join(base_path, "data_hanna")
-results_path = os.path.join(base_path, "results_l2")
+results_path = os.path.join(base_path, "results_hanna")
 plots_path = os.path.join(results_path, "plots")
 
 # Create separate folders for different visualization types
@@ -741,7 +741,7 @@ def main():
             save_path=os.path.join(viz_folders['animations'], f'{strategy}_2d_tsne.gif')
         )
         
-        # Create 3D t-SNE animation
+        '''# Create 3D t-SNE animation
         print(f"  - Creating 3D t-SNE animation...")
         create_3d_tsne_animation(
             feature_vectors,
@@ -796,7 +796,7 @@ def main():
             selections_by_cycle,
             strategy,
             save_path=os.path.join(viz_folders['animations'], f'{strategy}_parallel_coords.gif')
-        )
+        )'''
     
     print(f"Analysis complete! Results saved to {plots_path}")
 
