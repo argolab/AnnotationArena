@@ -25,7 +25,9 @@ from selection import (
     FastVOISelectionStrategy,
     GradientSelectionStrategy,
     EntropyExampleSelectionStrategy,
-    EntropyFeatureSelectionStrategy
+    EntropyFeatureSelectionStrategy,
+    BADGESelectionStrategy,
+    ArgmaxVOISelectionStrategy
 ) 
 
 def run_experiment(
@@ -53,7 +55,7 @@ def run_experiment(
         dataset_train: Training dataset
         dataset_val: Validation dataset
         dataset_test: Test dataset
-        example_strategy: Strategy for selecting examples ("random", "gradient", "entropy", etc.)
+        example_strategy: Strategy for selecting examples ("random", "gradient", "entropy", "badge", etc.)
         model: Model to use for predictions
         feature_strategy: Strategy for selecting features (None for observe_all_features=True)
         cycles: Number of active learning cycles
@@ -145,8 +147,7 @@ def run_experiment(
         if example_strategy == "random":
             selected_examples = random.sample(active_pool, min(examples_per_cycle, len(active_pool)))
 
-        elif example_strategy == "gradient" or example_strategy == "entropy":
-
+        elif example_strategy in ["gradient", "entropy", "badge"]:
             strategy_class = SelectionFactory.create_example_strategy(example_strategy, model, device, gradient_top_only=gradient_top_only)
             active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_pool]
             active_pool_subset = AnnotationDataset(active_pool_examples)
@@ -155,7 +156,6 @@ def run_experiment(
                 active_pool_subset, num_to_select=min(examples_per_cycle, len(active_pool)),
                 val_dataset=dataset_val, num_samples=3, batch_size=batch_size
             )
-
             
             selected_examples = [active_pool[idx] for idx in selected_indices]
 
@@ -240,7 +240,7 @@ def run_experiment(
                     positions_to_annotate = masked_positions[:features_to_annotate]
                     position_benefit_costs = [(pos, 1.0, 1.0, 1.0) for pos in positions_to_annotate]
 
-                elif feature_strategy in ["voi", "fast_voi", "entropy"]:
+                elif feature_strategy in ["voi", "fast_voi", "entropy", "voi_argmax"]:
                     feature_suggestions = arena.suggest(
                         candidate_variables=candidate_variables,
                         strategy=feature_strategy, loss_type=loss_type
@@ -367,7 +367,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for training")
     parser.add_argument("--experiment", type=str, default="all", 
                       help="Experiment to run (all, random_all, random_5, gradient_all, gradient_sequential, gradient_voi, "
-                           "gradient_fast_voi, entropy_all, entropy_5)")
+                           "gradient_fast_voi, entropy_all, entropy_5, badge_all, badge_cold_start, gradient_voi_argmax)")
     parser.add_argument("--resample_validation", action="store_true", help="Resample validation set on each cycle")
     parser.add_argument("--loss_type", type=str, default="cross_entropy", help="Type of loss to use (cross_entropy, l2)")
     parser.add_argument("--run_until_exhausted", action="store_true", help="Run until annotation pool is exhausted")
@@ -392,18 +392,19 @@ def main():
     
     # Initialize model
     if dataset == "hanna":
-
         model = Imputer(
             question_num=7, max_choices=5, encoder_layers_num=6,
             attention_heads=4, hidden_dim=64, num_annotator=18, 
             annotator_embedding_dim=19, dropout=0.1
         ).to(device)
+
     elif dataset == "llm_rubric":
         model = Imputer(
             question_num=9, max_choices=4, encoder_layers_num=6,
             attention_heads=4, hidden_dim=64, num_annotator=24, 
             annotator_embedding_dim=24, dropout=0.1
         ).to(device)
+
     else:
         model = Imputer(
             question_num=5, max_choices=5, encoder_layers_num=6,
@@ -417,7 +418,19 @@ def main():
     # Configure experiments to run
     experiments_to_run = []
     if args.experiment == "all":
-        experiments_to_run = ["gradient_random_cold_start", "gradient_voi_cold_start", "gradient_fast_voi_cold_start", "gradient_sequential_cold_start", "gradient_all_top_only", "gradient_sequential_top_only", "gradient_voi_top_only", "gradient_fast_voi_top_only", "gradient_random_top_only", "entropy_all", "entropy_5", "random_all", "random_5", "gradient_all", "gradient_sequential", "gradient_voi", "gradient_fast_voi", "gradient_random"]
+        # experiments_to_run = [
+        #     "badge_all", "entropy_all", "gradient_all", "gradient_all_top_only"
+        # ]
+        experiments_to_run = [
+        "gradient_voi_argmax", "gradient_voi", "gradient_fast_voi", "gradient_sequential"
+        ]
+        # experiments_to_run = [
+        #     "gradient_random_cold_start", "gradient_voi_cold_start", "gradient_fast_voi_cold_start", "gradient_sequential_cold_start", 
+        #     "gradient_all_top_only", "gradient_sequential_top_only", "gradient_voi_top_only", "gradient_fast_voi_top_only", "gradient_random_top_only", 
+        #     "entropy_all", "entropy_5", "random_all", "random_5", "gradient_all", 
+        #     "gradient_sequential", "gradient_voi", "gradient_fast_voi", "gradient_random", 
+        #     "badge_all", "badge_cold_start", "gradient_voi_argmax"
+        # ]
     else:
         experiments_to_run = [args.experiment]
     
@@ -430,8 +443,8 @@ def main():
             data_manager = DataManager(base_path + '/data/')
         else:
             data_manager = DataManager(base_path + f'/data_{dataset}/')
+
         if dataset == "hanna":
-            #change this back later
             data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start)
         elif dataset == "llm_rubric":
             data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start)
@@ -443,7 +456,6 @@ def main():
         model_copy = copy.deepcopy(model)
 
         if experiment == "random_all":
-
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])
@@ -462,8 +474,48 @@ def main():
                 run_until_exhausted=args.run_until_exhausted
             )
 
-        elif experiment == "entropy_all":
+        elif experiment == "badge_all":
+            # BADGE example selection with observe_all_features=True
+            train_dataset = AnnotationDataset(data_manager.paths['train'])
+            val_dataset = AnnotationDataset(data_manager.paths['validation'])
+            test_dataset = AnnotationDataset(data_manager.paths['test'])
+            active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
+            
+            print(f"Loaded datasets: Train={len(train_dataset)}, Val={len(val_dataset)}, "
+                f"Test={len(test_dataset)}, Active Pool={len(active_pool_dataset)}")
 
+            results = run_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="badge", model=model_copy,
+                observe_all_features=True,
+                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
+                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+                device=device, resample_validation=args.resample_validation,
+                run_until_exhausted=args.run_until_exhausted
+            )
+
+        elif experiment == "badge_cold_start":
+            # BADGE with cold_start=True for comparison with no initial annotations
+            train_dataset = AnnotationDataset(data_manager.paths['train'])
+            val_dataset = AnnotationDataset(data_manager.paths['validation'])
+            test_dataset = AnnotationDataset(data_manager.paths['test'])
+            active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
+            
+            print(f"Loaded datasets: Train={len(train_dataset)}, Val={len(val_dataset)}, "
+                f"Test={len(test_dataset)}, Active Pool={len(active_pool_dataset)}")
+
+            results = run_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="badge", model=model_copy,
+                observe_all_features=True,
+                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
+                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+                device=device, resample_validation=args.resample_validation,
+                run_until_exhausted=args.run_until_exhausted,
+                cold_start=True
+            )
+
+        elif experiment == "entropy_all":
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])
@@ -483,7 +535,6 @@ def main():
             )
 
         elif experiment == "gradient_all":
-
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])
@@ -503,7 +554,6 @@ def main():
             )
 
         elif experiment == "gradient_all_top_only":
-
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])
@@ -524,7 +574,6 @@ def main():
             )
 
         elif experiment == "random_5":
-
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])
@@ -544,7 +593,6 @@ def main():
             )
 
         elif experiment == "gradient_sequential":
-
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])
@@ -647,7 +695,6 @@ def main():
             )
 
         elif experiment == "gradient_voi":
-
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])
@@ -663,8 +710,24 @@ def main():
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted
             )
 
-        elif experiment == "gradient_voi_cold_start":
+        elif experiment == "gradient_voi_argmax":
+            # Gradient alignment with ArgmaxVOI feature selection
+            train_dataset = AnnotationDataset(data_manager.paths['train'])
+            val_dataset = AnnotationDataset(data_manager.paths['validation'])
+            test_dataset = AnnotationDataset(data_manager.paths['test'])
+            active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
 
+            results = run_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="gradient", feature_strategy="voi_argmax", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
+                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+                device=device, resample_validation=args.resample_validation,
+                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted
+            )
+
+        elif experiment == "gradient_voi_cold_start":
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])
@@ -682,7 +745,6 @@ def main():
             )
 
         elif experiment == "gradient_voi_top_only":
-
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])
@@ -700,7 +762,6 @@ def main():
             )
 
         elif experiment == "gradient_fast_voi":
-
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])
@@ -717,7 +778,6 @@ def main():
             )
 
         elif experiment == "gradient_fast_voi_cold_start":
-
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])
@@ -735,7 +795,6 @@ def main():
             )
 
         elif experiment == "gradient_fast_voi_top_only":
-
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])
@@ -753,7 +812,6 @@ def main():
             )
 
         elif experiment == "entropy_5":
-
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])
@@ -786,8 +844,9 @@ def main():
             
         print(f"Results saved to {results_path}")
 
-        create_plots()
-        print(f"Plots Generated!")
+        # create_plots()
+        # print(f"Plots Generated!")
         
 if __name__ == "__main__":
-    main()
+    # main()
+    create_plots()

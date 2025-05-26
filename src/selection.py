@@ -6,6 +6,7 @@ import math
 import random
 import copy
 from torch.utils.data import DataLoader
+from sklearn.metrics.pairwise import pairwise_distances
 
 class SelectionStrategy:
     """
@@ -1494,6 +1495,392 @@ class CombinedSelectionStrategy:
         
         return selections
 
+class BADGESelectionStrategy(ExampleSelectionStrategy):
+    """
+    BADGE (Batch Active learning by Diverse Gradient Embeddings) example selection strategy.
+    
+    This strategy selects examples based on gradient embeddings diversity, combining
+    the benefits of uncertainty sampling and diversity sampling.
+    """
+    
+    def __init__(self, model, device=None):
+        """Initialize BADGE selection strategy."""
+        super().__init__("badge", model, device)
+    
+    def select_examples(self, dataset, num_to_select=1, costs=None, **kwargs):
+        """
+        Select examples using BADGE strategy.
+        
+        Args:
+            dataset: Dataset to select from
+            num_to_select: Number of examples to select
+            costs: Dictionary mapping example indices to their annotation costs
+            **kwargs: Additional arguments specific to the strategy
+            
+        Returns:
+            list: Indices of selected examples
+            list: Corresponding scores for selected examples
+        """
+        self.model.eval()
+        
+        # Get all valid examples (with at least one masked position)
+        valid_indices = []
+        example_datas = []
+        
+        for idx in range(len(dataset)):
+            masked_positions = dataset.get_masked_positions(idx)
+            if masked_positions:
+                valid_indices.append(idx)
+                known_questions, inputs, answers, annotators, questions = dataset[idx]
+                example_datas.append((inputs, answers, annotators, questions))
+        
+        if not valid_indices:
+            return [], []
+        
+        # Compute gradient embeddings for all valid examples
+        embeddings = []
+        scores = []  # Will use uncertainty as scores
+        
+        for i, idx in enumerate(valid_indices):
+            inputs, answers, annotators, questions = example_datas[i]
+            inputs = inputs.to(self.device)
+            answers = answers.to(self.device)
+            annotators = annotators.to(self.device)
+            questions = questions.to(self.device)
+            
+            # Compute hypothetical labels and gradient embeddings
+            embedding, uncertainty_score = self.compute_gradient_embedding(
+                self.model, inputs.unsqueeze(0), answers.unsqueeze(0), 
+                annotators.unsqueeze(0), questions.unsqueeze(0)
+            )
+            
+            embeddings.append(embedding)
+            scores.append(uncertainty_score)
+        
+        embeddings = np.vstack(embeddings)
+        
+        # Select examples using k-means++ seeding
+        selected_indices = self.kmeans_plus_plus_sampling(embeddings, min(num_to_select, len(valid_indices)))
+        
+        # Map selected indices back to original dataset indices
+        selected_examples = [valid_indices[i] for i in selected_indices]
+        selected_scores = [scores[i] for i in selected_indices]
+        
+        # Adjust for costs if provided
+        if costs:
+            # Compute benefit/cost for each example
+            benefit_cost_pairs = []
+            for i, idx in enumerate(selected_examples):
+                cost = costs.get(idx, 1.0)
+                benefit_cost_ratio = selected_scores[i] / max(cost, 1e-10)
+                benefit_cost_pairs.append((idx, selected_scores[i], benefit_cost_ratio))
+            
+            # Sort by benefit/cost ratio
+            benefit_cost_pairs.sort(key=lambda x: x[2], reverse=True)
+            
+            # Extract sorted indices and scores
+            selected_examples = [idx for idx, _, _ in benefit_cost_pairs]
+            selected_scores = [score for _, score, _ in benefit_cost_pairs]
+        
+        return selected_examples, selected_scores
+    
+    def compute_gradient_embedding(self, model, inputs, labels, annotators, questions):
+        """
+        Compute gradient embedding vector for an example.
+        
+        Args:
+            model: Model to use for predictions
+            inputs: Input tensor [batch_size, sequence_length, input_dim]
+            labels: Label tensor
+            annotators: Annotator indices
+            questions: Question indices
+            
+        Returns:
+            tuple: (gradient_embedding, uncertainty_score)
+        """
+        model.eval()
+        
+        # 1. Identify masked positions
+        masked_positions = []
+        for j in range(inputs.shape[1]):
+            if inputs[0, j, 0] == 1:
+                masked_positions.append(j)
+        
+        if not masked_positions:
+            # No masked positions, return zero vector
+            return np.zeros(model.max_choices * len(masked_positions)), 0.0
+        
+        # 2. For each masked position, compute hypothetical label and gradient embedding
+        with torch.no_grad():
+            outputs = model(inputs, annotators, questions)
+        
+        all_position_embeddings = []
+        total_uncertainty = 0.0
+        
+        # Enable gradients for embedding computation
+        for pos in masked_positions:
+            # Get predicted class (hypothetical label)
+            logits = outputs[0, pos]
+            probs = F.softmax(logits, dim=0)
+            pred_class = torch.argmax(probs).item()
+            
+            # Measure uncertainty (entropy)
+            entropy = -torch.sum(probs * torch.log(probs + 1e-10)).item()
+            total_uncertainty += entropy
+            
+            # Create target using the class index
+            with torch.enable_grad():
+                model.zero_grad()
+                
+                # Forward pass with requires_grad
+                inputs_clone = inputs.clone().detach()
+                inputs_clone.requires_grad_(True)
+                outputs_grad = model(inputs_clone, annotators, questions)
+                
+                # Add batch dimension to logits and ensure target has correct shape
+                logits = outputs_grad[0, pos].unsqueeze(0)  # Shape: [1, num_classes]
+                target = torch.tensor([pred_class], device=self.device)  # Shape: [1]
+                
+                # Compute loss
+                loss = F.cross_entropy(logits, target)
+                loss.backward()
+                
+                # Extract gradient with respect to output layer weights
+                output_layer_grads = []
+                for name, param in model.named_parameters():
+                    if 'encoder.param_update' in name or 'encoder.layers' in name and 'out' in name:
+                        if param.grad is not None:
+                            flat_grad = param.grad.detach().view(-1)
+                            output_layer_grads.append(flat_grad)
+                
+                if output_layer_grads:
+                    position_embedding = torch.cat(output_layer_grads).cpu().numpy()
+                    # Normalize the embedding
+                    norm = np.linalg.norm(position_embedding)
+                    if norm > 0:
+                        position_embedding = position_embedding / norm
+                    all_position_embeddings.append(position_embedding)
+        
+        # Combine all position embeddings to get example embedding
+        if all_position_embeddings:
+            final_embedding = np.concatenate(all_position_embeddings)
+            avg_uncertainty = total_uncertainty / len(masked_positions)
+            return final_embedding, avg_uncertainty
+        else:
+            # Fallback if no gradients were collected
+            return np.zeros(10), 0.0
+    
+    def kmeans_plus_plus_sampling(self, embeddings, n_samples):
+        """
+        Implements k-means++ seeding algorithm for diversity sampling.
+        
+        Args:
+            embeddings: Numpy array of embeddings [n_examples, embedding_dim]
+            n_samples: Number of examples to select
+            
+        Returns:
+            list: Indices of selected examples
+        """
+        n_examples = embeddings.shape[0]
+        
+        # If we need all examples or just one, return all indices
+        if n_samples >= n_examples or n_samples <= 1:
+            return list(range(min(n_samples, n_examples)))
+        
+        # Select first example randomly
+        selected_indices = [random.randint(0, n_examples - 1)]
+        selected_embeddings = embeddings[selected_indices]
+        
+        # Select remaining examples
+        for _ in range(1, n_samples):
+            # Compute distances to nearest selected example
+            distances = pairwise_distances(
+                embeddings, selected_embeddings, metric='euclidean'
+            ).min(axis=1)
+            
+            # Normalize distances as probabilities (squared distances for k-means++)
+            probabilities = distances**2 / np.sum(distances**2)
+            
+            # Sample next example based on these probabilities
+            next_idx = np.random.choice(n_examples, 1, p=probabilities)[0]
+            
+            selected_indices.append(next_idx)
+            selected_embeddings = embeddings[selected_indices]
+        
+        return selected_indices
+
+
+class ArgmaxVOICalculator(VOICalculator):
+    """
+    Value of Information (VOI) calculator using argmax instead of expectation.
+    
+    Instead of computing expected reduction in loss over all possible values,
+    this only considers the most likely value (argmax) of the candidate variable.
+    """
+    
+    def __init__(self, model, device=None):
+        """Initialize ArgmaxVOI calculator."""
+        super().__init__(model, device)
+    
+    def compute_argmax_voi(self, model, inputs, annotators, questions, known_questions, 
+                         candidate_idx, target_indices, loss_type="cross_entropy", cost=1.0):
+        """
+        Compute VOI using only the argmax value instead of expectation.
+        
+        Args:
+            model: Model to use for predictions
+            inputs: Input tensor [batch_size, sequence_length, input_dim]
+            annotators: Annotator indices [batch_size, sequence_length]
+            questions: Question indices [batch_size, sequence_length]
+            known_questions: Mask indicating known questions [batch_size, sequence_length]
+            candidate_idx: Index of candidate annotation to evaluate
+            target_indices: Target indices to compute loss on
+            loss_type: Type of loss to compute
+            cost: Cost of annotating this position
+            
+        Returns:
+            tuple: (voi_value, voi/cost_ratio, expected_posterior_loss)
+        """
+        model.eval()
+
+        with torch.no_grad():
+            # Get initial outputs and compute initial loss
+            outputs = model(inputs, annotators, questions)
+            
+            # Extract predictions for target indices
+            if isinstance(target_indices, list) and len(target_indices) == 1:
+                target_idx = target_indices[0]
+                target_preds = outputs[:, target_idx, :]
+            else:
+                # Handle multiple target indices - concatenate predictions
+                target_preds = torch.cat([outputs[:, idx, :].unsqueeze(1) for idx in target_indices], dim=1)
+            
+            # Compute initial loss
+            loss_initial = self.compute_loss(target_preds, loss_type)
+            
+            # Get prediction for candidate
+            candidate_pred = outputs[:, candidate_idx, :]
+            candidate_probs = F.softmax(candidate_pred, dim=-1)
+            
+            # Get most likely class (argmax)
+            most_likely_class = torch.argmax(candidate_probs, dim=1)[0].item()
+            
+            batch_size = inputs.shape[0]
+            num_classes = candidate_probs.shape[-1]
+            
+            # Create copy of inputs with candidate set to most likely class
+            input_with_answer = inputs.clone()
+            one_hot = F.one_hot(torch.tensor(most_likely_class), num_classes=num_classes).float().to(self.device)
+            input_with_answer[:, candidate_idx, 1:] = one_hot
+            input_with_answer[:, candidate_idx, 0] = 0  # Mark as observed
+            
+            # Get predictions with argmax value
+            new_outputs = model(input_with_answer, annotators, questions)
+            
+            # Extract target predictions
+            if isinstance(target_indices, list) and len(target_indices) == 1:
+                target_idx = target_indices[0]
+                new_target_preds = new_outputs[:, target_idx, :]
+            else:
+                # Handle multiple target indices
+                new_target_preds = torch.cat([new_outputs[:, idx, :].unsqueeze(1) for idx in target_indices], dim=1)
+            
+            # Compute posterior loss with argmax value
+            posterior_loss = self.compute_loss(new_target_preds, loss_type)
+            
+            # VOI is the reduction in loss
+            voi = loss_initial - posterior_loss
+            
+            # Compute benefit/cost ratio
+            voi_cost_ratio = voi / max(cost, 1e-10)
+            
+            return voi, voi_cost_ratio, posterior_loss
+
+
+class ArgmaxVOISelectionStrategy(FeatureSelectionStrategy):
+    """
+    VOI-based feature selection strategy that only considers the argmax value.
+    
+    Uses the ArgmaxVOICalculator to compute VOI more efficiently by only
+    considering the most likely value for each candidate variable.
+    """
+    
+    def __init__(self, model, device=None):
+        """Initialize ArgmaxVOI selection strategy."""
+        super().__init__("voi_argmax", model, device)
+        self.voi_calculator = ArgmaxVOICalculator(model, device)
+    
+    def select_features(self, example_idx, dataset, num_to_select=1, target_questions=None, 
+                       loss_type="cross_entropy", costs=None, **kwargs):
+        """
+        Select features (positions) using ArgmaxVOI within a given example.
+        
+        Args:
+            example_idx: Index of the example to select features from
+            dataset: Dataset containing the example
+            num_to_select: Number of features to select
+            target_questions: Target questions to compute VOI for
+            loss_type: Type of loss to compute
+            costs: Dictionary mapping positions to their annotation costs
+            **kwargs: Additional arguments
+            
+        Returns:
+            list: Tuples of (position_idx, benefit, cost, benefit/cost_ratio) for selected positions
+        """
+        if target_questions is None:
+            # Default to first question (Q0)
+            target_questions = [0]
+        
+        # Convert target questions to indices if needed
+        if isinstance(target_questions[0], str):
+            question_list = ['Q0', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6']
+            target_questions = [question_list.index(q) for q in target_questions if q in question_list]
+        
+        # Get masked positions
+        masked_positions = dataset.get_masked_positions(example_idx)
+        if not masked_positions:
+            return []
+        
+        # Get data
+        known_questions, inputs, answers, annotators, questions = dataset[example_idx]
+        inputs = inputs.unsqueeze(0).to(self.device)
+        answers = answers.unsqueeze(0).to(self.device)
+        annotators = annotators.unsqueeze(0).to(self.device)
+        questions = questions.unsqueeze(0).to(self.device)
+        known_questions = known_questions.unsqueeze(0).to(self.device)
+        
+        # Find target indices (positions that have the target questions)
+        target_indices = []
+        for q_idx in target_questions:
+            for i in range(questions.shape[1]):
+                if questions[0, i].item() == q_idx and annotators[0, i].item() >= 0:  # Human annotation
+                    target_indices.append(i)
+        
+        if not target_indices:
+            return []
+        
+        # Calculate ArgmaxVOI for each masked position
+        position_vois = []
+        for position in masked_positions:
+            # Get cost for this position
+            cost = 1.0  # Default cost
+            if costs and position in costs:
+                cost = costs[position]
+                
+            # Compute ArgmaxVOI
+            voi, voi_cost_ratio, posterior_loss = self.voi_calculator.compute_argmax_voi(
+                self.model, inputs, annotators, questions, known_questions,
+                position, target_indices, loss_type, cost=cost
+            )
+            
+            position_vois.append((position, voi, cost, voi_cost_ratio))
+        
+        # Sort by benefit/cost ratio (highest first)
+        position_vois.sort(key=lambda x: x[3], reverse=True)
+        
+        # Return top selections
+        return position_vois[:num_to_select]
+
 
 class SelectionFactory:
     """
@@ -1512,6 +1899,7 @@ class SelectionFactory:
             strategy_name: Name of the strategy
             model: Model to use for predictions
             device: Device to use for computations
+            gradient_top_only: Whether to use only top layer gradients (for GradientSelectionStrategy)
             
         Returns:
             ExampleSelectionStrategy: Example selection strategy
@@ -1522,6 +1910,8 @@ class SelectionFactory:
             return GradientSelectionStrategy(model, device, gradient_top_only=gradient_top_only)
         elif strategy_name == "entropy":
             return EntropyExampleSelectionStrategy(model, device)
+        elif strategy_name == "badge":
+            return BADGESelectionStrategy(model, device)
         else:
             raise ValueError(f"Unknown example selection strategy: {strategy_name}")
     
@@ -1544,6 +1934,8 @@ class SelectionFactory:
             return VOISelectionStrategy(model, device)
         elif strategy_name == "fast_voi":
             return FastVOISelectionStrategy(model, device)
+        elif strategy_name == "voi_argmax":
+            return ArgmaxVOISelectionStrategy(model, device)
         elif strategy_name == "sequential":
             return RandomFeatureSelectionStrategy(model, device)
         elif strategy_name == "entropy":

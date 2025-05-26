@@ -223,7 +223,7 @@ class AnnotationArena:
                 target_mapping[example_idx] = []
             target_mapping[example_idx].append((position_idx, var_id))
         
-        if strategy in ["voi", "fast_voi", "entropy"]:
+        if strategy in ["voi", "fast_voi", "entropy", "voi_argmax"]:
             feature_strategy = SelectionFactory.create_feature_strategy(strategy, self.model, self.device)
             if hasattr(feature_strategy, 'loss_type'):
                 feature_strategy.loss_type = loss_type

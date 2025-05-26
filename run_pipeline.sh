@@ -16,4 +16,4 @@ module load cuda/12.1
 
 conda activate llm_rubric_env
 
-python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py --examples_per_cycle 80 --features_per_example 3 --experiment all --loss_type l2 --resample_validation --run_until_exhausted --dataset hanna --runner prabhav
+python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner_noise.py --examples_per_cycle 30 --features_per_example 3 --experiment all --loss_type l2 --resample_validation --run_until_exhausted --dataset hanna --runner prabhav --llm_sigmas 0.6 --human_corruptions 0.3
