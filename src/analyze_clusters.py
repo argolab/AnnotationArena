@@ -25,7 +25,7 @@ plots_path = os.path.join(base_path, "plots")'''
 
 base_path = "../outputs"
 data_path = os.path.join(base_path, "data_hanna")
-results_path = os.path.join(base_path, "results_hanna")
+results_path = os.path.join(base_path, "results")
 plots_path = os.path.join(results_path, "plots")
 
 # Create separate folders for different visualization types

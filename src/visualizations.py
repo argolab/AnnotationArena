@@ -240,6 +240,87 @@ def plot_observe_5_experiments(results_dict, save_path, feature_num):
     plt.close()
     print(f"Saved 'observe 5' plot to {save_path}")
 
+def plot_cold_start_experiments(results_dict, save_path, feature_num):
+    """Plot 'observe 5' experiments (random_5, gradient_sequential, gradient_voi, entropy_5)."""
+    # Filter only the relevant experiments - UPDATED to include entropy_5
+    observe_5_results = {k: v for k, v in results_dict.items() 
+                         if k in ['random_5_cold_start', 'gradient_voi_cold_start', 'entropy_5_cold_start', "gradient_random_cold_start"]}
+    
+    if not observe_5_results:
+        print("No 'observe 5' experiment results found")
+        return
+    
+    fig, ax = plt.subplots(figsize=(14, 10))
+    
+    # UPDATED to include entropy_5
+    colors = {
+        'random_5_cold_start': 'purple',
+        'gradient_voi_cold_start': 'brown',
+        'entropy_5_cold_start': 'darkgreen',
+        'gradient_random_cold_start': "cyan"  # New color for entropy
+    }
+    
+    # UPDATED to include entropy_5
+    markers = {
+        'random_5_cold_start': 'D',
+        'gradient_voi_cold_start': '*',
+        'entropy_5_cold_start': 'X',  # New marker for entropy
+        "gradient_random_cold_start": "v"
+    }
+    
+    for strategy, results in observe_5_results.items():
+        # Plot expected loss on test set (solid line)
+        if 'test_expected_losses' in results:
+            expected_losses = results['test_expected_losses']
+            cycles = list(range(len(expected_losses)))
+            
+            ax.plot(cycles, expected_losses, 
+                    linestyle='-', 
+                    color=colors[strategy],
+                    marker=markers[strategy], 
+                    label=f"{strategy.replace('5', str(feature_num))} (Expected)",
+                    linewidth=2,
+                    markersize=8)
+            
+            # Plot annotated loss on test set (dotted line)
+            if 'test_annotated_losses' in results:
+                annotated_losses = results['test_annotated_losses']
+                
+                # Find where the lines diverge
+                for c in range(1, len(cycles)):
+                    if abs(expected_losses[c] - annotated_losses[c]) > 0.01:
+                        # Draw a vertical line to show the drop
+                        ax.plot([cycles[c], cycles[c]], 
+                                [expected_losses[c], annotated_losses[c]],
+                                linestyle='-', 
+                                color=colors[strategy],
+                                linewidth=1,
+                                alpha=0.6)
+                
+                ax.plot(cycles, annotated_losses, 
+                        linestyle=':', 
+                        color=colors[strategy],
+                        marker=markers[strategy], 
+                        label=f"{strategy.replace('5', str(feature_num))} (Annotated)",
+                        linewidth=2,
+                        markersize=8,
+                        alpha=0.8)
+    
+    ax.set_title('Loss on Test Set: Observe 5 Experiments', fontsize=16)
+    ax.set_xlabel('Cycles', fontsize=14)
+    ax.set_ylabel('Loss', fontsize=14)
+    ax.grid(True, linestyle='--', alpha=0.7)
+    ax.legend(loc='upper right', fontsize=12)
+    
+    # Set y-axis to start from 0 and have some headroom
+    max_loss = max([max(r.get('test_annotated_losses', [0])) for r in observe_5_results.values()])
+    ax.set_ylim(0, max_loss * 1.1)
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved 'observe 5' plot to {save_path}")
+
 def plot_voi_comparison(results_dict, save_path):
     """Plot comparison of gradient_voi and gradient_fast_voi."""
     # Filter only the relevant experiments
@@ -516,7 +597,7 @@ def plot_loss_vs_cost(results_dict, costs_dict, save_path, feature_num):
 
 def create_plots(feature_num):
     base_path = "../outputs"
-    results_path = os.path.join(base_path, "results-rubric")
+    results_path = os.path.join(base_path, "results")
     plots_path = os.path.join(results_path, "plots")
     os.makedirs(plots_path, exist_ok=True)
     
@@ -535,6 +616,7 @@ def create_plots(feature_num):
     plot_voi_comparison(experiment_results, os.path.join(plots_path, "voi_comparison.png"))
     plot_feature_counts(experiment_results, os.path.join(plots_path, "feature_counts.png"))
     plot_top_only_comparison(experiment_results, os.path.join(plots_path, "top_only_comparison.png"))
+    plot_cold_start_experiments(experiment_results, os.path.join(plots_path, "cold_start_experiments.png"), feature_num)
     
     # Create new cost-based plot
     plot_loss_vs_cost(experiment_results, cumulative_costs, os.path.join(plots_path, "loss_vs_cost.png"), feature_num)
