@@ -246,7 +246,7 @@ class VOICalculator:
             max_prob = probs.max(dim=-1)[0].mean().item()
             return 1 - max_prob 
     
-    def compute_voi(self, model, inputs, annotators, questions, known_questions, candidate_idx, 
+    def compute_voi(self, model, inputs, annotators, questions, embeddings, known_questions, candidate_idx, 
                    target_indices, loss_type="cross_entropy", cost=1.0):
         """
         Compute VOI using batch processing approach.
@@ -269,7 +269,7 @@ class VOICalculator:
 
         with torch.no_grad():
             # Get initial outputs and compute initial loss
-            outputs = model(inputs, annotators, questions)
+            outputs = model(inputs, annotators, questions, embeddings)
             
             # Extract predictions for target indices
             if isinstance(target_indices, list) and len(target_indices) == 1:
@@ -293,6 +293,7 @@ class VOICalculator:
             expanded_inputs = []
             expanded_annotators = []
             expanded_questions = []
+            expanded_embeddings = []
             
             for i in range(num_classes):
                 # Create a copy of inputs with candidate set to class i
@@ -304,13 +305,15 @@ class VOICalculator:
                 expanded_inputs.append(input_with_answer)
                 expanded_annotators.append(annotators.clone())
                 expanded_questions.append(questions.clone())
+                expanded_embeddings.append(embeddings.clone())
             
             expanded_inputs = torch.cat(expanded_inputs, dim=0)
             expanded_annotators = torch.cat(expanded_annotators, dim=0)
             expanded_questions = torch.cat(expanded_questions, dim=0)
+            expanded_embeddings = torch.cat(expanded_embeddings, dim=0)
             
             # Get predictions for all possible answers
-            expanded_outputs = model(expanded_inputs, expanded_annotators, expanded_questions)
+            expanded_outputs = model(expanded_inputs, expanded_annotators, expanded_questions, expanded_embeddings)
             
             # Extract target predictions for each possible answer
             all_losses = []
@@ -360,9 +363,7 @@ class FastVOICalculator(VOICalculator):
         super().__init__(model, device)
         self.loss_type = loss_type
     
-    def compute_fast_voi(self, model, inputs, annotators, questions, known_questions, 
-                      candidate_idx, target_indices, loss_type=None, 
-                      num_samples=3, cost=1.0):
+    def compute_fast_voi(self, model, inputs, annotators, questions, known_questions, embeddings, candidate_idx, target_indices, loss_type=None, num_samples=3, cost=1.0):
         """
         Compute VOI using gradient-based approximation.
         
@@ -391,7 +392,7 @@ class FastVOICalculator(VOICalculator):
             inputs_grad = inputs.clone().requires_grad_(True)
             
             # Forward pass
-            outputs = model(inputs_grad, annotators, questions)
+            outputs = model(inputs_grad, annotators, questions, embeddings)
             
             # Extract predictions for target indices
             if isinstance(target_indices, list) and len(target_indices) == 1:
@@ -550,12 +551,14 @@ class VOISelectionStrategy(FeatureSelectionStrategy):
             return []
         
         # Get data
-        known_questions, inputs, answers, annotators, questions = dataset[example_idx]
+        known_questions, inputs, answers, annotators, questions, embeddings = dataset[example_idx]
         inputs = inputs.unsqueeze(0).to(self.device)
         answers = answers.unsqueeze(0).to(self.device)
         annotators = annotators.unsqueeze(0).to(self.device)
         questions = questions.unsqueeze(0).to(self.device)
         known_questions = known_questions.unsqueeze(0).to(self.device)
+        if embeddings is not None:
+            embeddings = embeddings.unsqueeze(0).to(self.device)
         
         # Find target indices (positions that have the target questions)
         target_indices = []
@@ -577,7 +580,7 @@ class VOISelectionStrategy(FeatureSelectionStrategy):
                 
             # Compute VOI
             voi, voi_cost_ratio, posterior_loss = self.voi_calculator.compute_voi(
-                self.model, inputs, annotators, questions, known_questions,
+                self.model, inputs, annotators, questions, embeddings, known_questions,
                 position, target_indices, loss_type, cost=cost
             )
             
@@ -638,12 +641,14 @@ class FastVOISelectionStrategy(FeatureSelectionStrategy):
             return []
         
         # Get data
-        known_questions, inputs, answers, annotators, questions = dataset[example_idx]
+        known_questions, inputs, answers, annotators, questions, embeddings = dataset[example_idx]
         inputs = inputs.unsqueeze(0).to(self.device)
         answers = answers.unsqueeze(0).to(self.device)
         annotators = annotators.unsqueeze(0).to(self.device)
         questions = questions.unsqueeze(0).to(self.device)
         known_questions = known_questions.unsqueeze(0).to(self.device)
+        if embeddings is not None:
+            embeddings = embeddings.unsqueeze(0).to(self.device)
         
         # Find target indices (positions that have the target questions)
         target_indices = []
@@ -665,7 +670,7 @@ class FastVOISelectionStrategy(FeatureSelectionStrategy):
                 
             # Compute Fast VOI
             voi, voi_cost_ratio, posterior_loss, most_informative_class = self.voi_calculator.compute_fast_voi(
-                self.model, inputs, annotators, questions, known_questions,
+                self.model, inputs, annotators, questions, known_questions, embeddings,
                 position, target_indices, loss_type, num_samples, cost=cost
             )
             
@@ -740,7 +745,7 @@ class GradientSelector:
         
         return dot_product
     
-    def compute_sample_gradient(self, model, inputs, labels, annotators, questions):
+    def compute_sample_gradient(self, model, inputs, labels, annotators, questions, embeddings):
         """
         Compute gradient for a single example using autoregressive sampling.
         
@@ -774,7 +779,7 @@ class GradientSelector:
         
         for pos in masked_positions:
             with torch.no_grad():
-                current_outputs = model(temp_inputs, annotators, questions)
+                current_outputs = model(temp_inputs, annotators, questions, embeddings)
                 var_outputs = current_outputs[0, pos]
                 var_probs = F.softmax(var_outputs, dim=0)
             
@@ -791,9 +796,9 @@ class GradientSelector:
         # Compute loss with full supervision
         model.zero_grad()
         
-        outputs = model(temp_inputs, annotators, questions)
+        outputs = model(temp_inputs, annotators, questions, embeddings)
         loss = model.compute_total_loss(
-            outputs, temp_labels, temp_inputs, questions,
+            outputs, temp_labels, temp_inputs, questions, embeddings,
             full_supervision=True
         )
         
@@ -809,7 +814,7 @@ class GradientSelector:
         
         return grad_dict
     
-    def compute_example_gradients(self, model, inputs, labels, annotators, questions, num_samples=5):
+    def compute_example_gradients(self, model, inputs, labels, annotators, questions, embeddings, num_samples=5):
         """
         Compute gradients for a single example with multiple samples.
         
@@ -828,7 +833,7 @@ class GradientSelector:
         
         for _ in range(num_samples):
             sample_grad_dict = self.compute_sample_gradient(
-                model, inputs, labels, annotators, questions
+                model, inputs, labels, annotators, questions, embeddings
             )
             
             # Accumulate gradients
@@ -865,11 +870,14 @@ class GradientSelector:
             sample_count = 0
             
             for batch in val_dataloader:
-                known_questions, inputs, labels, annotators, questions = batch
+                known_questions, inputs, labels, annotators, questions, embeddings = batch
                 inputs, labels, annotators, questions = (
                     inputs.to(self.device), labels.to(self.device), 
                     annotators.to(self.device), questions.to(self.device)
                 )
+
+                if embeddings is not None:
+                    embeddings = embeddings.unsqueeze(0).to(self.device)
                 
                 batch_size = inputs.shape[0]
                 
@@ -884,7 +892,7 @@ class GradientSelector:
                     # Sample values for masked positions
                     for pos in masked_positions:
                         with torch.no_grad():
-                            current_outputs = model(temp_inputs, annotators, questions)
+                            current_outputs = model(temp_inputs, annotators, questions, embeddings)
                             var_outputs = current_outputs[i, pos]
                             var_probs = F.softmax(var_outputs, dim=0)
                         
@@ -902,9 +910,9 @@ class GradientSelector:
                 # Compute loss with full supervision
                 model.zero_grad()
                 
-                outputs = model(temp_inputs, annotators, questions)
+                outputs = model(temp_inputs, annotators, questions, embeddings)
                 batch_loss = model.compute_total_loss(
-                    outputs, labels, temp_inputs, questions, 
+                    outputs, labels, temp_inputs, questions, embeddings,
                     full_supervision=True
                 )
                 
@@ -963,7 +971,7 @@ class GradientTopOnlySelector(GradientSelector):
         return any(identifier in param_name.lower() for identifier in top_layer_identifiers)
     
     
-    def compute_sample_gradient(self, model, inputs, labels, annotators, questions):
+    def compute_sample_gradient(self, model, inputs, labels, annotators, questions, embeddings):
         """
         Compute gradient for a single example using autoregressive sampling.
         
@@ -997,7 +1005,7 @@ class GradientTopOnlySelector(GradientSelector):
         
         for pos in masked_positions:
             with torch.no_grad():
-                current_outputs = model(temp_inputs, annotators, questions)
+                current_outputs = model(temp_inputs, annotators, questions, embeddings)
                 var_outputs = current_outputs[0, pos]
                 var_probs = F.softmax(var_outputs, dim=0)
             
@@ -1014,9 +1022,9 @@ class GradientTopOnlySelector(GradientSelector):
         # Compute loss with full supervision
         model.zero_grad()
         
-        outputs = model(temp_inputs, annotators, questions)
+        outputs = model(temp_inputs, annotators, questions, embeddings)
         loss = model.compute_total_loss(
-            outputs, temp_labels, temp_inputs, questions,
+            outputs, temp_labels, temp_inputs, questions, embeddings,
             full_supervision=True
         )
         
@@ -1028,9 +1036,9 @@ class GradientTopOnlySelector(GradientSelector):
                     non_top_params.append(param)
 
         model.zero_grad()
-        outputs = model(temp_inputs, annotators, questions)
+        outputs = model(temp_inputs, annotators, questions, embeddings)
         loss = model.compute_total_loss(
-            outputs, temp_labels, temp_inputs, questions,
+            outputs, temp_labels, temp_inputs, questions, embeddings,
             full_supervision=True
         )
         loss.backward()
@@ -1068,11 +1076,14 @@ class GradientTopOnlySelector(GradientSelector):
             sample_count = 0
             
             for batch in val_dataloader:
-                known_questions, inputs, labels, annotators, questions = batch
+                known_questions, inputs, labels, annotators, questions, embeddings = batch
                 inputs, labels, annotators, questions = (
                     inputs.to(self.device), labels.to(self.device), 
                     annotators.to(self.device), questions.to(self.device)
                 )
+
+                if embeddings is not None:
+                    embeddings = embeddings.to(self.device)
                 
                 batch_size = inputs.shape[0]
                 
@@ -1087,7 +1098,7 @@ class GradientTopOnlySelector(GradientSelector):
                     # Sample values for masked positions
                     for pos in masked_positions:
                         with torch.no_grad():
-                            current_outputs = model(temp_inputs, annotators, questions)
+                            current_outputs = model(temp_inputs, annotators, questions, embeddings)
                             var_outputs = current_outputs[i, pos]
                             var_probs = F.softmax(var_outputs, dim=0)
                         
@@ -1112,9 +1123,9 @@ class GradientTopOnlySelector(GradientSelector):
                             param.requires_grad = False
                             non_top_params.append(param)
                 model.zero_grad()
-                outputs = model(temp_inputs, annotators, questions)
+                outputs = model(temp_inputs, annotators, questions, embeddings)
                 batch_loss = model.compute_total_loss(
-                    outputs, labels, temp_inputs, questions, 
+                    outputs, labels, temp_inputs, questions, embeddings,
                     full_supervision=True
                 )
                 
@@ -1195,11 +1206,13 @@ class GradientSelectionStrategy(ExampleSelectionStrategy):
         dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
         
         for batch_idx, batch in enumerate(tqdm(dataloader, desc="Computing gradient alignment")):
-            known_questions, inputs, labels, annotators, questions = batch
+            known_questions, inputs, labels, annotators, questions, embeddings = batch
             inputs, labels, annotators, questions = (
                 inputs.to(self.device), labels.to(self.device), 
                 annotators.to(self.device), questions.to(self.device)
             )
+            if embeddings is not None:
+                embeddings = embeddings.to(self.device)
             
             for i in range(inputs.shape[0]):
                 # Skip examples with no masked positions
@@ -1210,11 +1223,12 @@ class GradientSelectionStrategy(ExampleSelectionStrategy):
                 example_labels = labels[i:i+1]
                 example_annotator = annotators[i:i+1]
                 example_question = questions[i:i+1]
+                example_embedding = embeddings[i:i+1]
                 
                 example_grad_dict = self.selector.compute_example_gradients(
                     self.model, 
                     example_input, example_labels, 
-                    example_annotator, example_question, 
+                    example_annotator, example_question, example_embedding,
                     num_samples=num_samples
                 )
                 
@@ -1304,15 +1318,18 @@ class EntropyExampleSelectionStrategy(ExampleSelectionStrategy):
             valid_indices.append(idx)
             
             # Get data for this example
-            known_questions, inputs, answers, annotators, questions = dataset[idx]
+            known_questions, inputs, answers, annotators, questions, embeddings = dataset[idx]
             inputs = inputs.unsqueeze(0).to(self.device)
             answers = answers.unsqueeze(0).to(self.device)
             annotators = annotators.unsqueeze(0).to(self.device)
             questions = questions.unsqueeze(0).to(self.device)
+
+            if embeddings is not None:
+                embeddings = embeddings.unsqueeze(0).to(self.device)
             
             # Make predictions
             with torch.no_grad():
-                outputs = self.model(inputs, annotators, questions)
+                outputs = self.model(inputs, annotators, questions, embeddings)
                 
                 # Calculate entropy for all masked positions
                 total_entropy = 0.0
@@ -1392,15 +1409,17 @@ class EntropyFeatureSelectionStrategy(FeatureSelectionStrategy):
             return []
             
         # Get data for this example
-        known_questions, inputs, answers, annotators, questions = dataset[example_idx]
+        known_questions, inputs, answers, annotators, questions, embeddings = dataset[example_idx]
         inputs = inputs.unsqueeze(0).to(self.device)
         answers = answers.unsqueeze(0).to(self.device)
         annotators = annotators.unsqueeze(0).to(self.device)
         questions = questions.unsqueeze(0).to(self.device)
+        if embeddings is not None:
+            embeddings = embeddings.unsqueeze(0).to(self.device)
         
         # Make predictions
         with torch.no_grad():
-            outputs = self.model(inputs, annotators, questions)
+            outputs = self.model(inputs, annotators, questions, embeddings)
             
             # Calculate entropy for each masked position
             position_entropies = []
@@ -1555,8 +1574,8 @@ class BADGESelectionStrategy(ExampleSelectionStrategy):
             masked_positions = dataset.get_masked_positions(idx)
             if masked_positions:
                 valid_indices.append(idx)
-                known_questions, inputs, answers, annotators, questions = dataset[idx]
-                example_datas.append((inputs, answers, annotators, questions))
+                known_questions, inputs, answers, annotators, questions, embeddings = dataset[idx]
+                example_datas.append((inputs, answers, annotators, questions, embeddings))
         
         if not valid_indices:
             return [], []
@@ -1566,17 +1585,17 @@ class BADGESelectionStrategy(ExampleSelectionStrategy):
         scores = []  # Will use uncertainty as scores
         
         for i, idx in enumerate(valid_indices):
-            inputs, answers, annotators, questions = example_datas[i]
+            inputs, answers, annotators, questions, question_embeddings = example_datas[i]
             inputs = inputs.to(self.device)
             answers = answers.to(self.device)
             annotators = annotators.to(self.device)
             questions = questions.to(self.device)
+
+            if embeddings is not None:
+                question_embeddings = question_embeddings.unsqueeze(0).to(self.device)
             
             # Compute hypothetical labels and gradient embeddings
-            embedding, uncertainty_score = self.compute_gradient_embedding(
-                self.model, inputs.unsqueeze(0), answers.unsqueeze(0), 
-                annotators.unsqueeze(0), questions.unsqueeze(0)
-            )
+            embedding, uncertainty_score = self.compute_gradient_embedding(self.model, inputs.unsqueeze(0), answers.unsqueeze(0), annotators.unsqueeze(0), questions.unsqueeze(0), question_embeddings)
             
             embeddings.append(embedding)
             scores.append(uncertainty_score)
@@ -1608,7 +1627,7 @@ class BADGESelectionStrategy(ExampleSelectionStrategy):
         
         return selected_examples, selected_scores
     
-    def compute_gradient_embedding(self, model, inputs, labels, annotators, questions):
+    def compute_gradient_embedding(self, model, inputs, labels, annotators, questions, question_embeddings):
         """
         Compute gradient embedding vector for an example.
         
@@ -1636,7 +1655,7 @@ class BADGESelectionStrategy(ExampleSelectionStrategy):
         
         # 2. For each masked position, compute hypothetical label and gradient embedding
         with torch.no_grad():
-            outputs = model(inputs, annotators, questions)
+            outputs = model(inputs, annotators, questions, question_embeddings)
         
         all_position_embeddings = []
         total_uncertainty = 0.0
@@ -1659,7 +1678,7 @@ class BADGESelectionStrategy(ExampleSelectionStrategy):
                 # Forward pass with requires_grad
                 inputs_clone = inputs.clone().detach()
                 inputs_clone.requires_grad_(True)
-                outputs_grad = model(inputs_clone, annotators, questions)
+                outputs_grad = model(inputs_clone, annotators, questions, question_embeddings)
                 
                 # Add batch dimension to logits and ensure target has correct shape
                 logits = outputs_grad[0, pos].unsqueeze(0)  # Shape: [1, num_classes]
@@ -1746,8 +1765,7 @@ class ArgmaxVOICalculator(VOICalculator):
         """Initialize ArgmaxVOI calculator."""
         super().__init__(model, device)
     
-    def compute_argmax_voi(self, model, inputs, annotators, questions, known_questions, 
-                         candidate_idx, target_indices, loss_type="cross_entropy", cost=1.0):
+    def compute_argmax_voi(self, model, inputs, annotators, questions, known_questions, embeddings, candidate_idx, target_indices, loss_type="cross_entropy", cost=1.0):
         """
         Compute VOI using only the argmax value instead of expectation.
         
@@ -1769,7 +1787,7 @@ class ArgmaxVOICalculator(VOICalculator):
 
         with torch.no_grad():
             # Get initial outputs and compute initial loss
-            outputs = model(inputs, annotators, questions)
+            outputs = model(inputs, annotators, questions, embeddings)
             
             # Extract predictions for target indices
             if isinstance(target_indices, list) and len(target_indices) == 1:
@@ -1799,7 +1817,7 @@ class ArgmaxVOICalculator(VOICalculator):
             input_with_answer[:, candidate_idx, 0] = 0  # Mark as observed
             
             # Get predictions with argmax value
-            new_outputs = model(input_with_answer, annotators, questions)
+            new_outputs = model(input_with_answer, annotators, questions, embeddings)
             
             # Extract target predictions
             if isinstance(target_indices, list) and len(target_indices) == 1:
@@ -1866,12 +1884,14 @@ class ArgmaxVOISelectionStrategy(FeatureSelectionStrategy):
             return []
         
         # Get data
-        known_questions, inputs, answers, annotators, questions = dataset[example_idx]
+        known_questions, inputs, answers, annotators, questions, embeddings = dataset[example_idx]
         inputs = inputs.unsqueeze(0).to(self.device)
         answers = answers.unsqueeze(0).to(self.device)
         annotators = annotators.unsqueeze(0).to(self.device)
         questions = questions.unsqueeze(0).to(self.device)
         known_questions = known_questions.unsqueeze(0).to(self.device)
+        if embeddings is not None:
+            embeddings = embeddings.unsqueeze(0).to(self.device)
         
         # Find target indices (positions that have the target questions)
         target_indices = []
@@ -1893,7 +1913,7 @@ class ArgmaxVOISelectionStrategy(FeatureSelectionStrategy):
                 
             # Compute ArgmaxVOI
             voi, voi_cost_ratio, posterior_loss = self.voi_calculator.compute_argmax_voi(
-                self.model, inputs, annotators, questions, known_questions,
+                self.model, inputs, annotators, questions, known_questions, embeddings,
                 position, target_indices, loss_type, cost=cost
             )
             

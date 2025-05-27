@@ -124,12 +124,14 @@ class AnnotationArena:
             
         example_idx, position_idx = self._parse_variable_id(variable_id)
         
-        known_questions, inputs, answers, annotators, questions = self._get_example_data(example_idx)
-        
+        known_questions, inputs, answers, annotators, questions, embeddings = self._get_example_data(example_idx)
+        if embeddings is not None:
+            embeddings = embeddings.unsqueeze(0).to(self.device)
         predictions = self.model.predict(
             inputs.unsqueeze(0).to(self.device),
             annotators.unsqueeze(0).to(self.device),
             questions.unsqueeze(0).to(self.device),
+            embeddings,
             positions=[position_idx],
             train=train,
             weight=weight

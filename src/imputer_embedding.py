@@ -61,14 +61,16 @@ class Positional_Encoder(nn.Module):
         torch.nn.init.kaiming_normal_(self.question_embedding, mode='fan_out', nonlinearity='relu')
         self.num_annotator = num_annotator
 
-    def forward(self, x, annotators, questions):
+    def forward(self, x, annotators, questions, embeddings):
         """Create encoded representations combining annotator and question features."""
         batch_size = x.shape[0]
         question_embeds = self.question_embedding[questions]
         annotators = torch.where(annotators < 0, torch.full_like(annotators, self.num_annotator), annotators)
         annotator_embeds = self.annotator_embedding[annotators]
-        feature_x = torch.cat((question_embeds + annotator_embeds, x[:,:,1:]), dim=-1)
-        param_x = x[:,:,-self.max_choices:].clone()
+        if len(embeddings.shape) == 4:
+            embeddings = embeddings.squeeze(0)
+        feature_x = torch.cat((question_embeds + annotator_embeds, embeddings, x[:,:,1:]), dim=-1)
+        param_x = x[:,:,1:].clone()
         return feature_x, param_x
 
 
@@ -132,7 +134,7 @@ class Encoder(nn.Module):
                  num_annotator, annotator_embedding_dim, dropout=0.1):
         """Initialize encoder with multiple layers."""
         super().__init__()
-        self.feature_dim = annotator_embedding_dim + 384 + max_choices
+        self.feature_dim = annotator_embedding_dim + max_choices + 384
         self.param_dim = max_choices
         self.position_encoder = Positional_Encoder(question_num, max_choices, num_annotator, annotator_embedding_dim)
         self.layers = nn.ModuleList([
@@ -142,9 +144,9 @@ class Encoder(nn.Module):
         self.norm = NormLayer(self.feature_dim)
         self.annotator_embedding_dim = annotator_embedding_dim
 
-    def forward(self, x, annotators, questions):
+    def forward(self, x, annotators, questions, embeddings):
         """Process input through all encoder layers."""
-        feature_x, param_x = self.position_encoder(x, annotators, questions)
+        feature_x, param_x = self.position_encoder(x, annotators, questions, embeddings)
         for layer in self.layers:
             feature_x, param_x = layer(feature_x, param_x)
         return param_x
@@ -180,12 +182,12 @@ class ImputerEmbedding(nn.Module):
         # Track training losses over time
         self.training_losses = []
     
-    def forward(self, x, annotators, questions):
+    def forward(self, x, annotators, questions, embeddings):
         """Forward pass through the model."""
-        param_x = self.encoder(x, annotators, questions)
+        param_x = self.encoder(x, annotators, questions, embeddings)
         return param_x
     
-    def predict(self, inputs, annotators, questions, positions=None, train=True, weight=1.0):
+    def predict(self, inputs, annotators, questions, embeddings, positions=None, train=True, weight=1.0):
         """
         Predict distributions for specified positions.
         
@@ -203,7 +205,7 @@ class ImputerEmbedding(nn.Module):
         self.eval()  # Set to eval mode for prediction
         
         with torch.no_grad():
-            outputs = self(inputs, annotators, questions)
+            outputs = self(inputs, annotators, questions, embeddings)
             
             # Extract predictions for specific positions if provided
             if positions is not None:
@@ -219,11 +221,12 @@ class ImputerEmbedding(nn.Module):
             batch_size = inputs.shape[0]
             
             for i in range(batch_size):
-                example = {
+                example = { #TODO: check should we change this
                     'inputs': inputs[i].detach().cpu().clone(),
                     'annotators': annotators[i].detach().cpu().clone(),
                     'questions': questions[i].detach().cpu().clone(),
                     'positions': positions if positions is not None else list(range(inputs.shape[1])),
+                    "embeddings": None if embeddings is None else embeddings[i].detach().cpu().clone(),
                     'weight': weight,
                     'timestamp': len(self.training_examples),
                     'loss': None,  # Will be filled during training
@@ -370,14 +373,15 @@ class ImputerEmbedding(nn.Module):
                 batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
                 batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
                 batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
+                batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device)
                 batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
                 
                 # Forward pass
                 optimizer.zero_grad()
-                outputs = self(batch_inputs, batch_annotators, batch_questions)
-
-
-                batch_targets = batch_inputs[:, :, 385:].clone()
+                outputs = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
+                
+                # Compute loss on observed positions (where mask bit is 0)
+                batch_targets = batch_inputs[:, :, 1:].clone()  # Exclude mask bit
                 observed_mask = (batch_inputs[:, :, 0] == 0).float().unsqueeze(-1).expand_as(outputs)
                 masked_outputs = outputs * observed_mask
                 masked_targets = batch_targets * observed_mask
@@ -579,7 +583,7 @@ class ImputerEmbedding(nn.Module):
         
         return model
     
-    def compute_total_loss(self, outputs, labels, inputs, questions, full_supervision=False):
+    def compute_total_loss(self, outputs, labels, inputs, questions, embeddings, full_supervision=False):
         """
         Compute total loss over all positions based on supervision type.
         Maintained for backward compatibility with activelearner.py.

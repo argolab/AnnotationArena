@@ -365,7 +365,7 @@ def main():
     parser.add_argument("--features_per_example", type=int, default=5, help="Number of features to select per example")
     parser.add_argument("--epochs_per_cycle", type=int, default=3, help="Number of training epochs per cycle")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training")
-    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate for training")
+    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for training")
     parser.add_argument("--experiment", type=str, default="all", 
                       help="Experiment to run (all, random_all, random_5, gradient_all, gradient_sequential, gradient_voi, "
                            "gradient_fast_voi, entropy_all, entropy_5, badge_all, badge_cold_start, gradient_voi_argmax)")
@@ -844,9 +844,9 @@ def main():
         torch.save(model_copy.state_dict(), os.path.join(models_path, f"{experiment}.pth"))
         file_name = experiment
         if not "cold_start" in experiment and args.cold_start:
-            file_name += "cold_start"
+            file_name += "_cold_start"
         if args.use_embedding:
-            file_name += "with_embedding"
+            file_name += "_with_embedding"
         with open(os.path.join(results_path, f"{file_name}.json"), "w") as f:
             json.dump(results, f, indent=4)
     

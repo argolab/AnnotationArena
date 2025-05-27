@@ -180,7 +180,7 @@ class Imputer(nn.Module):
         # Track training losses over time
         self.training_losses = []
     
-    def forward(self, x, annotators, questions):
+    def forward(self, x, annotators, questions, embeddings):
         """Forward pass through the model."""
         param_x = self.encoder(x, annotators, questions)
         return param_x
@@ -579,7 +579,7 @@ class Imputer(nn.Module):
         
         return model
     
-    def compute_total_loss(self, outputs, labels, inputs, questions, full_supervision=False):
+    def compute_total_loss(self, outputs, labels, inputs, questions, embeddings, full_supervision=False):
         """
         Compute total loss over all positions based on supervision type.
         Maintained for backward compatibility with activelearner.py.

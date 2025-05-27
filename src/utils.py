@@ -266,12 +266,13 @@ class DataManager:
                         entry["annotators"].append(int(judge_id))
                         entry["questions"].append(question_indices[question])
                 if use_embedding:
+                    entry["text_embedding"] = [[] for _ in range(14)]
                     for q_idx, question in enumerate(question_list):
                         text_embedding = text_embeddings[int(text_id)]
                         question_embedding = question_embeddings[question]
                         final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
-                        entry["input"][q_idx] = entry["input"][q_idx] [:1] + final_embedding + entry["input"][q_idx] [1:]
-                        entry["input"][q_idx + 7] = entry["input"][q_idx + 7] [:1] + final_embedding + entry["input"][q_idx + 7] [1:]
+                        entry["text_embedding"][q_idx] = final_embedding
+                        entry["text_embedding"][q_idx + 7] =  final_embedding
 
                 
                 data_list.append(entry)
@@ -409,8 +410,11 @@ class AnnotationDataset(Dataset):
         answers = torch.tensor(item['answers'], dtype=torch.float32)
         annotators = torch.tensor(item['annotators'], dtype=torch.int64)
         questions = torch.tensor(item['questions'], dtype=torch.int64)
+        if "text_embedding" in item.keys():
+            embedding = torch.tensor(item['text_embedding'], dtype=torch.float32)
+            return known_questions, inputs, answers, annotators, questions, embedding
         
-        return known_questions, inputs, answers, annotators, questions
+        return known_questions, inputs, answers, annotators, questions, None
     
     def get_data_entry(self, idx):
         """Get the raw data entry for an index."""
