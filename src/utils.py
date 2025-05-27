@@ -10,6 +10,9 @@ from torch.utils.data import Dataset, DataLoader
 from scipy.stats import pearsonr, spearmanr, kendalltau
 from tqdm.auto import tqdm
 import copy
+import pandas as pd
+from sentence_transformers import SentenceTransformer
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
 # Setting seeds for reproducibility
 random.seed(90)
@@ -41,7 +44,7 @@ class DataManager:
         os.makedirs(self.paths['gradient_alignment'], exist_ok=True)
         os.makedirs(self.paths['random'], exist_ok=True)
     
-    def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, dataset="hanna", cold_start=False):
+    def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, dataset="hanna", cold_start=False, use_embedding=False):
         """
         Prepare data splits for active learning experiments.
         
@@ -55,6 +58,9 @@ class DataManager:
         Returns:
             bool: Success status
         """
+        print(f"Use embedding: {use_embedding}")
+        if use_embedding and not dataset == "hanna":
+            raise ValueError("Not yet support other datasets with text embedding")
         if dataset == "gaussian":
             pass
         try:
@@ -64,6 +70,10 @@ class DataManager:
                 human_data = json.load(f)
         except FileNotFoundError:
             return False
+
+        if use_embedding and not os.path.exists(os.path.join(self.base_path, "text_embeddings.json")):
+            print("Preparing all text embeddings with sentence bert")
+            self.prepare_text_embeddings(num_partition)
         
         text_ids = list(human_data.keys())
         if dataset == "hanna":
@@ -91,10 +101,10 @@ class DataManager:
         test_data = []
         active_pool_data = []
         
-        self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start)
-        self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start)
-        self._prepare_entries(test_texts, test_data, 'test', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start)
-        self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start)
+        self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        self._prepare_entries(test_texts, test_data, 'test', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         
         for key, data in zip(['train', 'validation', 'test', 'active_pool', 'original_train', 'original_validation', 'original_test', 'original_active_pool'],
                              [initial_train_data, validation_data, test_data, active_pool_data, initial_train_data, validation_data, test_data, active_pool_data]):
@@ -104,7 +114,41 @@ class DataManager:
         
         return True
     
-    def _prepare_entries(self, texts, data_list, split_type, llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset, cold_start=False):
+    def prepare_text_embeddings(self, num_partition):
+        df = pd.read_csv(os.path.join(self.base_path, "hanna_stories_annotations_updated.csv"))
+
+        # Take the first 1200 entries from TEXT column
+        texts = df['TEXT'].head(num_partition)
+
+        # Define a function to extract prompt and story
+        def split_text(entry):
+            prompt = ""
+            story = ""
+            if isinstance(entry, str):
+                if "Prompt:" in entry and "Story:" in entry:
+                    parts = entry.split("Story:", 1)
+                    prompt = parts[0].replace("Prompt:", "").strip()
+                    story = parts[1].strip()
+            return pd.Series([prompt, story])
+
+        # Apply to all 1200 entries
+        df_split = texts.apply(split_text)
+        df_split.columns = ['Prompt', 'Story']
+
+        # Save as JSON
+        data_list = df_split.to_dict(orient='records')
+
+        with open(os.path.join(self.base_path, "prompts_and_stories.json"), 'w', encoding='utf-8') as f:
+            json.dump(data_list, f, indent=2, ensure_ascii=False)
+
+        all_embeddings = []
+        for entry in tqdm(data_list):
+            all_embeddings.append((model.encode([entry["Story"]])[0, :] + model.encode([entry["Prompt"]])[0, :]).tolist())
+        with open(os.path.join(self.base_path, "text_embeddings.json"), 'w') as f:
+            json.dump(all_embeddings, f, indent=2)
+
+    
+    def _prepare_entries(self, texts, data_list, split_type, llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset, cold_start=False, use_embedding=False):
         """
         Prepare data entries for a specific split.
         
@@ -121,8 +165,14 @@ class DataManager:
             cold_start: If True, both LLM and human questions will be unknown in active pool
         """
         if dataset == "hanna":
+            
+            if use_embedding:
+                with open(os.path.join(self.base_path, "text_embeddings.json"), "r") as file:
+                    text_embeddings = json.load(file)
+                with open(os.path.join(self.base_path, "propmt_embeddings.json"), "r") as file:
+                   question_embeddings = json.load(file)
 
-            for text_id in texts:
+            for text_id in tqdm(texts):
                 if text_id not in llm_data:
                     continue
                 
@@ -215,6 +265,14 @@ class DataManager:
                         entry["answers"].append(true_prob)   
                         entry["annotators"].append(int(judge_id))
                         entry["questions"].append(question_indices[question])
+                if use_embedding:
+                    for q_idx, question in enumerate(question_list):
+                        text_embedding = text_embeddings[int(text_id)]
+                        question_embedding = question_embeddings[question]
+                        final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
+                        entry["input"][q_idx] = entry["input"][q_idx] [:1] + final_embedding + entry["input"][q_idx] [1:]
+                        entry["input"][q_idx + 7] = entry["input"][q_idx + 7] [:1] + final_embedding + entry["input"][q_idx + 7] [1:]
+
                 
                 data_list.append(entry)
 
@@ -704,3 +762,7 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
     
     # Default return if no changes were made
     return dataset_val, active_pool, validation_example_indices
+
+if __name__ == "__main__":
+    data_manager = DataManager("../outputs/data_hanna")
+    data_manager.prepare_data(1200, cold_start=True, use_embedding=True)

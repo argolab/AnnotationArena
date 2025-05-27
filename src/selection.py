@@ -298,7 +298,7 @@ class VOICalculator:
                 # Create a copy of inputs with candidate set to class i
                 input_with_answer = inputs.clone()
                 one_hot = F.one_hot(torch.tensor(i), num_classes=num_classes).float().to(self.device)
-                input_with_answer[:, candidate_idx, 1:] = one_hot
+                input_with_answer[:, candidate_idx, -num_classes:] = one_hot
                 input_with_answer[:, candidate_idx, 0] = 0  # Mark as observed
                 
                 expanded_inputs.append(input_with_answer)
@@ -1020,8 +1020,23 @@ class GradientTopOnlySelector(GradientSelector):
             full_supervision=True
         )
         
-        # Compute gradients
+        non_top_params = []
+        for name, param in model.named_parameters():
+            if not self._is_top_layer_param(name):
+                if param.requires_grad:
+                    param.requires_grad = False
+                    non_top_params.append(param)
+
+        model.zero_grad()
+        outputs = model(temp_inputs, annotators, questions)
+        loss = model.compute_total_loss(
+            outputs, temp_labels, temp_inputs, questions,
+            full_supervision=True
+        )
         loss.backward()
+
+        for param in non_top_params:
+            param.requires_grad = True
         
         # Collect gradients
         for name, param in model.named_parameters():
@@ -1089,7 +1104,14 @@ class GradientTopOnlySelector(GradientSelector):
                 
                 # Compute loss with full supervision
                 model.zero_grad()
-                
+
+                non_top_params = []
+                for name, param in model.named_parameters():
+                    if not self._is_top_layer_param(name):
+                        if param.requires_grad:
+                            param.requires_grad = False
+                            non_top_params.append(param)
+                model.zero_grad()
                 outputs = model(temp_inputs, annotators, questions)
                 batch_loss = model.compute_total_loss(
                     outputs, labels, temp_inputs, questions, 
@@ -1106,6 +1128,8 @@ class GradientTopOnlySelector(GradientSelector):
                                 temp_grad_dict[name] = param.grad.detach().clone()
                             else:
                                 temp_grad_dict[name] += param.grad.detach().clone()
+                for param in non_top_params:
+                    param.requires_grad = True
             
             if sample_count > 0:
                 for name in temp_grad_dict:

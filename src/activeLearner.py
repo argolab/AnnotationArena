@@ -19,6 +19,7 @@ from annotationArena import *
 from utils import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset
 from visualizations import *
 from imputer import Imputer
+from imputer_embedding import ImputerEmbedding
 from selection import (
     SelectionFactory, 
     VOISelectionStrategy, 
@@ -364,7 +365,7 @@ def main():
     parser.add_argument("--features_per_example", type=int, default=5, help="Number of features to select per example")
     parser.add_argument("--epochs_per_cycle", type=int, default=3, help="Number of training epochs per cycle")
     parser.add_argument("--batch_size", type=int, default=8, help="Batch size for training")
-    parser.add_argument("--lr", type=float, default=1e-4, help="Learning rate for training")
+    parser.add_argument("--lr", type=float, default=1e-3, help="Learning rate for training")
     parser.add_argument("--experiment", type=str, default="all", 
                       help="Experiment to run (all, random_all, random_5, gradient_all, gradient_sequential, gradient_voi, "
                            "gradient_fast_voi, entropy_all, entropy_5, badge_all, badge_cold_start, gradient_voi_argmax)")
@@ -374,6 +375,7 @@ def main():
     parser.add_argument("--dataset", type=str, default="hanna", help="Dataset to run the experiment")
     parser.add_argument("--runner", type=str, default="prabhav", help="Pass name to change directory paths! (prabhav/haojun)")
     parser.add_argument("--cold_start", type=bool, default=False, help="Start with no annotation (true) or partial annotation (false)")
+    parser.add_argument("--use_embedding", type=bool, default=False, help="Use embeddings for texts")
     args = parser.parse_args()
     
     # Set up paths and device
@@ -389,24 +391,29 @@ def main():
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    if args.use_embedding:
+        ModelClass = ImputerEmbedding
+    else:
+        ModelClass = Imputer
     
     # Initialize model
     if dataset == "hanna":
-        model = Imputer(
+        model = ModelClass(
             question_num=7, max_choices=5, encoder_layers_num=6,
             attention_heads=4, hidden_dim=64, num_annotator=18, 
             annotator_embedding_dim=19, dropout=0.1
         ).to(device)
 
     elif dataset == "llm_rubric":
-        model = Imputer(
+        model = ModelClass(
             question_num=9, max_choices=4, encoder_layers_num=6,
             attention_heads=4, hidden_dim=64, num_annotator=24, 
             annotator_embedding_dim=24, dropout=0.1
         ).to(device)
 
     else:
-        model = Imputer(
+        model = ModelClass(
             question_num=5, max_choices=5, encoder_layers_num=6,
             attention_heads=4, hidden_dim=64, num_annotator=1, 
             annotator_embedding_dim=19, dropout=0.1
@@ -445,9 +452,9 @@ def main():
             data_manager = DataManager(base_path + f'/data_{dataset}/')
 
         if dataset == "hanna":
-            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start)
+            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start, use_embedding=args.use_embedding)
         elif dataset == "llm_rubric":
-            data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start)
+            data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start, use_embedding=args.use_embedding)
         elif dataset == "gaussian":
             data_manager.prepare_data(dataset=dataset)
         else:
@@ -471,7 +478,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "badge_all":
@@ -491,7 +498,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "badge_cold_start":
@@ -531,7 +538,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_all":
@@ -550,7 +557,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_all_top_only":
@@ -570,7 +577,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted,
-                gradient_top_only=True
+                gradient_top_only=True, cold_start=args.cold_start
             )
 
         elif experiment == "random_5":
@@ -589,7 +596,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_sequential":
@@ -605,7 +612,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_sequential_top_only":
@@ -622,7 +629,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted,
-                gradient_top_only=True
+                gradient_top_only=True, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_sequential_cold_start":
@@ -656,7 +663,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted,
-                gradient_top_only=False
+                gradient_top_only=False, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_random_cold_start":
@@ -691,7 +698,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted,
-                gradient_top_only=True
+                gradient_top_only=True, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_voi":
@@ -707,7 +714,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted
+                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_voi_argmax":
@@ -724,7 +731,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted
+                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_voi_cold_start":
@@ -758,7 +765,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
-                gradient_top_only=True
+                gradient_top_only=True, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_fast_voi":
@@ -774,7 +781,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted
+                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_fast_voi_cold_start":
@@ -808,7 +815,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
-                gradient_top_only=True
+                gradient_top_only=True, cold_start=args.cold_start
             )
 
         elif experiment == "entropy_5":
@@ -824,7 +831,7 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted
+                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
             )
 
         else:
@@ -835,7 +842,12 @@ def main():
         
         # Save model and results
         torch.save(model_copy.state_dict(), os.path.join(models_path, f"{experiment}.pth"))
-        with open(os.path.join(results_path, f"{experiment}.json"), "w") as f:
+        file_name = experiment
+        if not "cold_start" in experiment and args.cold_start:
+            file_name += "cold_start"
+        if args.use_embedding:
+            file_name += "with_embedding"
+        with open(os.path.join(results_path, f"{file_name}.json"), "w") as f:
             json.dump(results, f, indent=4)
     
     if experiment_results:
@@ -848,5 +860,5 @@ def main():
         # print(f"Plots Generated!")
         
 if __name__ == "__main__":
-    # main()
-    create_plots()
+    main()
+    #create_plots()
