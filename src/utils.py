@@ -41,8 +41,6 @@ class DataManager:
             'gradient_alignment': os.path.join(base_path, "gradient_alignment"),
             'random': os.path.join(base_path, "random")
         }
-        os.makedirs(self.paths['gradient_alignment'], exist_ok=True)
-        os.makedirs(self.paths['random'], exist_ok=True)
     
     def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, dataset="hanna", cold_start=False, use_embedding=False):
         """
@@ -59,6 +57,7 @@ class DataManager:
             bool: Success status
         """
         print(f"Use embedding: {use_embedding}")
+
         if use_embedding and not dataset == "hanna":
             raise ValueError("Not yet support other datasets with text embedding")
         if dataset == "gaussian":
@@ -74,6 +73,7 @@ class DataManager:
         if use_embedding and not os.path.exists(os.path.join(self.base_path, "text_embeddings.json")):
             print("Preparing all text embeddings with sentence bert")
             self.prepare_text_embeddings(num_partition)
+            print("Done\n")
         
         text_ids = list(human_data.keys())
         if dataset == "hanna":
@@ -100,24 +100,30 @@ class DataManager:
         validation_data = []
         test_data = []
         active_pool_data = []
-        
+
+        print('-- Creating Annotation for Train --')
         self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        print('-- Creating Annotation for Validation --')
         self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        print('-- Creating Annotation for Test --')
         self._prepare_entries(test_texts, test_data, 'test', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        print('-- Creating Annotation for Active Pool --')
         self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         
-        for key, data in zip(['train', 'validation', 'test', 'active_pool', 'original_train', 'original_validation', 'original_test', 'original_active_pool'],
-                             [initial_train_data, validation_data, test_data, active_pool_data, initial_train_data, validation_data, test_data, active_pool_data]):
+        print('Saving Data')
+        for key, data in tqdm(zip(['train', 'validation', 'test', 'active_pool', 'original_train', 'original_validation', 'original_test', 'original_active_pool'],
+                             [initial_train_data, validation_data, test_data, active_pool_data, initial_train_data, validation_data, test_data, active_pool_data])):
             with open(self.paths[key], "w") as f:
                 print(self.paths[key])
                 json.dump(data, f)
+
+        print('ALL DATA CREATED!')
         
         return True
     
     def prepare_text_embeddings(self, num_partition):
-        df = pd.read_csv(os.path.join(self.base_path, "hanna_stories_annotations_updated.csv"))
 
-        # Take the first 1200 entries from TEXT column
+        df = pd.read_csv(os.path.join(self.base_path, "hanna_stories_annotations_updated.csv"))
         texts = df['TEXT'].head(num_partition)
 
         # Define a function to extract prompt and story
@@ -373,6 +379,8 @@ class DataManager:
                         entry["questions"].append(question_indices[question])
                     
                     data_list.append(entry)
+
+            return
 
 class AnnotationDataset(Dataset):
     """
@@ -768,5 +776,6 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
     return dataset_val, active_pool, validation_example_indices
 
 if __name__ == "__main__":
-    data_manager = DataManager("../outputs/data_hanna")
+    # data_manager = DataManager("../outputs/data_hanna")
+    data_manager = DataManager("/export/fs06/psingh54/ActiveRubric-Internal/outputs/data")
     data_manager.prepare_data(1200, cold_start=True, use_embedding=True)

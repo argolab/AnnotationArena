@@ -425,12 +425,12 @@ def main():
     # Configure experiments to run
     experiments_to_run = []
     if args.experiment == "all":
-        # experiments_to_run = [
-        #     "badge_all", "entropy_all", "gradient_all", "gradient_all_top_only"
-        # ]
         experiments_to_run = [
-        "gradient_voi_argmax", "gradient_voi", "gradient_fast_voi", "gradient_sequential"
+            "random_all", "badge_all", "entropy_all", "gradient_all", "gradient_all_top_only"
         ]
+        # experiments_to_run = [
+        # "gradient_voi_argmax", "gradient_voi", "gradient_fast_voi", "gradient_sequential"
+        # ]
         # experiments_to_run = [
         #     "gradient_random_cold_start", "gradient_voi_cold_start", "gradient_fast_voi_cold_start", "gradient_sequential_cold_start", 
         #     "gradient_all_top_only", "gradient_sequential_top_only", "gradient_voi_top_only", "gradient_fast_voi_top_only", "gradient_random_top_only", 
@@ -444,7 +444,7 @@ def main():
     # Run each selected experiment
     for experiment in experiments_to_run:
         
-        print(f"\n=== Running {experiment} Experiment ===")
+        print(f"\n=== Creating Data for {experiment} Experiment ===")
         
         if args.runner == "prabhav":
             data_manager = DataManager(base_path + '/data/')
@@ -461,6 +461,8 @@ def main():
             raise ValueError("Unsupported dataset")
         
         model_copy = copy.deepcopy(model)
+
+        print(f"\n=== Created Data for {experiment} Experiment ===")
 
         if experiment == "random_all":
             train_dataset = AnnotationDataset(data_manager.paths['train'])
@@ -482,7 +484,9 @@ def main():
             )
 
         elif experiment == "badge_all":
-            # BADGE example selection with observe_all_features=True
+
+            print(f"\n=== Running {experiment} Experiment ===")
+
             train_dataset = AnnotationDataset(data_manager.paths['train'])
             val_dataset = AnnotationDataset(data_manager.paths['validation'])
             test_dataset = AnnotationDataset(data_manager.paths['test'])

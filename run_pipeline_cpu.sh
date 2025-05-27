@@ -6,9 +6,9 @@
 
 #SBATCH --job-name=ActiveLearner
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=36G
-#SBATCH --account=a100acct
-#SBATCH --partition=gpu-a100
+#SBATCH --gpus=1
+#SBATCH --mem-per-cpu=16G
+#SBATCH --partition=gpu
 #SBATCH --mail-user="psingh54@jhu.edu"
 
 source /home/psingh54/.bashrc
