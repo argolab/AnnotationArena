@@ -40,29 +40,41 @@ class NoisyDataManager(DataManager):
     def __init__(self, base_path):
         super().__init__(base_path)
         
-    def add_noise_to_llm(self, prob_dist, sigma=0.5):
-        """Add Gaussian noise to LLM probability distributions in log space."""
+    def add_noise_to_llm(self, prob_dist, alpha_multiplier=1.0):
+        """Add noise to LLM probability distributions using Dirichlet sampling."""
+
         prob_dist = np.array(prob_dist)
-        log_probs = np.log(prob_dist + 1e-10)
-        noisy_log_probs = log_probs + np.random.normal(0, sigma, log_probs.shape)
-        noisy_probs = np.exp(noisy_log_probs)
+        alpha_params = prob_dist * alpha_multiplier
+
+        alpha_params = np.maximum(alpha_params, 0.01)
+        
+        # Sample from Dirichlet distribution
+        noisy_probs = np.random.dirichlet(alpha_params)
         noisy_probs = noisy_probs / np.sum(noisy_probs)
+        
         return noisy_probs.tolist()
-    
-    def add_noise_to_human(self, one_hot, noise_level=0.3):
-        """Add uniform noise to human one-hot annotations and convert back to categorical."""
+
+    def add_noise_to_human(self, one_hot, flip_prob=0.3):
+        """Add noise to human one-hot annotations by flipping to different categories."""
         one_hot = np.array(one_hot)
-        noise = np.random.uniform(-noise_level, noise_level, one_hot.shape)
-        noisy = one_hot + noise
+        original_category = np.argmax(one_hot)
         
-        noisy_categorical = np.zeros_like(one_hot)
-        max_idx = np.argmax(noisy)
-        noisy_categorical[max_idx] = 1.0
-        
-        return noisy_categorical.tolist()
+        if np.random.random() < flip_prob:
+
+            num_categories = len(one_hot)
+            other_categories = [i for i in range(num_categories) if i != original_category]
+            
+            new_category = np.random.choice(other_categories)
+            
+            noisy_one_hot = np.zeros_like(one_hot)
+            noisy_one_hot[new_category] = 1.0
+            
+            return noisy_one_hot.tolist()
+        else:
+            return one_hot.tolist()
     
     def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, 
-                    dataset="hanna", cold_start=False, llm_sigma=0.5, human_noise=0.3, use_embedding=False):
+                dataset="hanna", cold_start=False, llm_alpha_multiplier=1.0, human_flip_prob=0.3, use_embedding=False):
         """Prepare data with noisy copies of all annotations."""
         
         print(f"Use embedding: {use_embedding}")
@@ -113,19 +125,19 @@ class NoisyDataManager(DataManager):
         print('-- Creating Annotation for Train --')
         self._prepare_entries_with_noise(initial_train_texts, initial_train_data, 'train', llm_data, human_data, 
                                        question_list, question_indices, known_human_questions_val, dataset, 
-                                       cold_start, llm_sigma, human_noise, use_embedding)
+                                       cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
         print('-- Creating Annotation for Validation --')
         self._prepare_entries_with_noise(validation_texts, validation_data, 'validation', llm_data, human_data, 
                                        question_list, question_indices, known_human_questions_val, dataset, 
-                                       cold_start, llm_sigma, human_noise, use_embedding)
+                                       cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
         print('-- Creating Annotation for Test --')
         self._prepare_entries_with_noise(test_texts, test_data, 'test', llm_data, human_data, 
                                        question_list, question_indices, known_human_questions_val, dataset, 
-                                       cold_start, llm_sigma, human_noise, use_embedding)
+                                       cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
         print('-- Creating Annotation for Active Pool --')
         self._prepare_entries_with_noise(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, 
                                        question_list, question_indices, known_human_questions_val, dataset, 
-                                       cold_start, llm_sigma, human_noise, use_embedding)
+                                       cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
         
         print('Saving Data')
         for key, data in tqdm(zip(['train', 'validation', 'test', 'active_pool', 'original_train', 'original_validation', 'original_test', 'original_active_pool'],
@@ -139,8 +151,8 @@ class NoisyDataManager(DataManager):
         return True
     
     def _prepare_entries_with_noise(self, texts, data_list, split_type, llm_data, human_data, question_list, 
-                              question_indices, known_human_questions_val, dataset, cold_start, 
-                              llm_sigma, human_noise, use_embedding):
+                          question_indices, known_human_questions_val, dataset, cold_start, 
+                          llm_alpha_multiplier, human_flip_prob, use_embedding):
         """Prepare entries with original + noisy copies."""
         
         if use_embedding:
@@ -189,7 +201,7 @@ class NoisyDataManager(DataManager):
                 # Process noisy LLM questions
                 for q_idx, question in enumerate(question_list):
                     true_prob = llm_data[text_id][question]
-                    noisy_prob = self.add_noise_to_llm(true_prob, llm_sigma)
+                    noisy_prob = self.add_noise_to_llm(true_prob, llm_alpha_multiplier)
                     
                     if cold_start and split_type == 'active_pool':
                         mask_bit = 1
@@ -226,8 +238,8 @@ class NoisyDataManager(DataManager):
                         self._add_human_annotation(entry, true_prob, split_type, known_human_questions_val, 
                                                 q_idx, judge_id, question_indices[question], False)
                 
-                # Process noisy human questions ONLY if human_noise > 0
-                if human_noise > 0:
+                # Process noisy human questions ONLY if human_flip_prob > 0
+                if human_flip_prob > 0:
                     for judge_id in annotators:
                         for q_idx, question in enumerate(question_list):
                             true_score = human_data[text_id][judge_id][question]
@@ -244,7 +256,7 @@ class NoisyDataManager(DataManager):
                                     index = true_score - 1
                                     true_prob[index] = 1.0
                             
-                            noisy_prob = self.add_noise_to_human(true_prob, human_noise)
+                            noisy_prob = self.add_noise_to_human(true_prob, human_flip_prob)
                             self._add_human_annotation(entry, noisy_prob, split_type, known_human_questions_val,
                                                     q_idx, judge_id, question_indices[question], True)
                 
@@ -263,7 +275,7 @@ class NoisyDataManager(DataManager):
                         entry["text_embedding"][embedding_idx] = final_embedding
                         embedding_idx += 1
                     
-                    # Human annotations (original + noisy if human_noise > 0)
+                    # Human annotations (original + noisy if human_flip_prob > 0)
                     for judge_id in annotators:
                         for q_idx, question in enumerate(question_list):
                             text_embedding = text_embeddings[int(text_id)]
@@ -275,7 +287,7 @@ class NoisyDataManager(DataManager):
                             embedding_idx += 1
                             
                             # Noisy human (if applicable)
-                            if human_noise > 0:
+                            if human_flip_prob > 0:
                                 entry["text_embedding"][embedding_idx] = final_embedding
                                 embedding_idx += 1
                 
@@ -317,7 +329,7 @@ class NoisyDataManager(DataManager):
                         entry["is_noisy"].append(False)
                         
                         # Noisy
-                        noisy_prob = self.add_noise_to_llm(true_prob, llm_sigma)
+                        noisy_prob = self.add_noise_to_llm(true_prob, llm_alpha_multiplier)
                         if cold_start and split_type in ['active_pool', 'validation']:
                             mask_bit = 1
                             combined_input = [mask_bit] + [0.0] * 4
@@ -353,8 +365,8 @@ class NoisyDataManager(DataManager):
                         self._add_human_annotation_4class(entry, true_prob, split_type, known_human_questions_val,
                                                         q_idx, annotator, question_indices[question], False)
                     
-                    # Noisy Human questions ONLY if human_noise > 0
-                    if human_noise > 0:
+                    # Noisy Human questions ONLY if human_flip_prob > 0
+                    if human_flip_prob > 0:
                         for q_idx, question in enumerate(question_list):
                             true_score = human_data[text_id][annotator][question]
                             true_prob = [0.0] * 4
@@ -371,7 +383,7 @@ class NoisyDataManager(DataManager):
                                     true_prob[index] = 1.0
                             
                             # Noisy
-                            noisy_prob = self.add_noise_to_human(true_prob, human_noise)
+                            noisy_prob = self.add_noise_to_human(true_prob, human_flip_prob)
                             self._add_human_annotation_4class(entry, noisy_prob, split_type, known_human_questions_val,
                                                             q_idx, annotator, question_indices[question], True)
                     
@@ -782,8 +794,8 @@ def main():
     parser.add_argument("--dataset", type=str, default="hanna", help="Dataset to run the experiment")
     parser.add_argument("--runner", type=str, default="prabhav", help="Pass name to change directory paths")
     parser.add_argument("--cold_start", type=bool, default=False, help="Start with no annotation")
-    parser.add_argument("--llm_sigma", type=float, default=0.5, help="Gaussian noise sigma for LLM annotations")
-    parser.add_argument("--human_noise", type=float, default=0.3, help="Uniform noise level for human annotations")
+    parser.add_argument("--llm_alpha_multiplier", type=float, default=1.0, help="Dirichlet concentration multiplier for LLM annotations (lower=more noise)")
+    parser.add_argument("--human_flip_prob", type=float, default=0.3, help="Probability of flipping human annotations to different category")
     parser.add_argument("--use_embedding", type=bool, default=False, help="Use embeddings for texts")
     parser.add_argument("--human_cost", type=float, default=1.0, help="Cost of human annotations")
     parser.add_argument("--llm_cost", type=float, default=1.0, help="Cost of LLM annotations")
@@ -801,7 +813,7 @@ def main():
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    print(f"LLM noise sigma: {args.llm_sigma}, Human noise level: {args.human_noise}")
+    print(f"LLM alpha multiplier: {args.llm_alpha_multiplier}, Human flip probability: {args.human_flip_prob}")
     print(f"Human cost: {args.human_cost}, LLM cost: {args.llm_cost}")
 
     if args.use_embedding:
@@ -840,12 +852,12 @@ def main():
 
         if dataset == "hanna":
             data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset, 
-                                    cold_start=args.cold_start, llm_sigma=args.llm_sigma, 
-                                    human_noise=args.human_noise, use_embedding=args.use_embedding)
+                        cold_start=args.cold_start, llm_alpha_multiplier=args.llm_alpha_multiplier, 
+                        human_flip_prob=args.human_flip_prob, use_embedding=args.use_embedding)
         elif dataset == "llm_rubric":
             data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset, 
-                                    cold_start=args.cold_start, llm_sigma=args.llm_sigma, 
-                                    human_noise=args.human_noise, use_embedding=args.use_embedding)
+                                    cold_start=args.cold_start, llm_alpha_multiplier=args.llm_alpha_multiplie, 
+                                    human_flip_prob=args.human_flip_prob, use_embedding=args.use_embedding)
         
         model_copy = copy.deepcopy(model)
 
