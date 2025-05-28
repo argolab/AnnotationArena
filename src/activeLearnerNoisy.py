@@ -13,11 +13,14 @@ import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 import copy
 import math
+import pandas as pd
+from sentence_transformers import SentenceTransformer
 
 from annotationArena import *
 from utils import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset
 from visualizations import *
 from imputer import Imputer
+from imputer_embedding import ImputerEmbedding
 from selection import (
     SelectionFactory, 
     VOISelectionStrategy, 
@@ -28,6 +31,8 @@ from selection import (
     BADGESelectionStrategy,
     ArgmaxVOISelectionStrategy
 ) 
+
+model = SentenceTransformer('all-MiniLM-L6-v2')
 
 class NoisyDataManager(DataManager):
     """Extended DataManager that creates noisy copies of annotations."""
@@ -57,9 +62,13 @@ class NoisyDataManager(DataManager):
         return noisy_categorical.tolist()
     
     def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, 
-                    dataset="hanna", cold_start=False, llm_sigma=0.5, human_noise=0.3):
+                    dataset="hanna", cold_start=False, llm_sigma=0.5, human_noise=0.3, use_embedding=False):
         """Prepare data with noisy copies of all annotations."""
         
+        print(f"Use embedding: {use_embedding}")
+
+        if use_embedding and not dataset == "hanna":
+            raise ValueError("Not yet support other datasets with text embedding")
         if dataset == "gaussian":
             pass
         try:
@@ -69,6 +78,11 @@ class NoisyDataManager(DataManager):
                 human_data = json.load(f)
         except FileNotFoundError:
             return False
+
+        if use_embedding and not os.path.exists(os.path.join(self.base_path, "text_embeddings.json")):
+            print("Preparing all text embeddings with sentence bert")
+            self.prepare_text_embeddings(num_partition)
+            print("Done\n")
         
         text_ids = list(human_data.keys())
         if dataset == "hanna":
@@ -96,33 +110,47 @@ class NoisyDataManager(DataManager):
         test_data = []
         active_pool_data = []
         
+        print('-- Creating Annotation for Train --')
         self._prepare_entries_with_noise(initial_train_texts, initial_train_data, 'train', llm_data, human_data, 
                                        question_list, question_indices, known_human_questions_val, dataset, 
-                                       cold_start, llm_sigma, human_noise)
+                                       cold_start, llm_sigma, human_noise, use_embedding)
+        print('-- Creating Annotation for Validation --')
         self._prepare_entries_with_noise(validation_texts, validation_data, 'validation', llm_data, human_data, 
                                        question_list, question_indices, known_human_questions_val, dataset, 
-                                       cold_start, llm_sigma, human_noise)
+                                       cold_start, llm_sigma, human_noise, use_embedding)
+        print('-- Creating Annotation for Test --')
         self._prepare_entries_with_noise(test_texts, test_data, 'test', llm_data, human_data, 
                                        question_list, question_indices, known_human_questions_val, dataset, 
-                                       cold_start, llm_sigma, human_noise)
+                                       cold_start, llm_sigma, human_noise, use_embedding)
+        print('-- Creating Annotation for Active Pool --')
         self._prepare_entries_with_noise(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, 
                                        question_list, question_indices, known_human_questions_val, dataset, 
-                                       cold_start, llm_sigma, human_noise)
+                                       cold_start, llm_sigma, human_noise, use_embedding)
         
-        for key, data in zip(['train', 'validation', 'test', 'active_pool', 'original_train', 'original_validation', 'original_test', 'original_active_pool'],
-                             [initial_train_data, validation_data, test_data, active_pool_data, initial_train_data, validation_data, test_data, active_pool_data]):
+        print('Saving Data')
+        for key, data in tqdm(zip(['train', 'validation', 'test', 'active_pool', 'original_train', 'original_validation', 'original_test', 'original_active_pool'],
+                             [initial_train_data, validation_data, test_data, active_pool_data, initial_train_data, validation_data, test_data, active_pool_data])):
             with open(self.paths[key], "w") as f:
+                print(self.paths[key])
                 json.dump(data, f)
+
+        print('ALL DATA CREATED!')
         
         return True
     
     def _prepare_entries_with_noise(self, texts, data_list, split_type, llm_data, human_data, question_list, 
                               question_indices, known_human_questions_val, dataset, cold_start, 
-                              llm_sigma, human_noise):
+                              llm_sigma, human_noise, use_embedding):
         """Prepare entries with original + noisy copies."""
         
+        if use_embedding:
+            with open(os.path.join(self.base_path, "text_embeddings.json"), "r") as file:
+                text_embeddings = json.load(file)
+            with open(os.path.join(self.base_path, "propmt_embeddings.json"), "r") as file:
+               question_embeddings = json.load(file)
+        
         if dataset == "hanna":
-            for text_id in texts:
+            for text_id in tqdm(texts):
                 if text_id not in llm_data:
                     continue
                 
@@ -134,7 +162,7 @@ class NoisyDataManager(DataManager):
                     "questions": [],
                     "orig_split": split_type,
                     "observation_history": [],
-                    "is_noisy": []  # Track which positions are noisy
+                    "is_noisy": []
                 }
                 
                 annotators = list(human_data[text_id].keys())
@@ -220,10 +248,40 @@ class NoisyDataManager(DataManager):
                             self._add_human_annotation(entry, noisy_prob, split_type, known_human_questions_val,
                                                     q_idx, judge_id, question_indices[question], True)
                 
+                if use_embedding:
+                    entry["text_embedding"] = [[] for _ in range(len(entry["input"]))]
+                    embedding_idx = 0
+                    for q_idx, question in enumerate(question_list):
+                        text_embedding = text_embeddings[int(text_id)]
+                        question_embedding = question_embeddings[question]
+                        final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
+                        
+                        # Original LLM
+                        entry["text_embedding"][embedding_idx] = final_embedding
+                        embedding_idx += 1
+                        # Noisy LLM
+                        entry["text_embedding"][embedding_idx] = final_embedding
+                        embedding_idx += 1
+                    
+                    # Human annotations (original + noisy if human_noise > 0)
+                    for judge_id in annotators:
+                        for q_idx, question in enumerate(question_list):
+                            text_embedding = text_embeddings[int(text_id)]
+                            question_embedding = question_embeddings[question]
+                            final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
+                            
+                            # Original human
+                            entry["text_embedding"][embedding_idx] = final_embedding
+                            embedding_idx += 1
+                            
+                            # Noisy human (if applicable)
+                            if human_noise > 0:
+                                entry["text_embedding"][embedding_idx] = final_embedding
+                                embedding_idx += 1
+                
                 data_list.append(entry)
 
         elif dataset == "llm_rubric":
-            # Similar implementation for llm_rubric with 4 classes instead of 5
             for text_id in texts:
                 annotators = list(human_data[text_id].keys())
                 for annotator in annotators:
@@ -419,6 +477,8 @@ def run_experiment_with_noise(
     run_until_exhausted=False,
     gradient_top_only=False,
     cold_start=False,
+    human_cost=1.0,
+    llm_cost=1.0,
 ):
     """Enhanced experiment runner that tracks noisy vs original selections."""
     
@@ -436,7 +496,6 @@ def run_experiment_with_noise(
         'benefit_cost_ratios': [],
         'observation_costs': [],
         'remaining_pool_size': [],
-        # New noise-specific metrics
         'original_selections_per_cycle': [],
         'noisy_selections_per_cycle': [],
         'selection_ratios_per_cycle': [],
@@ -451,7 +510,6 @@ def run_experiment_with_noise(
     total_original_selections = 0
     total_noisy_selections = 0
     
-    # Initial evaluation
     arena.set_dataset(dataset_val)
     val_metrics = arena.evaluate(list(range(len(dataset_val))))
     metrics['val_metrics'].append(val_metrics)
@@ -492,7 +550,6 @@ def run_experiment_with_noise(
                 strategy="add_selected", update_percentage=20
             ) 
         
-        # Select examples (same as original)
         if example_strategy == "random":
             selected_examples = random.sample(active_pool, min(examples_per_cycle, len(active_pool)))
         elif example_strategy in ["gradient", "entropy", "badge"]:
@@ -543,7 +600,6 @@ def run_experiment_with_noise(
         cycle_original_selections = 0
         cycle_noisy_selections = 0
         
-        # Annotate selected examples with noise tracking
         for example_idx in selected_examples:
             arena.register_example(example_idx, add_all_positions=False)
             
@@ -553,7 +609,13 @@ def run_experiment_with_noise(
                 
             if observe_all_features:
                 positions_to_annotate = masked_positions
-                position_benefit_costs = [(pos, 1.0, 1.0, 1.0) for pos in positions_to_annotate]
+                position_benefit_costs = []
+                for pos in positions_to_annotate:
+                    # Determine cost based on annotator type
+                    entry = dataset_train.get_data_entry(example_idx)
+                    is_llm = entry['annotators'][pos] == -1
+                    cost = llm_cost if is_llm else human_cost
+                    position_benefit_costs.append((pos, 1.0, cost, 1.0/cost))
             else:
                 if features_per_example is None:
                     features_per_example = 5
@@ -565,15 +627,26 @@ def run_experiment_with_noise(
                     for pos in masked_positions
                 ]
                 
+                # Create costs dictionary for this example
+                example_costs = {}
+                entry = dataset_train.get_data_entry(example_idx)
+                for pos in masked_positions:
+                    is_llm = entry['annotators'][pos] == -1
+                    example_costs[pos] = llm_cost if is_llm else human_cost
+                
                 if feature_strategy == "random":
                     selected_variables = random.sample(candidate_variables, features_to_annotate)
                     position_benefit_costs = []
                     for var in selected_variables:
                         _, pos = arena._parse_variable_id(var)
-                        position_benefit_costs.append((pos, 1.0, 1.0, 1.0))
+                        cost = example_costs[pos]
+                        position_benefit_costs.append((pos, 1.0, cost, 1.0/cost))
                 elif feature_strategy == "sequential":
                     positions_to_annotate = masked_positions[:features_to_annotate]
-                    position_benefit_costs = [(pos, 1.0, 1.0, 1.0) for pos in positions_to_annotate]
+                    position_benefit_costs = []
+                    for pos in positions_to_annotate:
+                        cost = example_costs[pos]
+                        position_benefit_costs.append((pos, 1.0, cost, 1.0/cost))
                 elif feature_strategy in ["voi", "fast_voi", "entropy", "voi_argmax"]:
                     feature_suggestions = arena.suggest(
                         candidate_variables=candidate_variables,
@@ -583,9 +656,11 @@ def run_experiment_with_noise(
                         continue
                     
                     position_benefit_costs = []
-                    for var, benefit, cost, ratio, *extra in feature_suggestions[:features_to_annotate]:
+                    for var, benefit, orig_cost, orig_ratio, *extra in feature_suggestions[:features_to_annotate]:
                         _, pos = arena._parse_variable_id(var)
-                        position_benefit_costs.append((pos, benefit, cost, ratio))
+                        actual_cost = example_costs[pos]
+                        actual_ratio = benefit / actual_cost
+                        position_benefit_costs.append((pos, benefit, actual_cost, actual_ratio))
                 else:
                     raise ValueError(f"Unknown feature strategy: {feature_strategy}")
             
@@ -593,11 +668,9 @@ def run_experiment_with_noise(
             if test_example_idx not in test_overlap_annotations:
                 test_overlap_annotations[test_example_idx] = []
             
-            # Track noisy vs original selections
             for pos_data in position_benefit_costs:
                 position = pos_data[0]
                 
-                # Check if this position is noisy
                 is_noisy = dataset_train.is_position_noisy(example_idx, position)
                 if is_noisy:
                     cycle_noisy_selections += 1
@@ -624,7 +697,6 @@ def run_experiment_with_noise(
                 variable_id = f"example_{example_idx}_position_{position}"
                 arena.predict(variable_id, train=True)
         
-        # Update noise tracking metrics
         total_original_selections += cycle_original_selections
         total_noisy_selections += cycle_noisy_selections
         
@@ -643,7 +715,6 @@ def run_experiment_with_noise(
         print(f"Cycle {cycle_count+1}: Original={cycle_original_selections}, Noisy={cycle_noisy_selections}, Ratio={selection_ratio:.3f}")
         print(f"Total features annotated: {total_features_annotated}")
         
-        # Training and evaluation (same as original)
         if total_features_annotated > 0:
             training_metrics = arena.train(
                 epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, 
@@ -713,6 +784,9 @@ def main():
     parser.add_argument("--cold_start", type=bool, default=False, help="Start with no annotation")
     parser.add_argument("--llm_sigma", type=float, default=0.5, help="Gaussian noise sigma for LLM annotations")
     parser.add_argument("--human_noise", type=float, default=0.3, help="Uniform noise level for human annotations")
+    parser.add_argument("--use_embedding", type=bool, default=False, help="Use embeddings for texts")
+    parser.add_argument("--human_cost", type=float, default=1.0, help="Cost of human annotations")
+    parser.add_argument("--llm_cost", type=float, default=1.0, help="Cost of LLM annotations")
     args = parser.parse_args()
     
     if args.runner == 'prabhav':
@@ -728,16 +802,21 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
     print(f"LLM noise sigma: {args.llm_sigma}, Human noise level: {args.human_noise}")
+    print(f"Human cost: {args.human_cost}, LLM cost: {args.llm_cost}")
+
+    if args.use_embedding:
+        ModelClass = ImputerEmbedding
+    else:
+        ModelClass = Imputer
     
-    # Initialize model with doubled input dimensions
     if dataset == "hanna":
-        model = Imputer(
+        model = ModelClass(
             question_num=7, max_choices=5, encoder_layers_num=6,
             attention_heads=4, hidden_dim=64, num_annotator=18, 
             annotator_embedding_dim=19, dropout=0.1
         ).to(device)
     elif dataset == "llm_rubric":
-        model = Imputer(
+        model = ModelClass(
             question_num=9, max_choices=4, encoder_layers_num=6,
             attention_heads=4, hidden_dim=64, num_annotator=24, 
             annotator_embedding_dim=24, dropout=0.1
@@ -747,9 +826,7 @@ def main():
     
     experiments_to_run = []
     if args.experiment == "all":
-        # experiments_to_run = ["gradient_voi", "gradient_random", "random_random", "entropy_7"]
-        experiments_to_run = ["gradient_voi", "random_random"]
-        
+        experiments_to_run = ["random_random", "gradient_voi"]
     else:
         experiments_to_run = [args.experiment]
     
@@ -763,10 +840,12 @@ def main():
 
         if dataset == "hanna":
             data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset, 
-                                    cold_start=args.cold_start, llm_sigma=args.llm_sigma, human_noise=args.human_noise)
+                                    cold_start=args.cold_start, llm_sigma=args.llm_sigma, 
+                                    human_noise=args.human_noise, use_embedding=args.use_embedding)
         elif dataset == "llm_rubric":
             data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset, 
-                                    cold_start=args.cold_start, llm_sigma=args.llm_sigma, human_noise=args.human_noise)
+                                    cold_start=args.cold_start, llm_sigma=args.llm_sigma, 
+                                    human_noise=args.human_noise, use_embedding=args.use_embedding)
         
         model_copy = copy.deepcopy(model)
 
@@ -786,7 +865,8 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted
+                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
+                human_cost=args.human_cost, llm_cost=args.llm_cost
             )
 
         elif experiment == "gradient_random":
@@ -797,7 +877,8 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted,
+                human_cost=args.human_cost, llm_cost=args.llm_cost
             )
         
         elif experiment == "random_random":
@@ -808,7 +889,8 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted,
+                human_cost=args.human_cost, llm_cost=args.llm_cost
             )
 
         elif experiment == "entropy_7":
@@ -819,7 +901,8 @@ def main():
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted
+                run_until_exhausted=args.run_until_exhausted,
+                human_cost=args.human_cost, llm_cost=args.llm_cost
             )
 
         else:
@@ -829,10 +912,14 @@ def main():
         experiment_results[experiment] = results
         
         torch.save(model_copy.state_dict(), os.path.join(models_path, f"noisy_{experiment}.pth"))
-        with open(os.path.join(results_path, f"noisy_{experiment}.json"), "w") as f:
+        
+        file_name = f"noisy_{experiment}"
+        if args.use_embedding:
+            file_name += "_with_embedding"
+        
+        with open(os.path.join(results_path, f"{file_name}.json"), "w") as f:
             json.dump(results, f, indent=4)
         
-        # Print noise selection summary
         print(f"\n=== Noise Selection Summary for {experiment} ===")
         total_orig = sum(results['original_selections_per_cycle'])
         total_noisy = sum(results['noisy_selections_per_cycle'])
@@ -842,7 +929,11 @@ def main():
             print(f"Final Noise Selection Ratio: {final_ratio:.3f}")
     
     if experiment_results:
-        with open(os.path.join(results_path, "combined_noisy_results.json"), "w") as f:
+        combined_file_name = "combined_noisy_results"
+        if args.use_embedding:
+            combined_file_name += "_with_embedding"
+        
+        with open(os.path.join(results_path, f"{combined_file_name}.json"), "w") as f:
             json.dump(experiment_results, f, indent=4)
             
         print(f"Noisy experiment results saved to {results_path}")
