@@ -820,8 +820,8 @@ def main():
     
     experiments_to_run = []
     if args.experiment == "all":
-        # experiments_to_run = ["random_random", "gradient_voi"]
         experiments_to_run = ["random_random", "gradient_voi"]
+        # experiments_to_run = ["random_random"]
     else:
         experiments_to_run = [args.experiment]
     
