@@ -42,16 +42,11 @@ class NoisyDataManager(DataManager):
         
     def add_noise_to_llm(self, prob_dist, alpha_multiplier=1.0):
         """Add noise to LLM probability distributions using Dirichlet sampling."""
-
         prob_dist = np.array(prob_dist)
         alpha_params = prob_dist * alpha_multiplier
-
         alpha_params = np.maximum(alpha_params, 0.01)
-        
-        # Sample from Dirichlet distribution
         noisy_probs = np.random.dirichlet(alpha_params)
         noisy_probs = noisy_probs / np.sum(noisy_probs)
-        
         return noisy_probs.tolist()
 
     def add_noise_to_human(self, one_hot, flip_prob=0.3):
@@ -60,15 +55,11 @@ class NoisyDataManager(DataManager):
         original_category = np.argmax(one_hot)
         
         if np.random.random() < flip_prob:
-
             num_categories = len(one_hot)
             other_categories = [i for i in range(num_categories) if i != original_category]
-            
             new_category = np.random.choice(other_categories)
-            
             noisy_one_hot = np.zeros_like(one_hot)
             noisy_one_hot[new_category] = 1.0
-            
             return noisy_one_hot.tolist()
         else:
             return one_hot.tolist()
@@ -147,7 +138,6 @@ class NoisyDataManager(DataManager):
                 json.dump(data, f)
 
         print('ALL DATA CREATED!')
-        
         return True
     
     def _prepare_entries_with_noise(self, texts, data_list, split_type, llm_data, human_data, question_list, 
@@ -170,6 +160,7 @@ class NoisyDataManager(DataManager):
                     "known_questions": [], 
                     "input": [], 
                     "answers": [], 
+                    "true_answers": [],
                     "annotators": [],
                     "questions": [],
                     "orig_split": split_type,
@@ -179,7 +170,6 @@ class NoisyDataManager(DataManager):
                 
                 annotators = list(human_data[text_id].keys())
                 
-                # Process original LLM questions
                 for q_idx, question in enumerate(question_list):
                     true_prob = llm_data[text_id][question]
                     
@@ -194,11 +184,11 @@ class NoisyDataManager(DataManager):
                     
                     entry["input"].append(combined_input)
                     entry["answers"].append(true_prob)
+                    entry["true_answers"].append(true_prob)
                     entry["annotators"].append(-1)
                     entry["questions"].append(question_indices[question])
                     entry["is_noisy"].append(False)
                 
-                # Process noisy LLM questions
                 for q_idx, question in enumerate(question_list):
                     true_prob = llm_data[text_id][question]
                     noisy_prob = self.add_noise_to_llm(true_prob, llm_alpha_multiplier)
@@ -214,11 +204,11 @@ class NoisyDataManager(DataManager):
                     
                     entry["input"].append(combined_input)
                     entry["answers"].append(noisy_prob)
+                    entry["true_answers"].append(true_prob)
                     entry["annotators"].append(-1)
                     entry["questions"].append(question_indices[question])
                     entry["is_noisy"].append(True)
 
-                # Process original human questions
                 for judge_id in annotators:
                     for q_idx, question in enumerate(question_list):
                         true_score = human_data[text_id][judge_id][question]
@@ -236,9 +226,8 @@ class NoisyDataManager(DataManager):
                                 true_prob[index] = 1.0
                         
                         self._add_human_annotation(entry, true_prob, split_type, known_human_questions_val, 
-                                                q_idx, judge_id, question_indices[question], False)
+                                                q_idx, judge_id, question_indices[question], False, true_prob)
                 
-                # Process noisy human questions ONLY if human_flip_prob > 0
                 if human_flip_prob > 0:
                     for judge_id in annotators:
                         for q_idx, question in enumerate(question_list):
@@ -258,7 +247,7 @@ class NoisyDataManager(DataManager):
                             
                             noisy_prob = self.add_noise_to_human(true_prob, human_flip_prob)
                             self._add_human_annotation(entry, noisy_prob, split_type, known_human_questions_val,
-                                                    q_idx, judge_id, question_indices[question], True)
+                                                    q_idx, judge_id, question_indices[question], True, true_prob)
                 
                 if use_embedding:
                     entry["text_embedding"] = [[] for _ in range(len(entry["input"]))]
@@ -268,25 +257,20 @@ class NoisyDataManager(DataManager):
                         question_embedding = question_embeddings[question]
                         final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
                         
-                        # Original LLM
                         entry["text_embedding"][embedding_idx] = final_embedding
                         embedding_idx += 1
-                        # Noisy LLM
                         entry["text_embedding"][embedding_idx] = final_embedding
                         embedding_idx += 1
                     
-                    # Human annotations (original + noisy if human_flip_prob > 0)
                     for judge_id in annotators:
                         for q_idx, question in enumerate(question_list):
                             text_embedding = text_embeddings[int(text_id)]
                             question_embedding = question_embeddings[question]
                             final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
                             
-                            # Original human
                             entry["text_embedding"][embedding_idx] = final_embedding
                             embedding_idx += 1
                             
-                            # Noisy human (if applicable)
                             if human_flip_prob > 0:
                                 entry["text_embedding"][embedding_idx] = final_embedding
                                 embedding_idx += 1
@@ -301,6 +285,7 @@ class NoisyDataManager(DataManager):
                         "known_questions": [], 
                         "input": [], 
                         "answers": [], 
+                        "true_answers": [],
                         "annotators": [],
                         "questions": [],
                         "orig_split": split_type,
@@ -308,11 +293,9 @@ class NoisyDataManager(DataManager):
                         "is_noisy": []
                     }
                     
-                    # Original + Noisy LLM questions (4 classes)
                     for q_idx, question in enumerate(question_list):
                         true_prob = llm_data[text_id][question]
                         
-                        # Original
                         if cold_start and split_type in ['active_pool', 'validation']:
                             mask_bit = 1
                             combined_input = [mask_bit] + [0.0] * 4
@@ -324,11 +307,11 @@ class NoisyDataManager(DataManager):
                         
                         entry["input"].append(combined_input)
                         entry["answers"].append(true_prob)
+                        entry["true_answers"].append(true_prob)
                         entry["annotators"].append(-1)
                         entry["questions"].append(question_indices[question])
                         entry["is_noisy"].append(False)
                         
-                        # Noisy
                         noisy_prob = self.add_noise_to_llm(true_prob, llm_alpha_multiplier)
                         if cold_start and split_type in ['active_pool', 'validation']:
                             mask_bit = 1
@@ -341,11 +324,11 @@ class NoisyDataManager(DataManager):
                         
                         entry["input"].append(combined_input)
                         entry["answers"].append(noisy_prob)
+                        entry["true_answers"].append(true_prob)
                         entry["annotators"].append(-1)
                         entry["questions"].append(question_indices[question])
                         entry["is_noisy"].append(True)
 
-                    # Original Human questions (4 classes)
                     for q_idx, question in enumerate(question_list):
                         true_score = human_data[text_id][annotator][question]
                         true_prob = [0.0] * 4
@@ -361,11 +344,9 @@ class NoisyDataManager(DataManager):
                                 index = true_score - 1
                                 true_prob[index] = 1.0
                         
-                        # Original
                         self._add_human_annotation_4class(entry, true_prob, split_type, known_human_questions_val,
-                                                        q_idx, annotator, question_indices[question], False)
+                                                        q_idx, annotator, question_indices[question], False, true_prob)
                     
-                    # Noisy Human questions ONLY if human_flip_prob > 0
                     if human_flip_prob > 0:
                         for q_idx, question in enumerate(question_list):
                             true_score = human_data[text_id][annotator][question]
@@ -382,14 +363,13 @@ class NoisyDataManager(DataManager):
                                     index = true_score - 1
                                     true_prob[index] = 1.0
                             
-                            # Noisy
                             noisy_prob = self.add_noise_to_human(true_prob, human_flip_prob)
                             self._add_human_annotation_4class(entry, noisy_prob, split_type, known_human_questions_val,
-                                                            q_idx, annotator, question_indices[question], True)
+                                                            q_idx, annotator, question_indices[question], True, true_prob)
                     
                     data_list.append(entry)
     
-    def _add_human_annotation(self, entry, prob, split_type, known_human_questions_val, q_idx, judge_id, question_idx, is_noisy):
+    def _add_human_annotation(self, entry, prob, split_type, known_human_questions_val, q_idx, judge_id, question_idx, is_noisy, original_prob):
         """Helper for adding human annotations (5 classes)."""
         if split_type == 'active_pool':
             mask_bit = 1
@@ -419,12 +399,13 @@ class NoisyDataManager(DataManager):
                 entry["known_questions"].append(1)
         
         entry["input"].append(combined_input)
-        entry["answers"].append(prob)   
+        entry["answers"].append(prob)
+        entry["true_answers"].append(original_prob)   
         entry["annotators"].append(int(judge_id))
         entry["questions"].append(question_idx)
         entry["is_noisy"].append(is_noisy)
     
-    def _add_human_annotation_4class(self, entry, prob, split_type, known_human_questions_val, q_idx, annotator, question_idx, is_noisy):
+    def _add_human_annotation_4class(self, entry, prob, split_type, known_human_questions_val, q_idx, annotator, question_idx, is_noisy, original_prob):
         """Helper for adding human annotations (4 classes)."""
         if split_type == 'active_pool':
             mask_bit = 1
@@ -454,7 +435,8 @@ class NoisyDataManager(DataManager):
                 entry["known_questions"].append(1)
         
         entry["input"].append(combined_input)
-        entry["answers"].append(prob)   
+        entry["answers"].append(prob)
+        entry["true_answers"].append(original_prob)   
         entry["annotators"].append(int(annotator))
         entry["questions"].append(question_idx)
         entry["is_noisy"].append(is_noisy)

@@ -471,6 +471,66 @@ class AnnotationArena:
             
         return success
     
+    # def evaluate(self, target_examples, target_questions=None, metrics=None):
+    #     """
+    #     Evaluate predictions on target examples and questions.
+        
+    #     Args:
+    #         target_examples: List of example indices to evaluate
+    #         target_questions: List of question indices to evaluate
+    #         metrics: List of metrics to compute
+            
+    #     Returns:
+    #         dict: Evaluation metrics
+    #     """
+    #     if metrics is None:
+    #         metrics = ["rmse", "pearson", "spearman", "kendall"]
+            
+    #     if target_questions is None:
+    #         target_questions = [0]  # Default to Q0
+            
+    #     all_preds = []
+    #     all_true = []
+    #     all_losses = []
+        
+    #     for example_idx in target_examples:
+    #         for q_idx in target_questions:
+    #             # Find position with this question
+    #             positions = []
+    #             entry = self.dataset.get_data_entry(example_idx)
+    #             for i, question in enumerate(entry['questions']):
+    #                 if question == q_idx and entry['annotators'][i] >= 0:  # Human annotation
+    #                     positions.append(i)
+                        
+    #             for position in positions:
+    #                 # Get variable ID
+    #                 variable_id = f"example_{example_idx}_position_{position}"
+                    
+    #                 # Predict value and get expected loss
+    #                 if variable_id in self.variables:
+    #                     pred, expected_loss = self.decode(variable_id)
+    #                 else:
+    #                     # If not registered, register and predict
+    #                     self.add(variable_id)
+    #                     pred, expected_loss = self.decode(variable_id)
+                    
+    #                 # Get true value
+    #                 true_label = torch.argmax(torch.tensor(entry['answers'][position])).item()
+                    
+    #                 # Convert to scores (1-5)
+    #                 pred_score = pred + 1
+    #                 true_score = true_label + 1
+                    
+    #                 all_preds.append(pred_score)
+    #                 all_true.append(true_score)
+    #                 all_losses.append(expected_loss)
+        
+    #     # Compute metrics
+    #     results = compute_metrics(np.array(all_preds), np.array(all_true))
+    #     results["avg_expected_loss"] = np.mean(all_losses) if all_losses else 0.0
+        
+    #     return results
+
     def evaluate(self, target_examples, target_questions=None, metrics=None):
         """
         Evaluate predictions on target examples and questions.
@@ -514,10 +574,14 @@ class AnnotationArena:
                         self.add(variable_id)
                         pred, expected_loss = self.decode(variable_id)
                     
-                    # Get true value
-                    true_label = torch.argmax(torch.tensor(entry['answers'][position])).item()
+                    # Get true value - USE TRUE_ANSWERS for evaluation if available
+                    if 'true_answers' in entry:
+                        true_label = torch.argmax(torch.tensor(entry['true_answers'][position])).item()
+                    else:
+                        # Fallback to answers if true_answers not available (backward compatibility)
+                        true_label = torch.argmax(torch.tensor(entry['answers'][position])).item()
                     
-                    # Convert to scores (1-5)
+                    # Convert to scores (1-5 for HANNA, 1-4 for LLM_RUBRIC)
                     pred_score = pred + 1
                     true_score = true_label + 1
                     
@@ -530,70 +594,6 @@ class AnnotationArena:
         results["avg_expected_loss"] = np.mean(all_losses) if all_losses else 0.0
         
         return results
-
-    # def evaluate(self, target_examples, target_questions=None, metrics=None):
-        # """
-        # Evaluate predictions on target examples and questions.
-        
-        # Args:
-        #     target_examples: List of example indices to evaluate
-        #     target_questions: List of question indices to evaluate
-        #     metrics: List of metrics to compute
-            
-        # Returns:
-        #     dict: Evaluation metrics
-        # """
-        # if metrics is None:
-        #     metrics = ["rmse", "pearson", "spearman", "kendall"]
-            
-        # if target_questions is None:
-        #     target_questions = [0]  # Default to Q0
-            
-        # all_preds = []
-        # all_true = []
-        # all_losses = []
-        
-        # for example_idx in target_examples:
-        #     for q_idx in target_questions:
-        #         # Find position with this question
-        #         positions = []
-        #         entry = self.dataset.get_data_entry(example_idx)
-        #         for i, question in enumerate(entry['questions']):
-        #             if question == q_idx and entry['annotators'][i] >= 0:  # Human annotation
-        #                 positions.append(i)
-                        
-        #         for position in positions:
-        #             # Get variable ID
-        #             variable_id = f"example_{example_idx}_position_{position}"
-                    
-        #             # Predict value and get expected loss
-        #             if variable_id in self.variables:
-        #                 pred, expected_loss = self.decode(variable_id)
-        #             else:
-        #                 # If not registered, register and predict
-        #                 self.add(variable_id)
-        #                 pred, expected_loss = self.decode(variable_id)
-                    
-        #             # Get true value - USE TRUE_ANSWERS for evaluation if available
-        #             if 'true_answers' in entry:
-        #                 true_label = torch.argmax(torch.tensor(entry['true_answers'][position])).item()
-        #             else:
-        #                 # Fallback to answers if true_answers not available (backward compatibility)
-        #                 true_label = torch.argmax(torch.tensor(entry['answers'][position])).item()
-                    
-        #             # Convert to scores (1-5 for HANNA, 1-4 for LLM_RUBRIC)
-        #             pred_score = pred + 1
-        #             true_score = true_label + 1
-                    
-        #             all_preds.append(pred_score)
-        #             all_true.append(true_score)
-        #             all_losses.append(expected_loss)
-        
-        # # Compute metrics
-        # results = compute_metrics(np.array(all_preds), np.array(all_true))
-        # results["avg_expected_loss"] = np.mean(all_losses) if all_losses else 0.0
-        
-        # return results
 
     def get_metrics_history(self):
         """Get the history of training metrics for plotting."""
