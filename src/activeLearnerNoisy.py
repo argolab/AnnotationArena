@@ -65,7 +65,7 @@ class NoisyDataManager(DataManager):
             return one_hot.tolist()
     
     def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, 
-                dataset="hanna", cold_start=False, llm_alpha_multiplier=1.0, human_flip_prob=0.3, use_embedding=False):
+            dataset="hanna", cold_start=False, llm_alpha_multiplier=1.0, human_flip_prob=0.3, use_embedding=False, validation_set_size=50):
         """Prepare data with noisy copies of all annotations."""
         
         print(f"Use embedding: {use_embedding}")
@@ -98,15 +98,14 @@ class NoisyDataManager(DataManager):
         random.shuffle(text_ids)
         
         initial_train_size = int(num_partition * initial_train_ratio)
-        validation_size = int(num_partition * 0.3)
         test_size = int(num_partition * 0.2)
-        active_pool_size = num_partition - initial_train_size - validation_size - test_size
-
+        
         initial_train_texts = text_ids[:initial_train_size]
-        validation_texts = text_ids[initial_train_size:initial_train_size + validation_size]
-        test_texts = text_ids[initial_train_size + validation_size:initial_train_size + validation_size + test_size]
-        active_pool_texts = text_ids[initial_train_size + validation_size + test_size:
-                                initial_train_size + validation_size + test_size + active_pool_size]
+        test_texts = text_ids[initial_train_size:initial_train_size + test_size]
+        
+        big_pool_texts = text_ids[initial_train_size + test_size:initial_train_size + test_size + (num_partition - initial_train_size - test_size)]
+        validation_texts = random.sample(big_pool_texts, min(validation_set_size, len(big_pool_texts)))
+        active_pool_texts = [text_id for text_id in big_pool_texts if text_id not in validation_texts]
         
         initial_train_data = []
         validation_data = []
@@ -115,29 +114,30 @@ class NoisyDataManager(DataManager):
         
         print('-- Creating Annotation for Train --')
         self._prepare_entries_with_noise(initial_train_texts, initial_train_data, 'train', llm_data, human_data, 
-                                       question_list, question_indices, known_human_questions_val, dataset, 
-                                       cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
+                                    question_list, question_indices, known_human_questions_val, dataset, 
+                                    cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
         print('-- Creating Annotation for Validation --')
         self._prepare_entries_with_noise(validation_texts, validation_data, 'validation', llm_data, human_data, 
-                                       question_list, question_indices, known_human_questions_val, dataset, 
-                                       cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
+                                    question_list, question_indices, known_human_questions_val, dataset, 
+                                    cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
         print('-- Creating Annotation for Test --')
         self._prepare_entries_with_noise(test_texts, test_data, 'test', llm_data, human_data, 
-                                       question_list, question_indices, known_human_questions_val, dataset, 
-                                       cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
+                                    question_list, question_indices, known_human_questions_val, dataset, 
+                                    cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
         print('-- Creating Annotation for Active Pool --')
         self._prepare_entries_with_noise(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, 
-                                       question_list, question_indices, known_human_questions_val, dataset, 
-                                       cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
+                                    question_list, question_indices, known_human_questions_val, dataset, 
+                                    cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
         
         print('Saving Data')
         for key, data in tqdm(zip(['train', 'validation', 'test', 'active_pool', 'original_train', 'original_validation', 'original_test', 'original_active_pool'],
-                             [initial_train_data, validation_data, test_data, active_pool_data, initial_train_data, validation_data, test_data, active_pool_data])):
+                            [initial_train_data, validation_data, test_data, active_pool_data, initial_train_data, validation_data, test_data, active_pool_data])):
             with open(self.paths[key], "w") as f:
                 print(self.paths[key])
                 json.dump(data, f)
 
         print('ALL DATA CREATED!')
+        print(f'Dataset sizes: Train={len(initial_train_data)}, Validation={len(validation_data)}, Test={len(test_data)}, Active Pool={len(active_pool_data)}')
         return True
     
     def _prepare_entries_with_noise(self, texts, data_list, split_type, llm_data, human_data, question_list, 
@@ -473,6 +473,7 @@ def run_experiment_with_noise(
     cold_start=False,
     human_cost=1.0,
     llm_cost=1.0,
+    validation_set_size=50,
 ):
     """Enhanced experiment runner that tracks noisy vs original selections."""
     
@@ -503,6 +504,9 @@ def run_experiment_with_noise(
     cycle_count = 0
     total_original_selections = 0
     total_noisy_selections = 0
+    
+    # Track validation example indices
+    validation_example_indices = list(range(len(dataset_val)))
     
     arena.set_dataset(dataset_val)
     val_metrics = arena.evaluate(list(range(len(dataset_val))))
@@ -538,11 +542,13 @@ def run_experiment_with_noise(
             print("No examples with masked positions left in active pool")
             break
         
+        # Resample validation set each cycle
         if resample_validation and cycle_count > 0:
-            dataset_val, active_pool, val_indices = resample_validation_dataset(
-                dataset_train, dataset_val, active_pool, list(set(annotated_examples)), 
-                strategy="add_selected", update_percentage=20
-            ) 
+            dataset_val, active_pool, validation_example_indices = resample_validation_dataset(
+                dataset_train, dataset_val, active_pool, annotated_examples, 
+                strategy="fixed_size_resample", validation_set_size=validation_set_size,
+                current_val_indices=validation_example_indices
+            )
         
         if example_strategy == "random":
             selected_examples = random.sample(active_pool, min(examples_per_cycle, len(active_pool)))
@@ -562,29 +568,12 @@ def run_experiment_with_noise(
         
         print(f"Selected {len(selected_examples)} examples")
         
+        # Remove selected examples from active pool (they disappear forever)
         active_pool = [idx for idx in active_pool if idx not in selected_examples]
         
         for example in selected_examples:
             if example not in annotated_examples:
                 annotated_examples.append(example)
-        
-        if resample_validation:
-            if cold_start:
-                dataset_val, active_pool_after_resample, val_examples = resample_validation_dataset(
-                    dataset_train, dataset_val, active_pool, annotated_examples, 
-                    strategy="add_selected_partial", selected_examples=selected_examples
-                )
-            else:
-                dataset_val, active_pool_after_resample, val_examples = resample_validation_dataset(
-                    dataset_train, dataset_val, active_pool, annotated_examples, 
-                    strategy="add_selected", selected_examples=selected_examples
-                )
-            if cold_start:
-                for idx in selected_examples:
-                    if idx not in val_examples:
-                        active_pool.append(idx)
-            else:
-                active_pool = active_pool_after_resample
         
         metrics['remaining_pool_size'].append(len(active_pool))
         
@@ -605,7 +594,6 @@ def run_experiment_with_noise(
                 positions_to_annotate = masked_positions
                 position_benefit_costs = []
                 for pos in positions_to_annotate:
-                    # Determine cost based on annotator type
                     entry = dataset_train.get_data_entry(example_idx)
                     is_llm = entry['annotators'][pos] == -1
                     cost = llm_cost if is_llm else human_cost
@@ -621,7 +609,6 @@ def run_experiment_with_noise(
                     for pos in masked_positions
                 ]
                 
-                # Create costs dictionary for this example
                 example_costs = {}
                 entry = dataset_train.get_data_entry(example_idx)
                 for pos in masked_positions:
@@ -781,6 +768,7 @@ def main():
     parser.add_argument("--use_embedding", type=bool, default=False, help="Use embeddings for texts")
     parser.add_argument("--human_cost", type=float, default=1.0, help="Cost of human annotations")
     parser.add_argument("--llm_cost", type=float, default=1.0, help="Cost of LLM annotations")
+    parser.add_argument("--validation_set_size", type=int, default=50, help="Fixed size for validation set")
     args = parser.parse_args()
     
     if args.runner == 'prabhav':
@@ -821,7 +809,6 @@ def main():
     experiments_to_run = []
     if args.experiment == "all":
         experiments_to_run = ["random_random", "gradient_voi"]
-        # experiments_to_run = ["random_random"]
     else:
         experiments_to_run = [args.experiment]
     
@@ -836,11 +823,13 @@ def main():
         if dataset == "hanna":
             data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset, 
                         cold_start=args.cold_start, llm_alpha_multiplier=args.llm_alpha_multiplier, 
-                        human_flip_prob=args.human_flip_prob, use_embedding=args.use_embedding)
+                        human_flip_prob=args.human_flip_prob, use_embedding=args.use_embedding, 
+                        validation_set_size=args.validation_set_size)
         elif dataset == "llm_rubric":
             data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset, 
-                                    cold_start=args.cold_start, llm_alpha_multiplier=args.llm_alpha_multiplie, 
-                                    human_flip_prob=args.human_flip_prob, use_embedding=args.use_embedding)
+                                    cold_start=args.cold_start, llm_alpha_multiplier=args.llm_alpha_multiplier, 
+                                    human_flip_prob=args.human_flip_prob, use_embedding=args.use_embedding,
+                                    validation_set_size=args.validation_set_size)
         
         model_copy = copy.deepcopy(model)
 
@@ -861,19 +850,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
-                human_cost=args.human_cost, llm_cost=args.llm_cost
-            )
-
-        elif experiment == "gradient_random":
-            results = run_experiment_with_noise(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="gradient", feature_strategy="random", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
-                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-                device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted,
-                human_cost=args.human_cost, llm_cost=args.llm_cost
+                human_cost=args.human_cost, llm_cost=args.llm_cost, validation_set_size=args.validation_set_size
             )
         
         elif experiment == "random_random":
@@ -885,19 +862,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted,
-                human_cost=args.human_cost, llm_cost=args.llm_cost
-            )
-
-        elif experiment == "entropy_7":
-            results = run_experiment_with_noise(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="entropy", feature_strategy="entropy", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
-                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-                device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted,
-                human_cost=args.human_cost, llm_cost=args.llm_cost
+                human_cost=args.human_cost, llm_cost=args.llm_cost, validation_set_size=args.validation_set_size
             )
 
         else:

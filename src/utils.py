@@ -613,7 +613,8 @@ def minimum_bayes_risk_ce(distribution):
 
 
 def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotated_examples, 
-                               strategy="balanced", update_percentage=25, selected_examples=None):
+                               strategy="balanced", update_percentage=25, selected_examples=None, 
+                               validation_set_size=50, current_val_indices=None):
     """
     Resample the validation dataset using annotated examples and active pool.
     
@@ -625,6 +626,8 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
         strategy: Strategy for resampling ("balanced", "add_only", "replace_all", "add_selected")
         update_percentage: Percentage of validation set to update (default: 25%)
         selected_examples: List of specific examples to add to validation set (for "add_selected")
+        validation_set_size: Fixed size for validation set (for fixed_size_resample strategy)
+        current_val_indices: Current validation example indices (for fixed_size_resample strategy)
         
     Returns:
         tuple: (new_validation_dataset, updated_active_pool, validation_example_indices)
@@ -676,59 +679,6 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
             
             print(f"Resampled validation set: {len(new_dataset_val)} examples ({len(new_val_indices)} new)")
             return new_dataset_val, updated_active_pool, validation_example_indices
-    
-    elif strategy == "add_only":
-        max_to_add = max(1, int(current_val_size * update_percentage / 100))
-        num_to_add = min(len(annotated_examples), max_to_add)
-        
-        if num_to_add > 0:
-            # Get examples to add
-            examples_to_add = random.sample(annotated_examples, num_to_add)
-            
-            # Create new validation dataset
-            new_val_data = []
-            
-            # Keep all existing validation examples
-            for i in range(current_val_size):
-                new_val_data.append(dataset_val.get_data_entry(i))
-            
-            # Add new examples
-            for idx in examples_to_add:
-                new_val_data.append(dataset_train.get_data_entry(idx))
-            
-            # Update validation example indices
-            validation_example_indices.extend(examples_to_add)
-            
-            new_dataset_val = AnnotationDataset(new_val_data)
-            
-            print(f"Added {num_to_add} annotated examples to validation set (now {len(new_dataset_val)} examples)")
-            return new_dataset_val, active_pool, validation_example_indices
-    
-    elif strategy == "replace_all":
-        val_size = min(current_val_size, len(active_pool))
-        if val_size > 0:
-            new_val_indices = random.sample(active_pool, val_size)
-            
-            new_val_data = []
-            for idx in new_val_indices:
-                new_val_data.append(dataset_train.get_data_entry(idx))
-            
-            # Update validation example indices
-            validation_example_indices = new_val_indices
-            
-            new_dataset_val = AnnotationDataset(new_val_data)
-            
-            updated_active_pool = [idx for idx in active_pool if idx not in new_val_indices]
-            
-            # Return current validation examples to active pool if they're not already annotated
-            current_val_indices = [i for i in range(len(dataset_val))]
-            for old_val_idx in current_val_indices:
-                if old_val_idx not in annotated_examples and old_val_idx not in updated_active_pool:
-                    updated_active_pool.append(old_val_idx)
-            
-            print(f"Completely replaced validation set with {len(new_dataset_val)} new examples")
-            print(f"Active pool size: {len(updated_active_pool)}")
-            return new_dataset_val, updated_active_pool, validation_example_indices
         
     elif strategy == "add_selected" and selected_examples:
         new_val_data = []
@@ -771,6 +721,36 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
         
         print(f"Added {examples_added} selected examples to validation set (now {len(new_dataset_val)} examples)")
         return new_dataset_val, active_pool, validation_example_indices
+    
+    elif strategy == "fixed_size_resample":
+        if current_val_indices is None:
+            current_val_indices = list(range(len(dataset_val)))
+        
+        # Create combined pool: current validation + remaining active pool
+        combined_pool = current_val_indices + active_pool
+        
+        # Sample exactly validation_set_size examples from combined pool
+        if len(combined_pool) >= validation_set_size:
+            new_val_indices = random.sample(combined_pool, validation_set_size)
+        else:
+            new_val_indices = combined_pool
+        
+        # Create new validation dataset
+        new_val_data = []
+        for idx in new_val_indices:
+            new_val_data.append(dataset_train.get_data_entry(idx))
+        
+        # Update active pool: combined_pool - new_val_indices
+        updated_active_pool = [idx for idx in combined_pool if idx not in new_val_indices]
+        
+        # Create new dataset
+        new_dataset_val = AnnotationDataset(new_val_data)
+        validation_example_indices = new_val_indices
+        
+        print(f"Fixed size resampled validation set: {len(new_dataset_val)} examples")
+        print(f"Updated active pool size: {len(updated_active_pool)}")
+        
+        return new_dataset_val, updated_active_pool, validation_example_indices
     
     # Default return if no changes were made
     return dataset_val, active_pool, validation_example_indices
