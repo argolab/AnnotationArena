@@ -173,7 +173,8 @@ class NoisyDataManager(DataManager):
                 for q_idx, question in enumerate(question_list):
                     true_prob = llm_data[text_id][question]
                     
-                    if cold_start and split_type == 'active_pool':
+                    # if cold_start and split_type == 'active_pool':
+                    if cold_start and split_type in ['active_pool', 'validation']:
                         mask_bit = 1
                         combined_input = [mask_bit] + [0.0] * 5
                         entry["known_questions"].append(0)
@@ -193,7 +194,8 @@ class NoisyDataManager(DataManager):
                     true_prob = llm_data[text_id][question]
                     noisy_prob = self.add_noise_to_llm(true_prob, llm_alpha_multiplier)
                     
-                    if cold_start and split_type == 'active_pool':
+                    # if cold_start and split_type == 'active_pool':
+                    if cold_start and split_type in ['active_pool', 'validation']:
                         mask_bit = 1
                         combined_input = [mask_bit] + [0.0] * 5
                         entry["known_questions"].append(0)
