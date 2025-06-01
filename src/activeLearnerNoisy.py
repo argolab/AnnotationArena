@@ -169,15 +169,18 @@ class NoisyDataManager(DataManager):
                 }
                 
                 annotators = list(human_data[text_id].keys())
-                
+
                 for q_idx, question in enumerate(question_list):
                     true_prob = llm_data[text_id][question]
                     
-                    # if cold_start and split_type == 'active_pool':
                     if cold_start and split_type in ['active_pool', 'validation']:
                         mask_bit = 1
                         combined_input = [mask_bit] + [0.0] * 5
                         entry["known_questions"].append(0)
+                    elif split_type == 'train':
+                        mask_bit = 0  # Observe clean LLM
+                        combined_input = [mask_bit] + true_prob
+                        entry["known_questions"].append(1)
                     else:
                         mask_bit = 0
                         combined_input = [mask_bit] + true_prob
@@ -194,8 +197,11 @@ class NoisyDataManager(DataManager):
                     true_prob = llm_data[text_id][question]
                     noisy_prob = self.add_noise_to_llm(true_prob, llm_alpha_multiplier)
                     
-                    # if cold_start and split_type == 'active_pool':
                     if cold_start and split_type in ['active_pool', 'validation']:
+                        mask_bit = 1
+                        combined_input = [mask_bit] + [0.0] * 5
+                        entry["known_questions"].append(0)
+                    elif split_type == 'train':
                         mask_bit = 1
                         combined_input = [mask_bit] + [0.0] * 5
                         entry["known_questions"].append(0)
@@ -377,10 +383,6 @@ class NoisyDataManager(DataManager):
             mask_bit = 1
             combined_input = [mask_bit] + [0.0] * 5
             entry["known_questions"].append(0)
-        elif split_type == 'train':
-            mask_bit = 0
-            combined_input = [mask_bit] + prob
-            entry["known_questions"].append(1)
         elif split_type == 'validation':
             if q_idx < known_human_questions_val:
                 mask_bit = 0
@@ -390,6 +392,15 @@ class NoisyDataManager(DataManager):
                 mask_bit = 1
                 combined_input = [mask_bit] + [0.0] * 5
                 entry["known_questions"].append(0)
+        elif split_type == 'train':
+            if is_noisy:
+                mask_bit = 1  # MASK noisy human annotations in training
+                combined_input = [mask_bit] + [0.0] * 5
+                entry["known_questions"].append(0)
+            else:
+                mask_bit = 0  # OBSERVE clean human annotations in training
+                combined_input = [mask_bit] + prob
+                entry["known_questions"].append(1)
         elif split_type == 'test':
             if random.random() < 0.5:
                 mask_bit = 1
@@ -476,8 +487,27 @@ def run_experiment_with_noise(
     human_cost=1.0,
     llm_cost=1.0,
     validation_set_size=50,
+    initial_train_dataset=None
 ):
     """Enhanced experiment runner that tracks noisy vs original selections."""
+
+    if initial_train_dataset is not None and len(initial_train_dataset) > 0:
+        arena = AnnotationArena(model, device)
+        print(f"=== Initial Training on {len(initial_train_dataset)} Clean Examples ===")
+        arena.set_dataset(initial_train_dataset)
+        
+        # Register and observe all clean annotations in training set
+        for idx in range(len(initial_train_dataset)):
+            arena.register_example(idx, add_all_positions=False)
+            known_positions = initial_train_dataset.get_known_positions(idx)
+            for pos in known_positions:
+                arena.observe_position(idx, pos)
+                variable_id = f"example_{idx}_position_{pos}"
+                arena.predict(variable_id, train=True)
+        
+        # Train the model on clean data
+        arena.train(epochs=10, batch_size=batch_size, lr=lr)
+        print("Initial training completed!")
     
     arena = AnnotationArena(model, device)
     arena.set_dataset(dataset_train)
@@ -823,12 +853,12 @@ def main():
             data_manager = NoisyDataManager(base_path + f'/data_{dataset}/')
 
         if dataset == "hanna":
-            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset, 
+            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.1, dataset=dataset, 
                         cold_start=args.cold_start, llm_alpha_multiplier=args.llm_alpha_multiplier, 
                         human_flip_prob=args.human_flip_prob, use_embedding=args.use_embedding, 
                         validation_set_size=args.validation_set_size)
         elif dataset == "llm_rubric":
-            data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset, 
+            data_manager.prepare_data(num_partition=225, initial_train_ratio=0.1, dataset=dataset, 
                                     cold_start=args.cold_start, llm_alpha_multiplier=args.llm_alpha_multiplier, 
                                     human_flip_prob=args.human_flip_prob, use_embedding=args.use_embedding,
                                     validation_set_size=args.validation_set_size)
@@ -842,6 +872,10 @@ def main():
         
         print(f"Loaded datasets: Train={len(train_dataset)}, Val={len(val_dataset)}, "
             f"Test={len(test_dataset)}, Active Pool={len(active_pool_dataset)}")
+        
+        if len(train_dataset) > 0:
+            print('Initial Training!')
+            initial_train_dataset=train_dataset
 
         if experiment == "gradient_voi":
             results = run_experiment_with_noise(
@@ -852,7 +886,8 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
-                human_cost=args.human_cost, llm_cost=args.llm_cost, validation_set_size=args.validation_set_size
+                human_cost=args.human_cost, llm_cost=args.llm_cost, validation_set_size=args.validation_set_size,
+                initial_train_dataset=initial_train_dataset
             )
         
         elif experiment == "random_random":
@@ -864,7 +899,8 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted,
-                human_cost=args.human_cost, llm_cost=args.llm_cost, validation_set_size=args.validation_set_size
+                human_cost=args.human_cost, llm_cost=args.llm_cost, validation_set_size=args.validation_set_size,
+                initial_train_dataset=initial_train_dataset
             )
 
         else:
