@@ -1,5 +1,6 @@
 """
-Code to run active learning experiments with noisy variables.
+Code to run active learning experiments with multi-level noisy variables.
+Supports low, medium, and heavy noise levels for both LLM and human annotations.
 """
 
 import os
@@ -35,26 +36,32 @@ from selection import (
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
 class NoisyDataManager(DataManager):
-    """Extended DataManager that creates noisy copies of annotations."""
+    """Extended DataManager that creates multi-level noisy copies of annotations."""
     
     def __init__(self, base_path):
         super().__init__(base_path)
+        self.noise_levels = ['low', 'medium', 'heavy']
+        self.noise_multipliers = {'low': 3, 'medium': 1.0, 'heavy': 0.1}
         
-    def add_noise_to_llm(self, prob_dist, alpha_multiplier=1.0):
+    def add_noise_to_llm(self, prob_dist, alpha_multiplier=1.0, noise_level='medium'):
         """Add noise to LLM probability distributions using Dirichlet sampling."""
         prob_dist = np.array(prob_dist)
-        alpha_params = prob_dist * alpha_multiplier
+        effective_alpha = alpha_multiplier * self.noise_multipliers[noise_level]
+        alpha_params = prob_dist * effective_alpha
         alpha_params = np.maximum(alpha_params, 0.01)
         noisy_probs = np.random.dirichlet(alpha_params)
         noisy_probs = noisy_probs / np.sum(noisy_probs)
         return noisy_probs.tolist()
 
-    def add_noise_to_human(self, one_hot, flip_prob=0.3):
+    def add_noise_to_human(self, one_hot, flip_prob=0.3, noise_level='medium'):
         """Add noise to human one-hot annotations by flipping to different categories."""
         one_hot = np.array(one_hot)
         original_category = np.argmax(one_hot)
         
-        if np.random.random() < flip_prob:
+        effective_flip_prob = flip_prob * self.noise_multipliers[noise_level]
+        effective_flip_prob = min(effective_flip_prob, 0.95)
+        
+        if np.random.random() < effective_flip_prob:
             num_categories = len(one_hot)
             other_categories = [i for i in range(num_categories) if i != original_category]
             new_category = np.random.choice(other_categories)
@@ -65,13 +72,17 @@ class NoisyDataManager(DataManager):
             return one_hot.tolist()
     
     def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, 
-            dataset="hanna", cold_start=False, llm_alpha_multiplier=1.0, human_flip_prob=0.3, use_embedding=False, validation_set_size=50):
-        """Prepare data with noisy copies of all annotations."""
+            dataset="hanna", cold_start=False, llm_alpha_multiplier=1.0, human_flip_prob=0.3, 
+            use_embedding=False, validation_set_size=50):
+        """Prepare data with multi-level noisy copies of all annotations."""
         
-        print(f"Use embedding: {use_embedding}")
+        print(f"Preparing data with multi-level noise:")
+        print(f"   - LLM noise levels: {self.noise_levels} (base α={llm_alpha_multiplier})")
+        print(f"   - Human noise levels: {self.noise_levels} (base flip={human_flip_prob})")
+        print(f"   - Text embeddings: {use_embedding}")
 
         if use_embedding and not dataset == "hanna":
-            raise ValueError("Not yet support other datasets with text embedding")
+            raise ValueError("Text embeddings only supported for HANNA dataset")
         if dataset == "gaussian":
             pass
         try:
@@ -83,9 +94,9 @@ class NoisyDataManager(DataManager):
             return False
 
         if use_embedding and not os.path.exists(os.path.join(self.base_path, "text_embeddings.json")):
-            print("Preparing all text embeddings with sentence bert")
+            print("Preparing text embeddings with SentenceBERT...")
             self.prepare_text_embeddings(num_partition)
-            print("Done\n")
+            print("Text embeddings ready\n")
         
         text_ids = list(human_data.keys())
         if dataset == "hanna":
@@ -112,38 +123,41 @@ class NoisyDataManager(DataManager):
         test_data = []
         active_pool_data = []
         
-        print('-- Creating Annotation for Train --')
-        self._prepare_entries_with_noise(initial_train_texts, initial_train_data, 'train', llm_data, human_data, 
+        print('Creating multi-level noisy annotations...')
+        print('   - Processing Train split...')
+        self._prepare_entries_with_multilevel_noise(initial_train_texts, initial_train_data, 'train', llm_data, human_data, 
                                     question_list, question_indices, known_human_questions_val, dataset, 
                                     cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
-        print('-- Creating Annotation for Validation --')
-        self._prepare_entries_with_noise(validation_texts, validation_data, 'validation', llm_data, human_data, 
+        print('    - Processing Validation split...')
+        self._prepare_entries_with_multilevel_noise(validation_texts, validation_data, 'validation', llm_data, human_data, 
                                     question_list, question_indices, known_human_questions_val, dataset, 
                                     cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
-        print('-- Creating Annotation for Test --')
-        self._prepare_entries_with_noise(test_texts, test_data, 'test', llm_data, human_data, 
+        print('    - Processing Test split...')
+        self._prepare_entries_with_multilevel_noise(test_texts, test_data, 'test', llm_data, human_data, 
                                     question_list, question_indices, known_human_questions_val, dataset, 
                                     cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
-        print('-- Creating Annotation for Active Pool --')
-        self._prepare_entries_with_noise(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, 
+        print('    - Processing Active Pool split...')
+        self._prepare_entries_with_multilevel_noise(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, 
                                     question_list, question_indices, known_human_questions_val, dataset, 
                                     cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
         
-        print('Saving Data')
+        print('Saving datasets...')
         for key, data in tqdm(zip(['train', 'validation', 'test', 'active_pool', 'original_train', 'original_validation', 'original_test', 'original_active_pool'],
                             [initial_train_data, validation_data, test_data, active_pool_data, initial_train_data, validation_data, test_data, active_pool_data])):
             with open(self.paths[key], "w") as f:
-                print(self.paths[key])
                 json.dump(data, f)
 
-        print('ALL DATA CREATED!')
-        print(f'Dataset sizes: Train={len(initial_train_data)}, Validation={len(validation_data)}, Test={len(test_data)}, Active Pool={len(active_pool_data)}')
+        print('Multi-level noisy data creation complete!')
+        print(f'Dataset sizes: Train={len(initial_train_data)}, Val={len(validation_data)}, Test={len(test_data)}, Active={len(active_pool_data)}')
+        
+        total_annotations_per_example = len(question_list) * (1 + len(self.noise_levels)) * 2
+        print(f'Annotations per example: {total_annotations_per_example} ({len(question_list)} base × {1+len(self.noise_levels)} levels × 2 types)')
         return True
     
-    def _prepare_entries_with_noise(self, texts, data_list, split_type, llm_data, human_data, question_list, 
+    def _prepare_entries_with_multilevel_noise(self, texts, data_list, split_type, llm_data, human_data, question_list, 
                           question_indices, known_human_questions_val, dataset, cold_start, 
                           llm_alpha_multiplier, human_flip_prob, use_embedding):
-        """Prepare entries with original + noisy copies."""
+        """Prepare entries with original + 3 noise level copies (low, medium, heavy)."""
         
         if use_embedding:
             with open(os.path.join(self.base_path, "text_embeddings.json"), "r") as file:
@@ -152,7 +166,7 @@ class NoisyDataManager(DataManager):
                question_embeddings = json.load(file)
         
         if dataset == "hanna":
-            for text_id in tqdm(texts):
+            for text_id in tqdm(texts, desc=f"{split_type.capitalize()} processing"):
                 if text_id not in llm_data:
                     continue
                 
@@ -165,123 +179,21 @@ class NoisyDataManager(DataManager):
                     "questions": [],
                     "orig_split": split_type,
                     "observation_history": [],
-                    "is_noisy": []
+                    "noise_info": []
                 }
                 
                 annotators = list(human_data[text_id].keys())
 
-                for q_idx, question in enumerate(question_list):
-                    true_prob = llm_data[text_id][question]
-                    
-                    if cold_start and split_type in ['active_pool', 'validation']:
-                        mask_bit = 1
-                        combined_input = [mask_bit] + [0.0] * 5
-                        entry["known_questions"].append(0)
-                    elif split_type == 'train':
-                        mask_bit = 0  # Observe clean LLM
-                        combined_input = [mask_bit] + true_prob
-                        entry["known_questions"].append(1)
-                    else:
-                        mask_bit = 0
-                        combined_input = [mask_bit] + true_prob
-                        entry["known_questions"].append(1)
-                    
-                    entry["input"].append(combined_input)
-                    entry["answers"].append(true_prob)
-                    entry["true_answers"].append(true_prob)
-                    entry["annotators"].append(-1)
-                    entry["questions"].append(question_indices[question])
-                    entry["is_noisy"].append(False)
+                self._add_llm_annotations(entry, llm_data[text_id], question_list, question_indices, 
+                                        split_type, cold_start, llm_alpha_multiplier)
                 
-                for q_idx, question in enumerate(question_list):
-                    true_prob = llm_data[text_id][question]
-                    noisy_prob = self.add_noise_to_llm(true_prob, llm_alpha_multiplier)
-                    
-                    if cold_start and split_type in ['active_pool', 'validation']:
-                        mask_bit = 1
-                        combined_input = [mask_bit] + [0.0] * 5
-                        entry["known_questions"].append(0)
-                    elif split_type == 'train':
-                        mask_bit = 1
-                        combined_input = [mask_bit] + [0.0] * 5
-                        entry["known_questions"].append(0)
-                    else:
-                        mask_bit = 0
-                        combined_input = [mask_bit] + noisy_prob
-                        entry["known_questions"].append(1)
-                    
-                    entry["input"].append(combined_input)
-                    entry["answers"].append(noisy_prob)
-                    entry["true_answers"].append(true_prob)
-                    entry["annotators"].append(-1)
-                    entry["questions"].append(question_indices[question])
-                    entry["is_noisy"].append(True)
-
-                for judge_id in annotators:
-                    for q_idx, question in enumerate(question_list):
-                        true_score = human_data[text_id][judge_id][question]
-                        true_prob = [0.0] * 5
-                        
-                        if isinstance(true_score, (int, float)):
-                            if true_score % 1 != 0:  
-                                rounded_score = math.ceil(true_score)
-                                rounded_score = max(min(rounded_score, 5), 1)
-                                index = rounded_score - 1
-                                true_prob[index] = 1.0
-                            else:
-                                true_score = max(min(int(true_score), 5), 1)
-                                index = true_score - 1
-                                true_prob[index] = 1.0
-                        
-                        self._add_human_annotation(entry, true_prob, split_type, known_human_questions_val, 
-                                                q_idx, judge_id, question_indices[question], False, true_prob)
-                
-                if human_flip_prob > 0:
-                    for judge_id in annotators:
-                        for q_idx, question in enumerate(question_list):
-                            true_score = human_data[text_id][judge_id][question]
-                            true_prob = [0.0] * 5
-                            
-                            if isinstance(true_score, (int, float)):
-                                if true_score % 1 != 0:  
-                                    rounded_score = math.ceil(true_score)
-                                    rounded_score = max(min(rounded_score, 5), 1)
-                                    index = rounded_score - 1
-                                    true_prob[index] = 1.0
-                                else:
-                                    true_score = max(min(int(true_score), 5), 1)
-                                    index = true_score - 1
-                                    true_prob[index] = 1.0
-                            
-                            noisy_prob = self.add_noise_to_human(true_prob, human_flip_prob)
-                            self._add_human_annotation(entry, noisy_prob, split_type, known_human_questions_val,
-                                                    q_idx, judge_id, question_indices[question], True, true_prob)
+                self._add_human_annotations(entry, human_data[text_id], annotators, question_list, 
+                                          question_indices, split_type, known_human_questions_val, 
+                                          cold_start, human_flip_prob)
                 
                 if use_embedding:
-                    entry["text_embedding"] = [[] for _ in range(len(entry["input"]))]
-                    embedding_idx = 0
-                    for q_idx, question in enumerate(question_list):
-                        text_embedding = text_embeddings[int(text_id)]
-                        question_embedding = question_embeddings[question]
-                        final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
-                        
-                        entry["text_embedding"][embedding_idx] = final_embedding
-                        embedding_idx += 1
-                        entry["text_embedding"][embedding_idx] = final_embedding
-                        embedding_idx += 1
-                    
-                    for judge_id in annotators:
-                        for q_idx, question in enumerate(question_list):
-                            text_embedding = text_embeddings[int(text_id)]
-                            question_embedding = question_embeddings[question]
-                            final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
-                            
-                            entry["text_embedding"][embedding_idx] = final_embedding
-                            embedding_idx += 1
-                            
-                            if human_flip_prob > 0:
-                                entry["text_embedding"][embedding_idx] = final_embedding
-                                embedding_idx += 1
+                    self._add_text_embeddings(entry, text_id, text_embeddings, question_embeddings, 
+                                            question_list, annotators)
                 
                 data_list.append(entry)
 
@@ -298,87 +210,88 @@ class NoisyDataManager(DataManager):
                         "questions": [],
                         "orig_split": split_type,
                         "observation_history": [],
-                        "is_noisy": []
+                        "noise_info": []
                     }
                     
-                    for q_idx, question in enumerate(question_list):
-                        true_prob = llm_data[text_id][question]
-                        
-                        if cold_start and split_type in ['active_pool', 'validation']:
-                            mask_bit = 1
-                            combined_input = [mask_bit] + [0.0] * 4
-                            entry["known_questions"].append(0)
-                        else:
-                            mask_bit = 0
-                            combined_input = [mask_bit] + true_prob
-                            entry["known_questions"].append(1)
-                        
-                        entry["input"].append(combined_input)
-                        entry["answers"].append(true_prob)
-                        entry["true_answers"].append(true_prob)
-                        entry["annotators"].append(-1)
-                        entry["questions"].append(question_indices[question])
-                        entry["is_noisy"].append(False)
-                        
-                        noisy_prob = self.add_noise_to_llm(true_prob, llm_alpha_multiplier)
-                        if cold_start and split_type in ['active_pool', 'validation']:
-                            mask_bit = 1
-                            combined_input = [mask_bit] + [0.0] * 4
-                            entry["known_questions"].append(0)
-                        else:
-                            mask_bit = 0
-                            combined_input = [mask_bit] + noisy_prob
-                            entry["known_questions"].append(1)
-                        
-                        entry["input"].append(combined_input)
-                        entry["answers"].append(noisy_prob)
-                        entry["true_answers"].append(true_prob)
-                        entry["annotators"].append(-1)
-                        entry["questions"].append(question_indices[question])
-                        entry["is_noisy"].append(True)
-
-                    for q_idx, question in enumerate(question_list):
-                        true_score = human_data[text_id][annotator][question]
-                        true_prob = [0.0] * 4
-                        
-                        if isinstance(true_score, (int, float)):
-                            if true_score % 1 != 0:  
-                                rounded_score = math.ceil(true_score)
-                                rounded_score = max(min(rounded_score, 4), 1)
-                                index = rounded_score - 1
-                                true_prob[index] = 1.0
-                            else:
-                                true_score = max(min(int(true_score), 4), 1)
-                                index = true_score - 1
-                                true_prob[index] = 1.0
-                        
-                        self._add_human_annotation_4class(entry, true_prob, split_type, known_human_questions_val,
-                                                        q_idx, annotator, question_indices[question], False, true_prob)
+                    self._add_llm_annotations_4class(entry, llm_data[text_id], question_list, question_indices,
+                                                   split_type, cold_start, llm_alpha_multiplier)
                     
-                    if human_flip_prob > 0:
-                        for q_idx, question in enumerate(question_list):
-                            true_score = human_data[text_id][annotator][question]
-                            true_prob = [0.0] * 4
-                            
-                            if isinstance(true_score, (int, float)):
-                                if true_score % 1 != 0:  
-                                    rounded_score = math.ceil(true_score)
-                                    rounded_score = max(min(rounded_score, 4), 1)
-                                    index = rounded_score - 1
-                                    true_prob[index] = 1.0
-                                else:
-                                    true_score = max(min(int(true_score), 4), 1)
-                                    index = true_score - 1
-                                    true_prob[index] = 1.0
-                            
-                            noisy_prob = self.add_noise_to_human(true_prob, human_flip_prob)
-                            self._add_human_annotation_4class(entry, noisy_prob, split_type, known_human_questions_val,
-                                                            q_idx, annotator, question_indices[question], True, true_prob)
+                    self._add_human_annotations_4class(entry, human_data[text_id][annotator], annotator,
+                                                     question_list, question_indices, split_type, 
+                                                     known_human_questions_val, cold_start, human_flip_prob)
                     
                     data_list.append(entry)
     
-    def _add_human_annotation(self, entry, prob, split_type, known_human_questions_val, q_idx, judge_id, question_idx, is_noisy, original_prob):
-        """Helper for adding human annotations (5 classes)."""
+    def _add_llm_annotations(self, entry, llm_text_data, question_list, question_indices, 
+                           split_type, cold_start, llm_alpha_multiplier):
+        """Add original LLM annotations plus 3 noise levels."""
+        for q_idx, question in enumerate(question_list):
+            true_prob = llm_text_data[question]
+            
+            self._add_single_llm_annotation(entry, true_prob, question_indices[question], 
+                                          split_type, cold_start, noise_type='original')
+            
+            for noise_level in self.noise_levels:
+                noisy_prob = self.add_noise_to_llm(true_prob, llm_alpha_multiplier, noise_level)
+                self._add_single_llm_annotation(entry, noisy_prob, question_indices[question], 
+                                              split_type, cold_start, noise_type=f'llm_{noise_level}', 
+                                              true_answer=true_prob)
+    
+    def _add_single_llm_annotation(self, entry, prob, question_idx, split_type, cold_start, 
+                                 noise_type='original', true_answer=None):
+        """Add a single LLM annotation with proper masking logic."""
+        if cold_start and split_type in ['active_pool', 'validation']:
+            mask_bit = 1
+            combined_input = [mask_bit] + [0.0] * 5
+            entry["known_questions"].append(0)
+        elif split_type == 'train':
+            if noise_type == 'original':
+                mask_bit = 0
+                combined_input = [mask_bit] + prob
+                entry["known_questions"].append(1)
+            else:
+                mask_bit = 1
+                combined_input = [mask_bit] + [0.0] * 5
+                entry["known_questions"].append(0)
+        else:
+            mask_bit = 0
+            combined_input = [mask_bit] + prob
+            entry["known_questions"].append(1)
+        
+        entry["input"].append(combined_input)
+        entry["answers"].append(prob)
+        entry["true_answers"].append(true_answer if true_answer is not None else prob)
+        entry["annotators"].append(-1)
+        entry["questions"].append(question_idx)
+        entry["noise_info"].append(noise_type)
+
+    def _add_human_annotations(self, entry, human_text_data, annotators, question_list, 
+                             question_indices, split_type, known_human_questions_val, 
+                             cold_start, human_flip_prob):
+        """Add original human annotations plus 3 noise levels for each annotator."""
+        for judge_id in annotators:
+            for q_idx, question in enumerate(question_list):
+                true_score = human_text_data[judge_id][question]
+                true_prob = self._score_to_prob(true_score, 5)
+                
+                self._add_single_human_annotation(entry, true_prob, int(judge_id), 
+                                                question_indices[question], split_type, 
+                                                known_human_questions_val, q_idx, 
+                                                noise_type='original')
+                
+                if human_flip_prob > 0:
+                    for noise_level in self.noise_levels:
+                        noisy_prob = self.add_noise_to_human(true_prob, human_flip_prob, noise_level)
+                        self._add_single_human_annotation(entry, noisy_prob, int(judge_id),
+                                                        question_indices[question], split_type,
+                                                        known_human_questions_val, q_idx,
+                                                        noise_type=f'human_{noise_level}',
+                                                        true_answer=true_prob)
+
+    def _add_single_human_annotation(self, entry, prob, judge_id, question_idx, split_type, 
+                                   known_human_questions_val, q_idx, noise_type='original', 
+                                   true_answer=None):
+        """Add a single human annotation with proper masking logic."""
         if split_type == 'active_pool':
             mask_bit = 1
             combined_input = [mask_bit] + [0.0] * 5
@@ -393,14 +306,14 @@ class NoisyDataManager(DataManager):
                 combined_input = [mask_bit] + [0.0] * 5
                 entry["known_questions"].append(0)
         elif split_type == 'train':
-            if is_noisy:
-                mask_bit = 1  # MASK noisy human annotations in training
-                combined_input = [mask_bit] + [0.0] * 5
-                entry["known_questions"].append(0)
-            else:
-                mask_bit = 0  # OBSERVE clean human annotations in training
+            if noise_type == 'original':
+                mask_bit = 0
                 combined_input = [mask_bit] + prob
                 entry["known_questions"].append(1)
+            else:
+                mask_bit = 1
+                combined_input = [mask_bit] + [0.0] * 5
+                entry["known_questions"].append(0)
         elif split_type == 'test':
             if random.random() < 0.5:
                 mask_bit = 1
@@ -413,13 +326,71 @@ class NoisyDataManager(DataManager):
         
         entry["input"].append(combined_input)
         entry["answers"].append(prob)
-        entry["true_answers"].append(original_prob)   
-        entry["annotators"].append(int(judge_id))
+        entry["true_answers"].append(true_answer if true_answer is not None else prob)   
+        entry["annotators"].append(judge_id)
         entry["questions"].append(question_idx)
-        entry["is_noisy"].append(is_noisy)
-    
-    def _add_human_annotation_4class(self, entry, prob, split_type, known_human_questions_val, q_idx, annotator, question_idx, is_noisy, original_prob):
-        """Helper for adding human annotations (4 classes)."""
+        entry["noise_info"].append(noise_type)
+
+    def _add_llm_annotations_4class(self, entry, llm_text_data, question_list, question_indices, 
+                                  split_type, cold_start, llm_alpha_multiplier):
+        """Add LLM annotations for 4-class problems (LLM_RUBRIC)."""
+        for q_idx, question in enumerate(question_list):
+            true_prob = llm_text_data[question]
+            
+            self._add_single_llm_annotation_4class(entry, true_prob, question_indices[question], 
+                                                 split_type, cold_start, noise_type='original')
+            
+            for noise_level in self.noise_levels:
+                noisy_prob = self.add_noise_to_llm(true_prob, llm_alpha_multiplier, noise_level)
+                self._add_single_llm_annotation_4class(entry, noisy_prob, question_indices[question], 
+                                                     split_type, cold_start, noise_type=f'llm_{noise_level}',
+                                                     true_answer=true_prob)
+
+    def _add_single_llm_annotation_4class(self, entry, prob, question_idx, split_type, cold_start, 
+                                        noise_type='original', true_answer=None):
+        """Add single LLM annotation for 4-class problems."""
+        if cold_start and split_type in ['active_pool', 'validation']:
+            mask_bit = 1
+            combined_input = [mask_bit] + [0.0] * 4
+            entry["known_questions"].append(0)
+        else:
+            mask_bit = 0
+            combined_input = [mask_bit] + prob
+            entry["known_questions"].append(1)
+        
+        entry["input"].append(combined_input)
+        entry["answers"].append(prob)
+        entry["true_answers"].append(true_answer if true_answer is not None else prob)
+        entry["annotators"].append(-1)
+        entry["questions"].append(question_idx)
+        entry["noise_info"].append(noise_type)
+
+    def _add_human_annotations_4class(self, entry, human_annotator_data, annotator, question_list, 
+                                    question_indices, split_type, known_human_questions_val, 
+                                    cold_start, human_flip_prob):
+        """Add human annotations for 4-class problems."""
+        for q_idx, question in enumerate(question_list):
+            true_score = human_annotator_data[question]
+            true_prob = self._score_to_prob(true_score, 4)
+            
+            self._add_single_human_annotation_4class(entry, true_prob, int(annotator),
+                                                   question_indices[question], split_type,
+                                                   known_human_questions_val, q_idx, 
+                                                   noise_type='original')
+            
+            if human_flip_prob > 0:
+                for noise_level in self.noise_levels:
+                    noisy_prob = self.add_noise_to_human(true_prob, human_flip_prob, noise_level)
+                    self._add_single_human_annotation_4class(entry, noisy_prob, int(annotator),
+                                                           question_indices[question], split_type,
+                                                           known_human_questions_val, q_idx,
+                                                           noise_type=f'human_{noise_level}',
+                                                           true_answer=true_prob)
+
+    def _add_single_human_annotation_4class(self, entry, prob, annotator, question_idx, split_type, 
+                                          known_human_questions_val, q_idx, noise_type='original', 
+                                          true_answer=None):
+        """Add single human annotation for 4-class problems."""
         if split_type == 'active_pool':
             mask_bit = 1
             combined_input = [mask_bit] + [0.0] * 4
@@ -449,25 +420,74 @@ class NoisyDataManager(DataManager):
         
         entry["input"].append(combined_input)
         entry["answers"].append(prob)
-        entry["true_answers"].append(original_prob)   
-        entry["annotators"].append(int(annotator))
+        entry["true_answers"].append(true_answer if true_answer is not None else prob)   
+        entry["annotators"].append(annotator)
         entry["questions"].append(question_idx)
-        entry["is_noisy"].append(is_noisy)
+        entry["noise_info"].append(noise_type)
 
-class NoisyAnnotationDataset(AnnotationDataset):
-    """Extended dataset that tracks noisy vs original selections."""
+    def _add_text_embeddings(self, entry, text_id, text_embeddings, question_embeddings, 
+                           question_list, annotators):
+        """Add text embeddings for all annotation positions."""
+        total_positions = len(entry["input"])
+        entry["text_embedding"] = [[] for _ in range(total_positions)]
+        
+        embedding_idx = 0
+        
+        for q_idx, question in enumerate(question_list):
+            text_embedding = text_embeddings[int(text_id)]
+            question_embedding = question_embeddings[question]
+            final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
+            
+            for _ in range(1 + len(self.noise_levels)):
+                entry["text_embedding"][embedding_idx] = final_embedding
+                embedding_idx += 1
+        
+        for judge_id in annotators:
+            for q_idx, question in enumerate(question_list):
+                text_embedding = text_embeddings[int(text_id)]
+                question_embedding = question_embeddings[question]
+                final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
+                
+                for _ in range(1 + len(self.noise_levels)):
+                    entry["text_embedding"][embedding_idx] = final_embedding
+                    embedding_idx += 1
+
+    def _score_to_prob(self, score, num_classes):
+        """Convert score to one-hot probability distribution."""
+        prob = [0.0] * num_classes
+        if isinstance(score, (int, float)):
+            if score % 1 != 0:  
+                rounded_score = math.ceil(score)
+                rounded_score = max(min(rounded_score, num_classes), 1)
+                index = rounded_score - 1
+                prob[index] = 1.0
+            else:
+                score = max(min(int(score), num_classes), 1)
+                index = score - 1
+                prob[index] = 1.0
+        return prob
+
+
+class MultiLevelNoisyAnnotationDataset(AnnotationDataset):
+    """Extended dataset that tracks multi-level noise selections."""
     
     def __init__(self, data_path_or_list):
         super().__init__(data_path_or_list)
         
-    def is_position_noisy(self, idx, position):
-        """Check if a position corresponds to a noisy variable."""
+    def get_noise_type(self, idx, position):
+        """Get the noise type for a specific position."""
         item = self.data[idx]
-        if "is_noisy" in item and position < len(item["is_noisy"]):
-            return item["is_noisy"][position]
-        return False
+        if "noise_info" in item and position < len(item["noise_info"]):
+            return item["noise_info"][position]
+        return 'unknown'
+    
+    def is_position_noisy(self, idx, position):
+        """Check if a position corresponds to any noisy variable."""
+        noise_type = self.get_noise_type(idx, position)
+        return noise_type != 'original'
 
-def run_experiment_with_noise(
+
+def run_experiment_with_multilevel_noise(
     dataset_train, dataset_val, dataset_test, 
     example_strategy, model,
     feature_strategy=None,
@@ -489,14 +509,13 @@ def run_experiment_with_noise(
     validation_set_size=50,
     initial_train_dataset=None
 ):
-    """Enhanced experiment runner that tracks noisy vs original selections."""
+    """Enhanced experiment runner that tracks multi-level noise selections."""
 
     if initial_train_dataset is not None and len(initial_train_dataset) > 0:
         arena = AnnotationArena(model, device)
-        print(f"=== Initial Training on {len(initial_train_dataset)} Clean Examples ===")
+        print(f"Initial training on {len(initial_train_dataset)} clean examples...")
         arena.set_dataset(initial_train_dataset)
         
-        # Register and observe all clean annotations in training set
         for idx in range(len(initial_train_dataset)):
             arena.register_example(idx, add_all_positions=False)
             known_positions = initial_train_dataset.get_known_positions(idx)
@@ -505,12 +524,14 @@ def run_experiment_with_noise(
                 variable_id = f"example_{idx}_position_{pos}"
                 arena.predict(variable_id, train=True)
         
-        # Train the model on clean data
         arena.train(epochs=10, batch_size=batch_size, lr=lr)
         print("Initial training completed!")
     
     arena = AnnotationArena(model, device)
     arena.set_dataset(dataset_train)
+    
+    noise_categories = ['original_llm', 'llm_low', 'llm_medium', 'llm_heavy',
+                       'original_human', 'human_low', 'human_medium', 'human_heavy']
     
     metrics = {
         'training_losses': [],
@@ -522,22 +543,21 @@ def run_experiment_with_noise(
         'test_annotated_losses': [],
         'benefit_cost_ratios': [],
         'observation_costs': [],
-        'remaining_pool_size': [],
-        'original_selections_per_cycle': [],
-        'noisy_selections_per_cycle': [],
-        'selection_ratios_per_cycle': [],
-        'cumulative_original_selections': [],
-        'cumulative_noisy_selections': []
+        'remaining_pool_size': []
     }
+    
+    for category in noise_categories:
+        metrics[f'{category}_selections_per_cycle'] = []
+        metrics[f'cumulative_{category}_selections'] = []
+    
+    metrics['selection_breakdown_per_cycle'] = []
     
     active_pool = list(range(len(dataset_train)))
     annotated_examples = []
     test_overlap_annotations = {}
     cycle_count = 0
-    total_original_selections = 0
-    total_noisy_selections = 0
     
-    # Track validation example indices
+    cumulative_selections = {category: 0 for category in noise_categories}
     validation_example_indices = list(range(len(dataset_val)))
     
     arena.set_dataset(dataset_val)
@@ -557,8 +577,11 @@ def run_experiment_with_noise(
             print(f"Active pool exhausted after {cycle_count} cycles")
             break
             
-        print(f"=== Cycle {cycle_count+1}/{cycles if not run_until_exhausted else 'until exhausted'} ===")
-        print(f"Active pool size: {len(active_pool)}")
+        print(f"\n{'='*60}")
+        print(f"CYCLE {cycle_count+1}/{cycles if not run_until_exhausted else '∞'}")
+        print(f"Active pool: {len(active_pool)} examples")
+        print(f"{'='*60}")
+        
         arena.set_dataset(dataset_train)
 
         valid_active_pool = []
@@ -567,14 +590,13 @@ def run_experiment_with_noise(
                 valid_active_pool.append(idx)
         
         if len(valid_active_pool) < len(active_pool):
-            print(f"Filtered active pool from {len(active_pool)} to {len(valid_active_pool)} examples")
+            print(f"Filtered pool: {len(active_pool)} → {len(valid_active_pool)} (removed examples with no masked positions)")
             active_pool = valid_active_pool
         
         if not active_pool:
-            print("No examples with masked positions left in active pool")
+            print("No examples with masked positions remaining")
             break
         
-        # Resample validation set each cycle
         if resample_validation and cycle_count > 0:
             dataset_val, active_pool, validation_example_indices = resample_validation_dataset(
                 dataset_train, dataset_val, active_pool, annotated_examples, 
@@ -587,7 +609,7 @@ def run_experiment_with_noise(
         elif example_strategy in ["gradient", "entropy", "badge"]:
             strategy_class = SelectionFactory.create_example_strategy(example_strategy, model, device, gradient_top_only=gradient_top_only)
             active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_pool]
-            active_pool_subset = NoisyAnnotationDataset(active_pool_examples)
+            active_pool_subset = MultiLevelNoisyAnnotationDataset(active_pool_examples)
             
             selected_indices, _ = strategy_class.select_examples(
                 active_pool_subset, num_to_select=min(examples_per_cycle, len(active_pool)),
@@ -600,7 +622,6 @@ def run_experiment_with_noise(
         
         print(f"Selected {len(selected_examples)} examples")
         
-        # Remove selected examples from active pool (they disappear forever)
         active_pool = [idx for idx in active_pool if idx not in selected_examples]
         
         for example in selected_examples:
@@ -612,8 +633,7 @@ def run_experiment_with_noise(
         total_features_annotated = 0
         cycle_benefit_cost_ratios = []
         cycle_observation_costs = []
-        cycle_original_selections = 0
-        cycle_noisy_selections = 0
+        cycle_selections = {category: 0 for category in noise_categories}
         
         for example_idx in selected_examples:
             arena.register_example(example_idx, add_all_positions=False)
@@ -684,11 +704,34 @@ def run_experiment_with_noise(
             for pos_data in position_benefit_costs:
                 position = pos_data[0]
                 
-                is_noisy = dataset_train.is_position_noisy(example_idx, position)
-                if is_noisy:
-                    cycle_noisy_selections += 1
+                noise_type = dataset_train.get_noise_type(example_idx, position)
+                is_llm = dataset_train.get_data_entry(example_idx)['annotators'][position] == -1
+                
+                if is_llm:
+                    if noise_type == 'original':
+                        category = 'original_llm'
+                    elif 'low' in noise_type:
+                        category = 'llm_low'
+                    elif 'medium' in noise_type:
+                        category = 'llm_medium'
+                    elif 'heavy' in noise_type:
+                        category = 'llm_heavy'
+                    else:
+                        category = 'original_llm'
                 else:
-                    cycle_original_selections += 1
+                    if noise_type == 'original':
+                        category = 'original_human'
+                    elif 'low' in noise_type:
+                        category = 'human_low'
+                    elif 'medium' in noise_type:
+                        category = 'human_medium'
+                    elif 'heavy' in noise_type:
+                        category = 'human_heavy'
+                    else:
+                        category = 'original_human'
+                
+                cycle_selections[category] += 1
+                cumulative_selections[category] += 1
                 
                 annotation_success = arena.observe_position(example_idx, position)
                 
@@ -710,30 +753,35 @@ def run_experiment_with_noise(
                 variable_id = f"example_{example_idx}_position_{position}"
                 arena.predict(variable_id, train=True)
         
-        total_original_selections += cycle_original_selections
-        total_noisy_selections += cycle_noisy_selections
+        for category in noise_categories:
+            metrics[f'{category}_selections_per_cycle'].append(cycle_selections[category])
+            metrics[f'cumulative_{category}_selections'].append(cumulative_selections[category])
         
-        metrics['original_selections_per_cycle'].append(cycle_original_selections)
-        metrics['noisy_selections_per_cycle'].append(cycle_noisy_selections)
-        metrics['cumulative_original_selections'].append(total_original_selections)
-        metrics['cumulative_noisy_selections'].append(total_noisy_selections)
+        metrics['selection_breakdown_per_cycle'].append(cycle_selections.copy())
         
-        total_selections = cycle_original_selections + cycle_noisy_selections
-        if total_selections > 0:
-            selection_ratio = cycle_noisy_selections / total_selections
-        else:
-            selection_ratio = 0.0
-        metrics['selection_ratios_per_cycle'].append(selection_ratio)
+        total_cycle_selections = sum(cycle_selections.values())
+        print(f"\nSELECTION BREAKDOWN (Cycle {cycle_count+1}):")
+        print(f"   Total selected: {total_cycle_selections}")
+        if total_cycle_selections > 0:
+            print(f"   LLM Original: {cycle_selections['original_llm']} ({cycle_selections['original_llm']/total_cycle_selections*100:.1f}%)")
+            print(f"   LLM Low:      {cycle_selections['llm_low']} ({cycle_selections['llm_low']/total_cycle_selections*100:.1f}%)")
+            print(f"   LLM Medium:   {cycle_selections['llm_medium']} ({cycle_selections['llm_medium']/total_cycle_selections*100:.1f}%)")
+            print(f"   LLM Heavy:    {cycle_selections['llm_heavy']} ({cycle_selections['llm_heavy']/total_cycle_selections*100:.1f}%)")
+            print(f"   Human Original: {cycle_selections['original_human']} ({cycle_selections['original_human']/total_cycle_selections*100:.1f}%)")
+            print(f"   Human Low:    {cycle_selections['human_low']} ({cycle_selections['human_low']/total_cycle_selections*100:.1f}%)")
+            print(f"   Human Medium: {cycle_selections['human_medium']} ({cycle_selections['human_medium']/total_cycle_selections*100:.1f}%)")
+            print(f"   Human Heavy:  {cycle_selections['human_heavy']} ({cycle_selections['human_heavy']/total_cycle_selections*100:.1f}%)")
         
-        print(f"Cycle {cycle_count+1}: Original={cycle_original_selections}, Noisy={cycle_noisy_selections}, Ratio={selection_ratio:.3f}")
         print(f"Total features annotated: {total_features_annotated}")
         
         if total_features_annotated > 0:
+            print(f"Training model ({epochs_per_cycle} epochs)...")
             training_metrics = arena.train(
                 epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, 
                 revisit_examples=True
             )
             metrics['training_losses'].append(training_metrics["avg_loss"])
+            print(f"   Training loss: {training_metrics['avg_loss']:.4f}")
         else:
             metrics['training_losses'].append(0.0)
         
@@ -741,6 +789,7 @@ def run_experiment_with_noise(
         val_metrics = arena.evaluate(list(range(len(dataset_val))))
         metrics['val_metrics'].append(val_metrics)
         metrics['val_losses'].append(val_metrics["avg_expected_loss"])
+        print(f"Validation loss: {val_metrics['avg_expected_loss']:.4f}")
         
         arena.set_dataset(dataset_test)
         test_metrics = arena.evaluate(list(range(len(dataset_test))))
@@ -764,6 +813,8 @@ def run_experiment_with_noise(
         else:
             metrics['test_annotated_losses'].append(test_metrics["avg_expected_loss"])
         
+        print(f"Test loss: {test_metrics['avg_expected_loss']:.4f}")
+        
         metrics['examples_annotated'].append(len(selected_examples))
         metrics['features_annotated'].append(total_features_annotated)
         metrics['benefit_cost_ratios'].append(np.mean(cycle_benefit_cost_ratios) if cycle_benefit_cost_ratios else 0.0)
@@ -771,6 +822,19 @@ def run_experiment_with_noise(
         
         cycle_count += 1
         
+    print(f"\n{'='*60}")
+    print(f"EXPERIMENT COMPLETE")
+    print(f"{'='*60}")
+    
+    total_cumulative = sum(cumulative_selections.values())
+    if total_cumulative > 0:
+        print(f"FINAL SELECTION SUMMARY:")
+        print(f"   Total annotations: {total_cumulative}")
+        for category in noise_categories:
+            count = cumulative_selections[category]
+            percentage = count / total_cumulative * 100
+            print(f"   {category:15s}: {count:4d} ({percentage:5.1f}%)")
+    
     metrics['test_metrics'] = test_metrics
     arena_metrics = arena.get_metrics_history()
     metrics['arena_training_losses'] = arena_metrics["training_losses"]
@@ -779,8 +843,9 @@ def run_experiment_with_noise(
     
     return metrics
 
+
 def main():
-    parser = argparse.ArgumentParser(description="Run Active Learning Experiments with Noisy Variables.")
+    parser = argparse.ArgumentParser(description="Run Active Learning Experiments with Multi-Level Noisy Variables.")
     parser.add_argument("--cycles", type=int, default=5, help="Number of active learning cycles")
     parser.add_argument("--examples_per_cycle", type=int, default=20, help="Number of examples to select per cycle")
     parser.add_argument("--features_per_example", type=int, default=5, help="Number of features to select per example")
@@ -795,8 +860,8 @@ def main():
     parser.add_argument("--dataset", type=str, default="hanna", help="Dataset to run the experiment")
     parser.add_argument("--runner", type=str, default="prabhav", help="Pass name to change directory paths")
     parser.add_argument("--cold_start", type=bool, default=False, help="Start with no annotation")
-    parser.add_argument("--llm_alpha_multiplier", type=float, default=1.0, help="Dirichlet concentration multiplier for LLM annotations (lower=more noise)")
-    parser.add_argument("--human_flip_prob", type=float, default=0.3, help="Probability of flipping human annotations to different category")
+    parser.add_argument("--llm_alpha_multiplier", type=float, default=1.0, help="Base Dirichlet concentration multiplier for LLM annotations")
+    parser.add_argument("--human_flip_prob", type=float, default=0.3, help="Base probability of flipping human annotations")
     parser.add_argument("--use_embedding", type=bool, default=False, help="Use embeddings for texts")
     parser.add_argument("--human_cost", type=float, default=1.0, help="Cost of human annotations")
     parser.add_argument("--llm_cost", type=float, default=1.0, help="Cost of LLM annotations")
@@ -810,13 +875,13 @@ def main():
 
     dataset = args.dataset
     models_path = os.path.join(base_path, "models")
-    results_path = os.path.join(base_path, f"results_noisy_{dataset}")
+    results_path = os.path.join(base_path, f"results_multilevel_noisy_{dataset}")
     os.makedirs(results_path, exist_ok=True)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
-    print(f"LLM alpha multiplier: {args.llm_alpha_multiplier}, Human flip probability: {args.human_flip_prob}")
-    print(f"Human cost: {args.human_cost}, LLM cost: {args.llm_cost}")
+    print(f"Base noise parameters: LLM α={args.llm_alpha_multiplier}, Human flip={args.human_flip_prob}")
+    print(f"Annotation costs: Human={args.human_cost}, LLM={args.llm_cost}")
 
     if args.use_embedding:
         ModelClass = ImputerEmbedding
@@ -845,7 +910,9 @@ def main():
         experiments_to_run = [args.experiment]
     
     for experiment in experiments_to_run:
-        print(f"\n=== Running Noisy {experiment} Experiment ===")
+        print(f"\n{'='*80}")
+        print(f"RUNNING MULTI-LEVEL NOISY {experiment.upper()} EXPERIMENT")
+        print(f"{'='*80}")
         
         if args.runner == "prabhav":
             data_manager = NoisyDataManager(base_path + '/data/')
@@ -865,20 +932,19 @@ def main():
         
         model_copy = copy.deepcopy(model)
 
-        train_dataset = NoisyAnnotationDataset(data_manager.paths['train'])
-        val_dataset = NoisyAnnotationDataset(data_manager.paths['validation'])
-        test_dataset = NoisyAnnotationDataset(data_manager.paths['test'])
-        active_pool_dataset = NoisyAnnotationDataset(data_manager.paths['active_pool'])
+        train_dataset = MultiLevelNoisyAnnotationDataset(data_manager.paths['train'])
+        val_dataset = MultiLevelNoisyAnnotationDataset(data_manager.paths['validation'])
+        test_dataset = MultiLevelNoisyAnnotationDataset(data_manager.paths['test'])
+        active_pool_dataset = MultiLevelNoisyAnnotationDataset(data_manager.paths['active_pool'])
         
-        print(f"Loaded datasets: Train={len(train_dataset)}, Val={len(val_dataset)}, "
-            f"Test={len(test_dataset)}, Active Pool={len(active_pool_dataset)}")
+        print(f"Dataset sizes: Train={len(train_dataset)}, Val={len(val_dataset)}, Test={len(test_dataset)}, Active={len(active_pool_dataset)}")
         
-        if len(train_dataset) > 0:
-            print('Initial Training!')
-            initial_train_dataset=train_dataset
+        initial_train_dataset = train_dataset if len(train_dataset) > 0 else None
+        if initial_train_dataset:
+            print('Will perform initial training on clean annotations!')
 
         if experiment == "gradient_voi":
-            results = run_experiment_with_noise(
+            results = run_experiment_with_multilevel_noise(
                 active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="gradient", feature_strategy="voi", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
@@ -891,7 +957,7 @@ def main():
             )
         
         elif experiment == "random_random":
-            results = run_experiment_with_noise(
+            results = run_experiment_with_multilevel_noise(
                 active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="random", feature_strategy="random", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
@@ -909,32 +975,46 @@ def main():
         
         experiment_results[experiment] = results
         
-        torch.save(model_copy.state_dict(), os.path.join(models_path, f"noisy_{experiment}.pth"))
+        torch.save(model_copy.state_dict(), os.path.join(models_path, f"multilevel_noisy_{experiment}.pth"))
         
-        file_name = f"noisy_{experiment}"
+        file_name = f"multilevel_noisy_{experiment}"
         if args.use_embedding:
             file_name += "_with_embedding"
         
         with open(os.path.join(results_path, f"{file_name}.json"), "w") as f:
             json.dump(results, f, indent=4)
         
-        print(f"\n=== Noise Selection Summary for {experiment} ===")
-        total_orig = sum(results['original_selections_per_cycle'])
-        total_noisy = sum(results['noisy_selections_per_cycle'])
-        if total_orig + total_noisy > 0:
-            final_ratio = total_noisy / (total_orig + total_noisy)
-            print(f"Total Original: {total_orig}, Total Noisy: {total_noisy}")
-            print(f"Final Noise Selection Ratio: {final_ratio:.3f}")
+        print(f"\n{'='*60}")
+        print(f"EXPERIMENT {experiment.upper()} SUMMARY")
+        print(f"{'='*60}")
+        
+        noise_categories = ['original_llm', 'llm_low', 'llm_medium', 'llm_heavy',
+                           'original_human', 'human_low', 'human_medium', 'human_heavy']
+        
+        total_final = 0
+        for category in noise_categories:
+            if f'cumulative_{category}_selections' in results:
+                final_count = results[f'cumulative_{category}_selections'][-1] if results[f'cumulative_{category}_selections'] else 0
+                total_final += final_count
+        
+        if total_final > 0:
+            print(f"Final selection distribution:")
+            for category in noise_categories:
+                if f'cumulative_{category}_selections' in results:
+                    final_count = results[f'cumulative_{category}_selections'][-1] if results[f'cumulative_{category}_selections'] else 0
+                    percentage = (final_count / total_final) * 100
+                    print(f"   {category:15s}: {final_count:4d} ({percentage:5.1f}%)")
     
     if experiment_results:
-        combined_file_name = "combined_noisy_results"
+        combined_file_name = "combined_multilevel_noisy_results"
         if args.use_embedding:
             combined_file_name += "_with_embedding"
         
         with open(os.path.join(results_path, f"{combined_file_name}.json"), "w") as f:
             json.dump(experiment_results, f, indent=4)
             
-        print(f"Noisy experiment results saved to {results_path}")
+        print(f"\nMulti-level noisy experiment results saved to {results_path}")
+
 
 if __name__ == "__main__":
     main()
