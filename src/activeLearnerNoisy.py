@@ -920,7 +920,7 @@ def main():
             data_manager = NoisyDataManager(base_path + f'/data_{dataset}/')
 
         if dataset == "hanna":
-            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.1, dataset=dataset, 
+            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.2, dataset=dataset, 
                         cold_start=args.cold_start, llm_alpha_multiplier=args.llm_alpha_multiplier, 
                         human_flip_prob=args.human_flip_prob, use_embedding=args.use_embedding, 
                         validation_set_size=args.validation_set_size)
@@ -953,7 +953,7 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 human_cost=args.human_cost, llm_cost=args.llm_cost, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                initial_train_dataset=initial_train_dataset, gradient_top_only=True
             )
         
         elif experiment == "random_random":

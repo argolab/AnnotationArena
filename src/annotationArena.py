@@ -460,7 +460,8 @@ class AnnotationArena:
             
         # Get true value
         entry = self.dataset.get_data_entry(example_idx)
-        true_value = entry['answers'][position]
+        # true_value = entry['answers'][position]
+        true_value = entry['true_answers'][position]
         
         # Observe the variable
         success = self.observe(variable_id, true_value)
@@ -468,7 +469,7 @@ class AnnotationArena:
         # Update dataset
         if success:
             self.dataset.observe_position(example_idx, position)
-            
+        
         return success
     
     # def evaluate(self, target_examples, target_questions=None, metrics=None):

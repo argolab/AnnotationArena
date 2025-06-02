@@ -472,28 +472,64 @@ class AnnotationDataset(Dataset):
                 
         return llm_positions
     
-    def observe_position(self, idx, position):
-        """
-        Mark a position as observed and update the input tensor.
+    # def observe_position(self, idx, position):
+    #     """
+    #     Mark a position as observed and update the input tensor.
         
-        Args:
-            idx: Example index
-            position: Position to observe
+    #     Args:
+    #         idx: Example index
+    #         position: Position to observe
             
-        Returns:
-            bool: Success status
-        """
+    #     Returns:
+    #         bool: Success status
+    #     """
+    #     item = self.data[idx]
+        
+    #     # Check if already observed
+    #     if item['input'][position][0] == 0:
+    #         return False
+    #     num_class = len(item["answers"][position])
+    #     # Update input tensor
+    #     item['input'][position][0] = 0  # Mark as observed
+    #     for i in range(num_class):  # Assuming 5 classes
+    #         try:
+    #             item['input'][position][i+1] = item['answers'][position][i]
+    #         except IndexError:
+    #             continue
+        
+    #     # Update known_questions
+    #     item['known_questions'][position] = 1
+        
+    #     # Add to observation history
+    #     item['observation_history'].append({
+    #         'position': position,
+    #         'timestamp': len(item['observation_history']),
+    #         'annotator': item['annotators'][position],
+    #         'question': item['questions'][position],
+    #         'answer': item['answers'][position]
+    #     })
+        
+    #     return True
+
+    def observe_position(self, idx, position):
+
         item = self.data[idx]
         
-        # Check if already observed
+
         if item['input'][position][0] == 0:
             return False
+        
         num_class = len(item["answers"][position])
-        # Update input tensor
         item['input'][position][0] = 0  # Mark as observed
-        for i in range(num_class):  # Assuming 5 classes
+        
+        if 'true_answers' in item and item['true_answers']:
+            training_target = item['true_answers'][position]
+        else:
+            training_target = item['answers'][position]
+        
+        for i in range(num_class):
             try:
-                item['input'][position][i+1] = item['answers'][position][i]
+                item['input'][position][i+1] = training_target[i]
             except IndexError:
                 continue
         
@@ -506,7 +542,7 @@ class AnnotationDataset(Dataset):
             'timestamp': len(item['observation_history']),
             'annotator': item['annotators'][position],
             'question': item['questions'][position],
-            'answer': item['answers'][position]
+            'answer': item['answers'][position] 
         })
         
         return True
