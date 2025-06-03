@@ -748,8 +748,9 @@ def run_experiment_with_multilevel_noise(
         if resample_validation and cycle_count > 0:
             dataset_val, active_pool, validation_example_indices = resample_validation_dataset(
                 dataset_train, dataset_val, active_pool, annotated_examples, 
-                strategy="fixed_size_resample", validation_set_size=validation_set_size,
-                current_val_indices=validation_example_indices
+                strategy="balanced_fixed_size", 
+                selected_examples=annotated_examples[-examples_per_cycle:] if annotated_examples else [],
+                validation_set_size=validation_set_size
             )
         
         # DYNAMIC K-CENTERS: Apply K-centers to current active pool using model embeddings
