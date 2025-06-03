@@ -16,6 +16,7 @@ import copy
 import math
 import pandas as pd
 from sentence_transformers import SentenceTransformer
+from sklearn.metrics.pairwise import pairwise_distances
 
 from annotationArena import *
 from utils import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset
@@ -35,31 +36,173 @@ from selection import (
 
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
+def extract_embeddings_features(dataset_entries, model_name='all-MiniLM-L6-v2'):
+    """Extract sentence transformer embeddings for K-centers algorithm."""
+    embedding_model = SentenceTransformer(model_name)
+    features = []
+    
+    for entry in dataset_entries:
+        if 'text_embedding' in entry and entry['text_embedding']:
+            embedding = np.array(entry['text_embedding'][0])
+        else:
+            inputs = np.array(entry['input'])
+            answer_dists = inputs[:, 1:] 
+            mean_dist = np.mean(answer_dists, axis=0)
+            std_dist = np.std(answer_dists, axis=0)
+            entropy_per_pos = []
+            
+            for dist in answer_dists:
+                if np.sum(dist) > 0:
+                    normalized = dist / np.sum(dist)
+                    entropy = -np.sum(normalized * np.log(normalized + 1e-10))
+                    entropy_per_pos.append(entropy)
+                else:
+                    entropy_per_pos.append(0.0)
+
+            embedding = np.concatenate([
+                mean_dist, 
+                std_dist, 
+                [np.mean(entropy_per_pos), np.std(entropy_per_pos)]
+            ])
+        
+        features.append(embedding)
+    
+    return np.array(features)
+
+def extract_model_embeddings(dataset, example_indices, model, device):
+    """Extract embeddings using the current imputer model state."""
+    model.eval()
+    embeddings = []
+    
+    with torch.no_grad():
+        for idx in example_indices:
+            known_questions, inputs, answers, annotators, questions, model_embeddings = dataset[idx]
+            inputs = inputs.unsqueeze(0).to(device)
+            annotators = annotators.unsqueeze(0).to(device)
+            questions = questions.unsqueeze(0).to(device)
+            if model_embeddings is not None:
+                model_embeddings = model_embeddings.unsqueeze(0).to(device)
+            
+            # Get model's internal representation
+            if hasattr(model, 'encoder'):
+                if model_embeddings is not None:
+                    feature_x, param_x = model.encoder.position_encoder(inputs, annotators, questions, model_embeddings)
+                else:
+                    feature_x, param_x = model.encoder.position_encoder(inputs, annotators, questions)
+                
+                # Use the feature representation as embedding
+                embedding = feature_x[0].mean(dim=0).cpu().numpy()  # Average across positions
+            else:
+                # Fallback to statistical features
+                entry = dataset.get_data_entry(idx)
+                inputs_array = np.array(entry['input'])
+                answer_dists = inputs_array[:, 1:]
+                embedding = np.concatenate([
+                    np.mean(answer_dists, axis=0),
+                    np.std(answer_dists, axis=0),
+                    [np.mean(answer_dists), np.std(answer_dists)]
+                ])
+            
+            embeddings.append(embedding)
+    
+    return np.array(embeddings)
+
+def greedy_k_centers(features, k, random_seed=42):
+    """Greedy K-centers algorithm for diverse subset selection."""
+    np.random.seed(random_seed)
+    n = len(features)
+    
+    if k >= n:
+        return list(range(n))
+    
+    selected = [np.random.randint(n)]
+    
+    for _ in range(k - 1):
+        distances = []
+        for i in range(n):
+            if i in selected:
+                distances.append(0)
+            else:
+                min_dist = min(np.linalg.norm(features[i] - features[j]) for j in selected)
+                distances.append(min_dist)
+                
+        next_center = np.argmax(distances)
+        selected.append(next_center)
+    
+    return selected
+
 class NoisyDataManager(DataManager):
     """Extended DataManager that creates multi-level noisy copies of annotations."""
     
     def __init__(self, base_path):
         super().__init__(base_path)
         self.noise_levels = ['low', 'medium', 'heavy']
-        self.noise_multipliers = {'low': 3, 'medium': 1.0, 'heavy': 0.1}
         
+    def add_noise_to_llm_low(self, prob_dist, confidence_reduction=0.3):
+        """Low noise: preserve argmax, reduce confidence."""
+        original = np.array(prob_dist)
+        argmax_idx = np.argmax(original)
+        
+        new_max_prob = max(0.5, original[argmax_idx] - confidence_reduction)
+        remaining_prob = 1.0 - new_max_prob
+        other_prob = remaining_prob / (len(original) - 1) if len(original) > 1 else 0.0
+        
+        new_dist = np.full_like(original, other_prob)
+        new_dist[argmax_idx] = new_max_prob
+        return new_dist.tolist()
+    
+    def add_noise_to_llm_medium(self, prob_dist, flip_prob=0.4, noise_strength=0.5):
+        """Medium noise: occasional argmax flips with controlled noise."""
+        original = np.array(prob_dist)
+        argmax_idx = np.argmax(original)
+        
+        if np.random.random() < flip_prob:
+            other_indices = [i for i in range(len(original)) if i != argmax_idx]
+            new_argmax = np.random.choice(other_indices)
+            
+            new_dist = np.random.dirichlet([0.5] * len(original))
+            new_dist[new_argmax] = max(new_dist[new_argmax], 0.35)
+            new_dist = new_dist / np.sum(new_dist)
+        else:
+            noise = np.random.dirichlet([1] * len(original))
+            new_dist = original * (1 - noise_strength) + noise * noise_strength
+            new_dist = new_dist / np.sum(new_dist)
+        
+        return new_dist.tolist()
+    
+    def add_noise_to_llm_heavy(self, prob_dist, uniformity=0.8):
+        """Heavy noise: high entropy/near uniform distributions."""
+        num_classes = len(prob_dist)
+        
+        if np.random.random() < uniformity:
+            uniform_base = 1.0 / num_classes
+            noise = np.random.normal(0, 0.05, num_classes)
+            new_dist = np.full(num_classes, uniform_base) + noise
+            new_dist = np.abs(new_dist)
+            new_dist = new_dist / np.sum(new_dist)
+        else:
+            new_dist = np.random.dirichlet([2] * num_classes)
+        
+        return new_dist.tolist()
+
     def add_noise_to_llm(self, prob_dist, alpha_multiplier=1.0, noise_level='medium'):
-        """Add noise to LLM probability distributions using Dirichlet sampling."""
-        prob_dist = np.array(prob_dist)
-        effective_alpha = alpha_multiplier * self.noise_multipliers[noise_level]
-        alpha_params = prob_dist * effective_alpha
-        alpha_params = np.maximum(alpha_params, 0.01)
-        noisy_probs = np.random.dirichlet(alpha_params)
-        noisy_probs = noisy_probs / np.sum(noisy_probs)
-        return noisy_probs.tolist()
+        """Add noise to LLM probability distributions using improved noise functions."""
+        if noise_level == 'low':
+            return self.add_noise_to_llm_low(prob_dist)
+        elif noise_level == 'medium':
+            return self.add_noise_to_llm_medium(prob_dist)
+        elif noise_level == 'heavy':
+            return self.add_noise_to_llm_heavy(prob_dist)
+        else:
+            return prob_dist
 
     def add_noise_to_human(self, one_hot, flip_prob=0.3, noise_level='medium'):
         """Add noise to human one-hot annotations by flipping to different categories."""
         one_hot = np.array(one_hot)
         original_category = np.argmax(one_hot)
         
-        effective_flip_prob = flip_prob * self.noise_multipliers[noise_level]
-        effective_flip_prob = min(effective_flip_prob, 0.95)
+        flip_probs = {'low': flip_prob * 0.3, 'medium': flip_prob, 'heavy': flip_prob * 2.0}
+        effective_flip_prob = min(flip_probs.get(noise_level, flip_prob), 0.95)
         
         if np.random.random() < effective_flip_prob:
             num_categories = len(one_hot)
@@ -73,13 +216,15 @@ class NoisyDataManager(DataManager):
     
     def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, 
             dataset="hanna", cold_start=False, llm_alpha_multiplier=1.0, human_flip_prob=0.3, 
-            use_embedding=False, validation_set_size=50):
-        """Prepare data with multi-level noisy copies of all annotations."""
+            use_embedding=False, validation_set_size=50, active_set_size=100):
+        """Prepare data with multi-level noisy copies. K-centers applied dynamically in experiment loop."""
         
-        print(f"Preparing data with multi-level noise:")
-        print(f"   - LLM noise levels: {self.noise_levels} (base α={llm_alpha_multiplier})")
+        print(f"Preparing data with improved multi-level noise:")
+        print(f"   - LLM noise levels: {self.noise_levels} (improved functions)")
         print(f"   - Human noise levels: {self.noise_levels} (base flip={human_flip_prob})")
         print(f"   - Text embeddings: {use_embedding}")
+        print(f"   - Validation set size: {validation_set_size}")
+        print(f"   - Active set size: {active_set_size} (applied dynamically)")
 
         if use_embedding and not dataset == "hanna":
             raise ValueError("Text embeddings only supported for HANNA dataset")
@@ -108,15 +253,19 @@ class NoisyDataManager(DataManager):
         random.seed(42)
         random.shuffle(text_ids)
         
+        # New data split structure: N-T-E-V-A (no K-centers here, done dynamically)
         initial_train_size = int(num_partition * initial_train_ratio)
         test_size = int(num_partition * 0.2)
         
         initial_train_texts = text_ids[:initial_train_size]
         test_texts = text_ids[initial_train_size:initial_train_size + test_size]
         
-        big_pool_texts = text_ids[initial_train_size + test_size:initial_train_size + test_size + (num_partition - initial_train_size - test_size)]
-        validation_texts = random.sample(big_pool_texts, min(validation_set_size, len(big_pool_texts)))
-        active_pool_texts = [text_id for text_id in big_pool_texts if text_id not in validation_texts]
+        remaining_pool = text_ids[initial_train_size + test_size:initial_train_size + test_size + (num_partition - initial_train_size - test_size)]
+        
+        validation_texts = remaining_pool[:validation_set_size]
+        
+        # Keep full active pool (no K-centers reduction here)
+        active_pool_texts = remaining_pool[validation_set_size:]
         
         initial_train_data = []
         validation_data = []
@@ -136,7 +285,7 @@ class NoisyDataManager(DataManager):
         self._prepare_entries_with_multilevel_noise(test_texts, test_data, 'test', llm_data, human_data, 
                                     question_list, question_indices, known_human_questions_val, dataset, 
                                     cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
-        print('    - Processing Active Pool split...')
+        print('    - Processing Active Pool (full size, K-centers applied dynamically)...')
         self._prepare_entries_with_multilevel_noise(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, 
                                     question_list, question_indices, known_human_questions_val, dataset, 
                                     cold_start, llm_alpha_multiplier, human_flip_prob, use_embedding)
@@ -148,10 +297,13 @@ class NoisyDataManager(DataManager):
                 json.dump(data, f)
 
         print('Multi-level noisy data creation complete!')
-        print(f'Dataset sizes: Train={len(initial_train_data)}, Val={len(validation_data)}, Test={len(test_data)}, Active={len(active_pool_data)}')
+        print(f'Final dataset sizes: Train={len(initial_train_data)}, Val={len(validation_data)}, Test={len(test_data)}, Active={len(active_pool_data)}')
         
-        total_annotations_per_example = len(question_list) * (1 + len(self.noise_levels)) * 2
-        print(f'Annotations per example: {total_annotations_per_example} ({len(question_list)} base × {1+len(self.noise_levels)} levels × 2 types)')
+        if len(active_pool_data) > 0:
+            sample_entry = active_pool_data[0]
+            annotations_per_example = len(sample_entry['input'])
+            print(f'DEBUG: Annotations per example: {annotations_per_example}')
+
         return True
     
     def _prepare_entries_with_multilevel_noise(self, texts, data_list, split_type, llm_data, human_data, question_list, 
@@ -507,9 +659,10 @@ def run_experiment_with_multilevel_noise(
     human_cost=1.0,
     llm_cost=1.0,
     validation_set_size=50,
+    active_set_size=100,
     initial_train_dataset=None
 ):
-    """Enhanced experiment runner that tracks multi-level noise selections."""
+    """Enhanced experiment runner with dynamic K-centers active set selection."""
 
     if initial_train_dataset is not None and len(initial_train_dataset) > 0:
         arena = AnnotationArena(model, device)
@@ -543,7 +696,8 @@ def run_experiment_with_multilevel_noise(
         'test_annotated_losses': [],
         'benefit_cost_ratios': [],
         'observation_costs': [],
-        'remaining_pool_size': []
+        'remaining_pool_size': [],
+        'active_subset_size': []
     }
     
     for category in noise_categories:
@@ -552,6 +706,7 @@ def run_experiment_with_multilevel_noise(
     
     metrics['selection_breakdown_per_cycle'] = []
     
+    # Start with full active pool
     active_pool = list(range(len(dataset_train)))
     annotated_examples = []
     test_overlap_annotations = {}
@@ -579,11 +734,12 @@ def run_experiment_with_multilevel_noise(
             
         print(f"\n{'='*60}")
         print(f"CYCLE {cycle_count+1}/{cycles if not run_until_exhausted else '∞'}")
-        print(f"Active pool: {len(active_pool)} examples")
+        print(f"Full active pool: {len(active_pool)} examples")
         print(f"{'='*60}")
         
         arena.set_dataset(dataset_train)
 
+        # Filter valid active pool
         valid_active_pool = []
         for idx in active_pool:
             if dataset_train.get_masked_positions(idx):
@@ -597,6 +753,7 @@ def run_experiment_with_multilevel_noise(
             print("No examples with masked positions remaining")
             break
         
+        # Resample validation if needed
         if resample_validation and cycle_count > 0:
             dataset_val, active_pool, validation_example_indices = resample_validation_dataset(
                 dataset_train, dataset_val, active_pool, annotated_examples, 
@@ -604,24 +761,47 @@ def run_experiment_with_multilevel_noise(
                 current_val_indices=validation_example_indices
             )
         
+        # DYNAMIC K-CENTERS: Apply K-centers to current active pool using model embeddings
+        print(f"Applying dynamic K-centers to select {min(active_set_size, len(active_pool))} from {len(active_pool)} examples...")
+        if len(active_pool) > active_set_size:
+            # Extract model embeddings for current pool
+            model_embeddings = extract_model_embeddings(dataset_train, active_pool, model, device)
+            selected_subset_indices = greedy_k_centers(model_embeddings, active_set_size, random_seed=42 + cycle_count)
+            active_subset = [active_pool[i] for i in selected_subset_indices]
+            print(f"K-centers selected {len(active_subset)} diverse examples from pool")
+        else:
+            active_subset = active_pool.copy()
+            print(f"Pool smaller than target, using all {len(active_subset)} examples")
+        
+        metrics['active_subset_size'].append(len(active_subset))
+        
+        # Debug logging
+        print(f"DEBUG: Active subset size: {len(active_subset)}")
+        if len(active_subset) > 0:
+            sample_idx = active_subset[0]
+            sample_entry = dataset_train.get_data_entry(sample_idx)
+            sample_features = len(sample_entry['input'])
+        
+        # Example selection from active subset
         if example_strategy == "random":
-            selected_examples = random.sample(active_pool, min(examples_per_cycle, len(active_pool)))
+            selected_examples = random.sample(active_subset, min(examples_per_cycle, len(active_subset)))
         elif example_strategy in ["gradient", "entropy", "badge"]:
             strategy_class = SelectionFactory.create_example_strategy(example_strategy, model, device, gradient_top_only=gradient_top_only)
-            active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_pool]
-            active_pool_subset = MultiLevelNoisyAnnotationDataset(active_pool_examples)
+            active_subset_examples = [dataset_train.get_data_entry(idx) for idx in active_subset]
+            active_subset_dataset = MultiLevelNoisyAnnotationDataset(active_subset_examples)
             
             selected_indices, _ = strategy_class.select_examples(
-                active_pool_subset, num_to_select=min(examples_per_cycle, len(active_pool)),
+                active_subset_dataset, num_to_select=min(examples_per_cycle, len(active_subset)),
                 val_dataset=dataset_val, num_samples=3, batch_size=batch_size
             )
             
-            selected_examples = [active_pool[idx] for idx in selected_indices]
+            selected_examples = [active_subset[idx] for idx in selected_indices]
         else:
             raise ValueError(f"Unknown example strategy: {example_strategy}")
         
-        print(f"Selected {len(selected_examples)} examples")
+        print(f"Selected {len(selected_examples)} examples from active subset")
         
+        # Remove selected examples from full active pool
         active_pool = [idx for idx in active_pool if idx not in selected_examples]
         
         for example in selected_examples:
@@ -641,7 +821,7 @@ def run_experiment_with_multilevel_noise(
             masked_positions = dataset_train.get_masked_positions(example_idx)
             if not masked_positions:
                 continue
-                
+                                
             if observe_all_features:
                 positions_to_annotate = masked_positions
                 position_benefit_costs = []
@@ -696,7 +876,7 @@ def run_experiment_with_multilevel_noise(
                         position_benefit_costs.append((pos, benefit, actual_cost, actual_ratio))
                 else:
                     raise ValueError(f"Unknown feature strategy: {feature_strategy}")
-            
+                        
             test_example_idx = example_idx % len(dataset_test)
             if test_example_idx not in test_overlap_annotations:
                 test_overlap_annotations[test_example_idx] = []
@@ -866,6 +1046,7 @@ def main():
     parser.add_argument("--human_cost", type=float, default=1.0, help="Cost of human annotations")
     parser.add_argument("--llm_cost", type=float, default=1.0, help="Cost of LLM annotations")
     parser.add_argument("--validation_set_size", type=int, default=50, help="Fixed size for validation set")
+    parser.add_argument("--active_set_size", type=int, default=100, help="Size of active subset selected by K-centers each cycle")
     args = parser.parse_args()
     
     if args.runner == 'prabhav':
@@ -882,6 +1063,7 @@ def main():
     print(f"Using device: {device}")
     print(f"Base noise parameters: LLM α={args.llm_alpha_multiplier}, Human flip={args.human_flip_prob}")
     print(f"Annotation costs: Human={args.human_cost}, LLM={args.llm_cost}")
+    print(f"Dynamic K-centers active subset: {args.active_set_size}, Validation set: {args.validation_set_size}")
 
     if args.use_embedding:
         ModelClass = ImputerEmbedding
@@ -923,12 +1105,12 @@ def main():
             data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.2, dataset=dataset, 
                         cold_start=args.cold_start, llm_alpha_multiplier=args.llm_alpha_multiplier, 
                         human_flip_prob=args.human_flip_prob, use_embedding=args.use_embedding, 
-                        validation_set_size=args.validation_set_size)
+                        validation_set_size=args.validation_set_size, active_set_size=args.active_set_size)
         elif dataset == "llm_rubric":
             data_manager.prepare_data(num_partition=225, initial_train_ratio=0.1, dataset=dataset, 
                                     cold_start=args.cold_start, llm_alpha_multiplier=args.llm_alpha_multiplier, 
                                     human_flip_prob=args.human_flip_prob, use_embedding=args.use_embedding,
-                                    validation_set_size=args.validation_set_size)
+                                    validation_set_size=args.validation_set_size, active_set_size=args.active_set_size)
         
         model_copy = copy.deepcopy(model)
 
@@ -953,7 +1135,7 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 human_cost=args.human_cost, llm_cost=args.llm_cost, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, gradient_top_only=True
+                active_set_size=args.active_set_size, initial_train_dataset=initial_train_dataset, gradient_top_only=True
             )
         
         elif experiment == "random_random":
@@ -966,7 +1148,7 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted,
                 human_cost=args.human_cost, llm_cost=args.llm_cost, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                active_set_size=args.active_set_size, initial_train_dataset=initial_train_dataset
             )
 
         else:
