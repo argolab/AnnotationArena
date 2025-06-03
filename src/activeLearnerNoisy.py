@@ -578,31 +578,22 @@ class NoisyDataManager(DataManager):
         entry["noise_info"].append(noise_type)
 
     def _add_text_embeddings(self, entry, text_id, text_embeddings, question_embeddings, 
-                           question_list, annotators):
+                       question_list, annotators):
         """Add text embeddings for all annotation positions."""
+        
         total_positions = len(entry["input"])
         entry["text_embedding"] = [[] for _ in range(total_positions)]
         
-        embedding_idx = 0
-        
-        for q_idx, question in enumerate(question_list):
+        # Simply assign embeddings based on the question for each position
+        for pos_idx in range(total_positions):
+            question_idx = entry['questions'][pos_idx]
+            question = question_list[question_idx]
+            
             text_embedding = text_embeddings[int(text_id)]
             question_embedding = question_embeddings[question]
             final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
             
-            for _ in range(1 + len(self.noise_levels)):
-                entry["text_embedding"][embedding_idx] = final_embedding
-                embedding_idx += 1
-        
-        for judge_id in annotators:
-            for q_idx, question in enumerate(question_list):
-                text_embedding = text_embeddings[int(text_id)]
-                question_embedding = question_embeddings[question]
-                final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
-                
-                for _ in range(1 + len(self.noise_levels)):
-                    entry["text_embedding"][embedding_idx] = final_embedding
-                    embedding_idx += 1
+            entry["text_embedding"][pos_idx] = final_embedding
 
     def _score_to_prob(self, score, num_classes):
         """Convert score to one-hot probability distribution."""
