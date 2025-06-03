@@ -19,5 +19,5 @@ conda activate llm_rubric_env
 python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearnerNoisy.py --examples_per_cycle 50 --features_per_example 10 \
     --experiment all --loss_type cross_entropy --resample_validation --run_until_exhausted \
     --dataset hanna --runner prabhav --use_embedding True --human_cost 1 --llm_cost 1 \
-    --llm_alpha_multiplier 0.4 --human_flip_prob 0.3 --cold_start False \
+    --llm_alpha_multiplier 0.4 --human_flip_prob 0 --cold_start False \
     --validation_set_size 50 --active_set_size 200
