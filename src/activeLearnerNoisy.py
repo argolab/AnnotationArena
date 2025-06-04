@@ -151,7 +151,7 @@ class NoisyDataManager(DataManager):
         new_dist[argmax_idx] = new_max_prob
         return new_dist.tolist()
     
-    def add_noise_to_llm_medium(self, prob_dist, flip_prob=0.4, noise_strength=0.5):
+    def add_noise_to_llm_medium(self, prob_dist, flip_prob=0.6, noise_strength=0.7):
         """Medium noise: occasional argmax flips with controlled noise."""
         original = np.array(prob_dist)
         argmax_idx = np.argmax(original)
@@ -170,18 +170,18 @@ class NoisyDataManager(DataManager):
         
         return new_dist.tolist()
     
-    def add_noise_to_llm_heavy(self, prob_dist, uniformity=0.8):
+    def add_noise_to_llm_heavy(self, prob_dist, uniformity=0.95):
         """Heavy noise: high entropy/near uniform distributions."""
         num_classes = len(prob_dist)
         
         if np.random.random() < uniformity:
+            noise = np.random.normal(0, 0.1, num_classes)  # Increased from 0.05
             uniform_base = 1.0 / num_classes
-            noise = np.random.normal(0, 0.05, num_classes)
             new_dist = np.full(num_classes, uniform_base) + noise
             new_dist = np.abs(new_dist)
             new_dist = new_dist / np.sum(new_dist)
         else:
-            new_dist = np.random.dirichlet([2] * num_classes)
+            new_dist = np.random.dirichlet([1] * num_classes)
         
         return new_dist.tolist()
 
@@ -201,7 +201,7 @@ class NoisyDataManager(DataManager):
         one_hot = np.array(one_hot)
         original_category = np.argmax(one_hot)
         
-        flip_probs = {'low': flip_prob * 0.3, 'medium': flip_prob, 'heavy': flip_prob * 2.0}
+        flip_probs = {'low': flip_prob * 0.6, 'medium': flip_prob, 'heavy': flip_prob * 2.0}
         effective_flip_prob = min(flip_probs.get(noise_level, flip_prob), 0.95)
         
         if np.random.random() < effective_flip_prob:
@@ -1048,7 +1048,7 @@ def main():
 
     dataset = args.dataset
     models_path = os.path.join(base_path, "models")
-    results_path = os.path.join(base_path, f"results_multilevel_noisy_{dataset}")
+    results_path = os.path.join(base_path, f"results_multilevel_noisy_{dataset}/experiment_both")
     os.makedirs(results_path, exist_ok=True)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -1094,7 +1094,7 @@ def main():
             data_manager = NoisyDataManager(base_path + f'/data_{dataset}/')
 
         if dataset == "hanna":
-            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.2, dataset=dataset, 
+            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset, 
                         cold_start=args.cold_start, llm_alpha_multiplier=args.llm_alpha_multiplier, 
                         human_flip_prob=args.human_flip_prob, use_embedding=args.use_embedding, 
                         validation_set_size=args.validation_set_size, active_set_size=args.active_set_size)
@@ -1127,7 +1127,7 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 human_cost=args.human_cost, llm_cost=args.llm_cost, validation_set_size=args.validation_set_size,
-                active_set_size=args.active_set_size, initial_train_dataset=initial_train_dataset, gradient_top_only=True
+                active_set_size=args.active_set_size, initial_train_dataset=initial_train_dataset
             )
         
         elif experiment == "random_random":
