@@ -83,31 +83,47 @@ def analyze_argmax_for_gradient(results, dataset):
     return same_percentage, argmax_distances
 
 def plot_llm_noise_dynamics(gradient_data, random_data, save_path):
+    import matplotlib.pyplot as plt
+
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
     
     min_cycles = min(len(gradient_data), len(random_data))
-    cycles = range(min_cycles)
+    cycles = range(min_cycles - 1) 
     categories = ['original_llm', 'llm_low', 'llm_medium', 'llm_heavy']
     colors = ['green', 'orange', 'red', 'darkred']
     labels = ['Original', 'Low Noise', 'Medium Noise', 'Heavy Noise']
     
-    for i, (cat, color, label) in enumerate(zip(categories, colors, labels)):
-        gradient_values = [gradient_data[c].get(cat, 0) for c in cycles]
-        ax1.plot(cycles, gradient_values, color=color, label=label, linewidth=2)
+    def compute_percentages(data):
+        percentages = {cat: [] for cat in categories}
+        for c in cycles:
+            total = sum(data[c].get(cat, 0) for cat in categories)
+            for cat in categories:
+                value = data[c].get(cat, 0)
+                percent = (value / total * 100) if total > 0 else 0
+                percentages[cat].append(percent)
+        return percentages
+
+    # Compute normalized percentages
+    gradient_percentages = compute_percentages(gradient_data)
+    random_percentages = compute_percentages(random_data)
+    
+    # Plot Gradient VOI
+    for cat, color, label in zip(categories, colors, labels):
+        ax1.plot(cycles, gradient_percentages[cat], color=color, label=label, linewidth=2)
     
     ax1.set_title('Gradient VOI')
     ax1.set_xlabel('Cycle')
-    ax1.set_ylabel('Percentage of LLM Selections')
+    ax1.set_ylabel('% of LLM Selections (Normalized)')
     ax1.legend()
     ax1.grid(True, alpha=0.3)
     
-    for i, (cat, color, label) in enumerate(zip(categories, colors, labels)):
-        random_values = [random_data[c].get(cat, 0) for c in cycles]
-        ax2.plot(cycles, random_values, color=color, label=label, linewidth=2)
+    # Plot Random
+    for cat, color, label in zip(categories, colors, labels):
+        ax2.plot(cycles, random_percentages[cat], color=color, label=label, linewidth=2)
     
     ax2.set_title('Random')
     ax2.set_xlabel('Cycle')
-    ax2.set_ylabel('Percentage of LLM Selections')
+    ax2.set_ylabel('% of LLM Selections (Normalized)')
     ax2.legend()
     ax2.grid(True, alpha=0.3)
     

@@ -151,7 +151,7 @@ class NoisyDataManager(DataManager):
         new_dist[argmax_idx] = new_max_prob
         return new_dist.tolist()
     
-    def add_noise_to_llm_medium(self, prob_dist, flip_prob=0.7, noise_strength=0.6):
+    def add_noise_to_llm_medium(self, prob_dist, flip_prob=0.9, noise_strength=0.6):
         """Medium noise: flip argmax ~70% of time, make distribution flatter."""
         original = np.array(prob_dist)
         argmax_idx = np.argmax(original)
@@ -178,7 +178,6 @@ class NoisyDataManager(DataManager):
     
     def add_noise_to_llm_heavy(self, prob_dist, uniformity=0.8):
         """Heavy noise: always flip argmax, make very flat distribution."""
-
         original = np.array(prob_dist)
         argmax_idx = np.argmax(original)
         num_classes = len(original)
@@ -238,7 +237,7 @@ class NoisyDataManager(DataManager):
         
         print(f"Preparing data with improved multi-level noise:")
         print(f"   - LLM noise levels: {self.noise_levels} (improved functions)")
-        print(f"   - Human noise levels: {self.noise_levels} (base flip={human_flip_prob})")
+        print(f"   - Human noise: single level (flip={human_flip_prob})")
         print(f"   - Text embeddings: {use_embedding}")
         print(f"   - Validation set size: {validation_set_size}")
         print(f"   - Active set size: {active_set_size} (applied dynamically)")
@@ -428,28 +427,24 @@ class NoisyDataManager(DataManager):
                                                     noise_type='human_noisy',
                                                     true_answer=true_prob)
 
-    def _add_human_annotations(self, entry, human_text_data, annotators, question_list, 
-                             question_indices, split_type, known_human_questions_val, 
-                             cold_start, human_flip_prob):
-        """Add original human annotations plus 3 noise levels for each annotator."""
-        for judge_id in annotators:
-            for q_idx, question in enumerate(question_list):
-                true_score = human_text_data[judge_id][question]
-                true_prob = self._score_to_prob(true_score, 5)
-                
-                self._add_single_human_annotation(entry, true_prob, int(judge_id), 
-                                                question_indices[question], split_type, 
-                                                known_human_questions_val, q_idx, 
-                                                noise_type='original')
-                
-                if human_flip_prob > 0:
-                    for noise_level in self.noise_levels:
-                        noisy_prob = self.add_noise_to_human(true_prob, human_flip_prob, noise_level)
-                        self._add_single_human_annotation(entry, noisy_prob, int(judge_id),
-                                                        question_indices[question], split_type,
-                                                        known_human_questions_val, q_idx,
-                                                        noise_type=f'human_{noise_level}',
-                                                        true_answer=true_prob)
+    def _add_single_llm_annotation(self, entry, prob, question_idx, split_type, cold_start, 
+                                 noise_type='original', true_answer=None):
+        """Add a single LLM annotation with proper masking logic."""
+        if cold_start and split_type in ['active_pool', 'validation']:
+            mask_bit = 1
+            combined_input = [mask_bit] + [0.0] * 5
+            entry["known_questions"].append(0)
+        else:
+            mask_bit = 0
+            combined_input = [mask_bit] + prob
+            entry["known_questions"].append(1)
+        
+        entry["input"].append(combined_input)
+        entry["answers"].append(prob)
+        entry["true_answers"].append(true_answer if true_answer is not None else prob)
+        entry["annotators"].append(-1)
+        entry["questions"].append(question_idx)
+        entry["noise_info"].append(noise_type)
 
     def _add_single_human_annotation(self, entry, prob, judge_id, question_idx, split_type, 
                                    known_human_questions_val, q_idx, noise_type='original', 
@@ -542,13 +537,12 @@ class NoisyDataManager(DataManager):
                                                    noise_type='original')
             
             if human_flip_prob > 0:
-                for noise_level in self.noise_levels:
-                    noisy_prob = self.add_noise_to_human(true_prob, human_flip_prob, noise_level)
-                    self._add_single_human_annotation_4class(entry, noisy_prob, int(annotator),
-                                                           question_indices[question], split_type,
-                                                           known_human_questions_val, q_idx,
-                                                           noise_type=f'human_{noise_level}',
-                                                           true_answer=true_prob)
+                noisy_prob = self.add_noise_to_human(true_prob, human_flip_prob)
+                self._add_single_human_annotation_4class(entry, noisy_prob, int(annotator),
+                                                       question_indices[question], split_type,
+                                                       known_human_questions_val, q_idx,
+                                                       noise_type='human_noisy',
+                                                       true_answer=true_prob)
 
     def _add_single_human_annotation_4class(self, entry, prob, annotator, question_idx, split_type, 
                                           known_human_questions_val, q_idx, noise_type='original', 
@@ -686,7 +680,7 @@ def run_experiment_with_multilevel_noise(
     arena.set_dataset(dataset_train)
     
     noise_categories = ['original_llm', 'llm_low', 'llm_medium', 'llm_heavy',
-                   'original_human', 'human_noisy']
+                       'original_human', 'human_noisy']
     
     metrics = {
         'training_losses': [],
@@ -947,9 +941,7 @@ def run_experiment_with_multilevel_noise(
             print(f"   LLM Medium:   {cycle_selections['llm_medium']} ({cycle_selections['llm_medium']/total_cycle_selections*100:.1f}%)")
             print(f"   LLM Heavy:    {cycle_selections['llm_heavy']} ({cycle_selections['llm_heavy']/total_cycle_selections*100:.1f}%)")
             print(f"   Human Original: {cycle_selections['original_human']} ({cycle_selections['original_human']/total_cycle_selections*100:.1f}%)")
-            print(f"   Human Low:    {cycle_selections['human_low']} ({cycle_selections['human_low']/total_cycle_selections*100:.1f}%)")
-            print(f"   Human Medium: {cycle_selections['human_medium']} ({cycle_selections['human_medium']/total_cycle_selections*100:.1f}%)")
-            print(f"   Human Heavy:  {cycle_selections['human_heavy']} ({cycle_selections['human_heavy']/total_cycle_selections*100:.1f}%)")
+            print(f"   Human Noisy:    {cycle_selections['human_noisy']} ({cycle_selections['human_noisy']/total_cycle_selections*100:.1f}%)")
         
         print(f"Total features annotated: {total_features_annotated}")
         
@@ -1127,7 +1119,7 @@ def main():
         if experiment == "gradient_voi":
             results = run_experiment_with_multilevel_noise(
                 active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="gradient", feature_strategy="voi", model=model_copy,
+                example_strategy="gradient", feature_strategy="voi_argmax", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
@@ -1170,7 +1162,7 @@ def main():
         print(f"{'='*60}")
         
         noise_categories = ['original_llm', 'llm_low', 'llm_medium', 'llm_heavy',
-                           'original_human', 'human_low', 'human_medium', 'human_heavy']
+                           'original_human', 'human_noisy']
         
         total_final = 0
         for category in noise_categories:

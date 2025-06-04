@@ -548,7 +548,6 @@ class VOISelectionStrategy(FeatureSelectionStrategy):
                 if (questions[0, i].item() == q_idx and 
                     not dataset.is_position_noisy(example_idx, i)):
                     target_indices.append(i)
-                    break
         
         if not target_indices:
             return []
@@ -1953,21 +1952,12 @@ class ArgmaxVOISelectionStrategy(FeatureSelectionStrategy):
         if embeddings is not None:
             embeddings = embeddings.unsqueeze(0).to(self.device)
         
-        # # Find target indices (positions that have the target questions)
-        # target_indices = []
-        # for q_idx in target_questions:
-        #     for i in range(questions.shape[1]):
-        #         if questions[0, i].item() == q_idx and annotators[0, i].item() >= 0:  # Human annotation
-        #             target_indices.append(i)
-
         target_indices = []
         for q_idx in target_questions:
             for i in range(questions.shape[1]):
                 if (questions[0, i].item() == q_idx and 
-                    annotators[0, i].item() >= 0 and  # Human annotation (not LLM)
-                    not dataset.is_position_noisy(example_idx, i)):  # NOT noisy
+                    not dataset.is_position_noisy(example_idx, i)):
                     target_indices.append(i)
-                    break  # Take only first original human target per question
         
         if not target_indices:
             return []
