@@ -151,37 +151,57 @@ class NoisyDataManager(DataManager):
         new_dist[argmax_idx] = new_max_prob
         return new_dist.tolist()
     
-    def add_noise_to_llm_medium(self, prob_dist, flip_prob=0.6, noise_strength=0.7):
-        """Medium noise: occasional argmax flips with controlled noise."""
+    def add_noise_to_llm_medium(self, prob_dist, flip_prob=0.7, noise_strength=0.6):
+        """Medium noise: flip argmax ~70% of time, make distribution flatter."""
         original = np.array(prob_dist)
         argmax_idx = np.argmax(original)
         
         if np.random.random() < flip_prob:
+            # Force argmax flip
             other_indices = [i for i in range(len(original)) if i != argmax_idx]
             new_argmax = np.random.choice(other_indices)
             
-            new_dist = np.random.dirichlet([0.5] * len(original))
-            new_dist[new_argmax] = max(new_dist[new_argmax], 0.35)
+            # Create flatter distribution with new argmax
+            new_dist = np.random.dirichlet([1.5] * len(original))
+            new_dist[new_argmax] = max(new_dist[new_argmax], 0.4)
             new_dist = new_dist / np.sum(new_dist)
         else:
-            noise = np.random.dirichlet([1] * len(original))
-            new_dist = original * (1 - noise_strength) + noise * noise_strength
-            new_dist = new_dist / np.sum(new_dist)
+            # Keep same argmax but flatten distribution
+            new_max_prob = max(0.4, original[argmax_idx] - noise_strength)
+            remaining_prob = 1.0 - new_max_prob
+            other_prob = remaining_prob / (len(original) - 1) if len(original) > 1 else 0.0
+            
+            new_dist = np.full_like(original, other_prob)
+            new_dist[argmax_idx] = new_max_prob
         
         return new_dist.tolist()
     
-    def add_noise_to_llm_heavy(self, prob_dist, uniformity=0.95):
-        """Heavy noise: high entropy/near uniform distributions."""
-        num_classes = len(prob_dist)
+    def add_noise_to_llm_heavy(self, prob_dist, uniformity=0.8):
+        """Heavy noise: always flip argmax, make very flat distribution."""
+
+        original = np.array(prob_dist)
+        argmax_idx = np.argmax(original)
+        num_classes = len(original)
+        
+        # Always flip argmax
+        other_indices = [i for i in range(num_classes) if i != argmax_idx]
+        new_argmax = np.random.choice(other_indices)
         
         if np.random.random() < uniformity:
-            noise = np.random.normal(0, 0.1, num_classes)  # Increased from 0.05
+            # Very flat/uniform distribution
+            noise = np.random.normal(0, 0.05, num_classes)
             uniform_base = 1.0 / num_classes
             new_dist = np.full(num_classes, uniform_base) + noise
             new_dist = np.abs(new_dist)
+            
+            # Ensure new argmax is slightly higher
+            new_dist[new_argmax] += 0.1
             new_dist = new_dist / np.sum(new_dist)
         else:
-            new_dist = np.random.dirichlet([1] * num_classes)
+            # Random but ensure argmax flip
+            new_dist = np.random.dirichlet([0.8] * num_classes)
+            new_dist[new_argmax] = max(new_dist[new_argmax], 0.3)
+            new_dist = new_dist / np.sum(new_dist)
         
         return new_dist.tolist()
 
@@ -196,15 +216,12 @@ class NoisyDataManager(DataManager):
         else:
             return prob_dist
 
-    def add_noise_to_human(self, one_hot, flip_prob=0.3, noise_level='medium'):
-        """Add noise to human one-hot annotations by flipping to different categories."""
+    def add_noise_to_human(self, one_hot, flip_prob=0.8):
+        """Single level human noise: flip argmax with given probability."""
         one_hot = np.array(one_hot)
         original_category = np.argmax(one_hot)
         
-        flip_probs = {'low': flip_prob * 0.6, 'medium': flip_prob, 'heavy': flip_prob * 2.0}
-        effective_flip_prob = min(flip_probs.get(noise_level, flip_prob), 0.95)
-        
-        if np.random.random() < effective_flip_prob:
+        if np.random.random() < flip_prob:
             num_categories = len(one_hot)
             other_categories = [i for i in range(num_categories) if i != original_category]
             new_category = np.random.choice(other_categories)
@@ -375,47 +392,41 @@ class NoisyDataManager(DataManager):
                     data_list.append(entry)
     
     def _add_llm_annotations(self, entry, llm_text_data, question_list, question_indices, 
-                           split_type, cold_start, llm_alpha_multiplier):
+                       split_type, cold_start, llm_alpha_multiplier):
         """Add original LLM annotations plus 3 noise levels."""
         for q_idx, question in enumerate(question_list):
             true_prob = llm_text_data[question]
             
             self._add_single_llm_annotation(entry, true_prob, question_indices[question], 
-                                          split_type, cold_start, noise_type='original')
+                                        split_type, cold_start, noise_type='original')
             
             for noise_level in self.noise_levels:
                 noisy_prob = self.add_noise_to_llm(true_prob, llm_alpha_multiplier, noise_level)
                 self._add_single_llm_annotation(entry, noisy_prob, question_indices[question], 
-                                              split_type, cold_start, noise_type=f'llm_{noise_level}', 
-                                              true_answer=true_prob)
+                                            split_type, cold_start, noise_type=f'llm_{noise_level}', 
+                                            true_answer=true_prob)
     
-    def _add_single_llm_annotation(self, entry, prob, question_idx, split_type, cold_start, 
-                                 noise_type='original', true_answer=None):
-        """Add a single LLM annotation with proper masking logic."""
-        if cold_start and split_type in ['active_pool', 'validation']:
-            mask_bit = 1
-            combined_input = [mask_bit] + [0.0] * 5
-            entry["known_questions"].append(0)
-        elif split_type == 'train':
-            if noise_type == 'original':
-                mask_bit = 0
-                combined_input = [mask_bit] + prob
-                entry["known_questions"].append(1)
-            else:
-                mask_bit = 1
-                combined_input = [mask_bit] + [0.0] * 5
-                entry["known_questions"].append(0)
-        else:
-            mask_bit = 0
-            combined_input = [mask_bit] + prob
-            entry["known_questions"].append(1)
-        
-        entry["input"].append(combined_input)
-        entry["answers"].append(prob)
-        entry["true_answers"].append(true_answer if true_answer is not None else prob)
-        entry["annotators"].append(-1)
-        entry["questions"].append(question_idx)
-        entry["noise_info"].append(noise_type)
+    def _add_human_annotations(self, entry, human_text_data, annotators, question_list, 
+                         question_indices, split_type, known_human_questions_val, 
+                         cold_start, human_flip_prob):
+        """Add original human annotations plus single noise level for each annotator."""
+        for judge_id in annotators:
+            for q_idx, question in enumerate(question_list):
+                true_score = human_text_data[judge_id][question]
+                true_prob = self._score_to_prob(true_score, 5)
+                
+                self._add_single_human_annotation(entry, true_prob, int(judge_id), 
+                                                question_indices[question], split_type, 
+                                                known_human_questions_val, q_idx, 
+                                                noise_type='original')
+                
+                if human_flip_prob > 0:
+                    noisy_prob = self.add_noise_to_human(true_prob, human_flip_prob)
+                    self._add_single_human_annotation(entry, noisy_prob, int(judge_id),
+                                                    question_indices[question], split_type,
+                                                    known_human_questions_val, q_idx,
+                                                    noise_type='human_noisy',
+                                                    true_answer=true_prob)
 
     def _add_human_annotations(self, entry, human_text_data, annotators, question_list, 
                              question_indices, split_type, known_human_questions_val, 
@@ -675,7 +686,7 @@ def run_experiment_with_multilevel_noise(
     arena.set_dataset(dataset_train)
     
     noise_categories = ['original_llm', 'llm_low', 'llm_medium', 'llm_heavy',
-                       'original_human', 'human_low', 'human_medium', 'human_heavy']
+                   'original_human', 'human_noisy']
     
     metrics = {
         'training_losses': [],
@@ -893,12 +904,8 @@ def run_experiment_with_multilevel_noise(
                 else:
                     if noise_type == 'original':
                         category = 'original_human'
-                    elif 'low' in noise_type:
-                        category = 'human_low'
-                    elif 'medium' in noise_type:
-                        category = 'human_medium'
-                    elif 'heavy' in noise_type:
-                        category = 'human_heavy'
+                    elif 'noisy' in noise_type:
+                        category = 'human_noisy'
                     else:
                         category = 'original_human'
                 
