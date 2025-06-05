@@ -751,6 +751,9 @@ def run_experiment_with_multilevel_noise(
         
         # Resample validation if needed
         if resample_validation and cycle_count > 0:
+            current_val_indices = list(range(len(dataset_val)))  # Get current validation indices
+            active_pool.extend(current_val_indices)  # Add them back to active pool
+            
             dataset_val, active_pool, validation_example_indices = resample_validation_dataset(
                 dataset_train, dataset_val, active_pool, annotated_examples, 
                 strategy="balanced_fixed_size", 
@@ -797,9 +800,14 @@ def run_experiment_with_multilevel_noise(
             raise ValueError(f"Unknown example strategy: {example_strategy}")
         
         print(f"Selected {len(selected_examples)} examples from active subset")
-        
+
         # Remove selected examples from full active pool
         active_pool = [idx for idx in active_pool if idx not in selected_examples]
+
+        # Put back the unselected examples from active_subset
+        if len(active_subset) < len(active_pool) + len(selected_examples): 
+            unselected_from_subset = [idx for idx in active_subset if idx not in selected_examples]
+            active_pool.extend(unselected_from_subset)
         
         for example in selected_examples:
             if example not in annotated_examples:

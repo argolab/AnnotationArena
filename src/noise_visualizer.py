@@ -13,24 +13,33 @@ def load_data(gradient_path, random_path, dataset_path):
         dataset = json.load(f)
     return gradient_results, random_results, dataset
 
-def extract_llm_selections_per_cycle(results):
+def extract_noise_selections_per_cycle(results, noise_type='llm', max_cycles=None):
+    """Extract noise selections by type (llm or human)"""
     cycles = len(results.get('selection_breakdown_per_cycle', []))
-    llm_categories = ['original_llm', 'llm_low', 'llm_medium', 'llm_heavy']
+    if max_cycles:
+        cycles = min(cycles, max_cycles)
+    
+    if noise_type == 'llm':
+        categories = ['original_llm', 'llm_low', 'llm_medium', 'llm_heavy']
+        labels = ['Original', 'Low Noise', 'Medium Noise', 'Heavy Noise']
+    else:  # human
+        categories = ['original_human', 'human_noisy'] 
+        labels = ['Original', 'Noisy']
     
     cycle_data = []
     for cycle_idx in range(cycles):
         if cycle_idx < len(results['selection_breakdown_per_cycle']):
             breakdown = results['selection_breakdown_per_cycle'][cycle_idx]
-            total_llm = sum(breakdown.get(cat, 0) for cat in llm_categories)
-            if total_llm > 0:
-                percentages = {cat: (breakdown.get(cat, 0) / total_llm) * 100 for cat in llm_categories}
+            total = sum(breakdown.get(cat, 0) for cat in categories)
+            if total > 0:
+                percentages = {cat: (breakdown.get(cat, 0) / total) * 100 for cat in categories}
             else:
-                percentages = {cat: 0 for cat in llm_categories}
+                percentages = {cat: 0 for cat in categories}
             cycle_data.append(percentages)
         else:
-            cycle_data.append({cat: 0 for cat in llm_categories})
+            cycle_data.append({cat: 0 for cat in categories})
     
-    return cycle_data
+    return cycle_data, categories, labels
 
 def parse_variable_id(variable_id):
     parts = variable_id.split('_')
@@ -38,112 +47,55 @@ def parse_variable_id(variable_id):
     position_idx = int(parts[3])
     return example_idx, position_idx
 
-def analyze_argmax_for_gradient(results, dataset):
-    observation_history = results.get('observation_history', [])
+def plot_noise_dynamics_separate(gradient_results, noise_type='llm', max_cycles=None, save_path=None):
+    """Plot noise dynamics for either LLM or Human separately"""
+    gradient_data, categories, labels = extract_noise_selections_per_cycle(
+        gradient_results, noise_type, max_cycles
+    )
     
-    same_argmax_count = 0
-    different_argmax_count = 0
-    argmax_distances = []
+    cycles = range(len(gradient_data))
     
-    for obs in observation_history:
-        variable_id = obs['variable_id']
-        example_idx, position_idx = parse_variable_id(variable_id)
-        
-        if example_idx >= len(dataset):
-            continue
-            
-        entry = dataset[example_idx]
-        if position_idx >= len(entry.get('annotators', [])):
-            continue
-            
-        is_llm = entry['annotators'][position_idx] == -1
-        if not is_llm:
-            continue
-            
-        noise_type = entry.get('noise_info', ['unknown'] * len(entry['annotators']))[position_idx]
-        if noise_type == 'original':
-            continue
-            
-        noisy_answer = entry['answers'][position_idx]
-        true_answer = entry['true_answers'][position_idx]
-        
-        noisy_argmax = np.argmax(noisy_answer)
-        true_argmax = np.argmax(true_answer)
-        
-        if noisy_argmax == true_argmax:
-            same_argmax_count += 1
-        else:
-            different_argmax_count += 1
-            distance = abs(noisy_argmax - true_argmax)
-            argmax_distances.append(distance)
+    if noise_type == 'llm':
+        colors = ['#2E8B57', '#FF8C00', '#DC143C', '#8B0000']  # Green, Orange, Red, Dark Red
+        title = 'LLM Noise Selection Dynamics (Gradient VOI)'
+    else:
+        colors = ['#4169E1', '#B22222']  # Royal Blue, Fire Brick
+        title = 'Human Noise Selection Dynamics (Gradient VOI)'
     
-    total_noisy_llm = same_argmax_count + different_argmax_count
-    same_percentage = (same_argmax_count / total_noisy_llm * 100) if total_noisy_llm > 0 else 0
+    plt.figure(figsize=(10, 6))
     
-    return same_percentage, argmax_distances
-
-def plot_llm_noise_dynamics(gradient_data, random_data, save_path):
-    import matplotlib.pyplot as plt
-
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-    
-    min_cycles = min(len(gradient_data), len(random_data))
-    cycles = range(min_cycles - 1) 
-    categories = ['original_llm', 'llm_low', 'llm_medium', 'llm_heavy']
-    colors = ['green', 'orange', 'red', 'darkred']
-    labels = ['Original', 'Low Noise', 'Medium Noise', 'Heavy Noise']
-    
-    def compute_percentages(data):
-        percentages = {cat: [] for cat in categories}
-        for c in cycles:
-            total = sum(data[c].get(cat, 0) for cat in categories)
-            for cat in categories:
-                value = data[c].get(cat, 0)
-                percent = (value / total * 100) if total > 0 else 0
-                percentages[cat].append(percent)
-        return percentages
-
-    # Compute normalized percentages
-    gradient_percentages = compute_percentages(gradient_data)
-    random_percentages = compute_percentages(random_data)
-    
-    # Plot Gradient VOI
     for cat, color, label in zip(categories, colors, labels):
-        ax1.plot(cycles, gradient_percentages[cat], color=color, label=label, linewidth=2)
+        percentages = [cycle.get(cat, 0) for cycle in gradient_data]
+        plt.plot(cycles, percentages, color=color, label=label, linewidth=2.5, marker='o', markersize=4)
     
-    ax1.set_title('Gradient VOI')
-    ax1.set_xlabel('Cycle')
-    ax1.set_ylabel('% of LLM Selections (Normalized)')
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    
-    # Plot Random
-    for cat, color, label in zip(categories, colors, labels):
-        ax2.plot(cycles, random_percentages[cat], color=color, label=label, linewidth=2)
-    
-    ax2.set_title('Random')
-    ax2.set_xlabel('Cycle')
-    ax2.set_ylabel('% of LLM Selections (Normalized)')
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
-    
+    plt.title(title, fontsize=14, fontweight='bold')
+    plt.xlabel('Cycle', fontsize=12)
+    plt.ylabel('% of Selections (Normalized)', fontsize=12)
+    plt.legend(fontsize=11)
+    plt.grid(True, alpha=0.3)
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-def plot_clean_selections_vs_performance(gradient_results, random_results, save_path):
-    fig, ax1 = plt.subplots(1, 1, figsize=(14, 8))
     
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+def plot_clean_selections_vs_performance(gradient_results, random_results, max_cycles=None, save_path=None):
+    """Plot clean selections vs performance with improved styling"""
     gradient_cycles = len(gradient_results.get('selection_breakdown_per_cycle', []))
     random_cycles = len(random_results.get('selection_breakdown_per_cycle', []))
     min_cycles = min(gradient_cycles, random_cycles)
+    if max_cycles:
+        min_cycles = min(min_cycles, max_cycles)
     
+    # Extract clean selections (LLM + Human original)
     gradient_clean = []
     gradient_test_loss = gradient_results.get('test_annotated_losses', [])[:min_cycles]
     
     for cycle_idx in range(min_cycles):
         breakdown = gradient_results['selection_breakdown_per_cycle'][cycle_idx]
-        clean_count = breakdown.get('original_llm', 0)
+        clean_count = breakdown.get('original_llm', 0) + breakdown.get('original_human', 0)
         gradient_clean.append(clean_count)
     
     random_clean = []
@@ -151,60 +103,52 @@ def plot_clean_selections_vs_performance(gradient_results, random_results, save_
     
     for cycle_idx in range(min_cycles):
         breakdown = random_results['selection_breakdown_per_cycle'][cycle_idx]
-        clean_count = breakdown.get('original_llm', 0)
+        clean_count = breakdown.get('original_llm', 0) + breakdown.get('original_human', 0)
         random_clean.append(clean_count)
+    
+    fig, ax1 = plt.subplots(1, 1, figsize=(12, 7))
+    ax2 = ax1.twinx()
     
     cycles = np.arange(min_cycles)
     width = 0.35
     
-    ax2 = ax1.twinx()
+    # Improved colors and transparency
+    bars1 = ax1.bar(cycles - width/2, gradient_clean, width, alpha=0.6, 
+                   color='#1f77b4', label='Gradient VOI Clean Selections', edgecolor='black', linewidth=0.5)
+    bars2 = ax1.bar(cycles + width/2, random_clean, width, alpha=0.6, 
+                   color='#ff7f0e', label='Random Clean Selections', edgecolor='black', linewidth=0.5)
     
-    bars1 = ax1.bar(cycles - width/2, gradient_clean, width, alpha=0.5, color='blue', label='Gradient VOI Clean Selections')
-    bars2 = ax1.bar(cycles + width/2, random_clean, width, alpha=0.5, color='orange', label='Random Clean Selections')
+    # Performance lines
+    line1 = ax2.plot(range(len(gradient_test_loss)), gradient_test_loss, '#d62728', 
+                    linewidth=2.5, marker='o', markersize=5, label='Gradient VOI Test Loss')
+    line2 = ax2.plot(range(len(random_test_loss)), random_test_loss, '#2ca02c', 
+                    linewidth=2.5, marker='s', markersize=5, label='Random Test Loss')
     
-    line1 = ax2.plot(range(len(gradient_test_loss)), gradient_test_loss, 'b-', linewidth=1, marker='o', markersize=4, label='Gradient VOI Test Loss')
-    line2 = ax2.plot(range(len(random_test_loss)), random_test_loss, 'r-', linewidth=1, marker='s', markersize=4, label='Random Test Loss')
-    
-    ax1.set_xlabel('Cycle')
-    ax1.set_ylabel('Clean LLM Selections')
-    ax2.set_ylabel('Test Loss')
-    ax1.set_title('Clean LLM Selections vs Test Loss Performance')
+    ax1.set_xlabel('Cycle', fontsize=12)
+    ax1.set_ylabel('Clean Selections Count', fontsize=12)
+    ax2.set_ylabel('Test Loss', fontsize=12)
+    ax1.set_title('Clean Selections vs Test Loss Performance', fontsize=14, fontweight='bold')
     
     ax1.set_xticks(cycles)
     ax1.set_xticklabels([str(i) for i in cycles])
     
+    # Combined legend
     lines1, labels1 = ax1.get_legend_handles_labels()
     lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right', fontsize='small')
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right', fontsize=10)
     
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-def plot_argmax_analysis(same_percentage, argmax_distances, save_path):
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10, 4))
-    
-    ax1.bar(['Same Argmax', 'Different Argmax'], [same_percentage, 100 - same_percentage], 
-            color=['green', 'red'], alpha=0.7)
-    ax1.set_ylabel('Percentage')
-    ax1.set_title('Argmax Comparison for Noisy LLM Selections')
-    ax1.set_ylim(0, 100)
-    
-    if argmax_distances:
-        ax2.hist(argmax_distances, bins=range(1, 6), alpha=0.7, color='red', edgecolor='black')
-        ax2.set_xlabel('Argmax Distance')
-        ax2.set_ylabel('Count')
-        ax2.set_title('Distance When Argmax Differs')
-        ax2.set_xticks(range(1, 5))
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
     else:
-        ax2.text(0.5, 0.5, 'No different argmax cases', ha='center', va='center', transform=ax2.transAxes)
-        ax2.set_title('Distance When Argmax Differs')
-    
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
+        plt.show()
 
-def plot_learning_curve(gradient_data, random_data, save_path):
+def plot_learning_curve_percent(gradient_results, random_results, max_cycles=None, save_path=None):
+    """Plot learning curve showing percentage of clean selections"""
+    gradient_data, _, _ = extract_noise_selections_per_cycle(gradient_results, 'llm', max_cycles)
+    random_data, _, _ = extract_noise_selections_per_cycle(random_results, 'llm', max_cycles)
+    
     def moving_average(data, window=3):
         if len(data) < window:
             return data
@@ -212,280 +156,108 @@ def plot_learning_curve(gradient_data, random_data, save_path):
     
     min_cycles = min(len(gradient_data), len(random_data))
     
+    # Calculate percentage of clean selections (LLM + Human)
     gradient_clean_pct = []
-    for cycle_idx in range(min_cycles - 1):
-        cycle = gradient_data[cycle_idx]
-        total_llm = sum(cycle.get(cat, 0) for cat in ['original_llm', 'llm_low', 'llm_medium', 'llm_heavy'])
-        if total_llm > 0:
-            clean_pct = cycle.get('original_llm', 0)
-        else:
-            clean_pct = 0
+    for cycle_idx in range(min_cycles):
+        breakdown = gradient_results['selection_breakdown_per_cycle'][cycle_idx]
+        total_selections = sum(breakdown.values())
+        clean_selections = breakdown.get('original_llm', 0) + breakdown.get('original_human', 0)
+        clean_pct = (clean_selections / total_selections * 100) if total_selections > 0 else 0
         gradient_clean_pct.append(clean_pct)
     
     random_clean_pct = []
-    for cycle_idx in range(min_cycles - 1):
-        cycle = random_data[cycle_idx]
-        total_llm = sum(cycle.get(cat, 0) for cat in ['original_llm', 'llm_low', 'llm_medium', 'llm_heavy'])
-        if total_llm > 0:
-            clean_pct = cycle.get('original_llm', 0)
-        else:
-            clean_pct = 0
+    for cycle_idx in range(min_cycles):
+        breakdown = random_results['selection_breakdown_per_cycle'][cycle_idx]
+        total_selections = sum(breakdown.values())
+        clean_selections = breakdown.get('original_llm', 0) + breakdown.get('original_human', 0)
+        clean_pct = (clean_selections / total_selections * 100) if total_selections > 0 else 0
         random_clean_pct.append(clean_pct)
     
     gradient_ma = moving_average(gradient_clean_pct)
     random_ma = moving_average(random_clean_pct)
     
-    plt.figure(figsize=(8, 5))
+    plt.figure(figsize=(10, 6))
     
     cycles = range(len(gradient_ma))
-    plt.plot(cycles, gradient_ma, 'b-', linewidth=2, label='Gradient VOI')
-    plt.plot(cycles, random_ma, 'r-', linewidth=2, label='Random')
+    plt.plot(cycles, gradient_ma, '#1f77b4', linewidth=2.5, marker='o', markersize=5, label='Gradient VOI')
+    plt.plot(cycles, random_ma, '#ff7f0e', linewidth=2.5, marker='s', markersize=5, label='Random')
     
-    plt.xlabel('Cycle')
-    plt.ylabel('Clean LLM Selections (3-cycle MA)')
-    plt.title('Learning Curve for Clean Selection')
-    plt.legend()
+    plt.xlabel('Cycle', fontsize=12)
+    plt.ylabel('% Clean Selections (3-cycle MA)', fontsize=12)
+    plt.title('Learning Curve: Clean Selection Percentage', fontsize=14, fontweight='bold')
+    plt.legend(fontsize=11)
     plt.grid(True, alpha=0.3)
+    plt.ylim(0, 100)
     
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-def plot_selection_heatmap(gradient_results, random_results, save_path):
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
-    
-    llm_categories = ['original_llm', 'llm_low', 'llm_medium', 'llm_heavy']
-    category_labels = ['Original', 'Low Noise', 'Medium Noise', 'Heavy Noise']
-    
-    gradient_cycles = len(gradient_results.get('selection_breakdown_per_cycle', []))
-    random_cycles = len(random_results.get('selection_breakdown_per_cycle', []))
-    min_cycles = min(gradient_cycles, random_cycles)
-    
-    gradient_matrix = np.zeros((len(llm_categories), min_cycles - 1))
-    
-    for cycle_idx in range(min_cycles - 1):
-        breakdown = gradient_results['selection_breakdown_per_cycle'][cycle_idx]
-        for cat_idx, cat in enumerate(llm_categories):
-            gradient_matrix[cat_idx, cycle_idx] = breakdown.get(cat, 0)
-    
-    random_matrix = np.zeros((len(llm_categories), min_cycles - 1))
-    
-    for cycle_idx in range(min_cycles - 1):
-        breakdown = random_results['selection_breakdown_per_cycle'][cycle_idx]
-        for cat_idx, cat in enumerate(llm_categories):
-            random_matrix[cat_idx, cycle_idx] = breakdown.get(cat, 0)
-    
-    im1 = ax1.imshow(gradient_matrix, cmap='Reds', aspect='auto')
-    ax1.set_title('Gradient VOI')
-    ax1.set_xlabel('Cycle')
-    ax1.set_ylabel('Noise Level')
-    ax1.set_yticks(range(len(category_labels)))
-    ax1.set_yticklabels(category_labels)
-    plt.colorbar(im1, ax=ax1, label='Selection Count')
-    
-    im2 = ax2.imshow(random_matrix, cmap='Reds', aspect='auto')
-    ax2.set_title('Random')
-    ax2.set_xlabel('Cycle')
-    ax2.set_ylabel('Noise Level')
-    ax2.set_yticks(range(len(category_labels)))
-    ax2.set_yticklabels(category_labels)
-    plt.colorbar(im2, ax=ax2, label='Selection Count')
-    
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-
-def detailed_argmax_analysis(results, dataset):
-    observation_history = results.get('observation_history', [])
-    
-    noise_categories = ['llm_low', 'llm_medium', 'llm_heavy']
-    analysis = {}
-    
-    for category in noise_categories:
-        analysis[category] = {
-            'same_argmax': 0,
-            'different_argmax': 0,
-            'distances': [],
-            'examples': []
-        }
-    
-    for obs in observation_history:
-        variable_id = obs['variable_id']
-        example_idx, position_idx = parse_variable_id(variable_id)
-        
-        if example_idx >= len(dataset):
-            continue
-            
-        entry = dataset[example_idx]
-        if position_idx >= len(entry.get('annotators', [])):
-            continue
-            
-        is_llm = entry['annotators'][position_idx] == -1
-        if not is_llm:
-            continue
-            
-        noise_type = entry.get('noise_info', ['unknown'] * len(entry['annotators']))[position_idx]
-        if noise_type not in noise_categories:
-            continue
-            
-        noisy_answer = entry['answers'][position_idx]
-        true_answer = entry['true_answers'][position_idx]
-        
-        noisy_argmax = np.argmax(noisy_answer)
-        true_argmax = np.argmax(true_answer)
-        
-        example_data = {
-            'example_idx': example_idx,
-            'position_idx': position_idx,
-            'noisy_answer': noisy_answer,
-            'true_answer': true_answer,
-            'noisy_argmax': noisy_argmax,
-            'true_argmax': true_argmax,
-            'question': entry['questions'][position_idx]
-        }
-        
-        if noisy_argmax == true_argmax:
-            analysis[noise_type]['same_argmax'] += 1
-            if len(analysis[noise_type]['examples']) < 3:
-                analysis[noise_type]['examples'].append(example_data)
-        else:
-            analysis[noise_type]['different_argmax'] += 1
-            distance = abs(noisy_argmax - true_argmax)
-            analysis[noise_type]['distances'].append(distance)
-            if len(analysis[noise_type]['examples']) < 6:
-                analysis[noise_type]['examples'].append(example_data)
-    
-    return analysis
-
-def print_detailed_argmax_analysis(analysis):
-    print("\n" + "="*80)
-    print("DETAILED ARGMAX ANALYSIS BY NOISE LEVEL")
-    print("="*80)
-    
-    for category in ['llm_low', 'llm_medium', 'llm_heavy']:
-        data = analysis[category]
-        total = data['same_argmax'] + data['different_argmax']
-        
-        if total == 0:
-            continue
-            
-        same_pct = (data['same_argmax'] / total) * 100
-        
-        print(f"\n{category.upper().replace('_', ' ')}:")
-        print(f"  Total selections: {total}")
-        print(f"  Same argmax: {data['same_argmax']} ({same_pct:.1f}%)")
-        print(f"  Different argmax: {data['different_argmax']} ({100-same_pct:.1f}%)")
-        
-        if data['distances']:
-            avg_distance = np.mean(data['distances'])
-            print(f"  Average distance when different: {avg_distance:.2f}")
-            distance_counts = {}
-            for d in data['distances']:
-                distance_counts[d] = distance_counts.get(d, 0) + 1
-            print(f"  Distance distribution: {distance_counts}")
-        
-        print(f"\n  Examples (first 6):")
-        for i, example in enumerate(data['examples'][:6]):
-            status = "SAME" if example['noisy_argmax'] == example['true_argmax'] else "DIFF"
-            print(f"    {i+1}. [{status}] Q{example['question']} | "
-                  f"Noisy argmax: {example['noisy_argmax']} | True argmax: {example['true_argmax']}")
-            print(f"       Noisy dist: {[f'{x:.3f}' for x in example['noisy_answer']]}")
-            print(f"       True dist:  {[f'{x:.3f}' for x in example['true_answer']]}")
-
-def plot_detailed_argmax_comparison(analysis, save_path):
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
-    
-    categories = ['llm_low', 'llm_medium', 'llm_heavy']
-    category_labels = ['Low Noise', 'Medium Noise', 'Heavy Noise']
-    colors = ['orange', 'red', 'darkred']
-    
-    same_percentages = []
-    total_counts = []
-    
-    for category in categories:
-        data = analysis[category]
-        total = data['same_argmax'] + data['different_argmax']
-        total_counts.append(total)
-        
-        if total > 0:
-            same_pct = (data['same_argmax'] / total) * 100
-            same_percentages.append(same_pct)
-        else:
-            same_percentages.append(0)
-    
-    ax1.bar(category_labels, same_percentages, color=colors, alpha=0.7)
-    ax1.set_ylabel('Percentage Same Argmax')
-    ax1.set_title('Same Argmax Rate by Noise Level')
-    ax1.set_ylim(0, 100)
-    
-    for i, (pct, count) in enumerate(zip(same_percentages, total_counts)):
-        ax1.text(i, pct + 2, f'{pct:.1f}%\n(n={count})', ha='center', va='bottom')
-    
-    ax2.bar(category_labels, total_counts, color=colors, alpha=0.7)
-    ax2.set_ylabel('Total Selections')
-    ax2.set_title('Number of Selections by Noise Level')
-    
-    all_distances = []
-    distance_labels = []
-    distance_colors = []
-    
-    for i, category in enumerate(categories):
-        distances = analysis[category]['distances']
-        if distances:
-            all_distances.extend(distances)
-            distance_labels.extend([category_labels[i]] * len(distances))
-            distance_colors.extend([colors[i]] * len(distances))
-    
-    if all_distances:
-        unique_distances = sorted(set(all_distances))
-        distance_counts = {cat: {d: 0 for d in unique_distances} for cat in category_labels}
-        
-        for dist, label in zip(all_distances, distance_labels):
-            distance_counts[label][dist] += 1
-        
-        x = np.arange(len(unique_distances))
-        width = 0.25
-        
-        for i, (cat_label, color) in enumerate(zip(category_labels, colors)):
-            counts = [distance_counts[cat_label][d] for d in unique_distances]
-            ax3.bar(x + i*width, counts, width, label=cat_label, color=color, alpha=0.7)
-        
-        ax3.set_xlabel('Argmax Distance')
-        ax3.set_ylabel('Count')
-        ax3.set_title('Distance Distribution When Argmax Differs')
-        ax3.set_xticks(x + width)
-        ax3.set_xticklabels(unique_distances)
-        ax3.legend()
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
     else:
-        ax3.text(0.5, 0.5, 'No different argmax cases', ha='center', va='center', transform=ax3.transAxes)
-        ax3.set_title('Distance Distribution When Argmax Differs')
+        plt.show()
+
+def plot_validation_metrics(gradient_results, random_results, max_cycles=None, save_path=None):
+    """Plot validation metrics over time"""
+    gradient_val_metrics = gradient_results.get('val_metrics', [])
+    random_val_metrics = random_results.get('val_metrics', [])
     
-    avg_distances = []
-    for category in categories:
-        distances = analysis[category]['distances']
-        if distances:
-            avg_distances.append(np.mean(distances))
-        else:
-            avg_distances.append(0)
+    if max_cycles:
+        gradient_val_metrics = gradient_val_metrics[:max_cycles+1]  # +1 because cycle 0 exists
+        random_val_metrics = random_val_metrics[:max_cycles+1]
     
-    ax4.bar(category_labels, avg_distances, color=colors, alpha=0.7)
-    ax4.set_ylabel('Average Distance')
-    ax4.set_title('Average Argmax Distance When Different')
+    min_cycles = min(len(gradient_val_metrics), len(random_val_metrics))
+    cycles = range(min_cycles)
     
-    for i, avg_dist in enumerate(avg_distances):
-        if avg_dist > 0:
-            ax4.text(i, avg_dist + 0.05, f'{avg_dist:.2f}', ha='center', va='bottom')
+    # Extract specific metrics
+    metrics_to_plot = ['rmse', 'pearson', 'spearman']
+    metric_labels = ['RMSE', 'Pearson Correlation', 'Spearman Correlation']
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    axes = axes.flatten()
+    
+    # Plot each metric
+    for i, (metric, label) in enumerate(zip(metrics_to_plot, metric_labels)):
+        gradient_metric = [m.get(metric, 0) for m in gradient_val_metrics]
+        random_metric = [m.get(metric, 0) for m in random_val_metrics]
+        
+        axes[i].plot(cycles, gradient_metric, '#1f77b4', linewidth=2.5, marker='o', 
+                    markersize=5, label='Gradient VOI')
+        axes[i].plot(cycles, random_metric, '#ff7f0e', linewidth=2.5, marker='s', 
+                    markersize=5, label='Random')
+        axes[i].set_title(label, fontsize=12, fontweight='bold')
+        axes[i].set_xlabel('Cycle', fontsize=10)
+        axes[i].set_ylabel(label, fontsize=10)
+        axes[i].legend(fontsize=9)
+        axes[i].grid(True, alpha=0.3)
+    
+    # Plot validation loss
+    gradient_val_loss = gradient_results.get('val_losses', [])[:min_cycles]
+    random_val_loss = random_results.get('val_losses', [])[:min_cycles]
+    
+    axes[3].plot(cycles, gradient_val_loss, '#1f77b4', linewidth=2.5, marker='o', 
+                markersize=5, label='Gradient VOI')
+    axes[3].plot(cycles, random_val_loss, '#ff7f0e', linewidth=2.5, marker='s', 
+                markersize=5, label='Random')
+    axes[3].set_title('Validation Loss', fontsize=12, fontweight='bold')
+    axes[3].set_xlabel('Cycle', fontsize=10)
+    axes[3].set_ylabel('Loss', fontsize=10)
+    axes[3].legend(fontsize=9)
+    axes[3].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
 
-def analyze_argmax_for_human(results, dataset):
+def analyze_question_selection_patterns(results, dataset, max_cycles=None):
+    """Analyze question selection patterns for clean selections"""
     observation_history = results.get('observation_history', [])
     
-    same_argmax_count = 0
-    different_argmax_count = 0
-    argmax_distances = []
+    # Track clean selections by question
+    question_counts = defaultdict(int)
+    total_clean_selections = 0
     
     for obs in observation_history:
         variable_id = obs['variable_id']
@@ -497,132 +269,69 @@ def analyze_argmax_for_human(results, dataset):
         entry = dataset[example_idx]
         if position_idx >= len(entry.get('annotators', [])):
             continue
-            
-        is_llm = entry['annotators'][position_idx] == -1
-        if is_llm:
-            continue
-            
+        
+        # Check if this is a clean (original) selection
         noise_type = entry.get('noise_info', ['unknown'] * len(entry['annotators']))[position_idx]
         if noise_type == 'original':
-            continue
-            
-        noisy_answer = entry['answers'][position_idx]
-        true_answer = entry['true_answers'][position_idx]
-        
-        noisy_argmax = np.argmax(noisy_answer)
-        true_argmax = np.argmax(true_answer)
-        
-        if noisy_argmax == true_argmax:
-            same_argmax_count += 1
-        else:
-            different_argmax_count += 1
-            distance = abs(noisy_argmax - true_argmax)
-            argmax_distances.append(distance)
+            question_idx = entry['questions'][position_idx]
+            question_counts[question_idx] += 1
+            total_clean_selections += 1
     
-    total_noisy_human = same_argmax_count + different_argmax_count
-    same_percentage = (same_argmax_count / total_noisy_human * 100) if total_noisy_human > 0 else 0
-    
-    return same_percentage, argmax_distances
+    return question_counts, total_clean_selections
 
-def detailed_argmax_analysis_human(results, dataset):
-    observation_history = results.get('observation_history', [])
+def plot_question_selection_patterns(gradient_results, random_results, dataset, max_cycles=None, save_path=None):
+    """Plot question selection patterns for clean selections"""
+    grad_counts, grad_total = analyze_question_selection_patterns(gradient_results, dataset, max_cycles)
+    rand_counts, rand_total = analyze_question_selection_patterns(random_results, dataset, max_cycles)
     
-    noise_categories = ['human_low', 'human_medium', 'human_heavy']
-    analysis = {}
+    # Get all questions (0-6 for HANNA)
+    all_questions = list(range(7))
     
-    for category in noise_categories:
-        analysis[category] = {
-            'same_argmax': 0,
-            'different_argmax': 0,
-            'distances': [],
-            'examples': []
-        }
+    grad_percentages = [(grad_counts[q] / grad_total * 100) if grad_total > 0 else 0 for q in all_questions]
+    rand_percentages = [(rand_counts[q] / rand_total * 100) if rand_total > 0 else 0 for q in all_questions]
     
-    for obs in observation_history:
-        variable_id = obs['variable_id']
-        example_idx, position_idx = parse_variable_id(variable_id)
-        
-        if example_idx >= len(dataset):
-            continue
-            
-        entry = dataset[example_idx]
-        if position_idx >= len(entry.get('annotators', [])):
-            continue
-            
-        is_llm = entry['annotators'][position_idx] == -1
-        if is_llm:
-            continue
-            
-        noise_type = entry.get('noise_info', ['unknown'] * len(entry['annotators']))[position_idx]
-        if noise_type not in noise_categories:
-            continue
-            
-        noisy_answer = entry['answers'][position_idx]
-        true_answer = entry['true_answers'][position_idx]
-        
-        noisy_argmax = np.argmax(noisy_answer)
-        true_argmax = np.argmax(true_answer)
-        
-        example_data = {
-            'example_idx': example_idx,
-            'position_idx': position_idx,
-            'noisy_answer': noisy_answer,
-            'true_answer': true_answer,
-            'noisy_argmax': noisy_argmax,
-            'true_argmax': true_argmax,
-            'question': entry['questions'][position_idx],
-            'annotator': entry['annotators'][position_idx]
-        }
-        
-        if noisy_argmax == true_argmax:
-            analysis[noise_type]['same_argmax'] += 1
-            if len(analysis[noise_type]['examples']) < 3:
-                analysis[noise_type]['examples'].append(example_data)
-        else:
-            analysis[noise_type]['different_argmax'] += 1
-            distance = abs(noisy_argmax - true_argmax)
-            analysis[noise_type]['distances'].append(distance)
-            if len(analysis[noise_type]['examples']) < 6:
-                analysis[noise_type]['examples'].append(example_data)
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
     
-    return analysis
+    # Gradient VOI
+    bars1 = ax1.bar(all_questions, grad_percentages, alpha=0.7, color='#1f77b4', 
+                   edgecolor='black', linewidth=0.5)
+    ax1.set_title('Question Selection Distribution\n(Gradient VOI - Clean Selections)', fontsize=12, fontweight='bold')
+    ax1.set_xlabel('Question Index', fontsize=11)
+    ax1.set_ylabel('% of Clean Selections', fontsize=11)
+    ax1.set_xticks(all_questions)
+    ax1.set_xticklabels([f'Q{i}' for i in all_questions])
+    ax1.grid(True, alpha=0.3, axis='y')
+    
+    # Add percentage labels on bars
+    for i, (bar, pct) in enumerate(zip(bars1, grad_percentages)):
+        if pct > 0:
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5, 
+                    f'{pct:.1f}%', ha='center', va='bottom', fontsize=9)
+    
+    # Random
+    bars2 = ax2.bar(all_questions, rand_percentages, alpha=0.7, color='#ff7f0e', 
+                   edgecolor='black', linewidth=0.5)
+    ax2.set_title('Question Selection Distribution\n(Random - Clean Selections)', fontsize=12, fontweight='bold')
+    ax2.set_xlabel('Question Index', fontsize=11)
+    ax2.set_ylabel('% of Clean Selections', fontsize=11)
+    ax2.set_xticks(all_questions)
+    ax2.set_xticklabels([f'Q{i}' for i in all_questions])
+    ax2.grid(True, alpha=0.3, axis='y')
+    
+    # Add percentage labels on bars
+    for i, (bar, pct) in enumerate(zip(bars2, rand_percentages)):
+        if pct > 0:
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5, 
+                    f'{pct:.1f}%', ha='center', va='bottom', fontsize=9)
+    
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
 
-def print_detailed_argmax_analysis_human(analysis):
-    print("\n" + "="*80)
-    print("DETAILED HUMAN ARGMAX ANALYSIS BY NOISE LEVEL")
-    print("="*80)
-    
-    for category in ['human_low', 'human_medium', 'human_heavy']:
-        data = analysis[category]
-        total = data['same_argmax'] + data['different_argmax']
-        
-        if total == 0:
-            continue
-            
-        same_pct = (data['same_argmax'] / total) * 100
-        
-        print(f"\n{category.upper().replace('_', ' ')}:")
-        print(f"  Total selections: {total}")
-        print(f"  Same argmax: {data['same_argmax']} ({same_pct:.1f}%)")
-        print(f"  Different argmax: {data['different_argmax']} ({100-same_pct:.1f}%)")
-        
-        if data['distances']:
-            avg_distance = np.mean(data['distances'])
-            print(f"  Average distance when different: {avg_distance:.2f}")
-            distance_counts = {}
-            for d in data['distances']:
-                distance_counts[d] = distance_counts.get(d, 0) + 1
-            print(f"  Distance distribution: {distance_counts}")
-        
-        print(f"\n  Examples (first 6):")
-        for i, example in enumerate(data['examples'][:6]):
-            status = "SAME" if example['noisy_argmax'] == example['true_argmax'] else "DIFF"
-            print(f"    {i+1}. [{status}] Q{example['question']} Annotator{example['annotator']} | "
-                  f"Noisy argmax: {example['noisy_argmax']} | True argmax: {example['true_argmax']}")
-            print(f"       Noisy dist: {[f'{x:.3f}' for x in example['noisy_answer']]}")
-            print(f"       True dist:  {[f'{x:.3f}' for x in example['true_answer']]}")
-
-def main():
+def main(max_cycles=15):
     gradient_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs/results_multilevel_noisy_hanna/experiment_both/multilevel_noisy_gradient_voi_with_embedding.json"
     random_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs/results_multilevel_noisy_hanna/experiment_both/multilevel_noisy_random_random_with_embedding.json"
     dataset_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs/data/active_pool.json"
@@ -632,40 +341,32 @@ def main():
     
     gradient_results, random_results, dataset = load_data(gradient_path, random_path, dataset_path)
     
-    gradient_llm_data = extract_llm_selections_per_cycle(gradient_results)
-    random_llm_data = extract_llm_selections_per_cycle(random_results)
+    # 1. LLM Noise Dynamics (Gradient VOI only)
+    plot_noise_dynamics_separate(gradient_results, 'llm', max_cycles, 
+                                os.path.join(output_dir, "llm_noise_dynamics_gradient.png"))
     
-    plot_llm_noise_dynamics(gradient_llm_data, random_llm_data, 
-                           os.path.join(output_dir, "llm_noise_dynamics.png"))
+    # 2. Human Noise Dynamics (Gradient VOI only) 
+    plot_noise_dynamics_separate(gradient_results, 'human', max_cycles,
+                                os.path.join(output_dir, "human_noise_dynamics_gradient.png"))
     
-    plot_clean_selections_vs_performance(gradient_results, random_results,
+    # 3. Clean selections vs performance
+    plot_clean_selections_vs_performance(gradient_results, random_results, max_cycles,
                                        os.path.join(output_dir, "clean_vs_performance.png"))
     
-    same_pct_llm, distances_llm = analyze_argmax_for_gradient(gradient_results, dataset)
-    plot_argmax_analysis(same_pct_llm, distances_llm,
-                        os.path.join(output_dir, "argmax_analysis.png"))
+    # 4. Learning curve (percentage)
+    plot_learning_curve_percent(gradient_results, random_results, max_cycles,
+                               os.path.join(output_dir, "learning_curve_percent.png"))
     
-    plot_learning_curve(gradient_llm_data, random_llm_data,
-                       os.path.join(output_dir, "learning_curve.png"))
+    # 5. Validation metrics
+    plot_validation_metrics(gradient_results, random_results, max_cycles,
+                           os.path.join(output_dir, "validation_metrics.png"))
     
-    plot_selection_heatmap(gradient_results, random_results,
-                          os.path.join(output_dir, "selection_heatmap.png"))
+    # 6. Question selection patterns
+    plot_question_selection_patterns(gradient_results, random_results, dataset, max_cycles,
+                                   os.path.join(output_dir, "question_selection_patterns.png"))
     
     print(f"All plots saved to {output_dir}")
-    print(f"LLM Argmax analysis: {same_pct_llm:.1f}% of noisy LLM selections had same argmax as clean")
-    print(f"LLM Distance distribution when different: {len(distances_llm)} cases")
-
-    detailed_analysis_llm = detailed_argmax_analysis(gradient_results, dataset)
-    print_detailed_argmax_analysis(detailed_analysis_llm)
-    plot_detailed_argmax_comparison(detailed_analysis_llm,
-                                   os.path.join(output_dir, "detailed_argmax_analysis.png"))
-    
-    same_pct_human, distances_human = analyze_argmax_for_human(gradient_results, dataset)
-    print(f"\nHuman Argmax analysis: {same_pct_human:.1f}% of noisy human selections had same argmax as clean")
-    print(f"Human Distance distribution when different: {len(distances_human)} cases")
-    
-    detailed_analysis_human = detailed_argmax_analysis_human(gradient_results, dataset)
-    print_detailed_argmax_analysis_human(detailed_analysis_human)
+    print(f"Plots limited to first {max_cycles} cycles")
 
 if __name__ == "__main__":
-    main()
+    main(max_cycles=9)  # Change this parameter as needed
