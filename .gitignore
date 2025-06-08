@@ -3,4 +3,5 @@ outputs
 __pycache__/
 slurm*
 mysrc
+src/tester.ipynb
 src/visualizations.py

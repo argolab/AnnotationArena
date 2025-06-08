@@ -1,397 +1,372 @@
-import os
 import json
-import matplotlib.pyplot as plt
 import numpy as np
-import seaborn as sns
+import matplotlib.pyplot as plt
+from collections import defaultdict
+import os
 
-# Set publication-ready style
-plt.style.use('seaborn-v0_8-whitegrid')
-sns.set_palette("husl")
-
-plt.rcParams['font.family'] = ['serif']
-plt.rcParams['font.serif'] = ['Times New Roman']
-
-def load_noisy_experiment_results(results_path):
-    """Load experiment results from JSON files with noisy data tracking."""
-    experiment_results = {}
-    
-    for filename in os.listdir(results_path):
-        if filename.endswith('.json') and 'noisy_' in filename and 'combined' not in filename:
-            filepath = os.path.join(results_path, filename)
-            try:
-                with open(filepath, 'r') as f:
-                    experiment_name = filename.replace('noisy_', '').replace('.json', '')
-                    experiment_results[experiment_name] = json.load(f)
-                    print(f"Loaded {experiment_name} noisy results")
-            except Exception as e:
-                print(f"Error loading {filename}: {e}")
-    
-    return experiment_results
-
-def analyze_detailed_selections(observation_history, dataset_path):
-    """
-    Analyze selections by parsing observation history and dataset structure.
-    Returns breakdown by cycle: original_human, corrupted_human, original_llm, corrupted_llm
-    """
-    # Load dataset to get is_noisy and annotator info
+def load_data(gradient_path, random_path, dataset_path):
+    with open(gradient_path, 'r') as f:
+        gradient_results = json.load(f)
+    with open(random_path, 'r') as f:
+        random_results = json.load(f)
     with open(dataset_path, 'r') as f:
         dataset = json.load(f)
-    
-    # Create mapping of example_idx to data
-    dataset_map = {i: entry for i, entry in enumerate(dataset)}
-    
-    # Group observations by cycles (approximately every 200 selections based on your experiment)
-    selections_per_cycle = 200  # Adjust based on your experiment
-    
-    breakdown_per_cycle = []
-    cycle_selections = {
-        'original_human': 0,
-        'corrupted_human': 0, 
-        'original_llm': 0,
-        'corrupted_llm': 0
-    }
-    
-    for i, obs in enumerate(observation_history):
-        # Parse variable_id: "example_{idx}_position_{pos}"
-        var_id = obs['variable_id']
-        parts = var_id.split('_')
-        example_idx = int(parts[1])
-        position_idx = int(parts[3])
-        
-        # Get entry data
-        if example_idx in dataset_map:
-            entry = dataset_map[example_idx]
-            
-            # Check if position exists
-            if position_idx < len(entry.get('annotators', [])):
-                is_llm = entry['annotators'][position_idx] == -1
-                is_noisy = entry.get('is_noisy', [False] * len(entry['annotators']))[position_idx]
-                
-                # Categorize selection
-                if is_llm:
-                    if is_noisy:
-                        cycle_selections['corrupted_llm'] += 1
-                    else:
-                        cycle_selections['original_llm'] += 1
-                else:  # Human
-                    if is_noisy:
-                        cycle_selections['corrupted_human'] += 1
-                    else:
-                        cycle_selections['original_human'] += 1
-        
-        # End of cycle check
-        if (i + 1) % selections_per_cycle == 0 or i == len(observation_history) - 1:
-            if any(cycle_selections.values()):
-                breakdown_per_cycle.append(cycle_selections.copy())
-            cycle_selections = {
-                'original_human': 0,
-                'corrupted_human': 0,
-                'original_llm': 0, 
-                'corrupted_llm': 0
-            }
-    
-    return breakdown_per_cycle
+    return gradient_results, random_results, dataset
 
-def plot_variable_type_breakdown_percentages(results_dict, dataset_paths, save_path):
-    """
-    Plot percentage breakdown of variable types selected per cycle.
-    """
-    fig, axes = plt.subplots(1, len(results_dict), figsize=(8*len(results_dict), 6))
-    if len(results_dict) == 1:
-        axes = [axes]
+def extract_noise_selections_per_cycle(results, noise_type='llm', max_cycles=None):
+    """Extract noise selections by type (llm or human)"""
+    cycles = len(results.get('selection_breakdown_per_cycle', []))
+    if max_cycles:
+        cycles = min(cycles, max_cycles)
     
-    # Clean colors
-    colors = {
-        'original_human': '#27AE60',    # Green
-        'corrupted_human': '#E74C3C',   # Red  
-        'original_llm': '#3498DB',      # Blue
-        'corrupted_llm': '#F39C12'      # Orange
-    }
+    if noise_type == 'llm':
+        categories = ['original_llm', 'llm_low', 'llm_medium', 'llm_heavy']
+        labels = ['Original', 'Low Noise', 'Medium Noise', 'Heavy Noise']
+    else:  # human
+        categories = ['original_human', 'human_noisy'] 
+        labels = ['Original', 'Noisy']
     
-    labels = {
-        'original_human': 'Original Human',
-        'corrupted_human': 'Corrupted Human',
-        'original_llm': 'Original LLM', 
-        'corrupted_llm': 'Corrupted LLM'
-    }
-    
-    strategies = list(results_dict.keys())
-    
-    for idx, strategy in enumerate(strategies):
-        ax = axes[idx]
-        results = results_dict[strategy]
-        
-        # Get breakdown from observation history
-        obs_history = results.get('observation_history', [])
-        if not obs_history:
-            continue
-            
-        dataset_path = dataset_paths.get(strategy, dataset_paths['default'])
-        breakdown_per_cycle = analyze_detailed_selections(obs_history, dataset_path)
-        
-        if not breakdown_per_cycle:
-            continue
-            
-        n_cycles = len(breakdown_per_cycle)
-        cycles = list(range(n_cycles))
-        
-        # Convert to percentages
-        percentages = {var_type: [] for var_type in colors.keys()}
-        
-        for cycle_data in breakdown_per_cycle:
-            total = sum(cycle_data.values())
+    cycle_data = []
+    for cycle_idx in range(cycles):
+        if cycle_idx < len(results['selection_breakdown_per_cycle']):
+            breakdown = results['selection_breakdown_per_cycle'][cycle_idx]
+            total = sum(breakdown.get(cat, 0) for cat in categories)
             if total > 0:
-                for var_type in colors.keys():
-                    percentages[var_type].append((cycle_data[var_type] / total) * 100)
+                percentages = {cat: (breakdown.get(cat, 0) / total) * 100 for cat in categories}
             else:
-                for var_type in colors.keys():
-                    percentages[var_type].append(0)
-        
-        # Create grouped bars
-        x = np.arange(n_cycles)
-        width = 0.2
-        positions = [-1.5*width, -0.5*width, 0.5*width, 1.5*width]
-        
-        for i, (var_type, values) in enumerate(percentages.items()):
-            ax.bar(x + positions[i], values, width, 
-                   label=labels[var_type], 
-                   color=colors[var_type], alpha=0.8)
-        
-        ax.set_title(f'{strategy.replace("_", " ").title()}', 
-                    fontsize=14, fontweight='bold')
-        ax.set_xlabel('Acquisition Cycle', fontsize=12)
-        ax.set_ylabel('Percentage of Selections', fontsize=12)
-        ax.set_xticks(x)
-        ax.set_xticklabels([f'{i}' for i in cycles])
-        ax.set_ylim(0, 100)
-        ax.legend(fontsize=10, loc='best')
-        ax.grid(True, alpha=0.3, axis='y')
+                percentages = {cat: 0 for cat in categories}
+            cycle_data.append(percentages)
+        else:
+            cycle_data.append({cat: 0 for cat in categories})
     
-    plt.suptitle('Variable Type Selection Breakdown by Cycle\n(Percentage Distribution)', 
-                 fontsize=16, fontweight='bold')
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved variable breakdown percentages to {save_path}")
+    return cycle_data, categories, labels
 
-def plot_performance_vs_selection_overlay(results_dict, save_path):
-    """
-    Single plot with dual y-axes showing performance and selection quality.
-    """
+def parse_variable_id(variable_id):
+    parts = variable_id.split('_')
+    example_idx = int(parts[1])
+    position_idx = int(parts[3])
+    return example_idx, position_idx
+
+def plot_noise_dynamics_separate(gradient_results, noise_type='llm', max_cycles=None, save_path=None):
+    """Plot noise dynamics for either LLM or Human separately"""
+    gradient_data, categories, labels = extract_noise_selections_per_cycle(
+        gradient_results, noise_type, max_cycles
+    )
     
-    fig, ax1 = plt.subplots(figsize=(12, 8))
+    cycles = range(len(gradient_data))
+    
+    if noise_type == 'llm':
+        colors = ['#2E8B57', '#FF8C00', '#DC143C', '#8B0000']  # Green, Orange, Red, Dark Red
+        title = 'LLM Noise Selection Dynamics (Gradient VOI)'
+    else:
+        colors = ['#4169E1', '#B22222']  # Royal Blue, Fire Brick
+        title = 'Human Noise Selection Dynamics (Gradient VOI)'
+    
+    plt.figure(figsize=(10, 6))
+    
+    for cat, color, label in zip(categories, colors, labels):
+        percentages = [cycle.get(cat, 0) for cycle in gradient_data]
+        plt.plot(cycles, percentages, color=color, label=label, linewidth=2.5, marker='o', markersize=4)
+    
+    plt.title(title, fontsize=14, fontweight='bold')
+    plt.xlabel('Cycle', fontsize=12)
+    plt.ylabel('% of Selections (Normalized)', fontsize=12)
+    plt.legend(fontsize=11)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+def plot_clean_selections_vs_performance(gradient_results, random_results, max_cycles=None, save_path=None):
+    """Plot clean selections vs performance with improved styling"""
+    gradient_cycles = len(gradient_results.get('selection_breakdown_per_cycle', []))
+    random_cycles = len(random_results.get('selection_breakdown_per_cycle', []))
+    min_cycles = min(gradient_cycles, random_cycles)
+    if max_cycles:
+        min_cycles = min(min_cycles, max_cycles)
+    
+    # Extract clean selections (LLM + Human original)
+    gradient_clean = []
+    gradient_test_loss = gradient_results.get('test_annotated_losses', [])[:min_cycles]
+    
+    for cycle_idx in range(min_cycles):
+        breakdown = gradient_results['selection_breakdown_per_cycle'][cycle_idx]
+        clean_count = breakdown.get('original_llm', 0) + breakdown.get('original_human', 0)
+        gradient_clean.append(clean_count)
+    
+    random_clean = []
+    random_test_loss = random_results.get('test_annotated_losses', [])[:min_cycles]
+    
+    for cycle_idx in range(min_cycles):
+        breakdown = random_results['selection_breakdown_per_cycle'][cycle_idx]
+        clean_count = breakdown.get('original_llm', 0) + breakdown.get('original_human', 0)
+        random_clean.append(clean_count)
+    
+    fig, ax1 = plt.subplots(1, 1, figsize=(12, 7))
     ax2 = ax1.twinx()
     
-    colors = {'gradient_voi': '#1f77b4', 'random_random': '#ff7f0e'}
-    markers = {'gradient_voi': 'o', 'random_random': 's'}
-    
-    for strategy, results in results_dict.items():
-        color = colors.get(strategy, '#333333')
-        marker = markers.get(strategy, 'o')
-        strategy_name = strategy.replace('_', ' ').title()
-        
-        if 'test_annotated_losses' in results and 'selection_ratios_per_cycle' in results:
-            test_losses = results['test_annotated_losses']
-            ratios = results['selection_ratios_per_cycle']
-            cumulative_samples = np.cumsum(results.get('features_annotated', []))
-            
-            # Performance on left axis
-            min_len_perf = min(len(test_losses), len(cumulative_samples))
-            if min_len_perf > 0:
-                ax1.plot(cumulative_samples[:min_len_perf], test_losses[:min_len_perf],
-                        color=color, linestyle='-', linewidth=1, 
-                        marker=marker, markersize=8, alpha=0.9,
-                        label=f'{strategy_name} - Test Loss')
-            
-            # Selection quality on right axis  
-            min_len_qual = min(len(ratios), len(cumulative_samples))
-            if min_len_qual > 0:
-                ax2.plot(cumulative_samples[:min_len_qual], ratios[:min_len_qual],
-                        color=color, linestyle='--', linewidth=2,
-                        marker=marker, markersize=8, alpha=0.7,
-                        label=f'{strategy_name} - Noise Ratio')
-    
-    # Random baseline
-    ax2.axhline(y=0.5, color='gray', linestyle=':', alpha=0.8, linewidth=2,
-                label='Random Baseline')
-    
-    # Configure axes - ALL BLACK
-    ax1.set_xlabel('Cumulative Samples Acquired', fontsize=13, color='black')
-    ax1.set_ylabel('Test Loss', fontsize=13, color='black')
-    ax1.tick_params(axis='y', labelcolor='black')
-    ax1.tick_params(axis='x', labelcolor='black')
-    ax1.grid(True, alpha=0.3)
-    
-    ax2.set_ylabel('Proportion of Noisy Variables', fontsize=13, color='black')
-    ax2.tick_params(axis='y', labelcolor='black')
-    ax2.set_ylim(0, 1)
-    
-    # Combined legend - CLEAN
-    lines1, labels1 = ax1.get_legend_handles_labels()
-    lines2, labels2 = ax2.get_legend_handles_labels()
-    ax1.legend(lines1 + lines2, labels1 + labels2, loc='best', fontsize=11)
-    
-    plt.title('Model Performance vs Selection Quality', 
-              fontsize=15, fontweight='bold', pad=20, color='black')
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    
-    print(f"Saved performance vs selection overlay to {save_path}")
-
-def plot_noise_selection_summary(results_dict, save_path):
-    """
-    Clean summary showing total selections and final ratios.
-    """
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
-    
-    colors = {'original': '#27AE60', 'noisy': '#E74C3C'}
-    
-    strategies = list(results_dict.keys())
-    x_pos = np.arange(len(strategies))
+    cycles = np.arange(min_cycles)
     width = 0.35
     
-    # Data extraction
-    original_totals = []
-    noisy_totals = []
-    final_ratios = []
+    # Improved colors and transparency
+    bars1 = ax1.bar(cycles - width/2, gradient_clean, width, alpha=0.6, 
+                   color='#1f77b4', label='Gradient VOI Clean Selections', edgecolor='black', linewidth=0.5)
+    bars2 = ax1.bar(cycles + width/2, random_clean, width, alpha=0.6, 
+                   color='#ff7f0e', label='Random Clean Selections', edgecolor='black', linewidth=0.5)
     
-    for strategy in strategies:
-        results = results_dict[strategy]
-        orig_total = sum(results.get('original_selections_per_cycle', []))
-        noisy_total = sum(results.get('noisy_selections_per_cycle', []))
-        total = orig_total + noisy_total
-        ratio = noisy_total / total if total > 0 else 0
+    # Performance lines
+    line1 = ax2.plot(range(len(gradient_test_loss)), gradient_test_loss, '#d62728', 
+                    linewidth=2.5, marker='o', markersize=5, label='Gradient VOI Test Loss')
+    line2 = ax2.plot(range(len(random_test_loss)), random_test_loss, '#2ca02c', 
+                    linewidth=2.5, marker='s', markersize=5, label='Random Test Loss')
+    
+    ax1.set_xlabel('Cycle', fontsize=12)
+    ax1.set_ylabel('Clean Selections Count', fontsize=12)
+    ax2.set_ylabel('Test Loss', fontsize=12)
+    ax1.set_title('Clean Selections vs Test Loss Performance', fontsize=14, fontweight='bold')
+    
+    ax1.set_xticks(cycles)
+    ax1.set_xticklabels([str(i) for i in cycles])
+    
+    # Combined legend
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='upper right', fontsize=10)
+    
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+def plot_learning_curve_percent(gradient_results, random_results, max_cycles=None, save_path=None):
+    """Plot learning curve showing percentage of clean selections"""
+    gradient_data, _, _ = extract_noise_selections_per_cycle(gradient_results, 'llm', max_cycles)
+    random_data, _, _ = extract_noise_selections_per_cycle(random_results, 'llm', max_cycles)
+    
+    def moving_average(data, window=3):
+        if len(data) < window:
+            return data
+        return [np.mean(data[max(0, i-window+1):i+1]) for i in range(len(data))]
+    
+    min_cycles = min(len(gradient_data), len(random_data))
+    
+    # Calculate percentage of clean selections (LLM + Human)
+    gradient_clean_pct = []
+    for cycle_idx in range(min_cycles):
+        breakdown = gradient_results['selection_breakdown_per_cycle'][cycle_idx]
+        total_selections = sum(breakdown.values())
+        clean_selections = breakdown.get('original_llm', 0) + breakdown.get('original_human', 0)
+        clean_pct = (clean_selections / total_selections * 100) if total_selections > 0 else 0
+        gradient_clean_pct.append(clean_pct)
+    
+    random_clean_pct = []
+    for cycle_idx in range(min_cycles):
+        breakdown = random_results['selection_breakdown_per_cycle'][cycle_idx]
+        total_selections = sum(breakdown.values())
+        clean_selections = breakdown.get('original_llm', 0) + breakdown.get('original_human', 0)
+        clean_pct = (clean_selections / total_selections * 100) if total_selections > 0 else 0
+        random_clean_pct.append(clean_pct)
+    
+    gradient_ma = moving_average(gradient_clean_pct)
+    random_ma = moving_average(random_clean_pct)
+    
+    plt.figure(figsize=(10, 6))
+    
+    cycles = range(len(gradient_ma))
+    plt.plot(cycles, gradient_ma, '#1f77b4', linewidth=2.5, marker='o', markersize=5, label='Gradient VOI')
+    plt.plot(cycles, random_ma, '#ff7f0e', linewidth=2.5, marker='s', markersize=5, label='Random')
+    
+    plt.xlabel('Cycle', fontsize=12)
+    plt.ylabel('% Clean Selections (3-cycle MA)', fontsize=12)
+    plt.title('Learning Curve: Clean Selection Percentage', fontsize=14, fontweight='bold')
+    plt.legend(fontsize=11)
+    plt.grid(True, alpha=0.3)
+    plt.ylim(0, 100)
+    
+    plt.tight_layout()
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
+
+def plot_validation_metrics(gradient_results, random_results, max_cycles=None, save_path=None):
+    """Plot validation metrics over time"""
+    gradient_val_metrics = gradient_results.get('val_metrics', [])
+    random_val_metrics = random_results.get('val_metrics', [])
+    
+    if max_cycles:
+        gradient_val_metrics = gradient_val_metrics[:max_cycles+1]  # +1 because cycle 0 exists
+        random_val_metrics = random_val_metrics[:max_cycles+1]
+    
+    min_cycles = min(len(gradient_val_metrics), len(random_val_metrics))
+    cycles = range(min_cycles)
+    
+    # Extract specific metrics
+    metrics_to_plot = ['rmse', 'pearson', 'spearman']
+    metric_labels = ['RMSE', 'Pearson Correlation', 'Spearman Correlation']
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    axes = axes.flatten()
+    
+    # Plot each metric
+    for i, (metric, label) in enumerate(zip(metrics_to_plot, metric_labels)):
+        gradient_metric = [m.get(metric, 0) for m in gradient_val_metrics]
+        random_metric = [m.get(metric, 0) for m in random_val_metrics]
         
-        original_totals.append(orig_total)
-        noisy_totals.append(noisy_total)
-        final_ratios.append(ratio)
+        axes[i].plot(cycles, gradient_metric, '#1f77b4', linewidth=2.5, marker='o', 
+                    markersize=5, label='Gradient VOI')
+        axes[i].plot(cycles, random_metric, '#ff7f0e', linewidth=2.5, marker='s', 
+                    markersize=5, label='Random')
+        axes[i].set_title(label, fontsize=12, fontweight='bold')
+        axes[i].set_xlabel('Cycle', fontsize=10)
+        axes[i].set_ylabel(label, fontsize=10)
+        axes[i].legend(fontsize=9)
+        axes[i].grid(True, alpha=0.3)
     
-    # Plot 1: Total counts
-    ax1.bar(x_pos - width/2, original_totals, width, label='Original Variables', 
-            color=colors['original'], alpha=0.8)
-    ax1.bar(x_pos + width/2, noisy_totals, width, label='Noisy Variables', 
-            color=colors['noisy'], alpha=0.8)
+    # Plot validation loss
+    gradient_val_loss = gradient_results.get('val_losses', [])[:min_cycles]
+    random_val_loss = random_results.get('val_losses', [])[:min_cycles]
     
-    ax1.set_xlabel('Selection Strategy', fontsize=12)
-    ax1.set_ylabel('Total Variables Selected', fontsize=12)
-    ax1.set_title('Total Selection Counts', fontsize=14, fontweight='bold')
-    ax1.set_xticks(x_pos)
-    ax1.set_xticklabels([s.replace('_', ' ').title() for s in strategies])
-    ax1.legend()
-    ax1.grid(True, alpha=0.3)
-    
-    # Plot 2: Noise ratios
-    bars = ax2.bar(x_pos, final_ratios, color=colors['noisy'], alpha=0.8)
-    ax2.axhline(y=0.5, color='gray', linestyle='--', alpha=0.8, linewidth=2,
-                label='Random Baseline')
-    
-    # Add value labels
-    for bar, ratio in zip(bars, final_ratios):
-        height = bar.get_height()
-        ax2.annotate(f'{ratio:.3f}',
-                    xy=(bar.get_x() + bar.get_width() / 2, height),
-                    xytext=(0, 3),
-                    textcoords="offset points",
-                    ha='center', va='bottom', fontsize=11, fontweight='bold')
-    
-    ax2.set_xlabel('Selection Strategy', fontsize=12)
-    ax2.set_ylabel('Proportion of Noisy Variables', fontsize=12)
-    ax2.set_title('Final Noise Selection Ratio', fontsize=14, fontweight='bold')
-    ax2.set_xticks(x_pos)
-    ax2.set_xticklabels([s.replace('_', ' ').title() for s in strategies])
-    ax2.set_ylim(0, 1)
-    ax2.legend()
-    ax2.grid(True, alpha=0.3)
+    axes[3].plot(cycles, gradient_val_loss, '#1f77b4', linewidth=2.5, marker='o', 
+                markersize=5, label='Gradient VOI')
+    axes[3].plot(cycles, random_val_loss, '#ff7f0e', linewidth=2.5, marker='s', 
+                markersize=5, label='Random')
+    axes[3].set_title('Validation Loss', fontsize=12, fontweight='bold')
+    axes[3].set_xlabel('Cycle', fontsize=10)
+    axes[3].set_ylabel('Loss', fontsize=10)
+    axes[3].legend(fontsize=9)
+    axes[3].grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved noise selection summary to {save_path}")
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
 
-def plot_learning_curves(results_dict, save_path):
-    """
-    Learning curves showing noise avoidance over time.
-    """
-    fig, ax = plt.subplots(figsize=(12, 8))
+def analyze_question_selection_patterns(results, dataset, max_cycles=None):
+    """Analyze question selection patterns for clean selections"""
+    observation_history = results.get('observation_history', [])
     
-    colors = {'gradient_voi': '#1f77b4', 'random_random': '#ff7f0e'}
-    markers = {'gradient_voi': 'o', 'random_random': 's'}
+    # Track clean selections by question
+    question_counts = defaultdict(int)
+    total_clean_selections = 0
     
-    for strategy, results in results_dict.items():
-        if 'selection_ratios_per_cycle' in results:
-            ratios = results['selection_ratios_per_cycle']
-            cumulative_samples = np.cumsum(results.get('features_annotated', []))
+    for obs in observation_history:
+        variable_id = obs['variable_id']
+        example_idx, position_idx = parse_variable_id(variable_id)
+        
+        if example_idx >= len(dataset):
+            continue
             
-            if len(ratios) > 0 and len(cumulative_samples) > 0:
-                min_len = min(len(ratios), len(cumulative_samples))
-                ax.plot(cumulative_samples[:min_len], ratios[:min_len], 
-                       marker=markers.get(strategy, 'o'), 
-                       color=colors.get(strategy, 'gray'),
-                       linewidth=3, markersize=8, alpha=0.8,
-                       label=strategy.replace('_', ' ').title())
+        entry = dataset[example_idx]
+        if position_idx >= len(entry.get('annotators', [])):
+            continue
+        
+        # Check if this is a clean (original) selection
+        noise_type = entry.get('noise_info', ['unknown'] * len(entry['annotators']))[position_idx]
+        if noise_type == 'original':
+            question_idx = entry['questions'][position_idx]
+            question_counts[question_idx] += 1
+            total_clean_selections += 1
     
-    ax.axhline(y=0.5, color='gray', linestyle='--', alpha=0.8, linewidth=2,
-               label='Random Baseline')
+    return question_counts, total_clean_selections
+
+def plot_question_selection_patterns(gradient_results, random_results, dataset, max_cycles=None, save_path=None):
+    """Plot question selection patterns for clean selections"""
+    grad_counts, grad_total = analyze_question_selection_patterns(gradient_results, dataset, max_cycles)
+    rand_counts, rand_total = analyze_question_selection_patterns(random_results, dataset, max_cycles)
     
-    ax.set_xlabel('Cumulative Samples Acquired', fontsize=13)
-    ax.set_ylabel('Proportion of Noisy Variables Selected', fontsize=13)
-    ax.set_title('Learning to Avoid Noisy Variables Over Time\n(Lower is Better)', 
-                fontsize=15, fontweight='bold')
-    ax.legend(fontsize=12)
-    ax.grid(True, alpha=0.3)
-    ax.set_ylim(0, 1)
+    # Get all questions (0-6 for HANNA)
+    all_questions = list(range(7))
+    
+    grad_percentages = [(grad_counts[q] / grad_total * 100) if grad_total > 0 else 0 for q in all_questions]
+    rand_percentages = [(rand_counts[q] / rand_total * 100) if rand_total > 0 else 0 for q in all_questions]
+    
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    
+    # Gradient VOI
+    bars1 = ax1.bar(all_questions, grad_percentages, alpha=0.7, color='#1f77b4', 
+                   edgecolor='black', linewidth=0.5)
+    ax1.set_title('Question Selection Distribution\n(Gradient VOI - Clean Selections)', fontsize=12, fontweight='bold')
+    ax1.set_xlabel('Question Index', fontsize=11)
+    ax1.set_ylabel('% of Clean Selections', fontsize=11)
+    ax1.set_xticks(all_questions)
+    ax1.set_xticklabels([f'Q{i}' for i in all_questions])
+    ax1.grid(True, alpha=0.3, axis='y')
+    
+    # Add percentage labels on bars
+    for i, (bar, pct) in enumerate(zip(bars1, grad_percentages)):
+        if pct > 0:
+            ax1.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5, 
+                    f'{pct:.1f}%', ha='center', va='bottom', fontsize=9)
+    
+    # Random
+    bars2 = ax2.bar(all_questions, rand_percentages, alpha=0.7, color='#ff7f0e', 
+                   edgecolor='black', linewidth=0.5)
+    ax2.set_title('Question Selection Distribution\n(Random - Clean Selections)', fontsize=12, fontweight='bold')
+    ax2.set_xlabel('Question Index', fontsize=11)
+    ax2.set_ylabel('% of Clean Selections', fontsize=11)
+    ax2.set_xticks(all_questions)
+    ax2.set_xticklabels([f'Q{i}' for i in all_questions])
+    ax2.grid(True, alpha=0.3, axis='y')
+    
+    # Add percentage labels on bars
+    for i, (bar, pct) in enumerate(zip(bars2, rand_percentages)):
+        if pct > 0:
+            ax2.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.5, 
+                    f'{pct:.1f}%', ha='center', va='bottom', fontsize=9)
     
     plt.tight_layout()
-    plt.savefig(save_path, dpi=300, bbox_inches='tight')
-    plt.close()
-    print(f"Saved learning curves to {save_path}")
+    if save_path:
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        plt.close()
+    else:
+        plt.show()
 
-def create_noisy_plots():
-    """Main function to create all noisy experiment plots."""
-    base_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs"
-    results_path = os.path.join(base_path, "results_noisy_hanna")
-    data_path = os.path.join(base_path, "data")
-    plots_path = os.path.join(results_path, "plots")
-    os.makedirs(plots_path, exist_ok=True)
+def main(max_cycles=15):
+    gradient_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs/results_multilevel_noisy_hanna/experiment_both/multilevel_noisy_gradient_voi_with_embedding.json"
+    random_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs/results_multilevel_noisy_hanna/experiment_both/multilevel_noisy_random_random_with_embedding.json"
+    dataset_path = "/export/fs06/psingh54/ActiveRubric-Internal/outputs/data/active_pool.json"
     
-    # Load results (NO COMBINED JSON)
-    experiment_results = load_noisy_experiment_results(results_path)
+    output_dir = "/export/fs06/psingh54/ActiveRubric-Internal/outputs/results_multilevel_noisy_hanna/plots"
+    os.makedirs(output_dir, exist_ok=True)
     
-    if not experiment_results:
-        print("No noisy experiment results found.")
-        return
+    gradient_results, random_results, dataset = load_data(gradient_path, random_path, dataset_path)
     
-    # Dataset paths
-    dataset_paths = {
-        'gradient_voi': os.path.join(data_path, "active_pool.json"),
-        'random_random': os.path.join(data_path, "active_pool.json"),
-        'default': os.path.join(data_path, "active_pool.json")
-    }
+    # 1. LLM Noise Dynamics (Gradient VOI only)
+    plot_noise_dynamics_separate(gradient_results, 'llm', max_cycles, 
+                                os.path.join(output_dir, "llm_noise_dynamics_gradient.png"))
     
-    # Create clean plots
-    plot_noise_selection_summary(
-        experiment_results, 
-        os.path.join(plots_path, "noise_selection_summary.png")
-    )
+    # 2. Human Noise Dynamics (Gradient VOI only) 
+    plot_noise_dynamics_separate(gradient_results, 'human', max_cycles,
+                                os.path.join(output_dir, "human_noise_dynamics_gradient.png"))
     
-    plot_learning_curves(
-        experiment_results,
-        os.path.join(plots_path, "learning_curves.png")
-    )
+    # 3. Clean selections vs performance
+    plot_clean_selections_vs_performance(gradient_results, random_results, max_cycles,
+                                       os.path.join(output_dir, "clean_vs_performance.png"))
     
-    plot_performance_vs_selection_overlay(
-        experiment_results,
-        os.path.join(plots_path, "performance_vs_selection.png")
-    )
+    # 4. Learning curve (percentage)
+    plot_learning_curve_percent(gradient_results, random_results, max_cycles,
+                               os.path.join(output_dir, "learning_curve_percent.png"))
     
-    plot_variable_type_breakdown_percentages(
-        experiment_results,
-        dataset_paths,
-        os.path.join(plots_path, "variable_breakdown_percentages.png")
-    )
+    # 5. Validation metrics
+    plot_validation_metrics(gradient_results, random_results, max_cycles,
+                           os.path.join(output_dir, "validation_metrics.png"))
     
-    print(f"All clean plots saved to {plots_path}")
+    # 6. Question selection patterns
+    plot_question_selection_patterns(gradient_results, random_results, dataset, max_cycles,
+                                   os.path.join(output_dir, "question_selection_patterns.png"))
+    
+    print(f"All plots saved to {output_dir}")
+    print(f"Plots limited to first {max_cycles} cycles")
 
 if __name__ == "__main__":
-    create_noisy_plots()
+    main(max_cycles=9)  # Change this parameter as needed
