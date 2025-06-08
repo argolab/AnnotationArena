@@ -737,11 +737,7 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
         return new_dataset_val, active_pool, validation_example_indices
     
     elif strategy == "fixed_size_resample":
-        if current_val_indices is None:
-            current_val_indices = list(range(len(dataset_val)))
-        
-        combined_pool = current_val_indices + active_pool
-        
+        combined_pool = list(range(len(dataset_train)))
         if len(combined_pool) >= validation_set_size:
             new_val_indices = random.sample(combined_pool, validation_set_size)
         else:
@@ -758,6 +754,7 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
         
         print(f"Fixed size resampled validation set: {len(new_dataset_val)} examples")
         print(f"Updated active pool size: {len(updated_active_pool)}")
+
         
         return new_dataset_val, updated_active_pool, validation_example_indices
 

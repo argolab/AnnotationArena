@@ -2015,6 +2015,8 @@ class SelectionFactory:
             return EntropyExampleSelectionStrategy(model, device)
         elif strategy_name == "badge":
             return BADGESelectionStrategy(model, device)
+        elif strategy_name == "combine":
+            return VariableGradientSelectionStrategy(model, device)
         else:
             raise ValueError(f"Unknown example selection strategy: {strategy_name}")
     
@@ -2063,3 +2065,580 @@ class SelectionFactory:
         example_strategy = SelectionFactory.create_example_strategy(example_strategy_name, model, device)
         feature_strategy = SelectionFactory.create_feature_strategy(feature_strategy_name, model, device)
         return CombinedSelectionStrategy(example_strategy, feature_strategy)
+
+
+class VariableGradientSelectionStrategy(ExampleSelectionStrategy):
+    """
+    Variable-level gradient-based example selection strategy for Active Learning.
+    
+    Computes gradients for individual masked positions (variables) rather than 
+    full examples, and selects the top variables with best gradient alignment 
+    to the validation set. Only considers top layer parameters for efficiency.
+    """
+    
+    def __init__(self, model, device=None):
+        """Initialize variable gradient selection strategy."""
+        super().__init__("variable_gradient", model, device)
+        self.selector = VariableGradientTopOnlySelector(model, device)
+    
+    def select_examples(self, dataset, num_to_select=300, val_dataset=None, 
+                        num_samples=5, batch_size=32, costs=None, **kwargs):
+        """
+        Select variables (masked positions) using gradient alignment.
+        
+        Args:
+            dataset: Dataset to select from
+            num_to_select: Number of variables to select (default 300)
+            val_dataset: Validation dataset
+            num_samples: Number of samples to compute per variable
+            batch_size: Batch size for dataloaders
+            costs: Dictionary mapping (example_idx, position) tuples to costs
+            **kwargs: Additional arguments
+            
+        Returns:
+            tuple: (Selected variable positions as (example_idx, position) tuples, 
+                   Alignment scores)
+        """
+        if val_dataset is None:
+            raise ValueError("Validation dataset is required for gradient selection")
+        
+        # Create validation dataloader
+        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        
+        # Compute validation gradients
+        validation_grad_samples = self.selector.compute_validation_gradient_sampled(
+            self.model, val_dataloader, num_samples=num_samples
+        )
+        
+        # Calculate gradient alignment for each variable
+        all_scores = []
+        all_variable_positions = []  # (example_idx, position) tuples
+        all_costs = []
+        all_bc_ratios = []
+        
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Computing variable gradient alignment")):
+            known_questions, inputs, labels, annotators, questions, embeddings = batch
+            inputs, labels, annotators, questions = (
+                inputs.to(self.device), labels.to(self.device), 
+                annotators.to(self.device), questions.to(self.device)
+            )
+            if embeddings is not None:
+                embeddings = embeddings.to(self.device)
+            
+            batch_size_actual = inputs.shape[0]
+            
+            for i in range(batch_size_actual):
+                global_example_idx = batch_idx * dataloader.batch_size + i
+                
+                # Find all masked positions for this example
+                masked_positions = []
+                for j in range(inputs.shape[1]):
+                    if inputs[i, j, 0] == 1:  # Position is masked
+                        masked_positions.append(j)
+                
+                if not masked_positions:
+                    continue
+                
+                example_input = inputs[i:i+1]
+                example_labels = labels[i:i+1]
+                example_annotator = annotators[i:i+1]
+                example_question = questions[i:i+1]
+                example_embedding = embeddings[i:i+1] if embeddings is not None else None
+                
+                # Efficiently compute gradients for all positions at once
+                all_variable_grads = self.selector.compute_all_variable_gradients_efficient(
+                    self.model, 
+                    example_input, example_labels, 
+                    example_annotator, example_question, example_embedding,
+                    masked_positions, num_samples=num_samples
+                )
+                
+                # Process each position's results
+                for pos in masked_positions:
+                    if pos not in all_variable_grads:
+                        continue
+                        
+                    variable_grad_dict = all_variable_grads[pos]
+                    variable_grad_dict = self.selector.normalize_gradient(variable_grad_dict)
+                    
+                    # Compute alignment with validation gradients
+                    alignment_scores = []
+                    for val_grad in validation_grad_samples:
+                        alignment = self.selector.compute_grad_dot_product(val_grad, variable_grad_dict)
+                        alignment_scores.append(alignment)
+                    
+                    # Get cost for this variable position
+                    cost = 1.0  # Default cost
+                    variable_key = (global_example_idx, pos)
+                    if costs and variable_key in costs:
+                        cost = costs[variable_key]
+                    
+                    avg_alignment = sum(alignment_scores) / len(alignment_scores) if alignment_scores else 0.0
+                    benefit_cost_ratio = avg_alignment / max(cost, 1e-10)
+                    
+                    all_scores.append(avg_alignment)
+                    all_variable_positions.append(variable_key)
+                    all_costs.append(cost)
+                    all_bc_ratios.append(benefit_cost_ratio)
+        
+        if all_scores:
+            # Sort by benefit/cost ratio or alignment score
+            if kwargs.get('use_benefit_cost_ratio', True):
+                sorted_data = sorted(zip(all_variable_positions, all_scores, all_costs, all_bc_ratios), 
+                                    key=lambda x: x[3], reverse=True)
+                sorted_positions = [pos for pos, _, _, _ in sorted_data]
+                sorted_scores = [score for _, score, _, _ in sorted_data]
+            else:
+                sorted_data = sorted(zip(all_variable_positions, all_scores, all_costs, all_bc_ratios), 
+                                    key=lambda x: x[1], reverse=True)
+                sorted_positions = [pos for pos, _, _, _ in sorted_data]
+                sorted_scores = [score for _, score, _, _ in sorted_data]
+            
+            selected_positions = sorted_positions[:num_to_select]
+            selected_scores = sorted_scores[:num_to_select]
+        else:
+            selected_positions = []
+            selected_scores = []
+        
+        return selected_positions, selected_scores
+
+
+class VariableGradientTopOnlySelector:
+    """
+    Variable-level gradient selector that only considers top layer parameters.
+    
+    Computes and compares gradients for individual masked positions,
+    selecting variables that would provide the most training benefit.
+    Only operates on top layer parameters for computational efficiency.
+    """
+    
+    def __init__(self, model, device=None):
+        """
+        Initialize variable gradient selector for top layer only.
+        
+        Args:
+            model: Model to use for predictions
+            device: Device to use for computations
+        """
+        self.model = model
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    def _is_top_layer_param(self, param_name):
+        """
+        Helper method to identify if a parameter belongs to the top layer.
+        
+        Args:
+            param_name: Name of the parameter
+            
+        Returns:
+            bool: True if the parameter belongs to the top layer, False otherwise
+        """
+        top_layer_identifiers = ['encoder.layers.5.out']
+        return any(identifier in param_name.lower() for identifier in top_layer_identifiers)
+    
+    def normalize_gradient(self, grad_dict):
+        """
+        Normalize gradients by their total L2 norm.
+        
+        Args:
+            grad_dict: Dictionary of gradients
+            
+        Returns:
+            dict: Normalized gradients
+        """
+        total_norm_squared = 0.0
+        for name, grad in grad_dict.items():
+            total_norm_squared += torch.sum(grad ** 2).item()
+        
+        if total_norm_squared <= 1e-10:
+            return grad_dict
+        
+        total_norm = math.sqrt(total_norm_squared)
+        normalized_grad_dict = {}
+        
+        for name, grad in grad_dict.items():
+            normalized_grad_dict[name] = grad / total_norm
+        
+        return normalized_grad_dict
+    
+    def compute_grad_dot_product(self, grad_dict1, grad_dict2):
+        """
+        Compute dot product between two gradient dictionaries.
+        
+        Args:
+            grad_dict1: First gradient dictionary
+            grad_dict2: Second gradient dictionary
+            
+        Returns:
+            float: Dot product
+        """
+        dot_product = 0.0
+        
+        for name in grad_dict1:
+            if name in grad_dict2:
+                dot_product += torch.sum(-grad_dict1[name] * grad_dict2[name]).item()
+        
+        return dot_product
+    
+    def compute_variable_sample_gradient(self, model, inputs, labels, annotators, questions, embeddings, position):
+        """
+        Compute gradient for a single variable position using sampling (top layer only).
+        Optimized to compute all masked positions' predictions in one forward pass.
+        
+        Args:
+            model: Model to use for predictions
+            inputs: Input tensor (single example)
+            labels: Label tensor
+            annotators: Annotator indices
+            questions: Question indices
+            embeddings: Embedding tensor
+            position: The specific masked position to compute gradient for
+            
+        Returns:
+            dict: Gradient dictionary
+        """
+        model.train()
+        grad_dict = {}
+        
+        # Check if the position is actually masked
+        if inputs[0, position, 0] != 1:
+            for name, param in model.named_parameters():
+                if param.requires_grad and self._is_top_layer_param(name):
+                    grad_dict[name] = torch.zeros_like(param)
+            return grad_dict
+        
+        temp_inputs = inputs.clone()
+        temp_labels = labels.clone()
+        
+        # Get all masked positions for this example
+        masked_positions = []
+        for j in range(inputs.shape[1]):
+            if temp_inputs[0, j, 0] == 1:
+                masked_positions.append(j)
+        
+        # Single forward pass to get predictions for all masked positions
+        with torch.no_grad():
+            current_outputs = model(temp_inputs, annotators, questions, embeddings)
+            
+            # Sample values for ALL masked positions at once
+            for pos in masked_positions:
+                var_outputs = current_outputs[0, pos]
+                var_probs = F.softmax(var_outputs, dim=0)
+                sampled_class = torch.multinomial(var_probs, 1).item()
+                
+                # Create one-hot encoding
+                one_hot = torch.zeros(model.max_choices, device=self.device)
+                one_hot[sampled_class] = 1.0
+                
+                # Update input and labels
+                temp_inputs[0, pos, 0] = 0  # Unmask
+                temp_inputs[0, pos, 1:1+model.max_choices] = one_hot
+                temp_labels[0, pos] = one_hot
+
+        # Disable gradients for non-top layer parameters
+        non_top_params = []
+        for name, param in model.named_parameters():
+            if not self._is_top_layer_param(name):
+                if param.requires_grad:
+                    param.requires_grad = False
+                    non_top_params.append(param)
+
+        model.zero_grad()
+        outputs = model(temp_inputs, annotators, questions, embeddings)
+        
+        # Compute loss only for the target position
+        position_output = outputs[0, position]
+        position_label = temp_labels[0, position]
+        loss = F.cross_entropy(position_output.unsqueeze(0), 
+                              torch.argmax(position_label).unsqueeze(0))
+        
+        loss.backward()
+
+        # Re-enable gradients
+        for param in non_top_params:
+            param.requires_grad = True
+        
+        # Collect gradients only from top layer
+        for name, param in model.named_parameters():
+            if param.requires_grad and param.grad is not None and self._is_top_layer_param(name):
+                grad_dict[name] = param.grad.detach().clone()
+        
+        model.zero_grad()
+        return grad_dict
+    
+    def compute_variable_gradients(self, model, inputs, labels, annotators, questions, embeddings, position, num_samples=5):
+        """
+        Compute gradients for a single variable with multiple samples (top layer only).
+        Optimized to compute all masked positions' predictions in one forward pass per sample.
+        
+        Args:
+            model: Model to use for predictions
+            inputs: Input tensor
+            labels: Label tensor
+            annotators: Annotator indices
+            questions: Question indices
+            embeddings: Embedding tensor
+            position: The masked position to compute gradients for
+            num_samples: Number of samples to compute
+            
+        Returns:
+            dict: Averaged gradient dictionary
+        """
+        grad_dict = {}
+        
+        # Pre-compute all masked positions for this example
+        masked_positions = []
+        for j in range(inputs.shape[1]):
+            if inputs[0, j, 0] == 1:
+                masked_positions.append(j)
+        
+        if position not in masked_positions:
+            # Position is not masked, return zero gradients
+            for name, param in model.named_parameters():
+                if param.requires_grad and self._is_top_layer_param(name):
+                    grad_dict[name] = torch.zeros_like(param)
+            return grad_dict
+        
+        for sample_idx in range(num_samples):
+            model.train()
+            temp_inputs = inputs.clone()
+            temp_labels = labels.clone()
+            
+            # Single forward pass to get predictions for all masked positions
+            with torch.no_grad():
+                current_outputs = model(temp_inputs, annotators, questions, embeddings)
+                
+                # Sample values for ALL masked positions at once
+                for pos in masked_positions:
+                    var_outputs = current_outputs[0, pos]
+                    var_probs = F.softmax(var_outputs, dim=0)
+                    sampled_class = torch.multinomial(var_probs, 1).item()
+                    
+                    # Create one-hot encoding
+                    one_hot = torch.zeros(model.max_choices, device=self.device)
+                    one_hot[sampled_class] = 1.0
+                    
+                    # Update input and labels
+                    temp_inputs[0, pos, 0] = 0  # Unmask
+                    temp_inputs[0, pos, 1:1+model.max_choices] = one_hot
+                    temp_labels[0, pos] = one_hot
+            
+            # Disable gradients for non-top layer parameters
+            non_top_params = []
+            for name, param in model.named_parameters():
+                if not self._is_top_layer_param(name):
+                    if param.requires_grad:
+                        param.requires_grad = False
+                        non_top_params.append(param)
+            
+            # Compute gradient for the target position
+            model.zero_grad()
+            outputs = model(temp_inputs, annotators, questions, embeddings)
+            
+            # Compute loss only for the target position
+            position_output = outputs[0, position]
+            position_label = temp_labels[0, position]
+            loss = F.cross_entropy(position_output.unsqueeze(0), 
+                                  torch.argmax(position_label).unsqueeze(0))
+            
+            loss.backward()
+            
+            # Re-enable gradients
+            for param in non_top_params:
+                param.requires_grad = True
+            
+            # Accumulate gradients (top layer only)
+            for name, param in model.named_parameters():
+                if param.requires_grad and param.grad is not None and self._is_top_layer_param(name):
+                    if name not in grad_dict:
+                        grad_dict[name] = param.grad.detach().clone()
+                    else:
+                        grad_dict[name] += param.grad.detach().clone()
+            
+            model.zero_grad()
+        
+        # Average over samples
+        if num_samples > 0:
+            for name in grad_dict:
+                grad_dict[name] /= num_samples
+        
+        return grad_dict
+    
+    def compute_all_variable_gradients_efficient(self, model, inputs, labels, annotators, questions, embeddings, masked_positions, num_samples=5):
+        """
+        Efficiently compute gradients for all masked positions (top layer only).
+        Uses shared forward passes to minimize computation.
+        
+        Args:
+            model: Model to use for predictions
+            inputs: Input tensor (single example)
+            labels: Label tensor
+            annotators: Annotator indices
+            questions: Question indices
+            embeddings: Embedding tensor
+            masked_positions: List of masked positions to compute gradients for
+            num_samples: Number of samples to compute
+            
+        Returns:
+            dict: Dictionary mapping position -> gradient dictionary
+        """
+        all_position_grads = {pos: {} for pos in masked_positions}
+        
+        for sample_idx in range(num_samples):
+            model.train()
+            temp_inputs = inputs.clone()
+            temp_labels = labels.clone()
+            
+            # Single forward pass to get predictions for all masked positions
+            with torch.no_grad():
+                current_outputs = model(temp_inputs, annotators, questions, embeddings)
+                
+                # Sample values for ALL masked positions at once
+                for pos in masked_positions:
+                    var_outputs = current_outputs[0, pos]
+                    var_probs = F.softmax(var_outputs, dim=0)
+                    sampled_class = torch.multinomial(var_probs, 1).item()
+                    
+                    # Create one-hot encoding
+                    one_hot = torch.zeros(model.max_choices, device=self.device)
+                    one_hot[sampled_class] = 1.0
+                    
+                    # Update input and labels
+                    temp_inputs[0, pos, 0] = 0  # Unmask
+                    temp_inputs[0, pos, 1:1+model.max_choices] = one_hot
+                    temp_labels[0, pos] = one_hot
+            
+            # Disable gradients for non-top layer parameters
+            non_top_params = []
+            for name, param in model.named_parameters():
+                if not self._is_top_layer_param(name):
+                    if param.requires_grad:
+                        param.requires_grad = False
+                        non_top_params.append(param)
+            
+            # Compute gradients for each position
+            for target_pos in masked_positions:
+                model.zero_grad()
+                outputs = model(temp_inputs, annotators, questions, embeddings)
+                
+                # Compute loss only for the target position
+                position_output = outputs[0, target_pos]
+                position_label = temp_labels[0, target_pos]
+                loss = F.cross_entropy(position_output.unsqueeze(0), 
+                                      torch.argmax(position_label).unsqueeze(0))
+                
+                loss.backward()
+                
+                # Accumulate gradients for this position (top layer only)
+                for name, param in model.named_parameters():
+                    if param.requires_grad and param.grad is not None and self._is_top_layer_param(name):
+                        if name not in all_position_grads[target_pos]:
+                            all_position_grads[target_pos][name] = param.grad.detach().clone()
+                        else:
+                            all_position_grads[target_pos][name] += param.grad.detach().clone()
+                
+                model.zero_grad()
+            
+            # Re-enable gradients
+            for param in non_top_params:
+                param.requires_grad = True
+        
+        # Average over samples for each position
+        if num_samples > 0:
+            for pos in masked_positions:
+                for name in all_position_grads[pos]:
+                    all_position_grads[pos][name] /= num_samples
+        
+        return all_position_grads
+    
+    def compute_validation_gradient_sampled(self, model, val_dataloader, num_samples=5):
+        """
+        Compute validation gradients using sampling approach (top layer only).
+        
+        Args:
+            model: Model to use for predictions
+            val_dataloader: Validation dataloader
+            num_samples: Number of samples to compute
+            
+        Returns:
+            list: List of gradient dictionaries
+        """
+        model.train()
+        grad_samples = []
+        
+        for _ in tqdm(range(num_samples), desc="Computing validation gradients"):
+            temp_grad_dict = {}
+            sample_count = 0
+            
+            for batch in val_dataloader:
+                known_questions, inputs, labels, annotators, questions, embeddings = batch
+                inputs, labels, annotators, questions = (
+                    inputs.to(self.device), labels.to(self.device), 
+                    annotators.to(self.device), questions.to(self.device)
+                )
+
+                if embeddings is not None:
+                    embeddings = embeddings.to(self.device)
+                
+                batch_size = inputs.shape[0]
+                temp_inputs = inputs.clone()
+                
+                for i in range(batch_size):
+                    masked_positions = []
+                    for j in range(inputs.shape[1]):
+                        if temp_inputs[i, j, 0] == 1:
+                            masked_positions.append(j)
+                    
+                    for pos in masked_positions:
+                        with torch.no_grad():
+                            current_outputs = model(temp_inputs, annotators, questions, embeddings)
+                            var_outputs = current_outputs[i, pos]
+                            var_probs = F.softmax(var_outputs, dim=0)
+                        
+                        sampled_class = torch.multinomial(var_probs, 1).item()
+                        one_hot = torch.zeros(model.max_choices, device=self.device)
+                        one_hot[sampled_class] = 1.0
+                        
+                        temp_inputs[i, pos, 0] = 0
+                        temp_inputs[i, pos, 1:1+model.max_choices] = one_hot
+                
+                # Disable gradients for non-top layer parameters
+                non_top_params = []
+                for name, param in model.named_parameters():
+                    if not self._is_top_layer_param(name):
+                        if param.requires_grad:
+                            param.requires_grad = False
+                            non_top_params.append(param)
+                
+                model.zero_grad()
+                outputs = model(temp_inputs, annotators, questions, embeddings)
+                batch_loss = model.compute_total_loss(
+                    outputs, labels, temp_inputs, questions, embeddings,
+                    full_supervision=True
+                )
+                
+                if batch_loss > 0:
+                    batch_loss.backward()
+                    sample_count += 1
+                    
+                    for name, param in model.named_parameters():
+                        if param.grad is not None and self._is_top_layer_param(name):
+                            if name not in temp_grad_dict:
+                                temp_grad_dict[name] = param.grad.detach().clone()
+                            else:
+                                temp_grad_dict[name] += param.grad.detach().clone()
+                
+                # Re-enable gradients
+                for param in non_top_params:
+                    param.requires_grad = True
+            
+            if sample_count > 0:
+                for name in temp_grad_dict:
+                    temp_grad_dict[name] /= sample_count
+                
+                normalized_grad_dict = self.normalize_gradient(temp_grad_dict)
+                grad_samples.append(normalized_grad_dict)
+        
+        return grad_samples

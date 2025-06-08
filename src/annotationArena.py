@@ -95,8 +95,7 @@ class AnnotationArena:
             "timestamp": observation_time,
             "cost": self.variables[variable_id]["cost"]
         })
-        
-        affected_examples = [ex for ex in self.prediction_history if variable_id in ex["variables"]]
+        affected_examples = [ex["timestamp"] for ex in self.prediction_history if variable_id in ex["variables"]]
         self.model.update_training_supervision(
             [value], [variable_id], affected_examples
         )
@@ -460,8 +459,8 @@ class AnnotationArena:
             
         # Get true value
         entry = self.dataset.get_data_entry(example_idx)
-        # true_value = entry['answers'][position]
-        true_value = entry['true_answers'][position]
+        true_value = entry['answers'][position]
+        # true_value = entry['true_answers'][position] #TODO: is "true_answers" a specific key for noisy experiments?
         
         # Observe the variable
         success = self.observe(variable_id, true_value)

@@ -250,23 +250,26 @@ class ImputerEmbedding(nn.Module):
         """
         if example_indices is None:
             example_indices = list(range(len(self.training_examples)))
-        
-        count = 0
-        for idx in example_indices:
-            example = self.training_examples[idx]
-            
-            # Check if any positions in this example match the observed positions
-            for i, pos in enumerate(positions):
-                if pos in example['positions']:
-                    # Update the example's inputs to reflect the observed value
-                    pos_idx = example['positions'].index(pos)
-                    example['inputs'][pos][0] = 0  # Mark as observed
-                    example['inputs'][pos][1:] = observed_values[i]
-                    count += 1
-                    
-                    # Mark this example for revisiting during next training
-                    example['needs_revisit'] = True
-                    self.examples_to_revisit.add(idx)
+        try:
+            count = 0
+            for idx in example_indices:
+                example = self.training_examples[idx]
+                
+                # Check if any positions in this example match the observed positions
+                for i, pos in enumerate(positions):
+                    if pos in example['positions']:
+                        # Update the example's inputs to reflect the observed value
+                        pos_idx = example['positions'].index(pos)
+                        example['inputs'][pos][0] = 0  # Mark as observed
+                        example['inputs'][pos][1:] = observed_values[i]
+                        count += 1
+                        
+                        # Mark this example for revisiting during next training
+                        example['needs_revisit'] = True
+                        self.examples_to_revisit.add(idx)
+        except TypeError:
+            print(example_indices)
+            raise Exception
         
         return count
     

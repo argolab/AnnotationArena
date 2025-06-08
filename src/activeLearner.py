@@ -97,6 +97,10 @@ def run_experiment(
     annotated_examples = []
     test_overlap_annotations = {}
     cycle_count = 0
+
+    active_pool_list = [dataset_train.get_data_entry(idx) for idx in range(len(dataset_train))]
+    val_list = [dataset_val.get_data_entry(idx) for idx in range(len(dataset_val))]
+    dataset_train = AnnotationDataset(active_pool_list + val_list)
     
     # Initial evaluation
     arena.set_dataset(dataset_val)
@@ -160,12 +164,26 @@ def run_experiment(
             
             selected_examples = [active_pool[idx] for idx in selected_indices]
 
+        elif example_strategy == "combine":
+            print("Debug: running combined strategy")
+            strategy_class = SelectionFactory.create_example_strategy(example_strategy, model, device, gradient_top_only=gradient_top_only)
+            active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_pool]
+            active_pool_subset = AnnotationDataset(active_pool_examples)
+            
+            selected_indices, _ = strategy_class.select_examples(
+                active_pool_subset, num_to_select=300, #TODO: should change this to using argument later on
+                val_dataset=dataset_val, num_samples=3, batch_size=batch_size
+            )
+
+            print(selected_indices)
+            
+            selected_examples = list(set([active_pool[idx[0]] for idx in selected_indices]))
         else:
             raise ValueError(f"Unknown example strategy: {example_strategy}")
         
         print(f"Selected {len(selected_examples)} examples")
         
-        active_pool = [idx for idx in active_pool if idx not in selected_examples]
+        #active_pool = [idx for idx in active_pool if idx not in selected_examples]
         
         # Add selected examples to annotated_examples list
         for example in selected_examples:
@@ -173,29 +191,13 @@ def run_experiment(
                 annotated_examples.append(example)
         
         
-        
         # Add selected examples to validation set if requested
         if resample_validation:
-            if cold_start:
-                dataset_val, active_pool_after_resample, val_examples = resample_validation_dataset(
-                    dataset_train, dataset_val, active_pool, annotated_examples, 
-                    strategy="add_selected_partial", selected_examples=selected_examples
-                )
-            else:
-                dataset_val, active_pool_after_resample, val_examples = resample_validation_dataset(
-                    dataset_train, dataset_val, active_pool, annotated_examples, 
-                    strategy="add_selected", selected_examples=selected_examples
-                )
-            # In cold_start mode, we need to ensure that examples added to validation set
-            # are removed from active pool to avoid duplicates
-            if cold_start:
-                
-                # Re-add selected examples that are not in validation set to active pool
-                for idx in selected_examples:
-                    if idx not in val_examples:
-                        active_pool.append(idx)
-            else:
-                active_pool = active_pool_after_resample
+            dataset_val, active_pool_after_resample, val_examples = resample_validation_dataset(
+                dataset_train, dataset_val, active_pool, annotated_examples, 
+                strategy="fixed_size_resample", selected_examples=selected_examples, validation_set_size=len(dataset_val),
+            )
+            active_pool = active_pool_after_resample
         metrics['remaining_pool_size'].append(len(active_pool))
         
         total_features_annotated = 0
@@ -205,59 +207,61 @@ def run_experiment(
         # Annotate selected examples
         for example_idx in selected_examples:
             arena.register_example(example_idx, add_all_positions=False)
-            
-            masked_positions = dataset_train.get_masked_positions(example_idx)
-            if not masked_positions:
-                print(f"No masked positions found for example {example_idx}")
-                continue
-                
-            if observe_all_features:
+        print(selected_examples)
+        if not example_strategy == "combine":
+            for example_idx in selected_examples: 
+                masked_positions = dataset_train.get_masked_positions(example_idx)
+                if not masked_positions:
+                    print(f"No masked positions found for example {example_idx}")
+                    continue
+                    
+                if observe_all_features:
 
-                # Observe all features of the selected examples
-                positions_to_annotate = masked_positions
-                position_benefit_costs = [(pos, 1.0, 1.0, 1.0) for pos in positions_to_annotate]
-
-            else:
-
-                # Select features using the specified feature strategy
-                if features_per_example is None:
-                    features_per_example = 5  # Default value
-                
-                features_to_annotate = min(features_per_example, len(masked_positions))
-                
-                candidate_variables = [
-                    f"example_{example_idx}_position_{pos}" 
-                    for pos in masked_positions
-                ]
-                
-                if feature_strategy == "random":
-                    selected_variables = random.sample(candidate_variables, features_to_annotate)
-                    position_benefit_costs = []
-                    for var in selected_variables:
-                        _, pos = arena._parse_variable_id(var)
-                        position_benefit_costs.append((pos, 1.0, 1.0, 1.0))
-
-                elif feature_strategy == "sequential":
-                    positions_to_annotate = masked_positions[:features_to_annotate]
+                    # Observe all features of the selected examples
+                    positions_to_annotate = masked_positions
                     position_benefit_costs = [(pos, 1.0, 1.0, 1.0) for pos in positions_to_annotate]
 
-                elif feature_strategy in ["voi", "fast_voi", "entropy", "voi_argmax"]:
-                    feature_suggestions = arena.suggest(
-                        candidate_variables=candidate_variables,
-                        strategy=feature_strategy, loss_type=loss_type
-                    )
-                    if not feature_suggestions:
-                        print(f"{feature_strategy} strategy returned no suggestions for example {example_idx}")
-                        continue
-                    
-                    # Extract positions and benefit/cost metrics
-                    position_benefit_costs = []
-                    for var, benefit, cost, ratio, *extra in feature_suggestions[:features_to_annotate]:
-                        _, pos = arena._parse_variable_id(var)
-                        position_benefit_costs.append((pos, benefit, cost, ratio))
-                        
                 else:
-                    raise ValueError(f"Unknown feature strategy: {feature_strategy}")
+
+                    # Select features using the specified feature strategy
+                    if features_per_example is None:
+                        features_per_example = 5  # Default value
+                    
+                    features_to_annotate = min(features_per_example, len(masked_positions))
+                    
+                    candidate_variables = [
+                        f"example_{example_idx}_position_{pos}" 
+                        for pos in masked_positions
+                    ]
+                    
+                    if feature_strategy == "random":
+                        selected_variables = random.sample(candidate_variables, features_to_annotate)
+                        position_benefit_costs = []
+                        for var in selected_variables:
+                            _, pos = arena._parse_variable_id(var)
+                            position_benefit_costs.append((pos, 1.0, 1.0, 1.0))
+
+                    elif feature_strategy == "sequential":
+                        positions_to_annotate = masked_positions[:features_to_annotate]
+                        position_benefit_costs = [(pos, 1.0, 1.0, 1.0) for pos in positions_to_annotate]
+
+                    elif feature_strategy in ["voi", "fast_voi", "entropy", "voi_argmax"]:
+                        feature_suggestions = arena.suggest(
+                            candidate_variables=candidate_variables,
+                            strategy=feature_strategy, loss_type=loss_type
+                        )
+                        if not feature_suggestions:
+                            print(f"{feature_strategy} strategy returned no suggestions for example {example_idx}")
+                            continue
+                        
+                        # Extract positions and benefit/cost metrics
+                        position_benefit_costs = []
+                        for var, benefit, cost, ratio, *extra in feature_suggestions[:features_to_annotate]:
+                            _, pos = arena._parse_variable_id(var)
+                            position_benefit_costs.append((pos, benefit, cost, ratio))
+                    
+                    else:
+                        raise ValueError(f"Unknown feature strategy: {feature_strategy}")
             
             # Check for overlaps with test set
             test_example_idx = example_idx % len(dataset_test)
@@ -293,7 +297,21 @@ def run_experiment(
                 # Make a prediction for training
                 variable_id = f"example_{example_idx}_position_{position}"
                 arena.predict(variable_id, train=True)
-        
+        else:
+            print("Debug: should print this for combined strategy")
+            for example_idx, pos in selected_indices:
+                actual_idx = active_pool[example_idx]
+                annotation_success = arena.observe_position(actual_idx, pos)
+                
+                if annotation_success:
+                    total_features_annotated += 1
+                else:
+                    print(f"Failed to observe position {position} for example {example_idx}")
+                cycle_benefit_cost_ratios.append(1.0)
+                cycle_observation_costs.append(1.0) #TODO: might change this later on
+                variable_id = f"example_{example_idx}_position_{pos}"
+                arena.predict(variable_id, train=True)
+
         print(f"Total features annotated in cycle {cycle_count+1}: {total_features_annotated}")
         
         # Training step
@@ -836,6 +854,23 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start
+            )
+        
+        elif experiment == "combine":
+            train_dataset = AnnotationDataset(data_manager.paths['train'])
+            val_dataset = AnnotationDataset(data_manager.paths['validation'])
+            test_dataset = AnnotationDataset(data_manager.paths['test'])
+            active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
+
+
+            results = run_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="combine", feature_strategy="random", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                cycles=args.cycles, epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+                device=device, resample_validation=args.resample_validation,
+                run_until_exhausted=args.run_until_exhausted,
+                gradient_top_only=True, cold_start=args.cold_start
             )
 
         else:

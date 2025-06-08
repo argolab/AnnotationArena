@@ -21,6 +21,59 @@ def load_experiment_results(results_path):
     
     return experiment_results
 
+def plot_cold_start_embedding_comparison(results_dict, save_path):
+    """Plot comparison between combine_cold_start_with_embedding and gradient_voi_cold_start_with_embedding_cross."""
+    # Filter only the relevant experiments
+    embedding_results = {k: v for k, v in results_dict.items() 
+                        if k in ['combine_cold_start_with_embedding', 'gradient_voi_cold_start_with_embedding', 'random_5_cold_start_with_embedding']}
+    
+    if not embedding_results:
+        print("No cold start embedding experiment results found")
+        return
+    
+    fig, ax = plt.subplots(figsize=(14, 10))
+    
+    colors = {
+        'combine_cold_start_with_embedding': 'orange',
+        'gradient_voi_cold_start_with_embedding': 'brown',
+        "random_5_cold_start_with_embedding": "cyan"
+    }
+    
+    markers = {
+        'combine_cold_start_with_embedding': 's',
+        'gradient_voi_cold_start_with_embedding': '*',
+        "random_5_cold_start_with_embedding": "s"
+    }
+    
+    for strategy, results in embedding_results.items():
+        # Plot annotated loss on test set only
+        if 'test_expected_losses' in results:
+            annotated_losses = results['test_expected_losses']
+            cycles = list(range(len(annotated_losses)))
+            
+            ax.plot(cycles, annotated_losses, 
+                    linestyle='-', 
+                    color=colors[strategy],
+                    marker=markers[strategy], 
+                    label=f"{strategy}",
+                    linewidth=2,
+                    markersize=8)
+    
+    ax.set_title('Loss on Test Set: Cold Start Embedding Comparison', fontsize=16)
+    ax.set_xlabel('Cycles', fontsize=14)
+    ax.set_ylabel('Annotated Loss', fontsize=14)
+    ax.grid(True, linestyle='--', alpha=0.7)
+    ax.legend(loc='upper right', fontsize=12)
+    
+    # Set y-axis to start from 0 and have some headroom
+    max_loss = max([max(r.get('test_annotated_losses', [0])) for r in embedding_results.values()])
+    ax.set_ylim(0, max_loss * 1.1)
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved cold start embedding comparison plot to {save_path}")
+
 def extract_costs_per_cycle(experiment_results):
     """
     Extract costs per cycle for each experiment from observation history.
@@ -818,10 +871,10 @@ def create_plots(feature_num):
     plot_feature_counts(experiment_results, os.path.join(plots_path, "feature_counts.png"))
     plot_top_only_comparison(experiment_results, os.path.join(plots_path, "top_only_comparison.png"))
     plot_cold_start_experiments(experiment_results, os.path.join(plots_path, "cold_start_experiments.png"), feature_num)'''
-    
+    #plot_top_only_comparison(experiment_results, os.path.join(plots_path, "top_only_comparison.png"))
     # Create new cost-based plot
-    plot_loss_vs_cost(experiment_results, cumulative_costs, os.path.join(plots_path, "loss_vs_cost.png"), feature_num)
-
+    #plot_loss_vs_cost(experiment_results, cumulative_costs, os.path.join(plots_path, "loss_vs_cost.png"), feature_num)
+    plot_cold_start_embedding_comparison(experiment_results, os.path.join(plots_path, "cold_start_embedding_comparison.png"))
     #plot_observation_patterns(experiment_results, os.path.join(plots_path, "observation_cost.png"))
     
     print(f"All plots saved to {plots_path}")
