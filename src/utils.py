@@ -57,7 +57,9 @@ class DataManager:
             bool: Success status
         """
         print(f"Use embedding: {use_embedding}")
-
+        if os.path.exists(os.path.join(self.base_path, "initial_train.json")):
+            print("Data was created before!")
+            return
         if use_embedding and not dataset == "hanna":
             raise ValueError("Not yet support other datasets with text embedding")
         if dataset == "gaussian":
@@ -70,10 +72,10 @@ class DataManager:
         except FileNotFoundError:
             return False
 
-        if use_embedding and not os.path.exists(os.path.join(self.base_path, "text_embeddings.json")):
+        '''if use_embedding and not os.path.exists(os.path.join(self.base_path, "text_embeddings.json")):
             print("Preparing all text embeddings with sentence bert")
             self.prepare_text_embeddings(num_partition)
-            print("Done\n")
+            print("Done\n")'''
         
         text_ids = list(human_data.keys())
         if dataset == "hanna":
@@ -173,10 +175,11 @@ class DataManager:
         if dataset == "hanna":
             
             if use_embedding:
-                with open(os.path.join(self.base_path, "text_embeddings.json"), "r") as file:
-                    text_embeddings = json.load(file)
-                with open(os.path.join(self.base_path, "propmt_embeddings.json"), "r") as file:
-                   question_embeddings = json.load(file)
+                with open(os.path.join(self.base_path, "questions.json"), "r") as file:
+                    question_data = json.load(file)
+
+                with open(os.path.join(self.base_path, "prompts_and_stories.json"), "r", encoding="utf-8") as file:
+                    text_data = json.load(file)
 
             for text_id in tqdm(texts):
                 if text_id not in llm_data:
@@ -189,7 +192,8 @@ class DataManager:
                     "annotators": [],
                     "questions": [],
                     "orig_split": split_type,
-                    "observation_history": []  # Track history of observations for this entry
+                    "observation_history": [],  # Track history of observations for this entry
+                    "text_embedding": []
                 }
                 
                 annotators = list(human_data[text_id].keys())
@@ -214,6 +218,12 @@ class DataManager:
                     entry["answers"].append(true_prob)
                     entry["annotators"].append(-1)
                     entry["questions"].append(question_indices[question])
+
+                    if use_embedding:
+                        sentence = text_data[int(text_id)]["Prompt"] + text_data[int(text_id)]["Story"] + question_data[question]
+                        embedding = model.encode([sentence])[0, :]
+                        entry["text_embedding"].append(embedding.tolist())
+
 
                 # Process human questions
                 for judge_id in annotators:
@@ -271,15 +281,11 @@ class DataManager:
                         entry["answers"].append(true_prob)   
                         entry["annotators"].append(int(judge_id))
                         entry["questions"].append(question_indices[question])
-                if use_embedding:
-                    entry["text_embedding"] = [[] for _ in range(14)]
-                    for q_idx, question in enumerate(question_list):
-                        text_embedding = text_embeddings[int(text_id)]
-                        question_embedding = question_embeddings[question]
-                        final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
-                        entry["text_embedding"][q_idx] = final_embedding
-                        entry["text_embedding"][q_idx + 7] =  final_embedding
 
+                        if use_embedding:
+                            sentence = text_data[int(text_id)]["Prompt"] + text_data[int(text_id)]["Story"] + question_data[question]
+                            embedding = model.encode([sentence])[0, :]
+                            entry["text_embedding"].append(embedding.tolist())
                 
                 data_list.append(entry)
 
@@ -776,6 +782,6 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
     return dataset_val, active_pool, validation_example_indices
 
 if __name__ == "__main__":
-    # data_manager = DataManager("../outputs/data_hanna")
-    data_manager = DataManager("/export/fs06/psingh54/ActiveRubric-Internal/outputs/data")
+    data_manager = DataManager("../outputs/data_hanna")
+    # data_manager = DataManager("/export/fs06/psingh54/ActiveRubric-Internal/outputs/data")
     data_manager.prepare_data(1200, cold_start=True, use_embedding=True)

@@ -36,7 +36,7 @@ def extract_costs_per_cycle(experiment_results):
     cumulative_costs = {}
     
     for experiment_name, results in experiment_results.items():
-        if "top_only" in experiment_name:
+        if "voi" not in experiment_name:
             continue
         if 'observation_history' not in results:
             print(f"No observation history found for {experiment_name}")
@@ -62,7 +62,7 @@ def extract_costs_per_cycle(experiment_results):
             cost = obs.get('cost', 0.0)
             
             # Apply special cost for position_7
-            if '_position_9' in variable_id:
+            if '_position_7' in variable_id:
                 cost = 1.5
             
             cycle_costs[experiment_name][cycle] += cost
@@ -538,9 +538,9 @@ def plot_loss_vs_cost(results_dict, costs_dict, save_path, feature_num):
         'gradient_all': 'red',
         'random_all': 'green',
         'random_5': 'purple',
-        'gradient_sequential': 'orange',
-        'gradient_voi': 'brown',
-        'gradient_fast_voi': 'blue',
+        'gradient_voi_cold_start_with_embedding': 'orange',
+        'gradient_voi_cold_start_with_embedding_cross': 'brown',
+        'gradient_voi_cold_start': 'blue',
         'entropy_all': 'pink',
         'entropy_5': 'darkgreen',
         'gradient_random': 'cyan'
@@ -550,9 +550,9 @@ def plot_loss_vs_cost(results_dict, costs_dict, save_path, feature_num):
         'gradient_all': 'o',
         'random_all': '^',
         'random_5': 'D',
-        'gradient_sequential': 's',
-        'gradient_voi': '*',
-        'gradient_fast_voi': 'X',
+        'gradient_voi_cold_start_with_embedding': 's',
+        'gradient_voi_cold_start_with_embedding_cross': '*',
+        'gradient_voi_cold_start': 'X',
         'entropy_all': 's',
         'entropy_5': 'P',
         'gradient_random': 'v'
@@ -581,7 +581,7 @@ def plot_loss_vs_cost(results_dict, costs_dict, save_path, feature_num):
                 linewidth=2,
                 markersize=8)
     
-    ax.set_title('Loss vs Cumulative Cost', fontsize=16)
+    ax.set_title('Hanna Loss vs Cumulative Cost', fontsize=16)
     ax.set_xlabel('Cumulative Cost', fontsize=14)
     ax.set_ylabel('Annotated Loss', fontsize=14)
     ax.grid(True, linestyle='--', alpha=0.7)
@@ -594,6 +594,207 @@ def plot_loss_vs_cost(results_dict, costs_dict, save_path, feature_num):
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     plt.close()
     print(f"Saved Loss vs Cost plot to {save_path}")
+
+def plot_observation_patterns(experiment_results, save_path):
+    """
+    Plot comparison of reobservation patterns across cycles between gradient_voi_cold_start_with_embedding 
+    and gradient_voi_cold_start experiments. Shows how frequently each experiment reobserves 
+    previously seen examples in each cycle.
+    """
+    import matplotlib.pyplot as plt
+    from collections import defaultdict
+    import numpy as np
+    
+    # Define the experiments to compare
+    target_experiments = ['gradient_voi_cold_start_with_embedding', 'gradient_voi_cold_start']
+    
+    # Filter experiments
+    filtered_results = {k: v for k, v in experiment_results.items() 
+                       if k in target_experiments and 'observation_history' in v}
+    
+    if len(filtered_results) < 2:
+        print(f"Need both experiments for comparison. Found: {list(filtered_results.keys())}")
+        return
+    
+    # Dictionary to store reobservation patterns for each experiment
+    experiment_patterns = {}
+    
+    for experiment_name, results in filtered_results.items():
+        observations = results['observation_history']
+        
+        if not observations:
+            continue
+            
+        # Divide observations into 10 cycles based on timestamp
+        max_timestamp = max(obs.get('timestamp', 0) for obs in observations)
+        cycle_size = max_timestamp / 10.0
+        
+        # Track examples seen in each cycle and reobservation rates
+        cycle_examples = defaultdict(set)  # cycle -> set of examples seen
+        cycle_reobs_counts = defaultdict(int)  # cycle -> count of reobservations
+        cycle_total_counts = defaultdict(int)  # cycle -> total observations
+        previously_seen = set()  # all examples seen in previous cycles
+        
+        for obs in observations:
+            timestamp = obs.get('timestamp', 0)
+            variable_id = obs.get('variable_id', '')
+            
+            # Determine cycle (0-9)
+            cycle = min(int(timestamp / cycle_size), 9)
+            
+            # Extract example number
+            example_num = None
+            if 'example_' in variable_id:
+                try:
+                    example_num = variable_id.split('example_')[1].split('_position_')[0]
+                    example_num = int(example_num)
+                except (IndexError, ValueError):
+                    continue
+            
+            if example_num is not None:
+                cycle_total_counts[cycle] += 1
+                
+                # Check if this example was seen in previous cycles
+                if example_num in previously_seen:
+                    cycle_reobs_counts[cycle] += 1
+                
+                # Add to current cycle's examples
+                cycle_examples[cycle].add(example_num)
+                
+                # Update previously seen examples for future cycles
+                previously_seen.add(example_num)
+        
+        # Calculate reobservation rates for each cycle
+        reobs_rates = []
+        total_obs_per_cycle = []
+        unique_obs_per_cycle = []
+        
+        for cycle in range(10):
+            total = cycle_total_counts[cycle]
+            reobs = cycle_reobs_counts[cycle]
+            unique = len(cycle_examples[cycle])
+            
+            total_obs_per_cycle.append(total)
+            unique_obs_per_cycle.append(unique)
+            
+            if total > 0:
+                reobs_rates.append(reobs / total * 100)  # Convert to percentage
+            else:
+                reobs_rates.append(0)
+        
+        experiment_patterns[experiment_name] = {
+            'reobs_rates': reobs_rates,
+            'total_obs': total_obs_per_cycle,
+            'unique_obs': unique_obs_per_cycle,
+            'cycle_examples': cycle_examples
+        }
+    
+    # Create the visualization
+    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(16, 12))
+    cycles = list(range(10))
+    
+    colors = {'gradient_voi_cold_start_with_embedding': 'orange', 
+              'gradient_voi_cold_start': 'brown'}
+    markers = {'gradient_voi_cold_start_with_embedding': 'o', 
+               'gradient_voi_cold_start': 's'}
+    
+    # Plot 1: Reobservation rates over cycles
+    for exp_name, patterns in experiment_patterns.items():
+        ax1.plot(cycles, patterns['reobs_rates'], 
+                color=colors[exp_name], marker=markers[exp_name], 
+                label=exp_name, linewidth=2, markersize=8)
+    
+    ax1.set_xlabel('Cycle', fontsize=12)
+    ax1.set_ylabel('Reobservation Rate (%)', fontsize=12)
+    ax1.set_title('Reobservation Rate Evolution Across Cycles', fontsize=14)
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    ax1.set_xticks(cycles)
+    
+    # Plot 2: Total observations per cycle
+    width = 0.35
+    x = np.array(cycles)
+    
+    exp_names = list(experiment_patterns.keys())
+    bars1 = ax2.bar(x - width/2, experiment_patterns[exp_names[0]]['total_obs'], 
+                    width, label=exp_names[0], alpha=0.7, color=colors[exp_names[0]])
+    bars2 = ax2.bar(x + width/2, experiment_patterns[exp_names[1]]['total_obs'], 
+                    width, label=exp_names[1], alpha=0.7, color=colors[exp_names[1]])
+    
+    ax2.set_xlabel('Cycle', fontsize=12)
+    ax2.set_ylabel('Total Observations', fontsize=12)
+    ax2.set_title('Total Observations Per Cycle', fontsize=14)
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    ax2.set_xticks(cycles)
+    
+    # Plot 3: Unique examples per cycle
+    for exp_name, patterns in experiment_patterns.items():
+        ax3.plot(cycles, patterns['unique_obs'], 
+                color=colors[exp_name], marker=markers[exp_name], 
+                label=exp_name, linewidth=2, markersize=8)
+    
+    ax3.set_xlabel('Cycle', fontsize=12)
+    ax3.set_ylabel('Unique Examples Observed', fontsize=12)
+    ax3.set_title('Unique Examples Per Cycle', fontsize=14)
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    ax3.set_xticks(cycles)
+    
+    # Plot 4: Cumulative unique examples
+    for exp_name, patterns in experiment_patterns.items():
+        cumulative_unique = []
+        seen_examples = set()
+        
+        for cycle in range(10):
+            seen_examples.update(patterns['cycle_examples'][cycle])
+            cumulative_unique.append(len(seen_examples))
+        
+        ax4.plot(cycles, cumulative_unique, 
+                color=colors[exp_name], marker=markers[exp_name], 
+                label=exp_name, linewidth=2, markersize=8)
+    
+    ax4.set_xlabel('Cycle', fontsize=12)
+    ax4.set_ylabel('Cumulative Unique Examples', fontsize=12)
+    ax4.set_title('Cumulative Unique Examples Across Cycles', fontsize=14)
+    ax4.legend()
+    ax4.grid(True, alpha=0.3)
+    ax4.set_xticks(cycles)
+    
+    plt.tight_layout()
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    
+    # Print detailed analysis
+    print(f"\nReobservation Pattern Analysis:")
+    print("=" * 50)
+    
+    for exp_name, patterns in experiment_patterns.items():
+        print(f"\n{exp_name}:")
+        print(f"  Average reobservation rate: {np.mean(patterns['reobs_rates']):.2f}%")
+        print(f"  Max reobservation rate: {np.max(patterns['reobs_rates']):.2f}% (Cycle {np.argmax(patterns['reobs_rates'])})")
+        print(f"  Total unique examples seen: {len(set().union(*patterns['cycle_examples'].values()))}")
+        
+        # Show cycle-by-cycle breakdown
+        print(f"  Cycle-by-cycle breakdown:")
+        for cycle in range(10):
+            reobs_rate = patterns['reobs_rates'][cycle]
+            total_obs = patterns['total_obs'][cycle]
+            unique_obs = patterns['unique_obs'][cycle]
+            print(f"    Cycle {cycle}: {reobs_rate:.1f}% reobs rate ({total_obs} total, {unique_obs} unique)")
+    
+    # Compare the two experiments
+    exp1, exp2 = list(experiment_patterns.keys())
+    rates1 = experiment_patterns[exp1]['reobs_rates']
+    rates2 = experiment_patterns[exp2]['reobs_rates']
+    
+    print(f"\nComparison:")
+    print(f"  {exp1} vs {exp2}:")
+    for cycle in range(10):
+        diff = rates1[cycle] - rates2[cycle]
+        print(f"    Cycle {cycle}: {diff:+.1f}% difference")
+    
+    print(f"\nSaved observation patterns plot to {save_path}")
 
 def create_plots(feature_num):
     base_path = "../outputs"
@@ -611,15 +812,17 @@ def create_plots(feature_num):
     _, cumulative_costs = extract_costs_per_cycle(experiment_results)
     
     # Create original plots
-    plot_observe_all_experiments(experiment_results, os.path.join(plots_path, "observe_all_experiments.png"))
+    '''plot_observe_all_experiments(experiment_results, os.path.join(plots_path, "observe_all_experiments.png"))
     plot_observe_5_experiments(experiment_results, os.path.join(plots_path, f"observe_{feature_num}_experiments.png"), feature_num)
     plot_voi_comparison(experiment_results, os.path.join(plots_path, "voi_comparison.png"))
     plot_feature_counts(experiment_results, os.path.join(plots_path, "feature_counts.png"))
     plot_top_only_comparison(experiment_results, os.path.join(plots_path, "top_only_comparison.png"))
-    plot_cold_start_experiments(experiment_results, os.path.join(plots_path, "cold_start_experiments.png"), feature_num)
+    plot_cold_start_experiments(experiment_results, os.path.join(plots_path, "cold_start_experiments.png"), feature_num)'''
     
     # Create new cost-based plot
     plot_loss_vs_cost(experiment_results, cumulative_costs, os.path.join(plots_path, "loss_vs_cost.png"), feature_num)
+
+    #plot_observation_patterns(experiment_results, os.path.join(plots_path, "observation_cost.png"))
     
     print(f"All plots saved to {plots_path}")
 
