@@ -720,21 +720,30 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
 
     elif strategy == "add_selected_partial" and selected_examples:
         new_val_data = []
-        
-        for i in range(current_val_size):
-            new_val_data.append(dataset_val.get_data_entry(i))
-        
         examples_added = 0
-        for idx in selected_examples:
-            if idx not in validation_example_indices and random.random() > 0.5:
-                new_val_data.append(dataset_train.get_data_entry(idx))
-                validation_example_indices.append(idx)
-                examples_added += 1
         
-            new_dataset_val = AnnotationDataset(new_val_data)
+        added_example = random.sample(annotated_examples, min(len(dataset_val), len(annotated_examples) // 2))
+        remaining_size = len(dataset_val) - len(added_example)
+        remaining_pool = []
+        combined_pool = list(range(len(dataset_train)))
+        for idx in combined_pool:
+            if idx not in added_example:
+                remaining_pool.append(idx)
+        extra_example = random.sample(remaining_pool, remaining_size)
+        validation_pool = added_example + extra_example
+        for idx in validation_pool:
+            new_val_data.append(dataset_train.get_data_entry(idx))
+            validation_example_indices.append(idx)
+            examples_added += 1
+
+        new_dataset_val = AnnotationDataset(new_val_data)  
+        new_active_pool = []
+        for i in combined_pool:
+            if i not in validation_example_indices:
+                new_active_pool.append(i)
         
         print(f"Added {examples_added} selected examples to validation set (now {len(new_dataset_val)} examples)")
-        return new_dataset_val, active_pool, validation_example_indices
+        return new_dataset_val, new_active_pool, validation_example_indices
     
     elif strategy == "fixed_size_resample":
         combined_pool = list(range(len(dataset_train)))

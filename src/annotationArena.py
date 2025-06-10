@@ -95,13 +95,13 @@ class AnnotationArena:
             "timestamp": observation_time,
             "cost": self.variables[variable_id]["cost"]
         })
-        affected_examples = [ex["timestamp"] for ex in self.prediction_history if variable_id in ex["variables"]]
+        affected_examples = None #[ex for ex in self.prediction_history if variable_id in ex["variables"]]
         self.model.update_training_supervision(
             [value], [variable_id], affected_examples
         )
         
-        for ex in affected_examples:
-            ex["needs_revisit"] = True
+        '''for ex in affected_examples:
+            ex["needs_revisit"] = True'''
         
         return True
         

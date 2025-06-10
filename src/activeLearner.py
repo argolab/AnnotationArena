@@ -171,7 +171,7 @@ def run_experiment(
             active_pool_subset = AnnotationDataset(active_pool_examples)
             
             selected_indices, _ = strategy_class.select_examples(
-                active_pool_subset, num_to_select=300, #TODO: should change this to using argument later on
+                active_pool_subset, num_to_select=180, #TODO: should change this to using argument later on
                 val_dataset=dataset_val, num_samples=3, batch_size=batch_size
             )
 
@@ -195,7 +195,7 @@ def run_experiment(
         if resample_validation:
             dataset_val, active_pool_after_resample, val_examples = resample_validation_dataset(
                 dataset_train, dataset_val, active_pool, annotated_examples, 
-                strategy="fixed_size_resample", selected_examples=selected_examples, validation_set_size=len(dataset_val),
+                strategy="add_selected_partial", selected_examples=selected_examples, validation_set_size=len(dataset_val),
             )
             active_pool = active_pool_after_resample
         metrics['remaining_pool_size'].append(len(active_pool))
@@ -263,45 +263,53 @@ def run_experiment(
                     else:
                         raise ValueError(f"Unknown feature strategy: {feature_strategy}")
             
-            # Check for overlaps with test set
-            test_example_idx = example_idx % len(dataset_test)
-            if test_example_idx not in test_overlap_annotations:
-                test_overlap_annotations[test_example_idx] = []
-            
-            # Observe the selected positions
-            for pos_data in position_benefit_costs:
-                position = pos_data[0]
+                # Check for overlaps with test set
+                test_example_idx = example_idx % len(dataset_test)
+                if test_example_idx not in test_overlap_annotations:
+                    test_overlap_annotations[test_example_idx] = []
                 
-                annotation_success = arena.observe_position(example_idx, position)
-                
-                if annotation_success:
-                    total_features_annotated += 1
-                else:
-                    print(f"Failed to observe position {position} for example {example_idx}")
-                
-                # Record benefit/cost metrics if available
-                if len(pos_data) >= 4:
-                    _, benefit, cost, ratio = pos_data[:4]
-                    cycle_benefit_cost_ratios.append(ratio)
-                    cycle_observation_costs.append(cost)
-                else:
-                    # Default values if not provided
-                    cycle_benefit_cost_ratios.append(1.0)
-                    cycle_observation_costs.append(1.0)
-                
-                # Check for position overlap with test set
-                test_positions = dataset_test.get_masked_positions(test_example_idx)
-                if position in test_positions:
-                    test_overlap_annotations[test_example_idx].append(position)
-                
-                # Make a prediction for training
-                variable_id = f"example_{example_idx}_position_{position}"
-                arena.predict(variable_id, train=True)
+                # Observe the selected positions
+                for pos_data in position_benefit_costs:
+                    position = pos_data[0]
+                    
+                    annotation_success = arena.observe_position(example_idx, position)
+                    
+                    if annotation_success:
+                        total_features_annotated += 1
+                    else:
+                        print(f"Failed to observe position {position} for example {example_idx}")
+                    
+                    # Record benefit/cost metrics if available
+                    if len(pos_data) >= 4:
+                        _, benefit, cost, ratio = pos_data[:4]
+                        cycle_benefit_cost_ratios.append(ratio)
+                        cycle_observation_costs.append(cost)
+                    else:
+                        # Default values if not provided
+                        cycle_benefit_cost_ratios.append(1.0)
+                        cycle_observation_costs.append(1.0)
+                    
+                    # Check for position overlap with test set
+                    test_positions = dataset_test.get_masked_positions(test_example_idx)
+                    if position in test_positions:
+                        test_overlap_annotations[test_example_idx].append(position)
+                    
+                    # Make a prediction for training
+                    variable_id = f"example_{example_idx}_position_{position}"
+                    arena.predict(variable_id, train=True)
         else:
             print("Debug: should print this for combined strategy")
             for example_idx, pos in selected_indices:
                 actual_idx = active_pool[example_idx]
                 annotation_success = arena.observe_position(actual_idx, pos)
+
+                test_example_idx = example_idx % len(dataset_test)
+                if test_example_idx not in test_overlap_annotations:
+                    test_overlap_annotations[test_example_idx] = []
+
+                test_positions = dataset_test.get_masked_positions(test_example_idx)
+                if pos in test_positions:
+                    test_overlap_annotations[test_example_idx].append(pos)
                 
                 if annotation_success:
                     total_features_annotated += 1

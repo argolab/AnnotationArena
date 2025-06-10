@@ -25,7 +25,7 @@ def plot_cold_start_embedding_comparison(results_dict, save_path):
     """Plot comparison between combine_cold_start_with_embedding and gradient_voi_cold_start_with_embedding_cross."""
     # Filter only the relevant experiments
     embedding_results = {k: v for k, v in results_dict.items() 
-                        if k in ['combine_cold_start_with_embedding', 'gradient_voi_cold_start_with_embedding', 'random_5_cold_start_with_embedding']}
+                        if k in ['gradient_random_cold_start_with_embedding', 'gradient_voi_cold_start_with_embedding', "random_5_cold_start_with_embedding"]}
     
     if not embedding_results:
         print("No cold start embedding experiment results found")
@@ -34,21 +34,21 @@ def plot_cold_start_embedding_comparison(results_dict, save_path):
     fig, ax = plt.subplots(figsize=(14, 10))
     
     colors = {
-        'combine_cold_start_with_embedding': 'orange',
+        'gradient_random_cold_start_with_embedding': 'orange',
         'gradient_voi_cold_start_with_embedding': 'brown',
-        "random_5_cold_start_with_embedding": "cyan"
+        'random_5_cold_start_with_embedding': "cyan"
     }
     
     markers = {
-        'combine_cold_start_with_embedding': 's',
+        'gradient_random_cold_start_with_embedding': 's',
         'gradient_voi_cold_start_with_embedding': '*',
-        "random_5_cold_start_with_embedding": "s"
+        'random_5_cold_start_with_embedding': 's'
     }
     
     for strategy, results in embedding_results.items():
         # Plot annotated loss on test set only
-        if 'test_expected_losses' in results:
-            annotated_losses = results['test_expected_losses']
+        if 'test_annotated_losses' in results:
+            annotated_losses = results['test_annotated_losses']
             cycles = list(range(len(annotated_losses)))
             
             ax.plot(cycles, annotated_losses, 
