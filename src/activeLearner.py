@@ -13,6 +13,7 @@ from tqdm.auto import tqdm
 import matplotlib.pyplot as plt
 from torch.utils.data import DataLoader
 import copy
+from feature_recorder import FeatureRecorder
 
 # Library Imports
 from annotationArena import *
@@ -79,7 +80,7 @@ def run_experiment(
 
     arena = AnnotationArena(model, device)
     arena.set_dataset(dataset_train)
-    
+    feature_recorder = FeatureRecorder(model, device)
     metrics = {
         'training_losses': [],
         'val_losses': [],
@@ -157,7 +158,7 @@ def run_experiment(
             active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_pool]
             active_pool_subset = AnnotationDataset(active_pool_examples)
             
-            selected_indices, _ = strategy_class.select_examples(
+            selected_indices, selected_scores = strategy_class.select_examples(
                 active_pool_subset, num_to_select=min(examples_per_cycle, len(active_pool)),
                 val_dataset=dataset_val, num_samples=3, batch_size=batch_size
             )
@@ -182,6 +183,19 @@ def run_experiment(
             raise ValueError(f"Unknown example strategy: {example_strategy}")
         
         print(f"Selected {len(selected_examples)} examples")
+
+        print("Recording features")
+        selected_with_scores = list(zip(selected_examples, selected_scores))
+        feature_recorder.record_cycle_features(
+            cycle_num=cycle_count,
+            dataset=dataset_train,
+            active_pool=active_pool,
+            annotated_examples=annotated_examples,
+            val_dataset=dataset_val,
+            selected_examples_with_scores=selected_with_scores
+        )
+
+        print("Finished")
         
         #active_pool = [idx for idx in active_pool if idx not in selected_examples]
         
@@ -203,7 +217,7 @@ def run_experiment(
         total_features_annotated = 0
         cycle_benefit_cost_ratios = []
         cycle_observation_costs = []
-        
+        selected_variables_for_recorder = []
         # Annotate selected examples
         for example_idx in selected_examples:
             arena.register_example(example_idx, add_all_positions=False)
@@ -276,6 +290,7 @@ def run_experiment(
                     
                     if annotation_success:
                         total_features_annotated += 1
+                        selected_variables_for_recorder.append((example_idx, position))
                     else:
                         print(f"Failed to observe position {position} for example {example_idx}")
                     
@@ -313,6 +328,7 @@ def run_experiment(
                 
                 if annotation_success:
                     total_features_annotated += 1
+                    selected_variables_for_recorder.append((actual_idx, pos))
                 else:
                     print(f"Failed to observe position {position} for example {example_idx}")
                 cycle_benefit_cost_ratios.append(1.0)
@@ -321,6 +337,8 @@ def run_experiment(
                 arena.predict(variable_id, train=True)
 
         print(f"Total features annotated in cycle {cycle_count+1}: {total_features_annotated}")
+
+        feature_recorder.update_from_selections(selected_examples, selected_variables_for_recorder)
         
         # Training step
         if total_features_annotated > 0:
@@ -372,7 +390,7 @@ def run_experiment(
         metrics['features_annotated'].append(total_features_annotated)
         metrics['benefit_cost_ratios'].append(np.mean(cycle_benefit_cost_ratios) if cycle_benefit_cost_ratios else 0.0)
         metrics['observation_costs'].append(np.sum(cycle_observation_costs) if cycle_observation_costs else 0.0)
-        
+        feature_recorder.save_features("features.pik")
         cycle_count += 1
         
     metrics['test_metrics'] = test_metrics
@@ -381,6 +399,8 @@ def run_experiment(
     metrics['arena_training_losses'] = arena_metrics["training_losses"]
     metrics['observation_history'] = arena_metrics["observation_history"]
     metrics['prediction_history'] = arena_metrics["prediction_history"]
+
+    feature_recorder.save_features("features.pik")
     
     return metrics
 
@@ -478,7 +498,7 @@ def main():
             data_manager = DataManager(base_path + f'/data_{dataset}/')
 
         if dataset == "hanna":
-            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start, use_embedding=args.use_embedding)
+            data_manager.prepare_data(num_partition=100, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start, use_embedding=args.use_embedding)
         elif dataset == "llm_rubric":
             data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start, use_embedding=args.use_embedding)
         elif dataset == "gaussian":

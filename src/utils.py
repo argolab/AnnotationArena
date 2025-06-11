@@ -57,9 +57,9 @@ class DataManager:
             bool: Success status
         """
         print(f"Use embedding: {use_embedding}")
-        if os.path.exists(os.path.join(self.base_path, "initial_train.json")):
+        '''if os.path.exists(os.path.join(self.base_path, "initial_train.json")):
             print("Data was created before!")
-            return
+            return'''
         if use_embedding and not dataset == "hanna":
             raise ValueError("Not yet support other datasets with text embedding")
         if dataset == "gaussian":
