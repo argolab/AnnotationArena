@@ -1147,6 +1147,7 @@ class GradientTopOnlySelector(GradientSelector):
                 batch_size = inputs.shape[0]
                 
                 temp_inputs = inputs.clone()
+                temp_labels = labels.clone()
                 
                 for i in range(batch_size):
                     masked_positions = []
@@ -1171,6 +1172,7 @@ class GradientTopOnlySelector(GradientSelector):
                         # Update input
                         temp_inputs[i, pos, 0] = 0
                         temp_inputs[i, pos, 1:1+model.max_choices] = one_hot
+                        temp_labels[0, pos] = one_hot
                 
                 # Compute loss with full supervision
                 model.zero_grad()
@@ -1184,7 +1186,7 @@ class GradientTopOnlySelector(GradientSelector):
                 model.zero_grad()
                 outputs = model(temp_inputs, annotators, questions, embeddings)
                 batch_loss = model.compute_total_loss(
-                    outputs, labels, temp_inputs, questions, embeddings,
+                    outputs, temp_labels, temp_inputs, questions, embeddings,
                     full_supervision=True
                 )
                 
@@ -1227,6 +1229,8 @@ class GradientSelectionStrategy(ExampleSelectionStrategy):
             self.selector = GradientTopOnlySelector(model, device)
         else:
             self.selector = GradientSelector(model, device)
+        
+        
     
     def select_examples(self, dataset, num_to_select=1, val_dataset=None, 
                         num_samples=5, batch_size=32, costs=None, **kwargs):
@@ -1255,6 +1259,8 @@ class GradientSelectionStrategy(ExampleSelectionStrategy):
         validation_grad_samples = self.selector.compute_validation_gradient_sampled(
             self.model, val_dataloader, num_samples=num_samples
         )
+
+        self.validation_grad_samples = validation_grad_samples
         
         # Calculate gradient alignment for each example
         all_scores = []
@@ -2045,6 +2051,8 @@ class SelectionFactory:
             return RandomFeatureSelectionStrategy(model, device)
         elif strategy_name == "entropy":
             return EntropyFeatureSelectionStrategy(model, device)
+        elif strategy_name == "gradient":
+            return GradientAlignmentFeatureSelectionStrategy(model, device)
         else:
             raise ValueError(f"Unknown feature selection strategy: {strategy_name}")
     
@@ -2642,3 +2650,160 @@ class VariableGradientTopOnlySelector:
                 grad_samples.append(normalized_grad_dict)
         
         return grad_samples
+    
+class GradientAlignmentFeatureSelectionStrategy(FeatureSelectionStrategy):
+    """
+    Gradient alignment-based feature selection strategy for Active Feature Acquisition.
+    
+    For each selected example, computes the gradient alignment for each masked position
+    with respect to the validation set gradient. Selects features that have the highest
+    gradient alignment, indicating they would provide the most training benefit.
+    """
+    
+    def __init__(self, model, device=None, loss_type="cross_entropy"):
+        """Initialize Gradient Alignment feature selection strategy."""
+        super().__init__("gradient_alignment", model, device)
+        self.gradient_selector = VariableGradientTopOnlySelector(model, device)
+        self.loss_type = loss_type
+        self.validation_gradients_cache = None
+        self.cache_valid = False
+    
+    def _compute_validation_gradients(self, val_dataset, num_samples=3, batch_size=32):
+        """
+        Compute validation gradients for alignment comparison.
+        
+        Args:
+            val_dataset: Validation dataset
+            num_samples: Number of samples to compute for validation gradients
+            batch_size: Batch size for validation dataloader
+            
+        Returns:
+            list: List of normalized validation gradient dictionaries
+        """
+        from torch.utils.data import DataLoader
+        
+        if self.cache_valid and self.validation_gradients_cache is not None:
+            return self.validation_gradients_cache
+        
+        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        validation_grad_samples = self.gradient_selector.compute_validation_gradient_sampled(
+            self.model, val_dataloader, num_samples=num_samples
+        )
+        
+        self.validation_gradients_cache = validation_grad_samples
+        self.cache_valid = True
+        
+        return validation_grad_samples
+    
+    def select_features(self, example_idx, dataset, num_to_select=1, target_questions=None, 
+                       loss_type=None, num_samples=3, costs=None, val_dataset=None, 
+                       batch_size=32, **kwargs):
+        """
+        Select features (positions) using gradient alignment with validation set.
+        
+        Args:
+            example_idx: Index of the example to select features from
+            dataset: Dataset containing the example
+            num_to_select: Number of features to select
+            target_questions: Target questions to compute alignment for (unused in this implementation)
+            loss_type: Type of loss to compute ("cross_entropy", "l2")
+            num_samples: Number of samples to use for gradient computation
+            costs: Dictionary mapping positions to their annotation costs
+            val_dataset: Validation dataset for computing reference gradients
+            batch_size: Batch size for validation dataloader
+            **kwargs: Additional arguments
+            
+        Returns:
+            list: Tuples of (position_idx, alignment_score, cost, benefit/cost_ratio, most_informative_class) 
+                 for selected positions, sorted by benefit/cost ratio
+        """
+        if val_dataset is None:
+            raise ValueError("Validation dataset is required for gradient alignment feature selection")
+        
+        loss_type = loss_type or self.loss_type
+        
+        # Get masked positions for this example
+        masked_positions = dataset.get_masked_positions(example_idx)
+        if not masked_positions:
+            return []
+        
+        # Get data for the example
+        known_questions, inputs, answers, annotators, questions, embeddings = dataset[example_idx]
+        inputs = inputs.unsqueeze(0).to(self.device)
+        answers = answers.unsqueeze(0).to(self.device)
+        annotators = annotators.unsqueeze(0).to(self.device)
+        questions = questions.unsqueeze(0).to(self.device)
+        if embeddings is not None:
+            embeddings = embeddings.unsqueeze(0).to(self.device)
+        
+        # Compute validation gradients for alignment
+        validation_grad_samples = self._compute_validation_gradients(
+            val_dataset, num_samples=num_samples, batch_size=batch_size
+        )
+        
+        if not validation_grad_samples:
+            print("Warning: No validation gradients computed, returning empty selection")
+            return []
+        
+        # Compute gradient alignment for each masked position
+        position_alignments = []
+        
+        # Efficiently compute gradients for all masked positions at once
+        all_variable_grads = self.gradient_selector.compute_all_variable_gradients_efficient(
+            self.model, inputs, answers, annotators, questions, embeddings,
+            masked_positions, num_samples=num_samples
+        )
+        
+        # Process each position's gradient alignment
+        for position in masked_positions:
+            if position not in all_variable_grads:
+                continue
+                
+            variable_grad_dict = all_variable_grads[position]
+            variable_grad_dict = self.gradient_selector.normalize_gradient(variable_grad_dict)
+            
+            # Compute alignment with validation gradients
+            alignment_scores = []
+            for val_grad in validation_grad_samples:
+                alignment = self.gradient_selector.compute_grad_dot_product(val_grad, variable_grad_dict)
+                alignment_scores.append(alignment)
+            
+            # Get cost for this position
+            cost = 1.0  # Default cost
+            if costs and position in costs:
+                cost = costs[position]
+            
+            # Compute average alignment and benefit/cost ratio
+            avg_alignment = sum(alignment_scores) / len(alignment_scores) if alignment_scores else 0.0
+            benefit_cost_ratio = avg_alignment / max(cost, 1e-10)
+            
+            # For consistency with other strategies, we'll set most_informative_class to 0
+            # In a full implementation, this could be determined by analyzing which class
+            # would provide the highest gradient alignment
+            most_informative_class = 0
+            
+            position_alignments.append((position, avg_alignment, cost, benefit_cost_ratio, most_informative_class))
+        
+        # Sort by benefit/cost ratio (highest first)
+        position_alignments.sort(key=lambda x: x[3], reverse=True)
+        
+        # Return top selections
+        return position_alignments[:num_to_select]
+    
+    def invalidate_cache(self):
+        """
+        Invalidate the validation gradients cache.
+        Call this when the model has been updated and validation gradients need recomputation.
+        """
+        self.cache_valid = False
+        self.validation_gradients_cache = None
+    
+    def set_validation_gradients(self, validation_gradients):
+        """
+        Manually set validation gradients (useful for sharing across multiple feature selections).
+        
+        Args:
+            validation_gradients: Pre-computed validation gradient samples
+        """
+        self.validation_gradients_cache = validation_gradients
+        self.cache_valid = True

@@ -49,6 +49,7 @@ def run_experiment(
     run_until_exhausted=False,
     gradient_top_only=False,
     cold_start=False,
+    use_feature=False
 ):
     """
     Unified experiment runner for all active learning strategies.
@@ -80,7 +81,8 @@ def run_experiment(
 
     arena = AnnotationArena(model, device)
     arena.set_dataset(dataset_train)
-    feature_recorder = FeatureRecorder(model, device)
+    if use_feature:
+        feature_recorder = FeatureRecorder(model, device)
     metrics = {
         'training_losses': [],
         'val_losses': [],
@@ -148,14 +150,29 @@ def run_experiment(
                 dataset_train, dataset_val, active_pool, list(set(annotated_examples)), 
                 strategy="add_selected", update_percentage=20
             ) 
+        active_set_size = 700
+        print(f"Applying dynamic K-centers to select {min(active_set_size, len(active_pool))} from {len(active_pool)} examples...")
+        if len(active_pool) > active_set_size:
+            # Extract model embeddings for current pool
+            model_embeddings = extract_model_embeddings(dataset_train, active_pool, model, device)
+            selected_subset_indices = greedy_k_centers(model_embeddings, active_set_size, random_seed=42 + cycle_count)
+            active_subset = [active_pool[i] for i in selected_subset_indices]
+            print(f"K-centers selected {len(active_subset)} diverse examples from pool")
+        else:
+            active_subset = active_pool.copy()
+            print(f"Pool smaller than target, using all {len(active_subset)} examples")
+        
+        
+        # Debug logging
+        print(f"DEBUG: Active subset size: {len(active_subset)}")
         
         # Select examples based on strategy
         if example_strategy == "random":
-            selected_examples = random.sample(active_pool, min(examples_per_cycle, len(active_pool)))
+            selected_examples = random.sample(active_subset, min(examples_per_cycle, len(active_subset)))
 
         elif example_strategy in ["gradient", "entropy", "badge"]:
             strategy_class = SelectionFactory.create_example_strategy(example_strategy, model, device, gradient_top_only=gradient_top_only)
-            active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_pool]
+            active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_subset]
             active_pool_subset = AnnotationDataset(active_pool_examples)
             
             selected_indices, selected_scores = strategy_class.select_examples(
@@ -163,39 +180,71 @@ def run_experiment(
                 val_dataset=dataset_val, num_samples=3, batch_size=batch_size
             )
             
-            selected_examples = [active_pool[idx] for idx in selected_indices]
+            selected_examples = [active_subset[idx] for idx in selected_indices]
+
+            if example_strategy == "gradient":
+                validation_gradient_cache = strategy_class.validation_grad_samples
 
         elif example_strategy == "combine":
             print("Debug: running combined strategy")
             strategy_class = SelectionFactory.create_example_strategy(example_strategy, model, device, gradient_top_only=gradient_top_only)
-            active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_pool]
+            active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_subset]
             active_pool_subset = AnnotationDataset(active_pool_examples)
+
+            num_to_select = examples_per_cycle * features_per_example
             
             selected_indices, _ = strategy_class.select_examples(
-                active_pool_subset, num_to_select=180, #TODO: should change this to using argument later on
+                active_pool_subset, num_to_select=num_to_select, #TODO: should change this to using argument later on
                 val_dataset=dataset_val, num_samples=3, batch_size=batch_size
             )
 
             print(selected_indices)
             
-            selected_examples = list(set([active_pool[idx[0]] for idx in selected_indices]))
+            selected_examples = list(set([active_subset[idx[0]] for idx in selected_indices]))
+
+        elif example_strategy == "gradient_combine":
+            print("Debug: running combined strategy")
+            strategy_class = SelectionFactory.create_example_strategy("gradient", model, device, gradient_top_only=gradient_top_only)
+            active_pool_examples = [dataset_train.get_data_entry(idx) for idx in active_subset]
+            active_pool_subset = AnnotationDataset(active_pool_examples)
+            num_to_select = examples_per_cycle * features_per_example
+            selected_indices, selected_scores = strategy_class.select_examples(
+                active_pool_subset, num_to_select=min(examples_per_cycle, len(active_pool)),
+                val_dataset=dataset_val, num_samples=3, batch_size=batch_size
+            )
+
+            selected_examples = [active_subset[idx] for idx in selected_indices]
+            selected_list = [dataset_train.get_data_entry(idx) for idx in selected_examples]
+            selected_set = AnnotationDataset(selected_list)
+
+            strategy_class = SelectionFactory.create_example_strategy("combine", model, device)
+            
+            selected_indices, _ = strategy_class.select_examples(
+                selected_set, num_to_select=num_to_select,
+                val_dataset=dataset_val, num_samples=3, batch_size=batch_size
+            )
+
+            print(selected_indices)
+            
+            selected_examples = list(set([active_subset[idx[0]] for idx in selected_indices]))
         else:
             raise ValueError(f"Unknown example strategy: {example_strategy}")
         
         print(f"Selected {len(selected_examples)} examples")
 
-        print("Recording features")
-        selected_with_scores = list(zip(selected_examples, selected_scores))
-        feature_recorder.record_cycle_features(
-            cycle_num=cycle_count,
-            dataset=dataset_train,
-            active_pool=active_pool,
-            annotated_examples=annotated_examples,
-            val_dataset=dataset_val,
-            selected_examples_with_scores=selected_with_scores
-        )
+        if use_feature:
+            print("Recording features")
+            selected_with_scores = list(zip(selected_examples, selected_scores))
+            feature_recorder.record_cycle_features(
+                cycle_num=cycle_count,
+                dataset=dataset_train,
+                active_pool=active_pool,
+                annotated_examples=annotated_examples,
+                val_dataset=dataset_val,
+                selected_examples_with_scores=selected_with_scores
+            )
 
-        print("Finished")
+            print("Finished")
         
         #active_pool = [idx for idx in active_pool if idx not in selected_examples]
         
@@ -222,8 +271,8 @@ def run_experiment(
         for example_idx in selected_examples:
             arena.register_example(example_idx, add_all_positions=False)
         print(selected_examples)
-        if not example_strategy == "combine":
-            for example_idx in selected_examples: 
+        if not example_strategy in ["combine", "gradient_combine"]:
+            for example_idx in tqdm(selected_examples, desc="Selecting features"): 
                 masked_positions = dataset_train.get_masked_positions(example_idx)
                 if not masked_positions:
                     print(f"No masked positions found for example {example_idx}")
@@ -273,6 +322,12 @@ def run_experiment(
                         for var, benefit, cost, ratio, *extra in feature_suggestions[:features_to_annotate]:
                             _, pos = arena._parse_variable_id(var)
                             position_benefit_costs.append((pos, benefit, cost, ratio))
+                    
+                    elif feature_strategy == "gradient":
+                        feature_selector = SelectionFactory.create_feature_strategy(feature_strategy, model)
+                        feature_selector.set_validation_gradients(validation_gradient_cache)
+                        selections = feature_selector.select_features(example_idx, dataset_train, num_to_select=features_per_example, val_dataset=dataset_val, batch_size=batch_size)
+                        position_benefit_costs = selections
                     
                     else:
                         raise ValueError(f"Unknown feature strategy: {feature_strategy}")
@@ -338,7 +393,10 @@ def run_experiment(
 
         print(f"Total features annotated in cycle {cycle_count+1}: {total_features_annotated}")
 
-        feature_recorder.update_from_selections(selected_examples, selected_variables_for_recorder)
+
+
+        if use_feature:
+            feature_recorder.update_from_selections(selected_examples, selected_variables_for_recorder)
         
         # Training step
         if total_features_annotated > 0:
@@ -390,7 +448,8 @@ def run_experiment(
         metrics['features_annotated'].append(total_features_annotated)
         metrics['benefit_cost_ratios'].append(np.mean(cycle_benefit_cost_ratios) if cycle_benefit_cost_ratios else 0.0)
         metrics['observation_costs'].append(np.sum(cycle_observation_costs) if cycle_observation_costs else 0.0)
-        feature_recorder.save_features("features.pik")
+        if use_feature:
+            feature_recorder.save_features("features.pik")
         cycle_count += 1
         
     metrics['test_metrics'] = test_metrics
@@ -400,9 +459,70 @@ def run_experiment(
     metrics['observation_history'] = arena_metrics["observation_history"]
     metrics['prediction_history'] = arena_metrics["prediction_history"]
 
-    feature_recorder.save_features("features.pik")
     
     return metrics
+
+def extract_model_embeddings(dataset, example_indices, model, device):
+    """Extract embeddings using the current imputer model state."""
+    model.eval()
+    embeddings = []
+    
+    with torch.no_grad():
+        for idx in example_indices:
+            known_questions, inputs, answers, annotators, questions, model_embeddings = dataset[idx]
+            inputs = inputs.unsqueeze(0).to(device)
+            annotators = annotators.unsqueeze(0).to(device)
+            questions = questions.unsqueeze(0).to(device)
+            if model_embeddings is not None:
+                model_embeddings = model_embeddings.unsqueeze(0).to(device)
+            
+            # Get model's internal representation
+            if hasattr(model, 'encoder'):
+                if model_embeddings is not None:
+                    feature_x, param_x = model.encoder.position_encoder(inputs, annotators, questions, model_embeddings)
+                else:
+                    feature_x, param_x = model.encoder.position_encoder(inputs, annotators, questions)
+                
+                # Use the feature representation as embedding
+                embedding = feature_x[0].mean(dim=0).cpu().numpy()  # Average across positions
+            else:
+                # Fallback to statistical features
+                entry = dataset.get_data_entry(idx)
+                inputs_array = np.array(entry['input'])
+                answer_dists = inputs_array[:, 1:]
+                embedding = np.concatenate([
+                    np.mean(answer_dists, axis=0),
+                    np.std(answer_dists, axis=0),
+                    [np.mean(answer_dists), np.std(answer_dists)]
+                ])
+            
+            embeddings.append(embedding)
+    
+    return np.array(embeddings)
+
+def greedy_k_centers(features, k, random_seed=42):
+    """Greedy K-centers algorithm for diverse subset selection."""
+    np.random.seed(random_seed)
+    n = len(features)
+    
+    if k >= n:
+        return list(range(n))
+    
+    selected = [np.random.randint(n)]
+    
+    for _ in range(k - 1):
+        distances = []
+        for i in range(n):
+            if i in selected:
+                distances.append(0)
+            else:
+                min_dist = min(np.linalg.norm(features[i] - features[j]) for j in selected)
+                distances.append(min_dist)
+                
+        next_center = np.argmax(distances)
+        selected.append(next_center)
+    
+    return selected
 
 def main():
     parser = argparse.ArgumentParser(description="Run Active Learning Experiments with AnnotationArena.")
@@ -498,7 +618,7 @@ def main():
             data_manager = DataManager(base_path + f'/data_{dataset}/')
 
         if dataset == "hanna":
-            data_manager.prepare_data(num_partition=100, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start, use_embedding=args.use_embedding)
+            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start, use_embedding=args.use_embedding)
         elif dataset == "llm_rubric":
             data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=dataset, cold_start=args.cold_start, use_embedding=args.use_embedding)
         elif dataset == "gaussian":
@@ -713,7 +833,7 @@ def main():
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted,
-                gradient_top_only=False, cold_start=args.cold_start
+                gradient_top_only=True, cold_start=args.cold_start
             )
 
         elif experiment == "gradient_random_cold_start":
@@ -860,6 +980,40 @@ def main():
             results = run_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="gradient", feature_strategy="fast_voi", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
+                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+                device=device, resample_validation=args.resample_validation,
+                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
+                gradient_top_only=True, cold_start=args.cold_start
+            )
+
+        elif experiment == "both_level_gradient":
+            train_dataset = AnnotationDataset(data_manager.paths['train'])
+            val_dataset = AnnotationDataset(data_manager.paths['validation'])
+            test_dataset = AnnotationDataset(data_manager.paths['test'])
+            active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
+            
+            results = run_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="gradient", feature_strategy="gradient", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
+                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
+                device=device, resample_validation=args.resample_validation,
+                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
+                gradient_top_only=True, cold_start=args.cold_start
+            )
+
+        elif experiment == "gradient_combine":
+            train_dataset = AnnotationDataset(data_manager.paths['train'])
+            val_dataset = AnnotationDataset(data_manager.paths['validation'])
+            test_dataset = AnnotationDataset(data_manager.paths['test'])
+            active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
+            
+            results = run_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="gradient_combine", feature_strategy="gradient", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
                 cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
                 epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
