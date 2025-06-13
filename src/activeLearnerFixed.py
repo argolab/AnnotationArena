@@ -72,30 +72,31 @@ def extract_embeddings_features(dataset_entries, model_name='all-MiniLM-L6-v2'):
     return np.array(features)
 
 def extract_model_embeddings(dataset, example_indices, model, device):
+
     """Extract embeddings using the current imputer model state."""
-    model.eval()
     embeddings = []
     
-    with torch.no_grad():
-        for idx in example_indices:
-            known_questions, inputs, answers, annotators, questions, text_embeddings = dataset[idx]
-            inputs = inputs.unsqueeze(0).to(device)
-            annotators = annotators.unsqueeze(0).to(device)
-            questions = questions.unsqueeze(0).to(device)
-            if text_embeddings is not None:
-                text_embeddings = text_embeddings.unsqueeze(0).to(device)
+    for idx in example_indices:
+        entry = dataset.get_data_entry(idx)
+        
+        inputs = torch.tensor(entry['input'], dtype=torch.float32).unsqueeze(0).to(device)
+        annotators = torch.tensor(entry['annotators'], dtype=torch.long).unsqueeze(0).to(device)
+        questions = torch.tensor(entry['questions'], dtype=torch.long).unsqueeze(0).to(device)
+        # text_embeddings = torch.tensor(entry['text_embedding'], dtype=torch.float32).to(device)
+        text_embeddings = torch.tensor(entry['text_embedding'], dtype=torch.float32).unsqueeze(0).to(device)
+        
+        with torch.no_grad():
+            feature_x, param_x = model.encoder.position_encoder(inputs, annotators, questions, text_embeddings)
             
-            if hasattr(model.encoder, 'position_encoder'):
-                feature_x, param_x = model.encoder.position_encoder(inputs, annotators, questions, text_embeddings)
-                for layer in model.encoder.layers[:-1]:
-                    feature_x, param_x = layer(feature_x, param_x)
+            # Create mask from input  
+            mask = inputs[:, :, 0]  # Add this line
+            
+            for layer in model.encoder.layers:
+                feature_x, param_x = layer(feature_x, param_x, questions, mask)  # Add questions, mask
                 
-                final_embedding = feature_x.mean(dim=1).squeeze().cpu().numpy()
-            else:
-                outputs = model(inputs, annotators, questions, text_embeddings)
-                final_embedding = outputs.mean(dim=1).squeeze().cpu().numpy()
-            
-            embeddings.append(final_embedding)
+            # Use mean of feature representations as embedding
+            embedding = feature_x.mean(dim=1).squeeze().cpu().numpy()
+            embeddings.append(embedding)
     
     return np.array(embeddings)
 

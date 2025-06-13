@@ -127,7 +127,7 @@ class SimilaritySmoothing(nn.Module):
                 for local_idx, global_idx in enumerate(type_indices):
                     if mask[b, global_idx] == 1:  # Only smooth masked variables
                         # Weighted combination of parameters
-                        smoothed_param = torch.mv(attention_weights[local_idx:local_idx+1], params_type).squeeze(0)
+                        smoothed_param = attention_weights[local_idx] @ params_type  # [num_type] @ [num_type, P] = [P]
                         smoothed_params[b, global_idx] = smoothed_param
         
         return hidden_states, smoothed_params
