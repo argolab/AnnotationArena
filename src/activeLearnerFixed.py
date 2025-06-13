@@ -86,7 +86,7 @@ def extract_model_embeddings(dataset, example_indices, model, device):
                 text_embeddings = text_embeddings.unsqueeze(0).to(device)
             
             if hasattr(model.encoder, 'position_encoder'):
-                feature_x, param_x = model.encoder.position_encoder(inputs, annotators, questions, text_embeddings)
+                feature_x, param_x, _ = model.encoder.position_encoder(inputs, annotators, questions, text_embeddings)
                 for layer in model.encoder.layers[:-1]:
                     feature_x, param_x = layer(feature_x, param_x)
                 
@@ -276,39 +276,112 @@ def run_enhanced_experiment(
             )
             
             selected_examples = [active_subset[idx] for idx in selected_indices]
+
         elif example_strategy == "combine":
             active_subset_dataset = AnnotationDataset([dataset_train.get_data_entry(idx) for idx in active_subset])
-            
+
             variable_selector = VariableGradientSelectionStrategy(model, device)
-            
+
+            # Calculate total features needed
+            total_features_needed = examples_per_cycle * features_per_example
+
+            # Request more variables than needed to ensure we have enough options
+            # Some examples might not have enough maskable positions
+            num_variables_to_request = min(total_features_needed * 3, len(active_subset) * 10)
+
             selected_variables, scores = variable_selector.select_examples(
                 active_subset_dataset,
-                num_to_select=min(examples_per_cycle * features_per_example if features_per_example else examples_per_cycle * 5, len(active_subset) * 10),
+                num_to_select=num_variables_to_request,
                 val_dataset=dataset_val,
                 num_samples=5,
                 batch_size=batch_size
             )
 
+            print(f"Variable selector returned {len(selected_variables)} candidate variables")
+
+            # Improved selection logic: Guarantee exactly total_features_needed features
             selected_examples_dict_fixed = {}
-            
+            total_features_selected = 0
+
+            # First pass: Collect exactly the number of features we need
             for (local_idx, pos), score in zip(selected_variables, scores):
+                if total_features_selected >= total_features_needed:
+                    break
+                    
                 global_idx = active_subset[local_idx]
+                
+                # Initialize example if not seen
                 if global_idx not in selected_examples_dict_fixed:
                     selected_examples_dict_fixed[global_idx] = []
                 
+                # Add feature if we haven't exceeded per-example limit
                 if len(selected_examples_dict_fixed[global_idx]) < features_per_example:
                     selected_examples_dict_fixed[global_idx].append(pos)
+                    total_features_selected += 1
+
+            # Second pass: If we still need more features, relax per-example limit
+            if total_features_selected < total_features_needed:
+                print(f"First pass collected {total_features_selected}/{total_features_needed} features")
+                print("Second pass: relaxing per-example limits to fill remaining slots")
                 
-                # Stop when we have enough examples with full annotation sets
-                complete_examples = sum(1 for positions in selected_examples_dict_fixed.values() 
-                                    if len(positions) == features_per_example)
-                if complete_examples >= examples_per_cycle:
-                    break
-            
-            # Only keep examples that have exactly features_per_example annotations
-            selected_examples = [ex for ex, positions in selected_examples_dict_fixed.items() 
-                                if len(positions) == features_per_example][:examples_per_cycle]
-            selected_examples_dict = selected_examples_dict_fixed
+                for (local_idx, pos), score in zip(selected_variables, scores):
+                    if total_features_selected >= total_features_needed:
+                        break
+                        
+                    global_idx = active_subset[local_idx]
+                    
+                    # Skip if already added this position
+                    if global_idx in selected_examples_dict_fixed and pos in selected_examples_dict_fixed[global_idx]:
+                        continue
+                        
+                    # Initialize example if not seen
+                    if global_idx not in selected_examples_dict_fixed:
+                        selected_examples_dict_fixed[global_idx] = []
+                    
+                    # Add feature (no per-example limit in second pass)
+                    selected_examples_dict_fixed[global_idx].append(pos)
+                    total_features_selected += 1
+
+            # Third pass: If still not enough, add any remaining maskable positions
+            if total_features_selected < total_features_needed:
+                print(f"Second pass collected {total_features_selected}/{total_features_needed} features")
+                print("Third pass: adding any remaining maskable positions")
+                
+                for example_idx in active_subset:
+                    if total_features_selected >= total_features_needed:
+                        break
+                        
+                    # Get all maskable positions for this example
+                    masked_positions = dataset_train.get_masked_positions(example_idx)
+                    
+                    # Initialize if not seen
+                    if example_idx not in selected_examples_dict_fixed:
+                        selected_examples_dict_fixed[example_idx] = []
+                    
+                    # Add any positions we haven't selected yet
+                    for pos in masked_positions:
+                        if total_features_selected >= total_features_needed:
+                            break
+                        if pos not in selected_examples_dict_fixed[example_idx]:
+                            selected_examples_dict_fixed[example_idx].append(pos)
+                            total_features_selected += 1
+
+            # Final selection: All examples that have at least one feature
+            selected_examples = list(selected_examples_dict_fixed.keys())
+            selected_examples = selected_examples[:examples_per_cycle] if len(selected_examples) > examples_per_cycle else selected_examples
+
+            # Final count verification
+            final_feature_count = sum(len(positions) for example, positions in selected_examples_dict_fixed.items() 
+                                        if example in selected_examples)
+
+            print(f"Variable gradient selection summary:")
+            print(f"  Target features: {total_features_needed}")
+            print(f"  Selected features: {final_feature_count}")
+            print(f"  Selected examples: {len(selected_examples)}")
+            print(f"  Avg features per example: {final_feature_count / len(selected_examples) if selected_examples else 0:.1f}")
+
+            # Ensure selected_examples_dict contains only selected examples
+            selected_examples_dict = {ex: selected_examples_dict_fixed[ex] for ex in selected_examples}
             
             # selected_examples_dict = {}
             # for (local_idx, pos), score in zip(selected_variables, scores):
@@ -318,6 +391,7 @@ def run_enhanced_experiment(
             #     selected_examples_dict[global_idx].append(pos)
             
             # selected_examples = list(selected_examples_dict.keys())[:examples_per_cycle]
+
         else:
             raise ValueError(f"Unknown example strategy: {example_strategy}")
         

@@ -45,7 +45,38 @@ class FeedForward(nn.Module):
         x = self.dropout(F.relu(self.linear_1(x)))
         x = self.linear_2(x)
         return x
-
+    
+class SimilaritySmoothing(nn.Module):
+    """Similarity-based smoothing layer for collaborative filtering of variables."""
+    
+    def __init__(self, hidden_dim, embedding_dim, dropout=0.1):
+        """Initialize similarity smoothing layer."""
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.embedding_dim = embedding_dim
+        
+        # Simple learnable weight for similarity
+        self.similarity_weight = nn.Parameter(torch.tensor(0.1))
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, hidden_states, embeddings, mask):
+        """Apply similarity-based smoothing."""
+        batch_size, seq_len, hidden_dim = hidden_states.shape
+        
+        # Compute embedding similarities (cosine similarity)
+        embeddings_norm = F.normalize(embeddings, dim=-1)
+        S = torch.bmm(embeddings_norm, embeddings_norm.transpose(1, 2))  # [B, L, L]
+        
+        # Simple similarity-based smoothing
+        similarity_weights = torch.softmax(self.similarity_weight * S, dim=-1)
+        smoothed = torch.bmm(similarity_weights, hidden_states)
+        smoothed = self.dropout(smoothed)
+        
+        # Only update masked positions
+        mask_expanded = mask.unsqueeze(-1).expand_as(hidden_states)
+        output = torch.where(mask_expanded.bool(), smoothed, hidden_states)
+        
+        return output
 
 class Positional_Encoder(nn.Module):
     """Encodes question and annotator information."""
@@ -61,17 +92,35 @@ class Positional_Encoder(nn.Module):
         torch.nn.init.kaiming_normal_(self.question_embedding, mode='fan_out', nonlinearity='relu')
         self.num_annotator = num_annotator
 
+    # def forward(self, x, annotators, questions, embeddings):
+    #     """Create encoded representations combining annotator and question features."""
+    #     batch_size = x.shape[0]
+    #     question_embeds = self.question_embedding[questions]
+    #     annotators = torch.where(annotators < 0, torch.full_like(annotators, self.num_annotator), annotators)
+    #     annotator_embeds = self.annotator_embedding[annotators]
+    #     if len(embeddings.shape) == 4:
+    #         embeddings = embeddings.squeeze(0)
+    #     feature_x = torch.cat((question_embeds + annotator_embeds, embeddings, x[:,:,1:]), dim=-1)
+    #     param_x = x[:,:,1:].clone()
+    #     return feature_x, param_x
+
     def forward(self, x, annotators, questions, embeddings):
         """Create encoded representations combining annotator and question features."""
         batch_size = x.shape[0]
         question_embeds = self.question_embedding[questions]
         annotators = torch.where(annotators < 0, torch.full_like(annotators, self.num_annotator), annotators)
         annotator_embeds = self.annotator_embedding[annotators]
+        
+        # Handle embeddings shape
         if len(embeddings.shape) == 4:
             embeddings = embeddings.squeeze(0)
-        feature_x = torch.cat((question_embeds + annotator_embeds, embeddings, x[:,:,1:]), dim=-1)
+            
+        # Combine all embeddings
+        combined_embeds = question_embeds + annotator_embeds
+        feature_x = torch.cat((combined_embeds, embeddings, x[:,:,1:]), dim=-1)
         param_x = x[:,:,1:].clone()
-        return feature_x, param_x
+        
+        return feature_x, param_x, combined_embeds  # Return combined_embeds for smoothing
 
 
 class EncoderLayer(nn.Module):
@@ -130,8 +179,22 @@ class EncoderLayer(nn.Module):
 class Encoder(nn.Module):
     """Full encoder consisting of multiple encoder layers."""
     
+    # def __init__(self, question_num, max_choices, encoder_num, attention_heads, 
+    #              num_annotator, annotator_embedding_dim, dropout=0.1):
+    #     """Initialize encoder with multiple layers."""
+    #     super().__init__()
+    #     self.feature_dim = annotator_embedding_dim + max_choices + 384
+    #     self.param_dim = max_choices
+    #     self.position_encoder = Positional_Encoder(question_num, max_choices, num_annotator, annotator_embedding_dim)
+    #     self.layers = nn.ModuleList([
+    #         EncoderLayer(self.feature_dim, self.param_dim, attention_heads, dropout)
+    #         for _ in range(encoder_num)
+    #     ])
+    #     self.norm = NormLayer(self.feature_dim)
+    #     self.annotator_embedding_dim = annotator_embedding_dim
+
     def __init__(self, question_num, max_choices, encoder_num, attention_heads, 
-                 num_annotator, annotator_embedding_dim, dropout=0.1):
+             num_annotator, annotator_embedding_dim, dropout=0.1):
         """Initialize encoder with multiple layers."""
         super().__init__()
         self.feature_dim = annotator_embedding_dim + max_choices + 384
@@ -143,13 +206,38 @@ class Encoder(nn.Module):
         ])
         self.norm = NormLayer(self.feature_dim)
         self.annotator_embedding_dim = annotator_embedding_dim
+        
+        # Add similarity smoothing layer
+        self.similarity_smoothing = SimilaritySmoothing(
+            hidden_dim=self.feature_dim,
+            embedding_dim=annotator_embedding_dim,
+            dropout=dropout
+        )
+
+    # def forward(self, x, annotators, questions, embeddings):
+    #     """Process input through all encoder layers."""
+    #     feature_x, param_x = self.position_encoder(x, annotators, questions, embeddings)
+    #     for layer in self.layers:
+    #         feature_x, param_x = layer(feature_x, param_x)
+    #     return param_x
 
     def forward(self, x, annotators, questions, embeddings):
-        """Process input through all encoder layers."""
-        feature_x, param_x = self.position_encoder(x, annotators, questions, embeddings)
+        """Process input through all encoder layers and apply similarity smoothing."""
+        feature_x, param_x, position_embeddings = self.position_encoder(x, annotators, questions, embeddings)
+        
+        # Process through encoder layers
         for layer in self.layers:
             feature_x, param_x = layer(feature_x, param_x)
-        return param_x
+        
+        # Apply similarity smoothing
+        mask = x[:, :, 0]  # First dimension is mask indicator
+        smoothed_features = self.similarity_smoothing(feature_x, position_embeddings, mask)
+        
+        # Update param_x based on smoothed features
+        combined = torch.cat([smoothed_features, param_x], dim=-1)
+        final_param_x = self.layers[-1].param_update(combined)
+        
+        return final_param_x
 
 
 class ImputerEmbedding(nn.Module):
