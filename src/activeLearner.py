@@ -150,7 +150,7 @@ def run_experiment(
                 dataset_train, dataset_val, active_pool, list(set(annotated_examples)), 
                 strategy="add_selected", update_percentage=20
             ) 
-        active_set_size = 700
+        active_set_size = 100
         print(f"Applying dynamic K-centers to select {min(active_set_size, len(active_pool))} from {len(active_pool)} examples...")
         if len(active_pool) > active_set_size:
             # Extract model embeddings for current pool

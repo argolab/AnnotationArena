@@ -455,6 +455,9 @@ class AnnotationDataset(Dataset):
                 known_positions.append(i)
                 
         return known_positions
+
+    def is_position_noisy(self, example_idx, pos):
+        return False
     
     def get_human_positions(self, idx):
         """Get positions of all human annotations."""
