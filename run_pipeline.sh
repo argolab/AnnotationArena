@@ -17,8 +17,7 @@ module load cuda/12.1
 
 conda activate llm_rubric_env
 
-python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearnerNoisy.py --examples_per_cycle 50 --features_per_example 5 \
-    --experiment all --loss_type cross_entropy --resample_validation --run_until_exhausted \
-    --dataset hanna --runner prabhav --use_embedding True --human_cost 10000 --llm_cost 0.1 \
-    --llm_alpha_multiplier 0.15 --human_flip_prob 0 --cold_start True \
-    --validation_set_size 100 --active_set_size 100
+python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearnerFixed.py --examples_per_cycle 50 --features_per_example 5 \
+ --experiment comparison --loss_type cross_entropy --resample_validation --run_until_exhausted \
+ --dataset hanna --runner prabhav --use_embedding True --cold_start True \
+ --validation_set_size 100 --active_set_size 100

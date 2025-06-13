@@ -57,9 +57,7 @@ class DataManager:
             bool: Success status
         """
         print(f"Use embedding: {use_embedding}")
-        if os.path.exists(os.path.join(self.base_path, "initial_train.json")):
-            print("Data was created before!")
-            return
+
         if use_embedding and not dataset == "hanna":
             raise ValueError("Not yet support other datasets with text embedding")
         if dataset == "gaussian":
@@ -72,10 +70,10 @@ class DataManager:
         except FileNotFoundError:
             return False
 
-        '''if use_embedding and not os.path.exists(os.path.join(self.base_path, "text_embeddings.json")):
+        if use_embedding and not os.path.exists(os.path.join(self.base_path, "text_embeddings.json")):
             print("Preparing all text embeddings with sentence bert")
             self.prepare_text_embeddings(num_partition)
-            print("Done\n")'''
+            print("Done\n")
         
         text_ids = list(human_data.keys())
         if dataset == "hanna":
@@ -175,11 +173,10 @@ class DataManager:
         if dataset == "hanna":
             
             if use_embedding:
-                with open(os.path.join(self.base_path, "questions.json"), "r") as file:
-                    question_data = json.load(file)
-
-                with open(os.path.join(self.base_path, "prompts_and_stories.json"), "r", encoding="utf-8") as file:
-                    text_data = json.load(file)
+                with open(os.path.join(self.base_path, "text_embeddings.json"), "r") as file:
+                    text_embeddings = json.load(file)
+                with open(os.path.join(self.base_path, "propmt_embeddings.json"), "r") as file:
+                   question_embeddings = json.load(file)
 
             for text_id in tqdm(texts):
                 if text_id not in llm_data:
@@ -192,8 +189,7 @@ class DataManager:
                     "annotators": [],
                     "questions": [],
                     "orig_split": split_type,
-                    "observation_history": [],  # Track history of observations for this entry
-                    "text_embedding": []
+                    "observation_history": []  # Track history of observations for this entry
                 }
                 
                 annotators = list(human_data[text_id].keys())
@@ -218,12 +214,6 @@ class DataManager:
                     entry["answers"].append(true_prob)
                     entry["annotators"].append(-1)
                     entry["questions"].append(question_indices[question])
-
-                    if use_embedding:
-                        sentence = text_data[int(text_id)]["Prompt"] + text_data[int(text_id)]["Story"] + question_data[question]
-                        embedding = model.encode([sentence])[0, :]
-                        entry["text_embedding"].append(embedding.tolist())
-
 
                 # Process human questions
                 for judge_id in annotators:
@@ -281,11 +271,15 @@ class DataManager:
                         entry["answers"].append(true_prob)   
                         entry["annotators"].append(int(judge_id))
                         entry["questions"].append(question_indices[question])
+                if use_embedding:
+                    entry["text_embedding"] = [[] for _ in range(14)]
+                    for q_idx, question in enumerate(question_list):
+                        text_embedding = text_embeddings[int(text_id)]
+                        question_embedding = question_embeddings[question]
+                        final_embedding = (torch.tensor(text_embedding) + torch.tensor(question_embedding)).tolist()
+                        entry["text_embedding"][q_idx] = final_embedding
+                        entry["text_embedding"][q_idx + 7] =  final_embedding
 
-                        if use_embedding:
-                            sentence = text_data[int(text_id)]["Prompt"] + text_data[int(text_id)]["Story"] + question_data[question]
-                            embedding = model.encode([sentence])[0, :]
-                            entry["text_embedding"].append(embedding.tolist())
                 
                 data_list.append(entry)
 
@@ -455,9 +449,6 @@ class AnnotationDataset(Dataset):
                 known_positions.append(i)
                 
         return known_positions
-
-    def is_position_noisy(self, example_idx, pos):
-        return False
     
     def get_human_positions(self, idx):
         """Get positions of all human annotations."""
@@ -723,33 +714,28 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
 
     elif strategy == "add_selected_partial" and selected_examples:
         new_val_data = []
-        examples_added = 0
         
-        added_example = random.sample(annotated_examples, min(len(dataset_val), len(annotated_examples) // 2))
-        remaining_size = len(dataset_val) - len(added_example)
-        remaining_pool = []
-        combined_pool = list(range(len(dataset_train)))
-        for idx in combined_pool:
-            if idx not in added_example:
-                remaining_pool.append(idx)
-        extra_example = random.sample(remaining_pool, remaining_size)
-        validation_pool = added_example + extra_example
-        for idx in validation_pool:
-            new_val_data.append(dataset_train.get_data_entry(idx))
-            validation_example_indices.append(idx)
-            examples_added += 1
-
-        new_dataset_val = AnnotationDataset(new_val_data)  
-        new_active_pool = []
-        for i in combined_pool:
-            if i not in validation_example_indices:
-                new_active_pool.append(i)
+        for i in range(current_val_size):
+            new_val_data.append(dataset_val.get_data_entry(i))
+        
+        examples_added = 0
+        for idx in selected_examples:
+            if idx not in validation_example_indices and random.random() > 0.5:
+                new_val_data.append(dataset_train.get_data_entry(idx))
+                validation_example_indices.append(idx)
+                examples_added += 1
+        
+            new_dataset_val = AnnotationDataset(new_val_data)
         
         print(f"Added {examples_added} selected examples to validation set (now {len(new_dataset_val)} examples)")
-        return new_dataset_val, new_active_pool, validation_example_indices
+        return new_dataset_val, active_pool, validation_example_indices
     
     elif strategy == "fixed_size_resample":
-        combined_pool = list(range(len(dataset_train)))
+        if current_val_indices is None:
+            current_val_indices = list(range(len(dataset_val)))
+        
+        combined_pool = current_val_indices + active_pool
+        
         if len(combined_pool) >= validation_set_size:
             new_val_indices = random.sample(combined_pool, validation_set_size)
         else:
@@ -766,7 +752,6 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
         
         print(f"Fixed size resampled validation set: {len(new_dataset_val)} examples")
         print(f"Updated active pool size: {len(updated_active_pool)}")
-
         
         return new_dataset_val, updated_active_pool, validation_example_indices
 
@@ -811,6 +796,6 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
     return dataset_val, active_pool, validation_example_indices
 
 if __name__ == "__main__":
-    data_manager = DataManager("../outputs/data_hanna")
-    # data_manager = DataManager("/export/fs06/psingh54/ActiveRubric-Internal/outputs/data")
+    # data_manager = DataManager("../outputs/data_hanna")
+    data_manager = DataManager("/export/fs06/psingh54/ActiveRubric-Internal/outputs/data")
     data_manager.prepare_data(1200, cold_start=True, use_embedding=True)
