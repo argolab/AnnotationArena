@@ -19,7 +19,7 @@ from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import pairwise_distances
 
 from annotationArena import *
-from utils import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset
+from utils_prabhav import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset
 from visualizations import *
 from imputer import Imputer
 from imputer_embedding import ImputerEmbedding
@@ -86,7 +86,7 @@ def extract_model_embeddings(dataset, example_indices, model, device):
                 text_embeddings = text_embeddings.unsqueeze(0).to(device)
             
             if hasattr(model.encoder, 'position_encoder'):
-                feature_x, param_x, _ = model.encoder.position_encoder(inputs, annotators, questions, text_embeddings)
+                feature_x, param_x = model.encoder.position_encoder(inputs, annotators, questions, text_embeddings)
                 for layer in model.encoder.layers[:-1]:
                     feature_x, param_x = layer(feature_x, param_x)
                 
@@ -639,8 +639,7 @@ def main():
         ]
     elif args.experiment == "comparison":
         experiments_to_run = [
-            "gradient_voi_q0_human", "gradient_voi_all_questions",
-            "variable_gradient_comparison"
+            "gradient_voi_q0_human"
         ]
     else:
         experiments_to_run = [args.experiment]
