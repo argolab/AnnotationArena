@@ -7,6 +7,7 @@ import random
 import copy
 from torch.utils.data import DataLoader
 from sklearn.metrics.pairwise import pairwise_distances
+import torch.nn as nn
 
 class SelectionStrategy:
     """
@@ -2076,51 +2077,26 @@ class SelectionFactory:
 
 
 class VariableGradientSelectionStrategy(ExampleSelectionStrategy):
-    """
-    Variable-level gradient-based example selection strategy for Active Learning.
-    
-    Computes gradients for individual masked positions (variables) rather than 
-    full examples, and selects the top variables with best gradient alignment 
-    to the validation set. Only considers top layer parameters for efficiency.
-    """
+    """Variable-level gradient-based example selection strategy for Active Learning."""
     
     def __init__(self, model, device=None):
-        """Initialize variable gradient selection strategy."""
         super().__init__("variable_gradient", model, device)
         self.selector = VariableGradientTopOnlySelector(model, device)
     
     def select_examples(self, dataset, num_to_select=300, val_dataset=None, 
                         num_samples=5, batch_size=32, costs=None, **kwargs):
-        """
-        Select variables (masked positions) using gradient alignment.
-        
-        Args:
-            dataset: Dataset to select from
-            num_to_select: Number of variables to select (default 300)
-            val_dataset: Validation dataset
-            num_samples: Number of samples to compute per variable
-            batch_size: Batch size for dataloaders
-            costs: Dictionary mapping (example_idx, position) tuples to costs
-            **kwargs: Additional arguments
-            
-        Returns:
-            tuple: (Selected variable positions as (example_idx, position) tuples, 
-                   Alignment scores)
-        """
+        """Select variables (masked positions) using gradient alignment."""
         if val_dataset is None:
             raise ValueError("Validation dataset is required for gradient selection")
         
-        # Create validation dataloader
         val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
         
-        # Compute validation gradients
         validation_grad_samples = self.selector.compute_validation_gradient_sampled(
             self.model, val_dataloader, num_samples=num_samples
         )
         
-        # Calculate gradient alignment for each variable
         all_scores = []
-        all_variable_positions = []  # (example_idx, position) tuples
+        all_variable_positions = []
         all_costs = []
         all_bc_ratios = []
         
@@ -2138,12 +2114,11 @@ class VariableGradientSelectionStrategy(ExampleSelectionStrategy):
             batch_size_actual = inputs.shape[0]
             
             for i in range(batch_size_actual):
-                global_example_idx = batch_idx * dataloader.batch_size + i
+                global_example_idx = batch_idx * batch_size + i
                 
-                # Find all masked positions for this example
                 masked_positions = []
                 for j in range(inputs.shape[1]):
-                    if inputs[i, j, 0] == 1:  # Position is masked
+                    if inputs[i, j, 0] == 1:
                         masked_positions.append(j)
                 
                 if not masked_positions:
@@ -2155,7 +2130,6 @@ class VariableGradientSelectionStrategy(ExampleSelectionStrategy):
                 example_question = questions[i:i+1]
                 example_embedding = embeddings[i:i+1] if embeddings is not None else None
                 
-                # Efficiently compute gradients for all positions at once
                 all_variable_grads = self.selector.compute_all_variable_gradients_efficient(
                     self.model, 
                     example_input, example_labels, 
@@ -2163,7 +2137,6 @@ class VariableGradientSelectionStrategy(ExampleSelectionStrategy):
                     masked_positions, num_samples=num_samples
                 )
                 
-                # Process each position's results
                 for pos in masked_positions:
                     if pos not in all_variable_grads:
                         continue
@@ -2171,14 +2144,12 @@ class VariableGradientSelectionStrategy(ExampleSelectionStrategy):
                     variable_grad_dict = all_variable_grads[pos]
                     variable_grad_dict = self.selector.normalize_gradient(variable_grad_dict)
                     
-                    # Compute alignment with validation gradients
                     alignment_scores = []
                     for val_grad in validation_grad_samples:
                         alignment = self.selector.compute_grad_dot_product(val_grad, variable_grad_dict)
                         alignment_scores.append(alignment)
                     
-                    # Get cost for this variable position
-                    cost = 1.0  # Default cost
+                    cost = 1.0
                     variable_key = (global_example_idx, pos)
                     if costs and variable_key in costs:
                         cost = costs[variable_key]
@@ -2192,57 +2163,24 @@ class VariableGradientSelectionStrategy(ExampleSelectionStrategy):
                     all_bc_ratios.append(benefit_cost_ratio)
         
         if all_scores:
-            # Sort by benefit/cost ratio or alignment score
-            if kwargs.get('use_benefit_cost_ratio', True):
-                sorted_data = sorted(zip(all_variable_positions, all_scores, all_costs, all_bc_ratios), 
-                                    key=lambda x: x[3], reverse=True)
-                sorted_positions = [pos for pos, _, _, _ in sorted_data]
-                sorted_scores = [score for _, score, _, _ in sorted_data]
-            else:
-                sorted_data = sorted(zip(all_variable_positions, all_scores, all_costs, all_bc_ratios), 
-                                    key=lambda x: x[1], reverse=True)
-                sorted_positions = [pos for pos, _, _, _ in sorted_data]
-                sorted_scores = [score for _, score, _, _ in sorted_data]
-            
-            selected_positions = sorted_positions[:num_to_select]
-            selected_scores = sorted_scores[:num_to_select]
+            sorted_data = sorted(zip(all_variable_positions, all_scores, all_costs, all_bc_ratios), 
+                                key=lambda x: x[3], reverse=True)
+            sorted_positions = [pos for pos, _, _, _ in sorted_data]
+            sorted_scores = [score for _, score, _, _ in sorted_data]
         else:
-            selected_positions = []
-            selected_scores = []
+            sorted_positions = []
+            sorted_scores = []
         
-        return selected_positions, selected_scores
+        return sorted_positions[:num_to_select], sorted_scores[:num_to_select]
 
 
 class VariableGradientTopOnlySelector:
-    """
-    Variable-level gradient selector that only considers top layer parameters.
-    
-    Computes and compares gradients for individual masked positions,
-    selecting variables that would provide the most training benefit.
-    Only operates on top layer parameters for computational efficiency.
-    """
     
     def __init__(self, model, device=None):
-        """
-        Initialize variable gradient selector for top layer only.
-        
-        Args:
-            model: Model to use for predictions
-            device: Device to use for computations
-        """
         self.model = model
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     def _is_top_layer_param(self, param_name):
-        """
-        Helper method to identify if a parameter belongs to the top layer.
-        
-        Args:
-            param_name: Name of the parameter
-            
-        Returns:
-            bool: True if the parameter belongs to the top layer, False otherwise
-        """
         top_layer_identifiers = ['encoder.layers.5.out']
         return any(identifier in param_name.lower() for identifier in top_layer_identifiers)
     
@@ -2359,8 +2297,8 @@ class VariableGradientTopOnlySelector:
         # Compute loss only for the target position
         position_output = outputs[0, position]
         position_label = temp_labels[0, position]
-        loss = F.cross_entropy(position_output.unsqueeze(0), 
-                              torch.argmax(position_label).unsqueeze(0))
+        loss = nn.CrossEntropyLoss(position_output.unsqueeze(0), 
+                              position_label.unsqueeze(0))
         
         loss.backward()
 
@@ -2448,8 +2386,8 @@ class VariableGradientTopOnlySelector:
             # Compute loss only for the target position
             position_output = outputs[0, position]
             position_label = temp_labels[0, position]
-            loss = F.cross_entropy(position_output.unsqueeze(0), 
-                                  torch.argmax(position_label).unsqueeze(0))
+            loss = nn.CrossEntropyLoss(position_output.unsqueeze(0), 
+                                  position_label.unsqueeze(0))
             
             loss.backward()
             
@@ -2534,8 +2472,8 @@ class VariableGradientTopOnlySelector:
                 # Compute loss only for the target position
                 position_output = outputs[0, target_pos]
                 position_label = temp_labels[0, target_pos]
-                loss = F.cross_entropy(position_output.unsqueeze(0), 
-                                      torch.argmax(position_label).unsqueeze(0))
+                loss = nn.CrossEntropyLoss(position_output.unsqueeze(0), 
+                                      position_label.unsqueeze(0))
                 
                 loss.backward()
                 
@@ -2592,6 +2530,7 @@ class VariableGradientTopOnlySelector:
                 
                 batch_size = inputs.shape[0]
                 temp_inputs = inputs.clone()
+                temp_labels = labels.clone()
                 
                 for i in range(batch_size):
                     masked_positions = []
@@ -2611,6 +2550,7 @@ class VariableGradientTopOnlySelector:
                         
                         temp_inputs[i, pos, 0] = 0
                         temp_inputs[i, pos, 1:1+model.max_choices] = one_hot
+                        temp_labels[i, pos] = one_hot
                 
                 # Disable gradients for non-top layer parameters
                 non_top_params = []
@@ -2623,7 +2563,7 @@ class VariableGradientTopOnlySelector:
                 model.zero_grad()
                 outputs = model(temp_inputs, annotators, questions, embeddings)
                 batch_loss = model.compute_total_loss(
-                    outputs, labels, temp_inputs, questions, embeddings,
+                    outputs, temp_labels, temp_inputs, questions, embeddings,
                     full_supervision=True
                 )
                 
