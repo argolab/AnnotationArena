@@ -59,8 +59,9 @@ class SimilaritySmoothing(nn.Module):
         self.Q = nn.Linear(hidden_dim, hidden_dim, bias=False)
         self.K = nn.Linear(hidden_dim, hidden_dim, bias=False)
         
-        # Temperature parameter
-        self.temperature = nn.Parameter(torch.tensor(0.1))
+        self.temp_projection = nn.Linear(hidden_dim, 1, bias=False)
+        with torch.no_grad():
+            self.temp_projection.weight.normal_(0, 0.01)
         
         # Initialize Q and K to approximate identity
         with torch.no_grad():
@@ -115,8 +116,13 @@ class SimilaritySmoothing(nn.Module):
                 Q_type = Q[b, type_indices]  # [num_type, H]
                 K_type = K[b, type_indices]  # [num_type, H]
                 
-                # Attention scores: [num_type, num_type]
-                scores = torch.mm(Q_type, K_type.t()) / self.temperature
+                type_hidden_states = hidden_states[b, type_indices]  # [num_type, H]
+                variable_temps = F.softplus(self.temp_projection(type_hidden_states)) + 0.01  # [num_type, 1]
+
+                # Attention scores with per-variable temperature: [num_type, num_type]
+                base_scores = torch.mm(Q_type, K_type.t())
+                scores = base_scores / variable_temps
+
                 attention_weights = F.softmax(scores, dim=1)
                 attention_weights = self.dropout(attention_weights)
                 
@@ -146,7 +152,9 @@ class FullyVectorizedSimilaritySmoothing(nn.Module):
         self.K = nn.Linear(hidden_dim, hidden_dim, bias=False)
         
         # Temperature parameter
-        self.temperature = nn.Parameter(torch.tensor(0.1))
+        self.temp_projection = nn.Linear(hidden_dim, 1, bias=False)
+        with torch.no_grad():
+            self.temp_projection.weight.normal_(0, 0.01)
         
         # Initialize Q and K to approximate identity
         with torch.no_grad():
