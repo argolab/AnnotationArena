@@ -131,6 +131,78 @@ class SimilaritySmoothing(nn.Module):
                         smoothed_params[b, global_idx] = smoothed_param
         
         return hidden_states, smoothed_params
+    
+class FullyVectorizedSimilaritySmoothing(nn.Module):
+    """Fully vectorized version - most aggressive optimization."""
+    
+    def __init__(self, hidden_dim, param_dim, num_question_types, dropout=0.1):
+        super().__init__()
+        self.hidden_dim = hidden_dim
+        self.param_dim = param_dim
+        self.num_question_types = num_question_types
+        
+        # Q and K matrices for attention
+        self.Q = nn.Linear(hidden_dim, hidden_dim, bias=False)
+        self.K = nn.Linear(hidden_dim, hidden_dim, bias=False)
+        
+        # Temperature parameter
+        self.temperature = nn.Parameter(torch.tensor(0.1))
+        
+        # Initialize Q and K to approximate identity
+        with torch.no_grad():
+            self.Q.weight.copy_(torch.eye(hidden_dim) + 0.01 * torch.randn(hidden_dim, hidden_dim))
+            self.K.weight.copy_(self.Q.weight.clone())
+        
+        self.dropout = nn.Dropout(dropout)
+        
+    def forward(self, hidden_states, param_states, questions, mask):
+        """
+        Fully vectorized forward pass.
+        """
+        batch_size, seq_len, hidden_dim = hidden_states.shape
+        
+        # Ensure mask is boolean for proper operations
+        mask_bool = mask.bool() if mask.dtype != torch.bool else mask
+        
+        # Early exit if no masked positions
+        if mask_bool.sum() == 0:
+            return hidden_states, param_states
+        
+        # Compute Q and K projections
+        Q = self.Q(hidden_states)  # [B, L, H]
+        K = self.K(hidden_states)  # [B, L, H]
+        
+        # Create attention scores for all positions
+        # [B, L, L] - attention from each position to every other position
+        scores = torch.bmm(Q, K.transpose(-2, -1)) / self.temperature
+        
+        # Create question type mask - only allow attention within same question type
+        # [B, L, L] where element [b, i, j] is 1 if questions[b, i] == questions[b, j]
+        question_mask = questions.unsqueeze(-1) == questions.unsqueeze(-2)  # [B, L, L]
+        
+        # Apply question type mask
+        scores = scores.masked_fill(~question_mask, float('-inf'))
+        
+        # Compute attention weights
+        attention_weights = F.softmax(scores, dim=-1)  # [B, L, L]
+        attention_weights = self.dropout(attention_weights)
+        
+        # Apply smoothing only to masked positions
+        # Create a mask for which positions should be smoothed
+        should_smooth = mask_bool.unsqueeze(-1).expand(-1, -1, seq_len)  # [B, L, L]
+        
+        # Zero out attention weights for positions that shouldn't be smoothed
+        attention_weights = attention_weights * should_smooth.float()
+        
+        # For positions that shouldn't be smoothed, set self-attention to 1
+        eye_mask = torch.eye(seq_len, device=hidden_states.device).unsqueeze(0).expand(batch_size, -1, -1)
+        no_smooth_mask = (~mask_bool).unsqueeze(-1).expand(-1, -1, seq_len)
+        attention_weights = attention_weights + eye_mask * no_smooth_mask.float()
+        
+        # Apply smoothing
+        smoothed_params = torch.bmm(attention_weights, param_states)  # [B, L, P]
+        
+        return hidden_states, smoothed_params
 
 class Positional_Encoder(nn.Module):
     """Encodes question and annotator information."""
@@ -189,7 +261,7 @@ class EncoderLayer(nn.Module):
         self.param_update = nn.Linear(feature_dim + param_dim, param_dim)
 
         # Add smoothing layer
-        self.smoothing = SimilaritySmoothing(
+        self.smoothing = FullyVectorizedSimilaritySmoothing(
             hidden_dim=feature_dim,
             param_dim=param_dim, 
             num_question_types=num_question_types,
