@@ -156,10 +156,11 @@ class FullyVectorizedSimilaritySmoothing(nn.Module):
         with torch.no_grad():
             self.temp_projection.weight.normal_(0, 0.01)
         
-        # Initialize Q and K to approximate identity
         with torch.no_grad():
-            self.Q.weight.copy_(torch.eye(hidden_dim) + 0.01 * torch.randn(hidden_dim, hidden_dim))
-            self.K.weight.copy_(self.Q.weight.clone())
+            # Johnson-Lindenstrauss: entries ~ N(0, 1/k)
+            jl_matrix = torch.randn(hidden_dim, hidden_dim) / math.sqrt(hidden_dim)
+            self.Q.weight.copy_(jl_matrix)
+            self.K.weight.copy_(jl_matrix.clone())  # Same matrix ensures (Qh_i)·(Kh_j) ≈ h_i·h_j
         
         self.dropout = nn.Dropout(dropout)
         
