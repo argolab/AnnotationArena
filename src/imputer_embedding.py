@@ -180,9 +180,15 @@ class FullyVectorizedSimilaritySmoothing(nn.Module):
         Q = self.Q(hidden_states)  # [B, L, H]
         K = self.K(hidden_states)  # [B, L, H]
         
-        # Create attention scores for all positions
-        # [B, L, L] - attention from each position to every other position
-        scores = torch.bmm(Q, K.transpose(-2, -1)) / self.temperature
+        # Compute variable-specific temperatures for all positions
+        variable_temps = F.softplus(self.temp_projection(hidden_states)) + 0.01  # [B, L, 1]
+
+        # Expand temperatures for broadcasting: [B, L, L]
+        # Each row i uses temperature from variable i
+        temp_matrix = variable_temps.expand(-1, -1, seq_len)  # [B, L, L]
+
+        # Create attention scores with per-variable temperature
+        scores = torch.bmm(Q, K.transpose(-2, -1)) / temp_matrix
         
         # Create question type mask - only allow attention within same question type
         # [B, L, L] where element [b, i, j] is 1 if questions[b, i] == questions[b, j]
