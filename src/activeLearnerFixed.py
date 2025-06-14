@@ -159,7 +159,7 @@ def run_enhanced_experiment(
                 variable_id = f"example_{idx}_position_{pos}"
                 arena.predict(variable_id, train=True)
         
-        arena.train(epochs=10, batch_size=batch_size, lr=lr)
+        arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr)
         print("Initial training completed!")
     else:
         arena = AnnotationArena(model, device)
@@ -185,7 +185,7 @@ def run_enhanced_experiment(
     annotated_examples = []
     test_overlap_annotations = {}
     cycle_count = 0
-        
+
     arena.set_dataset(dataset_val)
     val_metrics = arena.evaluate(list(range(len(dataset_val))))
     metrics['val_metrics'].append(val_metrics)
@@ -508,6 +508,11 @@ def run_enhanced_experiment(
         val_metrics = arena.evaluate(list(range(len(dataset_val))))
         metrics['val_metrics'].append(val_metrics)
         metrics['val_losses'].append(val_metrics["avg_expected_loss"])
+
+        # Print validation metrics for this cycle
+        print(f"Validation - RMSE: {val_metrics['rmse']:.4f}, "
+        f"Pearson: {val_metrics['pearson']:.4f}, "
+        f"Expected Loss: {val_metrics['avg_expected_loss']:.4f}")
         
         arena.set_dataset(dataset_test)
         test_metrics = arena.evaluate(list(range(len(dataset_test))))

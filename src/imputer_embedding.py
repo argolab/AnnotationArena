@@ -180,8 +180,7 @@ class FullyVectorizedSimilaritySmoothing(nn.Module):
         Q = self.Q(hidden_states)  # [B, L, H]
         K = self.K(hidden_states)  # [B, L, H]
         
-        # Compute variable-specific temperatures for all positions
-        variable_temps = F.softplus(self.temp_projection(hidden_states)) + 0.01  # [B, L, 1]
+        variable_temps = F.relu(self.temp_projection(hidden_states)) + 0.01 # [B, L, 1]
 
         # Expand temperatures for broadcasting: [B, L, L]
         # Each row i uses temperature from variable i
