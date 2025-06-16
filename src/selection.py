@@ -508,21 +508,15 @@ class FastVOICalculator(VOICalculator):
             return 1 - max_prob
 
 class VOISelectionStrategy(FeatureSelectionStrategy):
-    """
-    VOI-based feature selection strategy for Active Feature Acquisition.
-    
-    Selects features that provide the highest value of information (expected
-    reduction in loss) per unit cost, making annotation more cost-effective.
-    """
+    """VOI-based feature selection strategy for Active Feature Acquisition."""
     
     def __init__(self, model, device=None):
-        """Initialize VOI selection strategy."""
         super().__init__("voi", model, device)
         self.voi_calculator = VOICalculator(model, device)
 
     def select_features(self, example_idx, dataset, num_to_select=1, target_questions=None, 
                    loss_type="cross_entropy", costs=None, **kwargs):
-        
+        """Select features using VOI within a given example."""
         if target_questions is None:
             target_questions = [0]
         
@@ -546,8 +540,7 @@ class VOISelectionStrategy(FeatureSelectionStrategy):
         target_indices = []
         for q_idx in target_questions:
             for i in range(questions.shape[1]):
-                if (questions[0, i].item() == q_idx and 
-                    not dataset.is_position_noisy(example_idx, i)):
+                if questions[0, i].item() == q_idx and annotators[0, i].item() >= 0:
                     target_indices.append(i)
         
         if not target_indices:
@@ -2017,13 +2010,13 @@ class SelectionFactory:
         if strategy_name == "random":
             return RandomExampleSelectionStrategy(model, device)
         elif strategy_name == "gradient":
-            return GradientSelectionStrategy(model, device, gradient_top_only=gradient_top_only)
+            return NewGradientSelectionStrategy(model, device)
         elif strategy_name == "entropy":
             return EntropyExampleSelectionStrategy(model, device)
         elif strategy_name == "badge":
             return BADGESelectionStrategy(model, device)
         elif strategy_name == "combine":
-            return NewVariableGradientSelectionStrategy(model, device)
+            return VariableGradientSelectionStrategy(model, device)
         else:
             raise ValueError(f"Unknown example selection strategy: {strategy_name}")
     
@@ -3422,3 +3415,444 @@ class NewVariableGradientTopOnlySelector:
                 grad_samples.append(normalized_grad_dict)
         
         return grad_samples
+
+class NewGradientTopOnlySelector(GradientSelector):
+    """
+    Helper class for gradient-based selection.
+    
+    Computes and compares gradients for active learning,
+    selecting examples that would provide the most training benefit.
+    """
+    
+    def __init__(self, model, device=None, num_subset_samples=3):
+        """
+        Initialize gradient selector.
+        
+        Args:
+            model: Model to use for predictions
+            device: Device to use for computations
+            num_subset_samples: Number of different subset combinations to try
+        """
+        super().__init__(model, device)
+        self.num_subset_samples = num_subset_samples
+
+    def _is_top_layer_param(self, param_name):
+        """
+        Helper method to identify if a parameter belongs to the top layer.
+        Customize this method based on your model's architecture naming conventions.
+        
+        Args:
+            param_name: Name of the parameter
+            
+        Returns:
+            bool: True if the parameter belongs to the top layer, False otherwise
+        """
+        top_layer_identifiers = ['encoder.layers.5.out']
+        return any(identifier in param_name.lower() for identifier in top_layer_identifiers)
+    
+    def _sample_subset(self, all_positions, min_size=1):
+        """
+        Sample a random subset of positions.
+        
+        Args:
+            all_positions: List of all available positions
+            min_size: Minimum size of subset
+            
+        Returns:
+            list: Randomly sampled subset of positions
+        """
+        if len(all_positions) <= min_size:
+            return all_positions.copy()
+        
+        # Randomly choose subset size (at least min_size, at most all positions)
+        max_size = len(all_positions)
+        subset_size = torch.randint(min_size, max_size + 1, (1,)).item()
+        
+        # Randomly sample positions
+        shuffled = all_positions.copy()
+        torch.manual_seed(torch.randint(0, 10000, (1,)).item())
+        random.shuffle(shuffled)
+        
+        return shuffled[:subset_size]
+    
+    def compute_sample_gradient(self, model, inputs, labels, annotators, questions, embeddings, num_samples=5):
+        """
+        Compute gradient for a single example using the same approach as NewVariableGradientTopOnlySelector
+        but at example level instead of feature level.
+        
+        Args:
+            model: Model to use for predictions
+            inputs: Input tensor (single example)
+            labels: Label tensor
+            annotators: Annotator indices
+            questions: Question indices
+            embeddings: Embedding tensor
+            num_samples: Number of samples to compute
+            
+        Returns:
+            dict: Gradient dictionary
+        """
+        model.train()
+        accumulated_grad_dict = {}
+        total_samples = 0
+        
+        # Find masked and observed positions
+        masked_positions = []
+        observed_positions = []
+        for j in range(inputs.shape[1]):
+            if inputs[0, j, 0] == 1:
+                masked_positions.append(j)
+            else:
+                observed_positions.append(j)
+        
+        if not masked_positions:
+            for name, param in model.named_parameters():
+                if param.requires_grad and self._is_top_layer_param(name):
+                    accumulated_grad_dict[name] = torch.zeros_like(param)
+            return accumulated_grad_dict
+        
+        # For each sample, generate fake labels for all masked positions and compute gradients
+        for sample_idx in range(num_samples):
+            model.train()
+            
+            # Step 1: Generate fake labels for all masked positions
+            fake_labels = {}
+            with torch.no_grad():
+                temp_outputs = model(inputs, annotators, questions, embeddings)
+                for pos in masked_positions:
+                    pos_probs = F.softmax(temp_outputs[0, pos], dim=0)
+                    sampled_class = torch.multinomial(pos_probs, 1).item()
+                    fake_label = torch.zeros(model.max_choices, device=self.device)
+                    fake_label[sampled_class] = 1.0
+                    fake_labels[pos] = fake_label
+            
+            # Step 2: Take multiple subset samples of all positions (observed + masked)
+            all_positions = observed_positions + masked_positions
+            
+            for subset_sample_idx in range(self.num_subset_samples):
+                # Sample a subset of all positions
+                subset_positions = self._sample_subset(all_positions, min_size=1)
+                
+                # Create input tensor for computing outputs
+                output_inputs = inputs.clone()
+                output_labels = labels.clone()
+                
+                # Update positions in the subset for output computation
+                for pos in subset_positions:
+                    if pos in observed_positions:
+                        # Keep original observed values (already in inputs)
+                        pass
+                    elif pos in masked_positions:
+                        # Use fake labels and unmask
+                        output_inputs[0, pos, 0] = 0  # Unmask for output computation
+                        output_inputs[0, pos, 1:] = fake_labels[pos]
+                        output_labels[0, pos] = fake_labels[pos]
+                
+                # Create separate input tensor for loss computation
+                # Set mask bit to 0 for ALL positions to use actual loss everywhere
+                loss_inputs = output_inputs.clone()
+                loss_inputs[0, :, 0] = 0  # Use actual loss for all positions
+                loss_labels = output_labels.clone()
+                
+                # Disable gradients for non-top layer parameters
+                non_top_params = []
+                for name, param in model.named_parameters():
+                    if not self._is_top_layer_param(name):
+                        if param.requires_grad:
+                            param.requires_grad = False
+                            non_top_params.append(param)
+                
+                model.zero_grad()
+                # Compute outputs using output_inputs (with proper masking)
+                outputs = model(output_inputs, annotators, questions, embeddings)
+                
+                # Compute loss using loss_inputs (all positions use actual loss)
+                loss = model.compute_total_loss(
+                    outputs, loss_labels, loss_inputs, questions, embeddings,
+                    full_supervision=True
+                )
+                
+                if loss > 0:
+                    loss.backward()
+                    total_samples += 1
+                    
+                    # Accumulate gradients
+                    for name, param in model.named_parameters():
+                        if param.requires_grad and param.grad is not None and self._is_top_layer_param(name):
+                            if name not in accumulated_grad_dict:
+                                accumulated_grad_dict[name] = param.grad.detach().clone()
+                            else:
+                                accumulated_grad_dict[name] += param.grad.detach().clone()
+                
+                # Re-enable gradients
+                for param in non_top_params:
+                    param.requires_grad = True
+                
+                model.zero_grad()
+        
+        # Average gradients over all samples
+        if total_samples > 0:
+            for name in accumulated_grad_dict:
+                accumulated_grad_dict[name] /= total_samples
+        
+        return accumulated_grad_dict
+    
+    def compute_validation_gradient_sampled(self, model, val_dataloader, num_samples=5):
+        """
+        Compute validation gradients using the same approach as NewVariableGradientTopOnlySelector.
+        
+        Args:
+            model: Model to use for predictions
+            val_dataloader: Validation dataloader
+            num_samples: Number of samples to compute
+            
+        Returns:
+            list: List of gradient dictionaries
+        """
+        model.train()
+        grad_samples = []
+        
+        for sample_idx in tqdm(range(num_samples), desc="Computing validation gradients"):
+            temp_grad_dict = {}
+            sample_count = 0
+            
+            for batch in val_dataloader:
+                known_questions, inputs, labels, annotators, questions, embeddings = batch
+                inputs, labels, annotators, questions = (
+                    inputs.to(self.device), labels.to(self.device), 
+                    annotators.to(self.device), questions.to(self.device)
+                )
+
+                if embeddings is not None:
+                    embeddings = embeddings.to(self.device)
+                
+                batch_size = inputs.shape[0]
+                
+                # Process each example in the batch
+                for i in range(batch_size):
+                    # Step 1: Find masked and observed positions
+                    masked_positions = []
+                    observed_positions = []
+                    for j in range(inputs.shape[1]):
+                        if inputs[i, j, 0] == 1:
+                            masked_positions.append(j)
+                        else:
+                            observed_positions.append(j)
+                    
+                    if len(masked_positions) == 0:
+                        continue
+                    
+                    # Step 2: Generate fake labels for all masked positions
+                    fake_labels = {}
+                    with torch.no_grad():
+                        temp_outputs = model(inputs, annotators, questions, embeddings)
+                        for pos in masked_positions:
+                            pos_probs = F.softmax(temp_outputs[i, pos], dim=0)
+                            sampled_class = torch.multinomial(pos_probs, 1).item()
+                            fake_label = torch.zeros(model.max_choices, device=self.device)
+                            fake_label[sampled_class] = 1.0
+                            fake_labels[pos] = fake_label
+                    
+                    # Step 3: Take multiple subset samples
+                    all_positions = observed_positions + masked_positions
+                    
+                    for subset_sample_idx in range(self.num_subset_samples):
+                        # Sample a subset of all positions
+                        subset_positions = self._sample_subset(all_positions, min_size=1)
+                        
+                        # Create input tensor for computing outputs
+                        output_inputs = inputs.clone()
+                        output_labels = labels.clone()
+                        
+                        # Update positions in the subset for output computation
+                        for pos in subset_positions:
+                            if pos in observed_positions:
+                                # Keep original observed values (already in inputs)
+                                pass
+                            elif pos in masked_positions:
+                                # Use fake labels and unmask
+                                output_inputs[i, pos, 0] = 0  # Unmask for output computation
+                                output_inputs[i, pos, 1:] = fake_labels[pos]
+                                output_labels[i, pos] = fake_labels[pos]
+                        
+                        # Create separate input tensor for loss computation
+                        # Set mask bit to 0 for ALL positions to use actual loss everywhere
+                        loss_inputs = output_inputs.clone()
+                        loss_inputs[i, :, 0] = 0  # Use actual loss for all positions
+                        loss_labels = output_labels.clone()
+                        
+                        # Disable gradients for non-top layer parameters
+                        non_top_params = []
+                        for name, param in model.named_parameters():
+                            if not self._is_top_layer_param(name):
+                                if param.requires_grad:
+                                    param.requires_grad = False
+                                    non_top_params.append(param)
+                        
+                        model.zero_grad()
+                        # Compute outputs using output_inputs (with proper masking)
+                        outputs = model(output_inputs, annotators, questions, embeddings)
+                        
+                        # Compute loss using loss_inputs (all positions use actual loss)
+                        example_loss = model.compute_total_loss(
+                            outputs[i:i+1], loss_labels[i:i+1], loss_inputs[i:i+1], 
+                            questions[i:i+1], embeddings[i:i+1] if embeddings is not None else None,
+                            full_supervision=True
+                        )
+                        
+                        if example_loss > 0:
+                            example_loss.backward()
+                            sample_count += 1
+                            
+                            for name, param in model.named_parameters():
+                                if param.grad is not None and self._is_top_layer_param(name):
+                                    if name not in temp_grad_dict:
+                                        temp_grad_dict[name] = param.grad.detach().clone()
+                                    else:
+                                        temp_grad_dict[name] += param.grad.detach().clone()
+                        
+                        # Re-enable gradients
+                        for param in non_top_params:
+                            param.requires_grad = True
+                        
+                        model.zero_grad()
+            
+            if sample_count > 0:
+                for name in temp_grad_dict:
+                    temp_grad_dict[name] /= sample_count
+                
+                normalized_grad_dict = self.normalize_gradient(temp_grad_dict)
+                grad_samples.append(normalized_grad_dict)
+        
+        return grad_samples
+
+class NewGradientSelectionStrategy(ExampleSelectionStrategy):
+    """
+    Gradient-based example selection strategy for Active Learning.
+    
+    Selects examples that have gradient directions most aligned with
+    the validation loss gradient, indicating they'd be most helpful
+    for improving model performance on the validation set.
+    """
+    
+    def __init__(self, model, device=None, gradient_top_only=True):
+        """Initialize gradient selection strategy."""
+        super().__init__("gradient", model, device)
+        if gradient_top_only:
+            print("here")
+            self.selector = NewGradientTopOnlySelector(model, device)
+        else:
+            self.selector = GradientSelector(model, device)
+        
+        
+    
+    def select_examples(self, dataset, num_to_select=1, val_dataset=None, 
+                        num_samples=5, batch_size=32, costs=None, **kwargs):
+        """
+        Select examples using gradient alignment.
+        
+        Args:
+            dataset: Dataset to select from
+            num_to_select: Number of examples to select
+            val_dataset: Validation dataset
+            num_samples: Number of samples to compute
+            batch_size: Batch size for dataloaders
+            costs: Dictionary mapping example indices to their annotation costs
+            **kwargs: Additional arguments
+            
+        Returns:
+            tuple: (Selected indices, Alignment scores)
+        """
+        if val_dataset is None:
+            raise ValueError("Validation dataset is required for gradient selection")
+        
+        # Create validation dataloader
+        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        
+        # Compute validation gradients
+        validation_grad_samples = self.selector.compute_validation_gradient_sampled(
+            self.model, val_dataloader, num_samples=num_samples
+        )
+
+        self.validation_grad_samples = validation_grad_samples
+        
+        # Calculate gradient alignment for each example
+        all_scores = []
+        all_indices = []
+        all_costs = []
+        all_bc_ratios = []
+        
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Computing gradient alignment")):
+            known_questions, inputs, labels, annotators, questions, embeddings = batch
+            inputs, labels, annotators, questions = (
+                inputs.to(self.device), labels.to(self.device), 
+                annotators.to(self.device), questions.to(self.device)
+            )
+            if embeddings is not None:
+                embeddings = embeddings.to(self.device)
+            
+            for i in range(inputs.shape[0]):
+                # Skip examples with no masked positions
+                if torch.all(inputs[i, :, 0] == 0).item():
+                    continue
+                    
+                example_input = inputs[i:i+1]
+                example_labels = labels[i:i+1]
+                example_annotator = annotators[i:i+1]
+                example_question = questions[i:i+1]
+                example_embedding = embeddings[i:i+1]
+                
+                example_grad_dict = self.selector.compute_example_gradients(
+                    self.model, 
+                    example_input, example_labels, 
+                    example_annotator, example_question, example_embedding,
+                    num_samples=num_samples
+                )
+                
+                if not example_grad_dict:
+                    continue
+                
+                example_grad_dict = self.selector.normalize_gradient(example_grad_dict)
+                
+                alignment_scores = []
+                for val_grad in validation_grad_samples:
+                    alignment = self.selector.compute_grad_dot_product(val_grad, example_grad_dict)
+                    alignment_scores.append(alignment)
+                
+                global_idx = batch_idx * dataloader.batch_size + i
+                
+                # Get cost for this example
+                cost = 1.0  # Default cost
+                if costs and global_idx in costs:
+                    cost = costs[global_idx]
+                
+                avg_alignment = sum(alignment_scores) / len(alignment_scores) if alignment_scores else 0.0
+                benefit_cost_ratio = avg_alignment / max(cost, 1e-10)
+                
+                all_scores.append(avg_alignment)
+                all_indices.append(global_idx)
+                all_costs.append(cost)
+                all_bc_ratios.append(benefit_cost_ratio)
+        
+        if all_scores:
+            # Sort by benefit/cost ratio or alignment score
+            if kwargs.get('use_benefit_cost_ratio', True):
+                sorted_data = sorted(zip(all_indices, all_scores, all_costs, all_bc_ratios), 
+                                    key=lambda x: x[3], reverse=True)
+                sorted_indices = [idx for idx, _, _, _ in sorted_data]
+                sorted_scores = [score for _, score, _, _ in sorted_data]
+            else:
+                sorted_data = sorted(zip(all_indices, all_scores, all_costs, all_bc_ratios), 
+                                    key=lambda x: x[1], reverse=True)
+                sorted_indices = [idx for idx, _, _, _ in sorted_data]
+                sorted_scores = [score for _, score, _, _ in sorted_data]
+            
+            selected_indices = sorted_indices[:num_to_select]
+            selected_scores = sorted_scores[:num_to_select]
+        else:
+            selected_indices = []
+            selected_scores = []
+        
+        return selected_indices, selected_scores
