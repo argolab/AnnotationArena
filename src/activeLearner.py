@@ -23,7 +23,7 @@ from utils_prabhav import AnnotationDataset, DataManager, compute_metrics, resam
 from visualizations import *
 from imputer import Imputer
 from imputer_embedding import ImputerEmbedding
-from selection_fixed import (
+from selection import (
     SelectionFactory, 
     VOISelectionStrategy, 
     FastVOISelectionStrategy,
@@ -32,7 +32,8 @@ from selection_fixed import (
     EntropyFeatureSelectionStrategy,
     BADGESelectionStrategy,
     ArgmaxVOISelectionStrategy,
-    VariableGradientSelectionStrategy
+    VariableGradientSelectionStrategy,
+    NewVariableGradientSelectionStrategy
 )
 # from feature_recorder import FeatureRecorder
 
@@ -281,7 +282,7 @@ def run_enhanced_experiment(
         elif example_strategy == "combine":
             active_subset_dataset = AnnotationDataset([dataset_train.get_data_entry(idx) for idx in active_subset])
 
-            variable_selector = VariableGradientSelectionStrategy(model, device)
+            variable_selector = NewVariableGradientSelectionStrategy(model, device)
 
             # Calculate total features needed
             total_features_needed = examples_per_cycle * features_per_example
