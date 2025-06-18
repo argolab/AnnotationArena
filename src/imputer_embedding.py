@@ -508,396 +508,396 @@ class ImputerEmbedding(nn.Module):
             
         return loss
     
-    # def compute_bidirectional_loss(self, outputs, batch_inputs, batch_targets, batch_weights):
-    #     """Add bidirectional training loss."""
-    #     total_loss = 0.0
-    #     loss_count = 0
+    def compute_bidirectional_loss(self, outputs, batch_inputs, batch_targets, batch_weights):
+        """Add bidirectional training loss."""
+        total_loss = 0.0
+        loss_count = 0
         
-    #     for i in range(batch_inputs.shape[0]):
-    #         # Find observed positions for this example
-    #         observed_positions = []
-    #         for j in range(batch_inputs.shape[1]):
-    #             if batch_inputs[i, j, 0] == 0:  # Observed
-    #                 observed_positions.append(j)
+        for i in range(batch_inputs.shape[0]):
+            # Find observed positions for this example
+            observed_positions = []
+            for j in range(batch_inputs.shape[1]):
+                if batch_inputs[i, j, 0] == 0:  # Observed
+                    observed_positions.append(j)
             
-    #         if len(observed_positions) < 2:
-    #             continue
+            if len(observed_positions) < 2:
+                continue
                 
-    #         # For each observed position, predict it from others
-    #         for target_pos in observed_positions:
-    #             # Create mask: hide target, keep others  
-    #             temp_mask = batch_inputs[i:i+1, :, 0].clone()
-    #             temp_mask[0, target_pos] = 1  # Mask target
+            # For each observed position, predict it from others
+            for target_pos in observed_positions:
+                # Create mask: hide target, keep others  
+                temp_mask = batch_inputs[i:i+1, :, 0].clone()
+                temp_mask[0, target_pos] = 1  # Mask target
                 
-    #             # Get prediction for masked target
-    #             target_output = outputs[i:i+1, target_pos]
-    #             target_label = torch.argmax(batch_targets[i, target_pos]).item()
+                # Get prediction for masked target
+                target_output = outputs[i:i+1, target_pos]
+                target_label = torch.argmax(batch_targets[i, target_pos]).item()
                 
-    #             position_loss = F.cross_entropy(
-    #                 target_output,
-    #                 torch.tensor([target_label], device=self.device)
-    #             )
+                position_loss = F.cross_entropy(
+                    target_output,
+                    torch.tensor([target_label], device=self.device)
+                )
                 
-    #             total_loss += position_loss * batch_weights[i]
-    #             loss_count += 1
+                total_loss += position_loss * batch_weights[i]
+                loss_count += 1
         
-    #     return total_loss / max(loss_count, 1)
+        return total_loss / max(loss_count, 1)
     
-    # def train_on_examples(self, examples_indices=None, epochs=1, batch_size=8, lr=1e-4):
-    #     """Train with random masking patterns."""
-    #     if examples_indices is None:
-    #         examples_indices = list(range(len(self.training_examples)))
+    def train_on_examples_random_mask(self, examples_indices=None, epochs=1, batch_size=8, lr=1e-4):
+        """Train with random masking patterns."""
+        if examples_indices is None:
+            examples_indices = list(range(len(self.training_examples)))
         
-    #     if not examples_indices:
-    #         return []
+        if not examples_indices:
+            return []
         
-    #     self.train()
-    #     optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
+        self.train()
+        optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
         
-    #     # Same masking patterns as train_with_revisiting
-    #     masking_patterns = [
-    #         [0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1],
-    #         [0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0],
-    #         [0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0],
-    #         [0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0],
-    #         [0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0],
-    #         [1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0],
-    #         [0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1],
-    #         [0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0],
-    #         [0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0],
-    #         [0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1],
-    #         [0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0],
-    #         [0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0],
-    #         [1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0],
-    #         [0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1],
-    #         [0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0],
-    #         [0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0],
-    #         [0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0],
-    #         [0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0],
-    #         [0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0],
-    #         [1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1],
-    #         [0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1],
-    #         [0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
-    #         [1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0],
-    #         [0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1],
-    #         [0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0],
-    #         [0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0],
-    #         [0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0],
-    #         [0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1],
-    #         [0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1],
-    #         [0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0],
-    #         [1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0],
-    #         [0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0],
-    #         [0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0],
-    #         [0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0],
-    #     ]
+        # Same masking patterns as train_with_revisiting
+        masking_patterns = [
+            [0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+            [0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0],
+            [0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0],
+            [0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0],
+            [0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0],
+            [1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0],
+            [0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1],
+            [0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0],
+            [0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0],
+            [0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1],
+            [0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0],
+            [0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0],
+            [1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0],
+            [0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1],
+            [0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0],
+            [0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0],
+            [0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0],
+            [0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0],
+            [0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0],
+            [1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1],
+            [0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1],
+            [0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
+            [1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0],
+            [0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1],
+            [0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0],
+            [0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0],
+            [0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0],
+            [0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1],
+            [0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1],
+            [0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0],
+            [1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0],
+            [0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0],
+            [0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0],
+            [0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0],
+        ]
 
         
-    #     losses = []
-    #     for epoch in range(epochs):
-    #         epoch_loss = 0.0
-    #         batch_count = 0
+        losses = []
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            batch_count = 0
             
-    #         np.random.shuffle(examples_indices)
+            np.random.shuffle(examples_indices)
             
-    #         for batch_start in range(0, len(examples_indices), batch_size):
-    #             batch_indices = examples_indices[batch_start:batch_start + batch_size]
-    #             batch_examples = [self.training_examples[i] for i in batch_indices]
+            for batch_start in range(0, len(examples_indices), batch_size):
+                batch_indices = examples_indices[batch_start:batch_start + batch_size]
+                batch_examples = [self.training_examples[i] for i in batch_indices]
                 
-    #             # Extract batch data
-    #             batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
-    #             batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
-    #             batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
-    #             batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device)
-    #             batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
+                # Extract batch data
+                batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
+                batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
+                batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
+                batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device)
+                batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
                 
-    #             # Apply random masking pattern
-    #             temp_inputs = batch_inputs.clone()
-    #             pattern_idx = np.random.randint(0, len(masking_patterns))
-    #             pattern = masking_patterns[pattern_idx]
+                # Apply random masking pattern
+                temp_inputs = batch_inputs.clone()
+                pattern_idx = np.random.randint(0, len(masking_patterns))
+                pattern = masking_patterns[pattern_idx]
                 
-    #             for b in range(temp_inputs.shape[0]):
-    #                 for i in range(temp_inputs.shape[1]):
-    #                     q_idx = batch_questions[b, i].item()
-    #                     is_llm = (batch_annotators[b, i].item() == -1)
+                for b in range(temp_inputs.shape[0]):
+                    for i in range(temp_inputs.shape[1]):
+                        q_idx = batch_questions[b, i].item()
+                        is_llm = (batch_annotators[b, i].item() == -1)
                         
-    #                     # Only mask positions that are currently observed
-    #                     if temp_inputs[b, i, 0] == 0:  # Currently observed
-    #                         pattern_pos = 2 * q_idx + (0 if is_llm else 1)
-    #                         if pattern_pos < len(pattern) and pattern[pattern_pos] == 1:
-    #                             temp_inputs[b, i, 0] = 1  # Mask it
-    #                             temp_inputs[b, i, 1:] = 0  # Zero out
+                        # Only mask positions that are currently observed
+                        if temp_inputs[b, i, 0] == 0:  # Currently observed
+                            pattern_pos = 2 * q_idx + (0 if is_llm else 1)
+                            if pattern_pos < len(pattern) and pattern[pattern_pos] == 1:
+                                temp_inputs[b, i, 0] = 1  # Mask it
+                                temp_inputs[b, i, 1:] = 0  # Zero out
                 
-    #             # Forward pass
-    #             optimizer.zero_grad()
-    #             outputs = self(temp_inputs, batch_annotators, batch_questions, batch_embeddings)
+                # Forward pass
+                optimizer.zero_grad()
+                outputs = self(temp_inputs, batch_annotators, batch_questions, batch_embeddings)
                 
-    #             # Compute loss on ALL positions (using original labels)
-    #             batch_targets = batch_inputs[:, :, 1:].clone()  # Original targets
-    #             loss = self.compute_log_loss(outputs, batch_targets, batch_weights)
+                # Compute loss on ALL positions (using original labels)
+                batch_targets = batch_inputs[:, :, 1:].clone()  # Original targets
+                loss = self.compute_log_loss(outputs, batch_targets, batch_weights)
                 
-    #             if loss > 0:
-    #                 loss.backward()
-    #                 optimizer.step()
-    #                 epoch_loss += loss.item()
-    #                 batch_count += 1
+                if loss > 0:
+                    loss.backward()
+                    optimizer.step()
+                    epoch_loss += loss.item()
+                    batch_count += 1
             
-    #         avg_epoch_loss = epoch_loss / max(1, batch_count)
-    #         losses.append(avg_epoch_loss)
-    #         print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}")
+            avg_epoch_loss = epoch_loss / max(1, batch_count)
+            losses.append(avg_epoch_loss)
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}")
         
-    #     return losses
+        return losses
 
-    # def train_on_examples(self, examples_indices=None, epochs=1, batch_size=8, lr=1e-4):
-    #     """
-    #     Train the model on stored examples with prioritized revisiting.
+    def train_on_examples_old(self, examples_indices=None, epochs=1, batch_size=8, lr=1e-4):
+        """
+        Train the model on stored examples with prioritized revisiting.
         
-    #     Args:
-    #         examples_indices: Indices of examples to train on (default: all)
-    #         epochs: Number of training epochs
-    #         batch_size: Batch size
-    #         lr: Learning rate
+        Args:
+            examples_indices: Indices of examples to train on (default: all)
+            epochs: Number of training epochs
+            batch_size: Batch size
+            lr: Learning rate
             
-    #     Returns:
-    #         List of training losses
-    #     """
-    #     self.train()  # Set to train mode
+        Returns:
+            List of training losses
+        """
+        self.train()  # Set to train mode
         
-    #     # If no specific examples are provided, prioritize those that need revisiting
-    #     if examples_indices is None:
-    #         # First include examples that need revisiting
-    #         examples_to_revisit = list(self.examples_to_revisit)
+        # If no specific examples are provided, prioritize those that need revisiting
+        if examples_indices is None:
+            # First include examples that need revisiting
+            examples_to_revisit = list(self.examples_to_revisit)
             
-    #         # Then add other examples up to a reasonable batch count
-    #         other_examples = [i for i in range(len(self.training_examples)) 
-    #                          if i not in self.examples_to_revisit]
+            # Then add other examples up to a reasonable batch count
+            other_examples = [i for i in range(len(self.training_examples)) 
+                             if i not in self.examples_to_revisit]
             
-    #         # Determine how many additional examples to include
-    #         target_examples = batch_size * 10  # Train on approximately 10 batches
-    #         num_additional = max(0, target_examples - len(examples_to_revisit))
+            # Determine how many additional examples to include
+            target_examples = batch_size * 10  # Train on approximately 10 batches
+            num_additional = max(0, target_examples - len(examples_to_revisit))
             
-    #         if num_additional > 0 and other_examples:
-    #             additional_examples = np.random.choice(
-    #                 other_examples, 
-    #                 min(num_additional, len(other_examples)), 
-    #                 replace=False
-    #             ).tolist()
-    #             examples_indices = examples_to_revisit + additional_examples
-    #         else:
-    #             examples_indices = examples_to_revisit
+            if num_additional > 0 and other_examples:
+                additional_examples = np.random.choice(
+                    other_examples, 
+                    min(num_additional, len(other_examples)), 
+                    replace=False
+                ).tolist()
+                examples_indices = examples_to_revisit + additional_examples
+            else:
+                examples_indices = examples_to_revisit
                 
-    #         if not examples_indices:
-    #             # If still no examples, just use all available
-    #             examples_indices = list(range(len(self.training_examples)))
+            if not examples_indices:
+                # If still no examples, just use all available
+                examples_indices = list(range(len(self.training_examples)))
         
-    #     if len(examples_indices) == 0:
-    #         return []
+        if len(examples_indices) == 0:
+            return []
         
-    #     # Create optimizer
-    #     optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
+        # Create optimizer
+        optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
         
-    #     # Training loop
-    #     losses = []
-    #     for epoch in range(epochs):
-    #         epoch_loss = 0.0
-    #         batch_count = 0
+        # Training loop
+        losses = []
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            batch_count = 0
             
-    #         # Shuffle examples
-    #         np.random.shuffle(examples_indices)
+            # Shuffle examples
+            np.random.shuffle(examples_indices)
             
-    #         # Process in batches
-    #         for batch_start in range(0, len(examples_indices), batch_size):
-    #             batch_indices = examples_indices[batch_start:batch_start + batch_size]
-    #             batch_examples = [self.training_examples[i] for i in batch_indices]
+            # Process in batches
+            for batch_start in range(0, len(examples_indices), batch_size):
+                batch_indices = examples_indices[batch_start:batch_start + batch_size]
+                batch_examples = [self.training_examples[i] for i in batch_indices]
                 
-    #             # Extract batch data
-    #             batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
-    #             batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
-    #             batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
-    #             batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device)
-    #             batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
+                # Extract batch data
+                batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
+                batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
+                batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
+                batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device)
+                batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
                 
-    #             # Forward pass
-    #             optimizer.zero_grad()
-    #             outputs = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
+                # Forward pass
+                optimizer.zero_grad()
+                outputs = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
                 
-    #             # Compute loss on observed positions (where mask bit is 0)
-    #             batch_targets = batch_inputs[:, :, 1:].clone()  # Exclude mask bit
-    #             observed_mask = (batch_inputs[:, :, 0] == 0).float().unsqueeze(-1).expand_as(outputs)
-    #             masked_outputs = outputs * observed_mask
-    #             masked_targets = batch_targets * observed_mask
+                # Compute loss on observed positions (where mask bit is 0)
+                batch_targets = batch_inputs[:, :, 1:].clone()  # Exclude mask bit
+                observed_mask = (batch_inputs[:, :, 0] == 0).float().unsqueeze(-1).expand_as(outputs)
+                masked_outputs = outputs * observed_mask
+                masked_targets = batch_targets * observed_mask
                 
-    #             if observed_mask.sum() > 0:
-    #                 loss = self.compute_log_loss(masked_outputs, masked_targets, batch_weights)
-    #                 loss.backward()
-    #                 optimizer.step()
+                if observed_mask.sum() > 0:
+                    loss = self.compute_log_loss(masked_outputs, masked_targets, batch_weights)
+                    loss.backward()
+                    optimizer.step()
                     
-    #                 # Record example losses
-    #                 for i, idx in enumerate(batch_indices):
-    #                     example_outputs = outputs[i:i+1]
-    #                     example_targets = batch_targets[i:i+1]
-    #                     example_mask = observed_mask[i:i+1]
-    #                     if example_mask.sum() > 0:
-    #                         example_loss = self.compute_log_loss(
-    #                             example_outputs * example_mask, 
-    #                             example_targets * example_mask
-    #                         ).item()
-    #                         self.training_examples[idx]['loss'] = example_loss
+                    # Record example losses
+                    for i, idx in enumerate(batch_indices):
+                        example_outputs = outputs[i:i+1]
+                        example_targets = batch_targets[i:i+1]
+                        example_mask = observed_mask[i:i+1]
+                        if example_mask.sum() > 0:
+                            example_loss = self.compute_log_loss(
+                                example_outputs * example_mask, 
+                                example_targets * example_mask
+                            ).item()
+                            self.training_examples[idx]['loss'] = example_loss
                     
-    #                 epoch_loss += loss.item()
-    #                 batch_count += 1
+                    epoch_loss += loss.item()
+                    batch_count += 1
             
-    #         # Calculate average loss for this epoch
-    #         avg_epoch_loss = epoch_loss / max(1, batch_count)
-    #         losses.append(avg_epoch_loss)
+            # Calculate average loss for this epoch
+            avg_epoch_loss = epoch_loss / max(1, batch_count)
+            losses.append(avg_epoch_loss)
             
-    #         # Record for history
-    #         self.training_losses.append({
-    #             'epoch': len(self.training_losses),
-    #             'loss': avg_epoch_loss,
-    #             'examples_trained': len(examples_indices),
-    #             'examples_revisited': len(self.examples_to_revisit.intersection(examples_indices))
-    #         })
+            # Record for history
+            self.training_losses.append({
+                'epoch': len(self.training_losses),
+                'loss': avg_epoch_loss,
+                'examples_trained': len(examples_indices),
+                'examples_revisited': len(self.examples_to_revisit.intersection(examples_indices))
+            })
             
-    #         print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}")
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}")
         
-    #     # Clear the revisit flags for trained examples
-    #     for idx in examples_indices:
-    #         if idx in self.examples_to_revisit:
-    #             self.training_examples[idx]['needs_revisit'] = False
-    #             self.examples_to_revisit.remove(idx)
+        # Clear the revisit flags for trained examples
+        for idx in examples_indices:
+            if idx in self.examples_to_revisit:
+                self.training_examples[idx]['needs_revisit'] = False
+                self.examples_to_revisit.remove(idx)
         
-    #     return losses
+        return losses
     
-    # def train_on_examples(self, examples_indices=None, epochs=1, batch_size=8, lr=1e-4):
-    #     """
-    #     Train the model on stored examples with prioritized revisiting.
+    def train_on_examples_bd(self, examples_indices=None, epochs=1, batch_size=8, lr=1e-4):
+        """
+        Train the model on stored examples with prioritized revisiting.
         
-    #     Args:
-    #         examples_indices: Indices of examples to train on (default: all)
-    #         epochs: Number of training epochs
-    #         batch_size: Batch size
-    #         lr: Learning rate
+        Args:
+            examples_indices: Indices of examples to train on (default: all)
+            epochs: Number of training epochs
+            batch_size: Batch size
+            lr: Learning rate
             
-    #     Returns:
-    #         List of training losses
-    #     """
-    #     self.train()  # Set to train mode
+        Returns:
+            List of training losses
+        """
+        self.train()  # Set to train mode
         
-    #     # If no specific examples are provided, prioritize those that need revisiting
-    #     if examples_indices is None:
-    #         # First include examples that need revisiting
-    #         examples_to_revisit = list(self.examples_to_revisit)
+        # If no specific examples are provided, prioritize those that need revisiting
+        if examples_indices is None:
+            # First include examples that need revisiting
+            examples_to_revisit = list(self.examples_to_revisit)
             
-    #         # Then add other examples up to a reasonable batch count
-    #         other_examples = [i for i in range(len(self.training_examples)) 
-    #                          if i not in self.examples_to_revisit]
+            # Then add other examples up to a reasonable batch count
+            other_examples = [i for i in range(len(self.training_examples)) 
+                             if i not in self.examples_to_revisit]
             
-    #         # Determine how many additional examples to include
-    #         target_examples = batch_size * 10  # Train on approximately 10 batches
-    #         num_additional = max(0, target_examples - len(examples_to_revisit))
+            # Determine how many additional examples to include
+            target_examples = batch_size * 10  # Train on approximately 10 batches
+            num_additional = max(0, target_examples - len(examples_to_revisit))
             
-    #         if num_additional > 0 and other_examples:
-    #             additional_examples = np.random.choice(
-    #                 other_examples, 
-    #                 min(num_additional, len(other_examples)), 
-    #                 replace=False
-    #             ).tolist()
-    #             examples_indices = examples_to_revisit + additional_examples
-    #         else:
-    #             examples_indices = examples_to_revisit
+            if num_additional > 0 and other_examples:
+                additional_examples = np.random.choice(
+                    other_examples, 
+                    min(num_additional, len(other_examples)), 
+                    replace=False
+                ).tolist()
+                examples_indices = examples_to_revisit + additional_examples
+            else:
+                examples_indices = examples_to_revisit
                 
-    #         if not examples_indices:
-    #             # If still no examples, just use all available
-    #             examples_indices = list(range(len(self.training_examples)))
+            if not examples_indices:
+                # If still no examples, just use all available
+                examples_indices = list(range(len(self.training_examples)))
         
-    #     if len(examples_indices) == 0:
-    #         return []
+        if len(examples_indices) == 0:
+            return []
         
-    #     # Create optimizer
-    #     optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
+        # Create optimizer
+        optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
         
-    #     # Training loop
-    #     losses = []
-    #     for epoch in range(epochs):
-    #         epoch_loss = 0.0
-    #         batch_count = 0
+        # Training loop
+        losses = []
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            batch_count = 0
             
-    #         # Shuffle examples
-    #         np.random.shuffle(examples_indices)
+            # Shuffle examples
+            np.random.shuffle(examples_indices)
             
-    #         # Process in batches
-    #         for batch_start in range(0, len(examples_indices), batch_size):
-    #             batch_indices = examples_indices[batch_start:batch_start + batch_size]
-    #             batch_examples = [self.training_examples[i] for i in batch_indices]
+            # Process in batches
+            for batch_start in range(0, len(examples_indices), batch_size):
+                batch_indices = examples_indices[batch_start:batch_start + batch_size]
+                batch_examples = [self.training_examples[i] for i in batch_indices]
                 
-    #             # Extract batch data
-    #             batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
-    #             batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
-    #             batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
-    #             batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device)
-    #             batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
+                # Extract batch data
+                batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
+                batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
+                batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
+                batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device)
+                batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
                 
-    #             # Forward pass
-    #             optimizer.zero_grad()
-    #             outputs = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
+                # Forward pass
+                optimizer.zero_grad()
+                outputs = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
                 
-    #             # Compute loss on observed positions (where mask bit is 0)
-    #             batch_targets = batch_inputs[:, :, 1:].clone()  # Exclude mask bit
-    #             observed_mask = (batch_inputs[:, :, 0] == 0).float().unsqueeze(-1).expand_as(outputs)
-    #             masked_outputs = outputs * observed_mask
-    #             masked_targets = batch_targets * observed_mask
+                # Compute loss on observed positions (where mask bit is 0)
+                batch_targets = batch_inputs[:, :, 1:].clone()  # Exclude mask bit
+                observed_mask = (batch_inputs[:, :, 0] == 0).float().unsqueeze(-1).expand_as(outputs)
+                masked_outputs = outputs * observed_mask
+                masked_targets = batch_targets * observed_mask
                 
-    #             # if observed_mask.sum() > 0:
-    #             #     loss = self.compute_log_loss(masked_outputs, masked_targets, batch_weights)
-    #             #     loss.backward()
-    #             #     optimizer.step()
+                # if observed_mask.sum() > 0:
+                #     loss = self.compute_log_loss(masked_outputs, masked_targets, batch_weights)
+                #     loss.backward()
+                #     optimizer.step()
 
-    #             if observed_mask.sum() > 0:
-    #                 # # Bidirectional loss  
-    #                 bidirectional_loss = self.compute_bidirectional_loss(outputs, batch_inputs, batch_targets, batch_weights)
+                if observed_mask.sum() > 0:
+                    # # Bidirectional loss  
+                    bidirectional_loss = self.compute_bidirectional_loss(outputs, batch_inputs, batch_targets, batch_weights)
                     
-    #                 # Combined loss
-    #                 loss = bidirectional_loss
-    #                 loss.backward()
-    #                 optimizer.step()
+                    # Combined loss
+                    loss = bidirectional_loss
+                    loss.backward()
+                    optimizer.step()
                     
-    #                 # Record example losses
-    #                 for i, idx in enumerate(batch_indices):
-    #                     example_outputs = outputs[i:i+1]
-    #                     example_targets = batch_targets[i:i+1]
-    #                     example_mask = observed_mask[i:i+1]
-    #                     if example_mask.sum() > 0:
-    #                         example_loss = self.compute_log_loss(
-    #                             example_outputs * example_mask, 
-    #                             example_targets * example_mask
-    #                         ).item()
-    #                         self.training_examples[idx]['loss'] = example_loss
+                    # Record example losses
+                    for i, idx in enumerate(batch_indices):
+                        example_outputs = outputs[i:i+1]
+                        example_targets = batch_targets[i:i+1]
+                        example_mask = observed_mask[i:i+1]
+                        if example_mask.sum() > 0:
+                            example_loss = self.compute_log_loss(
+                                example_outputs * example_mask, 
+                                example_targets * example_mask
+                            ).item()
+                            self.training_examples[idx]['loss'] = example_loss
                     
-    #                 epoch_loss += loss.item()
-    #                 batch_count += 1
+                    epoch_loss += loss.item()
+                    batch_count += 1
             
-    #         # Calculate average loss for this epoch
-    #         avg_epoch_loss = epoch_loss / max(1, batch_count)
-    #         losses.append(avg_epoch_loss)
+            # Calculate average loss for this epoch
+            avg_epoch_loss = epoch_loss / max(1, batch_count)
+            losses.append(avg_epoch_loss)
             
-    #         # Record for history
-    #         self.training_losses.append({
-    #             'epoch': len(self.training_losses),
-    #             'loss': avg_epoch_loss,
-    #             'examples_trained': len(examples_indices),
-    #             'examples_revisited': len(self.examples_to_revisit.intersection(examples_indices))
-    #         })
+            # Record for history
+            self.training_losses.append({
+                'epoch': len(self.training_losses),
+                'loss': avg_epoch_loss,
+                'examples_trained': len(examples_indices),
+                'examples_revisited': len(self.examples_to_revisit.intersection(examples_indices))
+            })
             
-    #         print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}")
+            print(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}")
         
-    #     # Clear the revisit flags for trained examples
-    #     for idx in examples_indices:
-    #         if idx in self.examples_to_revisit:
-    #             self.training_examples[idx]['needs_revisit'] = False
-    #             self.examples_to_revisit.remove(idx)
+        # Clear the revisit flags for trained examples
+        for idx in examples_indices:
+            if idx in self.examples_to_revisit:
+                self.training_examples[idx]['needs_revisit'] = False
+                self.examples_to_revisit.remove(idx)
         
-    #     return losses
+        return losses
     
     def train_with_revisiting(self, dataset, epochs=1, batch_size=8, lr=1e-4):
         """

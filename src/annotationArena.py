@@ -303,7 +303,7 @@ class AnnotationArena:
             
         return suggestions
         
-    def train(self, epochs=1, batch_size=8, lr=1e-4, revisit_examples=True):
+    def train(self, epochs=1, batch_size=8, lr=1e-4, revisit_examples=True, training="random_mask"):
         """
         Train imputer model on observed variables with example revisiting.
         
@@ -316,19 +316,38 @@ class AnnotationArena:
         Returns:
             dict: Training metrics including losses and example counts
         """
-        if revisit_examples:
-            examples_to_revisit = [i for i, ex in enumerate(self.prediction_history) if ex["needs_revisit"]]
-            examples_to_train = examples_to_revisit
-            if len(examples_to_train) < batch_size * 10:
-                other_examples = [i for i, ex in enumerate(self.prediction_history) if not ex["needs_revisit"]]
-                if other_examples:
-                    examples_to_train.extend(random.sample(other_examples, 
-                                                         min(len(other_examples), batch_size * 10 - len(examples_to_train))))
-        else:
-            examples_to_train = list(range(len(self.prediction_history)))
+        # if revisit_examples:
+        #     examples_to_revisit = [i for i, ex in enumerate(self.prediction_history) if ex["needs_revisit"]]
+        #     examples_to_train = examples_to_revisit
+        #     if len(examples_to_train) < batch_size * 10:
+        #         other_examples = [i for i, ex in enumerate(self.prediction_history) if not ex["needs_revisit"]]
+        #         if other_examples:
+        #             examples_to_train.extend(random.sample(other_examples, 
+        #                                                  min(len(other_examples), batch_size * 10 - len(examples_to_train))))
+        # else:
+        #     examples_to_train = list(range(len(self.prediction_history)))
+
+        # TO DO 
+        '''
+        train_data = {}
+        loop over list(range(len(self.prediction_history))):
+
+            example_idx = examples_to_train[example_idx]
+            train_data[example_idx] = []
+        '''
+        if training == "random_mask":
+            print("Using random mask training")
+            func = self.model.train_on_examples_random_mask
+        elif training == "old":
+            print("Using old training")
+            func = self.model.train_on_examples_old
+        elif training == "bd":
+            print("Using biredictional loss")
+            func = self.model.train_on_examples_bd
+        examples_to_train = list(range(len(self.prediction_history)))
         
         # Train the model
-        epoch_losses = self.model.train_on_examples(
+        epoch_losses = func(
             examples_indices=examples_to_train,
             epochs=epochs, 
             batch_size=batch_size, 
@@ -349,8 +368,11 @@ class AnnotationArena:
             "losses": epoch_losses,
             "avg_loss": avg_loss,
             "examples_trained": len(examples_to_train),
-            "examples_revisited": len(examples_to_revisit) if revisit_examples else 0
+            "examples_revisited": 0
+            # "examples_revisited": len(examples_to_revisit) if revisit_examples else 0
         }
+
+        print(f'Training Metrics - {epoch_losses}, {avg_loss}, {len(examples_to_train)}')
         
         return training_metrics
     

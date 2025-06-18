@@ -1,14 +1,27 @@
 @echo off
 setlocal enabledelayedexpansion
 
-REM List of experiments
-set experiments=gradient_fast_voi_cold_start gradient_voi_cold_start gradient_sequential_cold_start gradient_random_cold_start
+python src/activeLearner.py --examples_per_cycle 50 --features_per_example 5 --experiment gradient_voi_q0_human --loss_type l2 --resample_validation --dataset hanna --runner haojun --cycles 20 --cold_start True --use_embedding True --epochs_per_cycle 10 --training_options random_mask
 
-REM Loop through each experiment and run the Python script
-for %%e in (%experiments%) do (
-    echo Running experiment: %%e
-    python src/activeLearner.py --examples_per_cycle 60 --features_per_example 3 --experiment %%e --loss_type l2 --resample_validation --dataset hanna --runner haojun --cycles 10 --cold_start True --batch_size 8
-)
+python src/activeLearner.py --examples_per_cycle 50 --features_per_example 5 --experiment gradient_voi_q0_both --loss_type l2 --resample_validation --dataset hanna --runner haojun --cycles 20 --cold_start True --use_embedding True --epochs_per_cycle 10 --training_options random_mask
 
-echo All experiments completed.
-pause
+python src/activeLearner.py --examples_per_cycle 50 --features_per_example 5 --experiment gradient_voi_q0_all_questions --loss_type l2 --resample_validation --dataset hanna --runner haojun --cycles 20 --cold_start True --use_embedding True --epochs_per_cycle 10 --training_options random_mask
+
+python src/activeLearner.py --examples_per_cycle 50 --features_per_example 5 --experiment variable_gradient_comparison --loss_type l2 --resample_validation --dataset hanna --runner haojun --cycles 20 --cold_start True --use_embedding True --epochs_per_cycle 10 --training_options random_mask
+
+python src/activeLearner.py --examples_per_cycle 50 --features_per_example 5 --experiment gradient_voi_q0_human --loss_type l2 --resample_validation --dataset hanna --runner haojun --cycles 20 --cold_start True --use_embedding True --epochs_per_cycle 10 --training_options old
+
+python src/activeLearner.py --examples_per_cycle 50 --features_per_example 5 --experiment gradient_voi_q0_both --loss_type l2 --resample_validation --dataset hanna --runner haojun --cycles 20 --cold_start True --use_embedding True --epochs_per_cycle 10 --training_options old
+
+python src/activeLearner.py --examples_per_cycle 50 --features_per_example 5 --experiment gradient_voi_q0_all_questions --loss_type l2 --resample_validation --dataset hanna --runner haojun --cycles 20 --cold_start True --use_embedding True --epochs_per_cycle 10 --training_options old
+
+python src/activeLearner.py --examples_per_cycle 50 --features_per_example 5 --experiment variable_gradient_comparison --loss_type l2 --resample_validation --dataset hanna --runner haojun --cycles 20 --cold_start True --use_embedding True --epochs_per_cycle 10 --training_options old
+
+python src/activeLearner.py --examples_per_cycle 50 --features_per_example 5 --experiment gradient_voi_q0_human --loss_type l2 --resample_validation --dataset hanna --runner haojun --cycles 20 --cold_start True --use_embedding True --epochs_per_cycle 10 --training_options bd
+
+python src/activeLearner.py --examples_per_cycle 50 --features_per_example 5 --experiment gradient_voi_q0_both --loss_type l2 --resample_validation --dataset hanna --runner haojun --cycles 20 --cold_start True --use_embedding True --epochs_per_cycle 10 --training_options bd
+
+python src/activeLearner.py --examples_per_cycle 50 --features_per_example 5 --experiment gradient_voi_q0_all_questions --loss_type l2 --resample_validation --dataset hanna --runner haojun --cycles 20 --cold_start True --use_embedding True --epochs_per_cycle 10 --training_options bd
+
+python src/activeLearner.py --examples_per_cycle 50 --features_per_example 5 --experiment variable_gradient_comparison --loss_type l2 --resample_validation --dataset hanna --runner haojun --cycles 20 --cold_start True --use_embedding True --epochs_per_cycle 10 --training_options bd
+

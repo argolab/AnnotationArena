@@ -143,7 +143,8 @@ def run_enhanced_experiment(
     active_set_size=100,
     validation_set_size=50,
     target_questions=None,
-    initial_train_dataset=None
+    initial_train_dataset=None,
+    training="random_mask"
 ):
     """Enhanced experiment runner with dynamic K-centers and improved validation resampling."""
     
@@ -160,7 +161,7 @@ def run_enhanced_experiment(
                 variable_id = f"example_{idx}_position_{pos}"
                 arena.predict(variable_id, train=True)
         
-        arena.train(epochs=10, batch_size=batch_size, lr=lr)
+        arena.train(epochs=10, batch_size=batch_size, lr=lr, training=training)
         print("Initial training completed!")
     else:
         arena = AnnotationArena(model, device)
@@ -554,7 +555,7 @@ def run_enhanced_experiment(
     
     # feature_recorder.save_features("features.pik")
     
-    return metrics
+    return metrics, arena.prediction_history
 
 def main():
     parser = argparse.ArgumentParser(description="Run Enhanced Active Learning Experiments with AnnotationArena.")
@@ -590,6 +591,8 @@ def main():
                        help="Size of active subset selected by K-centers each cycle")
     parser.add_argument("--validation_set_size", type=int, default=50, 
                        help="Fixed size for validation set")
+    parser.add_argument("--training_options", type=str, default="random_mask", 
+                       help="function for training")
     
     args = parser.parse_args()
     
@@ -600,7 +603,7 @@ def main():
 
     dataset = args.dataset
     models_path = os.path.join(base_path, "models")
-    results_path = os.path.join(base_path, f"results_enhanced_{dataset}")
+    results_path = os.path.join(base_path, f"results_enhanced_{dataset}_{args.training_options}")
     os.makedirs(results_path, exist_ok=True)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -687,7 +690,7 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                initial_train_dataset=initial_train_dataset, training=args.training_options
             )
 
         elif experiment == "gradient_all":
@@ -700,7 +703,7 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                initial_train_dataset=initial_train_dataset, training=args.training_options
             )
 
         elif experiment == "entropy_all":
@@ -713,7 +716,7 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                initial_train_dataset=initial_train_dataset, training=args.training_options
             )
 
         elif experiment == "random_5":
@@ -726,7 +729,7 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                initial_train_dataset=initial_train_dataset, training=args.training_options
             )
 
         elif experiment == "gradient_voi":
@@ -740,7 +743,7 @@ def main():
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0],
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                initial_train_dataset=initial_train_dataset, training=args.training_options
             )
 
         elif experiment == "gradient_voi_q0_human":
@@ -753,8 +756,8 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0],
-                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size, gradient_top_only=True,
+                initial_train_dataset=initial_train_dataset, training=args.training_options
             )
 
         elif experiment == "gradient_voi_q0_both":
@@ -767,8 +770,8 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0],
-                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size, gradient_top_only=True,
+                initial_train_dataset=initial_train_dataset, training=args.training_options
             )
 
         elif experiment == "gradient_voi_all_questions":
@@ -781,8 +784,8 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0, 1, 2, 3, 4, 5, 6],
-                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size, gradient_top_only=True,
+                initial_train_dataset=initial_train_dataset, training=args.training_options
             )
 
         elif experiment == "variable_gradient_comparison":
@@ -795,8 +798,8 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, 
                 cold_start=args.cold_start,
-                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size, gradient_top_only=True,
+                initial_train_dataset=initial_train_dataset, training=args.training_options
             )
 
         elif experiment == "gradient_entropy":
@@ -809,7 +812,7 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                initial_train_dataset=initial_train_dataset, training=args.training_options
             )
 
         elif experiment == "entropy_voi":
@@ -823,7 +826,7 @@ def main():
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0],
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                initial_train_dataset=initial_train_dataset, training=args.training_options
             )
 
         elif experiment == "gradient_sequential":
@@ -836,13 +839,14 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                initial_train_dataset=initial_train_dataset, training=args.training_options
             )
 
         else:
             print(f"Unknown experiment: {experiment}, skipping")
             continue
-        
+        history = results[1]
+        results = results[0]
         experiment_results[experiment] = results
         
         torch.save(model_copy.state_dict(), os.path.join(models_path, f"enhanced_{experiment}.pth"))
@@ -853,6 +857,9 @@ def main():
         
         with open(os.path.join(results_path, f"{file_name}.json"), "w") as f:
             json.dump(results, f, indent=4)
+
+        with open(os.path.join(results_path, f"{file_name}_history.json"), "w") as f:
+            json.dump(history, f, indent=4)
         
         print(f"\n{'='*60}")
         print(f"EXPERIMENT {experiment.upper()} SUMMARY")

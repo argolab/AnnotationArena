@@ -175,7 +175,7 @@ class DataManager:
             if use_embedding:
                 with open(os.path.join(self.base_path, "questions.json"), "r") as file:
                     question_data = json.load(file)
-                with open(os.path.join(self.base_path, "prompts_and_stories.json"), "r") as file:
+                with open(os.path.join(self.base_path, "prompts_and_stories.json"), "r", encoding="utf-8") as file:
                     text_data = json.load(file)
 
             for text_id in tqdm(texts):
