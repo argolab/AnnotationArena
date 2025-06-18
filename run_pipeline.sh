@@ -17,7 +17,7 @@ module load cuda/12.1
 
 conda activate llm_rubric_env
 
-python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearnerFixed.py --examples_per_cycle 50 \
+python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearnerFixed.py --examples_per_cycle 50 --features_per_example 5 \
  --experiment comparison --loss_type l2 --resample_validation --run_until_exhausted \
  --dataset hanna --runner prabhav --use_embedding True --cold_start True \
- --validation_set_size 100 --active_set_size 100
+ --validation_set_size 50 --active_set_size 100 --epochs_per_cycle 10
