@@ -2016,7 +2016,7 @@ class SelectionFactory:
         elif strategy_name == "badge":
             return BADGESelectionStrategy(model, device)
         elif strategy_name == "combine":
-            return VariableGradientSelectionStrategy(model, device)
+            return NewVariableGradientSelectionStrategy(model, device)
         else:
             raise ValueError(f"Unknown example selection strategy: {strategy_name}")
     
@@ -3084,8 +3084,6 @@ class NewVariableGradientSelectionStrategy(ExampleSelectionStrategy):
             
             return sorted_positions[:num_to_select], sorted_scores[:num_to_select]
 
-
-
 class NewVariableGradientTopOnlySelector:
     
     def __init__(self, model, device=None, num_subset_samples=3):
@@ -3739,7 +3737,6 @@ class NewGradientSelectionStrategy(ExampleSelectionStrategy):
         """Initialize gradient selection strategy."""
         super().__init__("gradient", model, device)
         if gradient_top_only:
-            print("here")
             self.selector = NewGradientTopOnlySelector(model, device)
         else:
             self.selector = GradientSelector(model, device)

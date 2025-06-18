@@ -1713,7 +1713,7 @@ class SelectionFactory:
         elif strategy_name == "badge":
             return BADGESelectionStrategy(model, device)
         elif strategy_name == "combine":
-            return VariableGradientSelectionStrategy(model, device)
+            return NewVariableGradientSelectionStrategy(model, device)
         else:
             raise ValueError(f"Unknown example selection strategy: {strategy_name}")
     
@@ -1741,3 +1741,504 @@ class SelectionFactory:
         example_strategy = SelectionFactory.create_example_strategy(example_strategy_name, model, device)
         feature_strategy = SelectionFactory.create_feature_strategy(feature_strategy_name, model, device)
         return CombinedSelectionStrategy(example_strategy, feature_strategy)
+    
+class NewVariableGradientSelectionStrategy(ExampleSelectionStrategy):
+    """Variable-level gradient-based example selection strategy for Active Learning."""
+    
+    def __init__(self, model, device=None):
+        super().__init__("variable_gradient", model, device)
+        self.selector = NewVariableGradientTopOnlySelector(model, device)
+    
+    def select_examples(self, dataset, num_to_select=300, val_dataset=None, 
+                        num_samples=5, batch_size=32, costs=None, 
+                        num_examples_to_select=50, num_features_per_example=5, **kwargs):
+        """
+        Select variables (masked positions) using gradient alignment.
+        
+        Args:
+            dataset: Dataset to select from
+            num_to_select: Total number of variables to select (fallback if example/feature counts not specified)
+            val_dataset: Validation dataset for gradient computation
+            num_samples: Number of samples for gradient estimation
+            batch_size: Batch size for processing
+            costs: Optional cost dictionary for variables
+            num_examples_to_select: Number of examples to select first (priority ranking)
+            num_features_per_example: Number of features to select per chosen example
+            **kwargs: Additional arguments
+            
+        Returns:
+            Tuple of (selected_variable_positions, selected_scores)
+        """
+        if val_dataset is None:
+            raise ValueError("Validation dataset is required for gradient selection")
+        
+        val_dataloader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+        
+        validation_grad_samples = self.selector.compute_validation_gradient_sampled(
+            self.model, val_dataloader, num_samples=num_samples
+        )
+        
+        # Store scores per example
+        example_scores = {}  # example_idx -> list of variable scores
+        example_variable_positions = {}  # example_idx -> list of (position, score, cost, bc_ratio)
+        
+        dataloader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
+        
+        for batch_idx, batch in enumerate(tqdm(dataloader, desc="Computing variable gradient alignment")):
+            known_questions, inputs, labels, annotators, questions, embeddings = batch
+            inputs, labels, annotators, questions = (
+                inputs.to(self.device), labels.to(self.device), 
+                annotators.to(self.device), questions.to(self.device)
+            )
+            if embeddings is not None:
+                embeddings = embeddings.to(self.device)
+            
+            batch_size_actual = inputs.shape[0]
+            
+            for i in range(batch_size_actual):
+                global_example_idx = batch_idx * batch_size + i
+                
+                masked_positions = []
+                observed_positions = []
+                for j in range(inputs.shape[1]):
+                    if inputs[i, j, 0] == 1:
+                        masked_positions.append(j)
+                    else:
+                        observed_positions.append(j)
+                
+                if not masked_positions:
+                    continue
+                
+                example_input = inputs[i:i+1]
+                example_labels = labels[i:i+1]
+                example_annotator = annotators[i:i+1]
+                example_question = questions[i:i+1]
+                example_embedding = embeddings[i:i+1] if embeddings is not None else None
+                
+                all_variable_grads = self.selector.compute_all_variable_gradients_efficient(
+                    self.model, 
+                    example_input, example_labels, 
+                    example_annotator, example_question, example_embedding,
+                    masked_positions, observed_positions, num_samples=num_samples
+                )
+                
+                # Store scores for this example
+                example_variable_scores = []
+                example_variable_data = []
+                
+                for pos in masked_positions:
+                    if pos not in all_variable_grads:
+                        continue
+                        
+                    variable_grad_dict = all_variable_grads[pos]
+                    variable_grad_dict = self.selector.normalize_gradient(variable_grad_dict)
+                    
+                    alignment_scores = []
+                    for val_grad in validation_grad_samples:
+                        alignment = self.selector.compute_grad_dot_product(val_grad, variable_grad_dict)
+                        alignment_scores.append(alignment)
+                    
+                    cost = 1.0
+                    variable_key = (global_example_idx, pos)
+                    if costs and variable_key in costs:
+                        cost = costs[variable_key]
+                    
+                    avg_alignment = sum(alignment_scores) / len(alignment_scores) if alignment_scores else 0.0
+                    benefit_cost_ratio = avg_alignment / max(cost, 1e-10)
+                    
+                    example_variable_scores.append(avg_alignment)
+                    example_variable_data.append((pos, avg_alignment, cost, benefit_cost_ratio))
+                
+                # Store data for this example
+                if example_variable_scores:
+                    example_scores[global_example_idx] = example_variable_scores
+                    example_variable_positions[global_example_idx] = example_variable_data
+        
+        # If no examples have scores, return empty
+        if not example_scores:
+            return [], []
+        
+        # Calculate average score per example
+        example_avg_scores = {}
+        for example_idx, scores in example_scores.items():
+            example_avg_scores[example_idx] = sum(scores) / len(scores)
+        
+        # Sort examples by average score (descending)
+        sorted_examples = sorted(example_avg_scores.items(), key=lambda x: x[1], reverse=True)
+        
+        # Determine selection strategy
+        if num_examples_to_select is not None and num_features_per_example is not None:
+            # Two-stage selection: first examples, then features within examples
+            selected_examples = sorted_examples[:num_examples_to_select]
+            
+            final_variable_positions = []
+            final_scores = []
+            
+            for example_idx, avg_score in selected_examples:
+                # Get all variables for this example, sorted by score
+                example_variables = example_variable_positions[example_idx]
+                example_variables_sorted = sorted(example_variables, key=lambda x: x[3], reverse=True)  # Sort by benefit_cost_ratio
+                
+                # Select top features from this example
+                selected_variables = example_variables_sorted[:num_features_per_example]
+                
+                for pos, score, cost, bc_ratio in selected_variables:
+                    final_variable_positions.append((example_idx, pos))
+                    final_scores.append(score)
+            
+            return final_variable_positions, final_scores
+        
+        else:
+            # Fallback: original behavior - select top variables globally
+            all_scores = []
+            all_variable_positions = []
+            all_costs = []
+            all_bc_ratios = []
+            
+            for example_idx in example_variable_positions:
+                for pos, score, cost, bc_ratio in example_variable_positions[example_idx]:
+                    all_scores.append(score)
+                    all_variable_positions.append((example_idx, pos))
+                    all_costs.append(cost)
+                    all_bc_ratios.append(bc_ratio)
+            
+            if all_scores:
+                sorted_data = sorted(zip(all_variable_positions, all_scores, all_costs, all_bc_ratios), 
+                                    key=lambda x: x[3], reverse=True)
+                sorted_positions = [pos for pos, _, _, _ in sorted_data]
+                sorted_scores = [score for _, score, _, _ in sorted_data]
+            else:
+                sorted_positions = []
+                sorted_scores = []
+            
+            return sorted_positions[:num_to_select], sorted_scores[:num_to_select]
+
+class NewVariableGradientTopOnlySelector:
+    
+    def __init__(self, model, device=None, num_subset_samples=3):
+        self.model = model
+        self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.num_subset_samples = num_subset_samples  # Number of different subset combinations to try
+
+    def _is_top_layer_param(self, param_name):
+        top_layer_identifiers = ['encoder.layers.5.out']
+        return any(identifier in param_name.lower() for identifier in top_layer_identifiers)
+    
+    def _sample_subset(self, all_positions, min_size=1):
+        """
+        Sample a random subset of positions.
+        
+        Args:
+            all_positions: List of all available positions
+            min_size: Minimum size of subset
+            
+        Returns:
+            list: Randomly sampled subset of positions
+        """
+        if len(all_positions) <= min_size:
+            return all_positions.copy()
+        
+        # Randomly choose subset size (at least min_size, at most all positions)
+        max_size = len(all_positions)
+        subset_size = torch.randint(min_size, max_size + 1, (1,)).item()
+        
+        # Randomly sample positions
+        shuffled = all_positions.copy()
+        torch.manual_seed(torch.randint(0, 10000, (1,)).item())
+        random.shuffle(shuffled)
+        
+        return shuffled[:subset_size]
+    
+    def normalize_gradient(self, grad_dict):
+        """
+        Normalize gradients by their total L2 norm.
+        
+        Args:
+            grad_dict: Dictionary of gradients
+            
+        Returns:
+            dict: Normalized gradients
+        """
+        total_norm_squared = 0.0
+        for name, grad in grad_dict.items():
+            total_norm_squared += torch.sum(grad ** 2).item()
+        
+        if total_norm_squared <= 1e-10:
+            return grad_dict
+        
+        total_norm = math.sqrt(total_norm_squared)
+        normalized_grad_dict = {}
+        
+        for name, grad in grad_dict.items():
+            normalized_grad_dict[name] = grad / total_norm
+        
+        return normalized_grad_dict
+    
+    def compute_grad_dot_product(self, grad_dict1, grad_dict2):
+        """
+        Compute dot product between two gradient dictionaries.
+        
+        Args:
+            grad_dict1: First gradient dictionary
+            grad_dict2: Second gradient dictionary
+            
+        Returns:
+            float: Dot product
+        """
+        dot_product = 0.0
+        
+        for name in grad_dict1:
+            if name in grad_dict2:
+                dot_product += torch.sum(-grad_dict1[name] * grad_dict2[name]).item()
+        
+        return dot_product
+    
+    def compute_all_variable_gradients_efficient(self, model, inputs, labels, annotators, questions, embeddings, masked_positions, observed_positions, num_samples=5):
+        """
+        Compute gradients for all masked positions using the correct approach:
+        1. For each target position (originally masked), generate a fake label
+        2. Take multiple subset samples of all observed features (original + new target)
+        3. Compute loss with full_supervision=True and accumulate gradients
+        
+        Args:
+            model: Model to use for predictions
+            inputs: Input tensor (single example)
+            labels: Label tensor
+            annotators: Annotator indices
+            questions: Question indices
+            embeddings: Embedding tensor
+            masked_positions: List of originally masked positions
+            observed_positions: List of originally observed positions
+            num_samples: Number of samples to compute
+            
+        Returns:
+            dict: Dictionary mapping position -> gradient dictionary
+        """
+        all_position_grads = {pos: {} for pos in masked_positions}
+        
+        for target_pos in masked_positions:
+            # For this target position, compute gradients across multiple samples
+            for sample_idx in range(num_samples):
+                model.train()
+                
+                # Step 1: Generate fake label for target position
+                with torch.no_grad():
+                    temp_outputs = model(inputs, annotators, questions, embeddings)
+                    target_probs = F.softmax(temp_outputs[0, target_pos], dim=0)
+                    sampled_class = torch.multinomial(target_probs, 1).item()
+                    
+                    # Create fake label (one-hot)
+                    fake_label = torch.zeros(model.max_choices, device=self.device)
+                    fake_label[sampled_class] = 1.0
+                
+                # Step 2: Create the new observed set (original observed + target with fake label)
+                all_observed_positions = observed_positions + [target_pos]
+                
+                # Step 3: Take multiple subset samples
+                for subset_sample_idx in range(self.num_subset_samples):
+                    # Sample a subset of observed positions to use
+                    subset_observed = self._sample_subset(all_observed_positions, min_size=1)
+                    
+                    # Create input tensor for computing outputs (keep mask bits as original)
+                    output_inputs = inputs.clone()
+                    output_labels = labels.clone()
+                    
+                    # Update only the subset of observed positions in the output computation
+                    for pos in observed_positions:
+                        if pos in subset_observed:
+                            # Keep original values (already in output_inputs)
+                            pass
+                        else:
+                            # This position is not in subset, keep it masked
+                            pass
+                    
+                    # Set target position with fake label if it's in the subset
+                    if target_pos in subset_observed:
+                        output_inputs[0, target_pos, 0] = 0  # Unmask for output computation
+                        output_inputs[0, target_pos, 1:] = fake_label
+                        output_labels[0, target_pos] = fake_label
+                    
+                    # Create separate input tensor for loss computation (indicates which positions to use actual loss)
+                    loss_inputs = inputs.clone()
+                    loss_labels = output_labels.clone()
+                    
+                    # Set mask bits to 0 for positions where we want actual loss (originally observed + target)
+                    for pos in observed_positions:
+                        loss_inputs[0, pos, 0] = 0  # Use actual loss for originally observed
+                    loss_inputs[0, target_pos, 0] = 0  # Use actual loss for target position
+                    
+                    # Disable gradients for non-top layer parameters
+                    non_top_params = []
+                    for name, param in model.named_parameters():
+                        if not self._is_top_layer_param(name):
+                            if param.requires_grad:
+                                param.requires_grad = False
+                                non_top_params.append(param)
+                    
+                    # Compute outputs with subset of features
+                    model.zero_grad()
+                    outputs = model(output_inputs, annotators, questions, embeddings)
+                    
+                    # Compute loss using loss_inputs to indicate which positions use actual loss
+                    loss = model.compute_total_loss(
+                        outputs, loss_labels, loss_inputs, questions, embeddings,
+                        full_supervision=True
+                    )
+                    
+                    if loss > 0:
+                        loss.backward()
+                        
+                        # Accumulate gradients for this target position
+                        for name, param in model.named_parameters():
+                            if param.requires_grad and param.grad is not None and self._is_top_layer_param(name):
+                                if name not in all_position_grads[target_pos]:
+                                    all_position_grads[target_pos][name] = param.grad.detach().clone()
+                                else:
+                                    all_position_grads[target_pos][name] += param.grad.detach().clone()
+                    
+                    # Re-enable gradients
+                    for param in non_top_params:
+                        param.requires_grad = True
+                    
+                    model.zero_grad()
+        
+        # Average gradients over all samples for each position
+        total_samples = num_samples * self.num_subset_samples
+        if total_samples > 0:
+            for pos in masked_positions:
+                for name in all_position_grads[pos]:
+                    all_position_grads[pos][name] /= total_samples
+        
+        return all_position_grads
+    
+    def compute_validation_gradient_sampled(self, model, val_dataloader, num_samples=5):
+        """
+        Compute validation gradients using the correct approach:
+        1. Sample fake labels for all masked positions
+        2. Take multiple subset samples of all features (masked + observed)
+        3. Compute loss with full_supervision=True and accumulate gradients
+        
+        Args:
+            model: Model to use for predictions
+            val_dataloader: Validation dataloader
+            num_samples: Number of samples to compute
+            
+        Returns:
+            list: List of gradient dictionaries
+        """
+        model.train()
+        grad_samples = []
+        
+        for sample_idx in tqdm(range(num_samples), desc="Computing validation gradients"):
+            temp_grad_dict = {}
+            sample_count = 0
+            
+            for batch in val_dataloader:
+                known_questions, inputs, labels, annotators, questions, embeddings = batch
+                inputs, labels, annotators, questions = (
+                    inputs.to(self.device), labels.to(self.device), 
+                    annotators.to(self.device), questions.to(self.device)
+                )
+
+                if embeddings is not None:
+                    embeddings = embeddings.to(self.device)
+                
+                batch_size = inputs.shape[0]
+                
+                # Process each example in the batch
+                for i in range(batch_size):
+                    # Step 1: Find masked and observed positions
+                    masked_positions = []
+                    observed_positions = []
+                    for j in range(inputs.shape[1]):
+                        if inputs[i, j, 0] == 1:
+                            masked_positions.append(j)
+                        else:
+                            observed_positions.append(j)
+                    
+                    if len(masked_positions) == 0:
+                        continue
+                    
+                    # Step 2: Generate fake labels for all masked positions
+                    fake_labels = {}
+                    with torch.no_grad():
+                        temp_outputs = model(inputs, annotators, questions, embeddings)
+                        for pos in masked_positions:
+                            pos_probs = F.softmax(temp_outputs[i, pos], dim=0)
+                            sampled_class = torch.multinomial(pos_probs, 1).item()
+                            fake_label = torch.zeros(model.max_choices, device=self.device)
+                            fake_label[sampled_class] = 1.0
+                            fake_labels[pos] = fake_label
+                    
+                    # Step 3: Take multiple subset samples
+                    all_positions = observed_positions + masked_positions
+                    
+                    for subset_sample_idx in range(self.num_subset_samples):
+                        # Sample a subset of all positions
+                        subset_positions = self._sample_subset(all_positions, min_size=1)
+                        
+                        # Create input tensor for computing outputs
+                        output_inputs = inputs.clone()
+                        output_labels = labels.clone()
+                        
+                        # Update positions in the subset for output computation
+                        for pos in subset_positions:
+                            if pos in observed_positions:
+                                # Keep original observed values (already in inputs)
+                                pass
+                            elif pos in masked_positions:
+                                # Use fake labels and unmask
+                                output_inputs[i, pos, 0] = 0  # Unmask for output computation
+                                output_inputs[i, pos, 1:] = fake_labels[pos]
+                                output_labels[i, pos] = fake_labels[pos]
+                        
+                        # Create separate input tensor for loss computation
+                        # Set mask bit to 0 for ALL positions to use actual loss everywhere
+                        loss_inputs = output_inputs.clone()
+                        loss_inputs[i, :, 0] = 0  # Use actual loss for all positions
+                        loss_labels = output_labels.clone()
+                        
+                        # Disable gradients for non-top layer parameters
+                        non_top_params = []
+                        for name, param in model.named_parameters():
+                            if not self._is_top_layer_param(name):
+                                if param.requires_grad:
+                                    param.requires_grad = False
+                                    non_top_params.append(param)
+                        
+                        model.zero_grad()
+                        # Compute outputs using output_inputs (with proper masking)
+                        outputs = model(output_inputs, annotators, questions, embeddings)
+                        
+                        # Compute loss using loss_inputs (all positions use actual loss)
+                        example_loss = model.compute_total_loss(
+                            outputs[i:i+1], loss_labels[i:i+1], loss_inputs[i:i+1], 
+                            questions[i:i+1], embeddings[i:i+1] if embeddings is not None else None,
+                            full_supervision=True
+                        )
+                        
+                        if example_loss > 0:
+                            example_loss.backward()
+                            sample_count += 1
+                            
+                            for name, param in model.named_parameters():
+                                if param.grad is not None and self._is_top_layer_param(name):
+                                    if name not in temp_grad_dict:
+                                        temp_grad_dict[name] = param.grad.detach().clone()
+                                    else:
+                                        temp_grad_dict[name] += param.grad.detach().clone()
+                        
+                        # Re-enable gradients
+                        for param in non_top_params:
+                            param.requires_grad = True
+                        
+                        model.zero_grad()
+            
+            if sample_count > 0:
+                for name in temp_grad_dict:
+                    temp_grad_dict[name] /= sample_count
+                
+                normalized_grad_dict = self.normalize_gradient(temp_grad_dict)
+                grad_samples.append(normalized_grad_dict)
+        
+        return grad_samples

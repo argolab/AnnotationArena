@@ -20,10 +20,9 @@ from sklearn.metrics.pairwise import pairwise_distances
 
 from annotationArena import *
 from utils_prabhav import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset
-from visualizations import *
 from imputer import Imputer
 from imputer_embedding import ImputerEmbedding
-from selection_fixed import (
+from selection import (
     SelectionFactory, 
     VOISelectionStrategy, 
     FastVOISelectionStrategy,
@@ -32,7 +31,8 @@ from selection_fixed import (
     EntropyFeatureSelectionStrategy,
     BADGESelectionStrategy,
     ArgmaxVOISelectionStrategy,
-    VariableGradientSelectionStrategy
+    VariableGradientSelectionStrategy,
+    NewVariableGradientSelectionStrategy
 )
 # from feature_recorder import FeatureRecorder
 
@@ -267,21 +267,23 @@ def run_enhanced_experiment(
             example_selector = SelectionFactory.create_example_strategy(
                 example_strategy, model, device, gradient_top_only=gradient_top_only
             )
+
+            print(example_selector)
             
             selected_indices, scores = example_selector.select_examples(
                 active_subset_dataset, 
                 num_to_select=min(examples_per_cycle, len(active_subset)),
                 val_dataset=dataset_val,
-                num_samples=5,
+                num_samples=3,
                 batch_size=batch_size
             )
             
             selected_examples = [active_subset[idx] for idx in selected_indices]
 
         elif example_strategy == "combine":
-            active_subset_dataset = AnnotationDataset([dataset_train.get_data_entry(idx) for idx in active_subset])
 
-            variable_selector = VariableGradientSelectionStrategy(model, device)
+            active_subset_dataset = AnnotationDataset([dataset_train.get_data_entry(idx) for idx in active_subset])
+            variable_selector = NewVariableGradientSelectionStrategy(model, device)
 
             # Calculate total features needed
             total_features_needed = examples_per_cycle * features_per_example
@@ -294,7 +296,7 @@ def run_enhanced_experiment(
                 active_subset_dataset,
                 num_to_select=num_variables_to_request,
                 val_dataset=dataset_val,
-                num_samples=5,
+                num_samples=3,
                 batch_size=batch_size
             )
 
@@ -316,60 +318,12 @@ def run_enhanced_experiment(
                     selected_examples_dict_fixed[global_idx] = []
                 
                 # Add feature if we haven't exceeded per-example limit
-                if len(selected_examples_dict_fixed[global_idx]) < features_per_example:
-                    selected_examples_dict_fixed[global_idx].append(pos)
-                    total_features_selected += 1
-
-            # Second pass: If we still need more features, relax per-example limit
-            if total_features_selected < total_features_needed:
-                print(f"First pass collected {total_features_selected}/{total_features_needed} features")
-                print("Second pass: relaxing per-example limits to fill remaining slots")
-                
-                for (local_idx, pos), score in zip(selected_variables, scores):
-                    if total_features_selected >= total_features_needed:
-                        break
-                        
-                    global_idx = active_subset[local_idx]
-                    
-                    # Skip if already added this position
-                    if global_idx in selected_examples_dict_fixed and pos in selected_examples_dict_fixed[global_idx]:
-                        continue
-                        
-                    # Initialize example if not seen
-                    if global_idx not in selected_examples_dict_fixed:
-                        selected_examples_dict_fixed[global_idx] = []
-                    
-                    # Add feature (no per-example limit in second pass)
-                    selected_examples_dict_fixed[global_idx].append(pos)
-                    total_features_selected += 1
-
-            # Third pass: If still not enough, add any remaining maskable positions
-            if total_features_selected < total_features_needed:
-                print(f"Second pass collected {total_features_selected}/{total_features_needed} features")
-                print("Third pass: adding any remaining maskable positions")
-                
-                for example_idx in active_subset:
-                    if total_features_selected >= total_features_needed:
-                        break
-                        
-                    # Get all maskable positions for this example
-                    masked_positions = dataset_train.get_masked_positions(example_idx)
-                    
-                    # Initialize if not seen
-                    if example_idx not in selected_examples_dict_fixed:
-                        selected_examples_dict_fixed[example_idx] = []
-                    
-                    # Add any positions we haven't selected yet
-                    for pos in masked_positions:
-                        if total_features_selected >= total_features_needed:
-                            break
-                        if pos not in selected_examples_dict_fixed[example_idx]:
-                            selected_examples_dict_fixed[example_idx].append(pos)
-                            total_features_selected += 1
+                #if len(selected_examples_dict_fixed[global_idx]) < features_per_example:
+                selected_examples_dict_fixed[global_idx].append(pos)
+                total_features_selected += 1
 
             # Final selection: All examples that have at least one feature
             selected_examples = list(selected_examples_dict_fixed.keys())
-            selected_examples = selected_examples[:examples_per_cycle] if len(selected_examples) > examples_per_cycle else selected_examples
 
             # Final count verification
             final_feature_count = sum(len(positions) for example, positions in selected_examples_dict_fixed.items() 
@@ -383,15 +337,6 @@ def run_enhanced_experiment(
 
             # Ensure selected_examples_dict contains only selected examples
             selected_examples_dict = {ex: selected_examples_dict_fixed[ex] for ex in selected_examples}
-            
-            # selected_examples_dict = {}
-            # for (local_idx, pos), score in zip(selected_variables, scores):
-            #     global_idx = active_subset[local_idx]
-            #     if global_idx not in selected_examples_dict:
-            #         selected_examples_dict[global_idx] = []
-            #     selected_examples_dict[global_idx].append(pos)
-            
-            # selected_examples = list(selected_examples_dict.keys())[:examples_per_cycle]
 
         else:
             raise ValueError(f"Unknown example strategy: {example_strategy}")
@@ -645,7 +590,8 @@ def main():
         ]
     elif args.experiment == "comparison":
         experiments_to_run = [
-            "gradient_voi_q0_human"
+            "gradient_voi_q0_human",
+            "variable_gradient_comparison"
         ]
     else:
         experiments_to_run = [args.experiment]
@@ -758,7 +704,7 @@ def main():
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0],
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                initial_train_dataset=initial_train_dataset, gradient_top_only=True
             )
 
         elif experiment == "gradient_voi_q0_both":
@@ -772,7 +718,7 @@ def main():
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0],
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                initial_train_dataset=initial_train_dataset, gradient_top_only=True
             )
 
         elif experiment == "gradient_voi_all_questions":
@@ -786,7 +732,7 @@ def main():
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0, 1, 2, 3, 4, 5, 6],
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                initial_train_dataset=initial_train_dataset, gradient_top_only=True
             )
 
         elif experiment == "variable_gradient_comparison":
@@ -800,7 +746,7 @@ def main():
                 run_until_exhausted=args.run_until_exhausted, 
                 cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset
+                initial_train_dataset=initial_train_dataset, gradient_top_only=True
             )
 
         elif experiment == "gradient_entropy":
