@@ -316,16 +316,27 @@ class AnnotationArena:
         Returns:
             dict: Training metrics including losses and example counts
         """
-        if revisit_examples:
-            examples_to_revisit = [i for i, ex in enumerate(self.prediction_history) if ex["needs_revisit"]]
-            examples_to_train = examples_to_revisit
-            if len(examples_to_train) < batch_size * 10:
-                other_examples = [i for i, ex in enumerate(self.prediction_history) if not ex["needs_revisit"]]
-                if other_examples:
-                    examples_to_train.extend(random.sample(other_examples, 
-                                                         min(len(other_examples), batch_size * 10 - len(examples_to_train))))
-        else:
-            examples_to_train = list(range(len(self.prediction_history)))
+        # if revisit_examples:
+        #     examples_to_revisit = [i for i, ex in enumerate(self.prediction_history) if ex["needs_revisit"]]
+        #     examples_to_train = examples_to_revisit
+        #     if len(examples_to_train) < batch_size * 10:
+        #         other_examples = [i for i, ex in enumerate(self.prediction_history) if not ex["needs_revisit"]]
+        #         if other_examples:
+        #             examples_to_train.extend(random.sample(other_examples, 
+        #                                                  min(len(other_examples), batch_size * 10 - len(examples_to_train))))
+        # else:
+        #     examples_to_train = list(range(len(self.prediction_history)))
+
+        # TO DO 
+        '''
+        train_data = {}
+        loop over list(range(len(self.prediction_history))):
+
+            example_idx = examples_to_train[example_idx]
+            train_data[example_idx] = []
+        '''
+
+        examples_to_train = list(range(len(self.prediction_history)))
         
         # Train the model
         epoch_losses = self.model.train_on_examples(
@@ -349,8 +360,11 @@ class AnnotationArena:
             "losses": epoch_losses,
             "avg_loss": avg_loss,
             "examples_trained": len(examples_to_train),
-            "examples_revisited": len(examples_to_revisit) if revisit_examples else 0
+            "examples_revisited": 0
+            # "examples_revisited": len(examples_to_revisit) if revisit_examples else 0
         }
+
+        print(f'Training Metrics - {epoch_losses}, {avg_loss}, {len(examples_to_train)}')
         
         return training_metrics
     
