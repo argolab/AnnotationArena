@@ -143,14 +143,20 @@ def run_enhanced_experiment(
     validation_set_size=50,
     target_questions=None,
     initial_train_dataset=None,
-    training_type='basic'
+    training_type='basic',
+    num_patterns_per_example=5,
+    visible_ratio=0.5
 ):
     """Enhanced experiment runner with dynamic K-centers and improved validation resampling."""
     
     if initial_train_dataset is not None and len(initial_train_dataset) > 0:
+
         arena = AnnotationArena(model, device)
         print(f"Initial training on {len(initial_train_dataset)} clean examples...")
         arena.set_dataset(initial_train_dataset)
+
+        if training_type == 'dynamic_masking':
+            arena.set_dynamic_masking_params(num_patterns_per_example, visible_ratio)
         
         for idx in range(len(initial_train_dataset)):
             arena.register_example(idx, add_all_positions=False)
@@ -162,7 +168,9 @@ def run_enhanced_experiment(
         
         arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, training_type=training_type)
         print("Initial training completed!")
+
     else:
+
         arena = AnnotationArena(model, device)
         arena.set_dataset(dataset_train)
 
@@ -446,6 +454,9 @@ def run_enhanced_experiment(
             for example_idx in selected_examples:
                 if example_idx in active_pool:
                     active_pool.remove(example_idx)
+
+        if training_type == 'dynamic_masking':
+            arena.set_dynamic_masking_params(num_patterns_per_example, visible_ratio)
         
         print(f"Training model for {epochs_per_cycle} epochs...")
         arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, training_type=training_type)
@@ -540,10 +551,16 @@ def main():
                        help="Size of active subset selected by K-centers each cycle")
     parser.add_argument("--validation_set_size", type=int, default=50, 
                        help="Fixed size for validation set")
-    parser.add_argument("--train_option", type=int, default='random_masking', 
-                       help="Type of Training to Use - basic / random_masking")
+    parser.add_argument("--train_option", choices=['basic', 'random_masking', 'dynamic_masking'], default='random_masking', 
+                       help="Type of Training to Use - basic / random_masking / dynamic masking")
     parser.add_argument("--gradient_top_only", type=bool, default=True, 
                        help="Faster Approximation with Top Only")
+    parser.add_argument('--num_patterns_per_example', type=int, default=5, 
+                   help='Number of masking patterns per example for dynamic masking')
+    parser.add_argument('--visible_ratio', type=float, default=0.5,
+                   help='Ratio of observed positions to keep visible in dynamic masking')
+    parser.add_argument('--output_path', type=str,
+                   help='Folder to Save In')
     
     args = parser.parse_args()
     
@@ -554,8 +571,10 @@ def main():
 
     dataset = args.dataset
     models_path = os.path.join(base_path, "models")
-    results_path = os.path.join(base_path, f"results_enhanced_{dataset}")
-    os.makedirs(results_path, exist_ok=True)
+
+    if args.output_path:
+        results_path = os.path.join(base_path, f"results_enhanced_{dataset}", args.output_path)
+        os.makedirs(results_path, exist_ok=True)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
@@ -564,6 +583,10 @@ def main():
     print(f"   K-centers active subset: {args.active_set_size}")
     print(f"   Validation set size: {args.validation_set_size}")
     print(f"   Use embeddings: {args.use_embedding}")
+
+    print("\n ---- ARGUMENTS FOR EXPERIMENT ----")
+    print(args)
+    print("\n")
 
     if args.use_embedding:
         ModelClass = ImputerEmbedding
@@ -595,7 +618,9 @@ def main():
         ]
     elif args.experiment == "comparison":
         experiments_to_run = [
+            "random_5",
             "gradient_voi_q0_human",
+            "gradient_voi_all_questions",
             "variable_gradient_comparison"
         ]
     else:
@@ -642,7 +667,8 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option,
+                num_patterns_per_example=args.num_patterns_per_example, visible_ratio=args.visible_ratio
             )
 
         elif experiment == "gradient_all":
@@ -655,7 +681,8 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option,
+                num_patterns_per_example=args.num_patterns_per_example, visible_ratio=args.visible_ratio
             )
 
         elif experiment == "entropy_all":
@@ -668,7 +695,8 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option,
+                num_patterns_per_example=args.num_patterns_per_example, visible_ratio=args.visible_ratio
             )
 
         elif experiment == "random_5":
@@ -681,7 +709,8 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option,
+                num_patterns_per_example=args.num_patterns_per_example, visible_ratio=args.visible_ratio
             )
 
         elif experiment == "gradient_voi_q0_human":
@@ -695,7 +724,8 @@ def main():
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0],
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option,
+                num_patterns_per_example=args.num_patterns_per_example, visible_ratio=args.visible_ratio
             )
 
         elif experiment == "gradient_voi_q0_both":
@@ -709,7 +739,8 @@ def main():
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0],
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option,
+                num_patterns_per_example=args.num_patterns_per_example, visible_ratio=args.visible_ratio
             )
 
         elif experiment == "gradient_voi_all_questions":
@@ -723,7 +754,8 @@ def main():
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0, 1, 2, 3, 4, 5, 6],
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option,
+                num_patterns_per_example=args.num_patterns_per_example, visible_ratio=args.visible_ratio
             )
 
         elif experiment == "variable_gradient_comparison":
@@ -737,7 +769,8 @@ def main():
                 run_until_exhausted=args.run_until_exhausted, 
                 cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option,
+                num_patterns_per_example=args.num_patterns_per_example, visible_ratio=args.visible_ratio
             )
 
         else:

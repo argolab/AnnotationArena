@@ -734,6 +734,150 @@ class ImputerEmbedding(nn.Module):
         
         return losses
     
+    def train_on_examples_dynamic_masking(self, examples_indices=None, epochs=5, batch_size=32, lr=1e-4, 
+                                     num_patterns_per_example=5, visible_ratio=0.5):
+        """
+        Train model using dynamic masking patterns based on observed variables.
+        
+        Args:
+            examples_indices: Indices of examples to train on (default: all)
+            epochs: Number of training epochs
+            batch_size: Batch size
+            lr: Learning rate
+            num_patterns_per_example: Number of different masking patterns to generate per example
+            visible_ratio: Ratio of observed positions to keep visible (vs masked)
+            
+        Returns:
+            List of training losses
+        """
+        if examples_indices is None:
+            examples_indices = list(range(len(self.training_examples)))
+        
+        if not examples_indices:
+            return []
+        
+        self.train()
+        optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
+        
+        epoch_losses = []
+        
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            batch_count = 0
+            
+            # Generate augmented training instances with dynamic masking
+            augmented_examples = []
+            
+            for idx in examples_indices:
+                original_example = self.training_examples[idx]
+                original_inputs = original_example['inputs']
+                
+                # Identify originally observed positions (mask bit = 0)
+                observed_positions = []
+                for pos in range(original_inputs.shape[0]):
+                    if original_inputs[pos, 0] == 0:
+                        observed_positions.append(pos)
+                
+                if len(observed_positions) == 0:
+                    continue
+                
+                # Generate multiple masking patterns for this example
+                for pattern_idx in range(num_patterns_per_example):
+                    # Create copy of original example
+                    augmented_example = {
+                        'inputs': original_inputs.clone(),
+                        'annotators': original_example['annotators'].clone(),
+                        'questions': original_example['questions'].clone(),
+                        'embeddings': original_example['embeddings'].clone() if original_example['embeddings'] is not None else None,
+                        'weight': original_example['weight'],
+                        'original_observed_mask': (original_inputs[:, 0] == 0).float(),
+                        'original_targets': original_inputs[:, 1:].clone()
+                    }
+                    
+                    # Randomly select which observed positions to keep visible
+                    num_visible = max(1, int(len(observed_positions) * visible_ratio))
+                    if num_visible >= len(observed_positions):
+                        visible_positions = observed_positions.copy()
+                    else:
+                        visible_positions = np.random.choice(
+                            observed_positions, size=num_visible, replace=False
+                        ).tolist()
+                    
+                    # Mask the non-visible observed positions
+                    for pos in observed_positions:
+                        if pos not in visible_positions:
+                            augmented_example['inputs'][pos, 0] = 1  # Set mask bit
+                            augmented_example['inputs'][pos, 1:] = 0  # Clear answer distribution
+                    
+                    augmented_examples.append(augmented_example)
+            
+            # Shuffle augmented examples
+            np.random.shuffle(augmented_examples)
+            
+            # Train in batches
+            for batch_start in range(0, len(augmented_examples), batch_size):
+                batch_examples = augmented_examples[batch_start:batch_start + batch_size]
+                
+                if not batch_examples:
+                    continue
+                
+                # Extract batch data
+                batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
+                batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
+                batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
+                batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device) if batch_examples[0]['embeddings'] is not None else None
+                batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
+                
+                # Extract original targets and observed masks
+                batch_targets = torch.stack([e['original_targets'] for e in batch_examples]).to(self.device)
+                batch_observed_mask = torch.stack([e['original_observed_mask'] for e in batch_examples]).to(self.device)
+                
+                # Forward pass
+                optimizer.zero_grad()
+                outputs = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
+                
+                # Compute loss only for originally observed positions
+                batch_size_actual, seq_len, num_classes = outputs.shape
+                outputs_flat = outputs.view(-1, num_classes)
+                targets_flat = batch_targets.view(-1, num_classes)
+                observed_mask_flat = batch_observed_mask.view(-1)
+                
+                # Compute loss only where originally observed
+                loss_per_position = F.cross_entropy(
+                    outputs_flat, 
+                    targets_flat.argmax(dim=1), 
+                    reduction='none'
+                )
+                
+                # Apply masking and weights
+                weighted_loss = loss_per_position * observed_mask_flat
+                
+                if batch_weights.numel() > 0:
+                    batch_weights_expanded = batch_weights.unsqueeze(1).expand(-1, seq_len).contiguous().view(-1)
+                    weighted_loss = weighted_loss * batch_weights_expanded
+                
+                # Average loss over originally observed positions
+                total_observed = observed_mask_flat.sum()
+                if total_observed > 0:
+                    loss = weighted_loss.sum() / total_observed
+                else:
+                    loss = weighted_loss.sum()
+                
+                # Backward pass
+                loss.backward()
+                optimizer.step()
+                
+                epoch_loss += loss.item()
+                batch_count += 1
+            
+            if batch_count > 0:
+                avg_epoch_loss = epoch_loss / batch_count
+                epoch_losses.append(avg_epoch_loss)
+            else:
+                epoch_losses.append(0.0)
+        
+        return epoch_losses
+    
     def train_with_revisiting(self, dataset, epochs=1, batch_size=8, lr=1e-4):
         """
         Train the model with revisiting examples.
