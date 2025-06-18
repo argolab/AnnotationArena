@@ -303,7 +303,7 @@ class AnnotationArena:
             
         return suggestions
         
-    def train(self, epochs=1, batch_size=8, lr=1e-4, revisit_examples=True):
+    def train(self, epochs=1, batch_size=8, lr=1e-4, revisit_examples=True, training_type='basic'):
         """
         Train imputer model on observed variables with example revisiting.
         
@@ -316,30 +316,19 @@ class AnnotationArena:
         Returns:
             dict: Training metrics including losses and example counts
         """
-        # if revisit_examples:
-        #     examples_to_revisit = [i for i, ex in enumerate(self.prediction_history) if ex["needs_revisit"]]
-        #     examples_to_train = examples_to_revisit
-        #     if len(examples_to_train) < batch_size * 10:
-        #         other_examples = [i for i, ex in enumerate(self.prediction_history) if not ex["needs_revisit"]]
-        #         if other_examples:
-        #             examples_to_train.extend(random.sample(other_examples, 
-        #                                                  min(len(other_examples), batch_size * 10 - len(examples_to_train))))
-        # else:
-        #     examples_to_train = list(range(len(self.prediction_history)))
-
-        # TO DO 
-        '''
-        train_data = {}
-        loop over list(range(len(self.prediction_history))):
-
-            example_idx = examples_to_train[example_idx]
-            train_data[example_idx] = []
-        '''
 
         examples_to_train = list(range(len(self.prediction_history)))
         
         # Train the model
-        epoch_losses = self.model.train_on_examples(
+        if training_type='basic':
+            epoch_losses = self.model.train_on_examples_basic(
+                examples_indices=examples_to_train,
+                epochs=epochs, 
+                batch_size=batch_size, 
+                lr=lr
+            )
+        else:
+            epoch_losses = self.model.train_on_examples_random_masking(
             examples_indices=examples_to_train,
             epochs=epochs, 
             batch_size=batch_size, 
