@@ -20,7 +20,6 @@ from sklearn.metrics.pairwise import pairwise_distances
 
 from annotationArena import *
 from utils_prabhav import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset
-from visualizations import *
 from imputer import Imputer
 from imputer_embedding import ImputerEmbedding
 from selection import (
@@ -144,7 +143,7 @@ def run_enhanced_experiment(
     validation_set_size=50,
     target_questions=None,
     initial_train_dataset=None,
-    training="random_mask"
+    training_type='basic'
 ):
     """Enhanced experiment runner with dynamic K-centers and improved validation resampling."""
     
@@ -161,7 +160,7 @@ def run_enhanced_experiment(
                 variable_id = f"example_{idx}_position_{pos}"
                 arena.predict(variable_id, train=True)
         
-        arena.train(epochs=10, batch_size=batch_size, lr=lr, training=training)
+        arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, training_type=training_type)
         print("Initial training completed!")
     else:
         arena = AnnotationArena(model, device)
@@ -187,7 +186,7 @@ def run_enhanced_experiment(
     annotated_examples = []
     test_overlap_annotations = {}
     cycle_count = 0
-        
+
     arena.set_dataset(dataset_val)
     val_metrics = arena.evaluate(list(range(len(dataset_val))))
     metrics['val_metrics'].append(val_metrics)
@@ -269,6 +268,8 @@ def run_enhanced_experiment(
             example_selector = SelectionFactory.create_example_strategy(
                 example_strategy, model, device, gradient_top_only=gradient_top_only
             )
+
+            print(example_selector)
             
             selected_indices, scores = example_selector.select_examples(
                 active_subset_dataset, 
@@ -281,8 +282,8 @@ def run_enhanced_experiment(
             selected_examples = [active_subset[idx] for idx in selected_indices]
 
         elif example_strategy == "combine":
-            active_subset_dataset = AnnotationDataset([dataset_train.get_data_entry(idx) for idx in active_subset])
 
+            active_subset_dataset = AnnotationDataset([dataset_train.get_data_entry(idx) for idx in active_subset])
             variable_selector = NewVariableGradientSelectionStrategy(model, device)
 
             # Calculate total features needed
@@ -322,56 +323,8 @@ def run_enhanced_experiment(
                 selected_examples_dict_fixed[global_idx].append(pos)
                 total_features_selected += 1
 
-            '''# Second pass: If we still need more features, relax per-example limit
-            if total_features_selected < total_features_needed:
-                print(f"First pass collected {total_features_selected}/{total_features_needed} features")
-                print("Second pass: relaxing per-example limits to fill remaining slots")
-                
-                for (local_idx, pos), score in zip(selected_variables, scores):
-                    if total_features_selected >= total_features_needed:
-                        break
-                        
-                    global_idx = active_subset[local_idx]
-                    
-                    # Skip if already added this position
-                    if global_idx in selected_examples_dict_fixed and pos in selected_examples_dict_fixed[global_idx]:
-                        continue
-                        
-                    # Initialize example if not seen
-                    if global_idx not in selected_examples_dict_fixed:
-                        selected_examples_dict_fixed[global_idx] = []
-                    
-                    # Add feature (no per-example limit in second pass)
-                    selected_examples_dict_fixed[global_idx].append(pos)
-                    total_features_selected += 1
-
-            # Third pass: If still not enough, add any remaining maskable positions
-            if total_features_selected < total_features_needed:
-                print(f"Second pass collected {total_features_selected}/{total_features_needed} features")
-                print("Third pass: adding any remaining maskable positions")
-                
-                for example_idx in active_subset:
-                    if total_features_selected >= total_features_needed:
-                        break
-                        
-                    # Get all maskable positions for this example
-                    masked_positions = dataset_train.get_masked_positions(example_idx)
-                    
-                    # Initialize if not seen
-                    if example_idx not in selected_examples_dict_fixed:
-                        selected_examples_dict_fixed[example_idx] = []
-                    
-                    # Add any positions we haven't selected yet
-                    for pos in masked_positions:
-                        if total_features_selected >= total_features_needed:
-                            break
-                        if pos not in selected_examples_dict_fixed[example_idx]:
-                            selected_examples_dict_fixed[example_idx].append(pos)
-                            total_features_selected += 1
-'''
             # Final selection: All examples that have at least one feature
             selected_examples = list(selected_examples_dict_fixed.keys())
-            #selected_examples = selected_examples[:examples_per_cycle] if len(selected_examples) > examples_per_cycle else selected_examples
 
             # Final count verification
             final_feature_count = sum(len(positions) for example, positions in selected_examples_dict_fixed.items() 
@@ -385,15 +338,6 @@ def run_enhanced_experiment(
 
             # Ensure selected_examples_dict contains only selected examples
             selected_examples_dict = {ex: selected_examples_dict_fixed[ex] for ex in selected_examples}
-            
-            # selected_examples_dict = {}
-            # for (local_idx, pos), score in zip(selected_variables, scores):
-            #     global_idx = active_subset[local_idx]
-            #     if global_idx not in selected_examples_dict:
-            #         selected_examples_dict[global_idx] = []
-            #     selected_examples_dict[global_idx].append(pos)
-            
-            # selected_examples = list(selected_examples_dict.keys())[:examples_per_cycle]
 
         else:
             raise ValueError(f"Unknown example strategy: {example_strategy}")
@@ -504,12 +448,17 @@ def run_enhanced_experiment(
                     active_pool.remove(example_idx)
         
         print(f"Training model for {epochs_per_cycle} epochs...")
-        arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr)
+        arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, training_type=training_type)
         
         arena.set_dataset(dataset_val)
         val_metrics = arena.evaluate(list(range(len(dataset_val))))
         metrics['val_metrics'].append(val_metrics)
         metrics['val_losses'].append(val_metrics["avg_expected_loss"])
+
+        # Print validation metrics for this cycle
+        print(f"Validation - RMSE: {val_metrics['rmse']:.4f}, "
+        f"Pearson: {val_metrics['pearson']:.4f}, "
+        f"Expected Loss: {val_metrics['avg_expected_loss']:.4f}")
         
         arena.set_dataset(dataset_test)
         test_metrics = arena.evaluate(list(range(len(dataset_test))))
@@ -555,7 +504,7 @@ def run_enhanced_experiment(
     
     # feature_recorder.save_features("features.pik")
     
-    return metrics, arena.prediction_history
+    return metrics
 
 def main():
     parser = argparse.ArgumentParser(description="Run Enhanced Active Learning Experiments with AnnotationArena.")
@@ -591,8 +540,10 @@ def main():
                        help="Size of active subset selected by K-centers each cycle")
     parser.add_argument("--validation_set_size", type=int, default=50, 
                        help="Fixed size for validation set")
-    parser.add_argument("--training_options", type=str, default="random_mask", 
-                       help="function for training")
+    parser.add_argument("--train_option", type=str, default='random_masking', 
+                       help="Type of Training to Use - basic / random_masking")
+    parser.add_argument("--gradient_top_only", type=bool, default=True, 
+                       help="Faster Approximation with Top Only")
     
     args = parser.parse_args()
     
@@ -603,7 +554,7 @@ def main():
 
     dataset = args.dataset
     models_path = os.path.join(base_path, "models")
-    results_path = os.path.join(base_path, f"results_enhanced_{dataset}_{args.training_options}")
+    results_path = os.path.join(base_path, f"results_enhanced_{dataset}")
     os.makedirs(results_path, exist_ok=True)
     
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -644,7 +595,8 @@ def main():
         ]
     elif args.experiment == "comparison":
         experiments_to_run = [
-            "gradient_voi_q0_human"
+            "gradient_voi_q0_human",
+            "variable_gradient_comparison"
         ]
     else:
         experiments_to_run = [args.experiment]
@@ -690,7 +642,7 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, training=args.training_options
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
             )
 
         elif experiment == "gradient_all":
@@ -703,7 +655,7 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, training=args.training_options
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
             )
 
         elif experiment == "entropy_all":
@@ -716,7 +668,7 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, training=args.training_options
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
             )
 
         elif experiment == "random_5":
@@ -729,21 +681,7 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, training=args.training_options
-            )
-
-        elif experiment == "gradient_voi":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="gradient", feature_strategy="voi", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
-                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-                device=device, resample_validation=args.resample_validation,
-                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
-                cold_start=args.cold_start, target_questions=[0],
-                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, training=args.training_options
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
             )
 
         elif experiment == "gradient_voi_q0_human":
@@ -756,8 +694,8 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0],
-                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size, gradient_top_only=True,
-                initial_train_dataset=initial_train_dataset, training=args.training_options
+                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
             )
 
         elif experiment == "gradient_voi_q0_both":
@@ -770,8 +708,8 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0],
-                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size, gradient_top_only=True,
-                initial_train_dataset=initial_train_dataset, training=args.training_options
+                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
             )
 
         elif experiment == "gradient_voi_all_questions":
@@ -784,8 +722,8 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
                 cold_start=args.cold_start, target_questions=[0, 1, 2, 3, 4, 5, 6],
-                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size, gradient_top_only=True,
-                initial_train_dataset=initial_train_dataset, training=args.training_options
+                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
             )
 
         elif experiment == "variable_gradient_comparison":
@@ -798,55 +736,14 @@ def main():
                 device=device, resample_validation=args.resample_validation,
                 run_until_exhausted=args.run_until_exhausted, 
                 cold_start=args.cold_start,
-                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size, gradient_top_only=True,
-                initial_train_dataset=initial_train_dataset, training=args.training_options
-            )
-
-        elif experiment == "gradient_entropy":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="gradient", feature_strategy="entropy", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
-                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-                device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
                 active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, training=args.training_options
-            )
-
-        elif experiment == "entropy_voi":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="entropy", feature_strategy="voi", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
-                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-                device=device, resample_validation=args.resample_validation,
-                loss_type=args.loss_type, run_until_exhausted=args.run_until_exhausted,
-                cold_start=args.cold_start, target_questions=[0],
-                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, training=args.training_options
-            )
-
-        elif experiment == "gradient_sequential":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="gradient", feature_strategy="random", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                cycles=args.cycles, examples_per_cycle=args.examples_per_cycle,
-                epochs_per_cycle=args.epochs_per_cycle, batch_size=args.batch_size, lr=args.lr,
-                device=device, resample_validation=args.resample_validation,
-                run_until_exhausted=args.run_until_exhausted, cold_start=args.cold_start,
-                active_set_size=args.active_set_size, validation_set_size=args.validation_set_size,
-                initial_train_dataset=initial_train_dataset, training=args.training_options
+                initial_train_dataset=initial_train_dataset, gradient_top_only=args.gradient_top_only, training_type=args.train_option
             )
 
         else:
             print(f"Unknown experiment: {experiment}, skipping")
             continue
-        history = results[1]
-        results = results[0]
+        
         experiment_results[experiment] = results
         
         torch.save(model_copy.state_dict(), os.path.join(models_path, f"enhanced_{experiment}.pth"))
@@ -857,9 +754,6 @@ def main():
         
         with open(os.path.join(results_path, f"{file_name}.json"), "w") as f:
             json.dump(results, f, indent=4)
-
-        with open(os.path.join(results_path, f"{file_name}_history.json"), "w") as f:
-            json.dump(history, f, indent=4)
         
         print(f"\n{'='*60}")
         print(f"EXPERIMENT {experiment.upper()} SUMMARY")

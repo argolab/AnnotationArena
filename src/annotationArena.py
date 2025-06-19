@@ -320,7 +320,7 @@ class AnnotationArena:
         examples_to_train = list(range(len(self.prediction_history)))
         
         # Train the model
-        if training_type='basic':
+        if training_type=='basic':
             epoch_losses = self.model.train_on_examples_basic(
                 examples_indices=examples_to_train,
                 epochs=epochs, 

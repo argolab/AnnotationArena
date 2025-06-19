@@ -57,6 +57,9 @@ class DataManager:
             bool: Success status
         """
         print(f"Use embedding: {use_embedding}")
+        print(self.base_path)
+        if os.path.exists(os.path.join(self.base_path, "active_pool.json")):
+            return
 
         if use_embedding and not dataset == "hanna":
             raise ValueError("Not yet support other datasets with text embedding")
