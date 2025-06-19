@@ -43,6 +43,12 @@ class AnnotationArena:
         self.prediction_history = []
         self.observation_history = []
         self.training_losses = []
+
+    def set_dynamic_masking_params(self, num_patterns_per_example=5, visible_ratio=0.5):
+        """Set parameters for dynamic masking training."""
+        
+        self.num_patterns_per_example = num_patterns_per_example
+        self.visible_ratio = visible_ratio
         
     def add(self, variable_id, loss_function="cross_entropy", distribution_family="categorical", cost=1.0):
         """
@@ -320,14 +326,23 @@ class AnnotationArena:
         examples_to_train = list(range(len(self.prediction_history)))
         
         # Train the model
-        if training_type=='basic':
+        if training_type == 'basic':
             epoch_losses = self.model.train_on_examples_basic(
                 examples_indices=examples_to_train,
                 epochs=epochs, 
                 batch_size=batch_size, 
                 lr=lr
             )
-        else:
+        elif training_type == 'dynamic_masking':
+            epoch_losses = self.model.train_on_examples_dynamic_masking(
+                examples_indices=examples_to_train,
+                epochs=epochs, 
+                batch_size=batch_size, 
+                lr=lr,
+                num_patterns_per_example=getattr(self, 'num_patterns_per_example', 5),
+                visible_ratio=getattr(self, 'visible_ratio', 0.5)
+            )
+        elif training_type == 'basic':
             epoch_losses = self.model.train_on_examples_random_masking(
             examples_indices=examples_to_train,
             epochs=epochs, 
