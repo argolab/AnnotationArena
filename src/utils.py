@@ -1,7 +1,14 @@
+"""
+Utility and Dataset Creation + Management for Active Learner framework.
+
+Author: Prabhav Singh / Haojun Shi
+"""
+
 import os
 import json
 import random
 import math
+import logging
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -12,70 +19,59 @@ from tqdm.auto import tqdm
 import copy
 import pandas as pd
 from sentence_transformers import SentenceTransformer
+
+logger = logging.getLogger(__name__)
 model = SentenceTransformer('all-MiniLM-L6-v2')
 
-# Setting seeds for reproducibility
 random.seed(90)
 torch.manual_seed(90)
 np.random.seed(90)
 
 class DataManager:
-    """
-    Manages data preparation and handling for annotation experiments.
-    """
+    """Manages data preparation and handling for annotation experiments."""
     
-    def __init__(self, base_path):
-        """Initialize data manager with paths for data storage."""
-
+    def __init__(self, config):
+        """Initialize data manager with config."""
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.base_path = base_path
-        self.paths = {
-            'train': os.path.join(base_path, "initial_train.json"),
-            'validation': os.path.join(base_path, "validation.json"),
-            'test': os.path.join(base_path, "test.json"),
-            'active_pool': os.path.join(base_path, "active_pool.json"),
-            'original_train': os.path.join(base_path, "original_initial_train.json"),
-            'original_validation': os.path.join(base_path, "original_validation.json"),
-            'original_test': os.path.join(base_path, "original_test.json"),
-            'original_active_pool': os.path.join(base_path, "original_active_pool.json"),
-            'gradient_alignment': os.path.join(base_path, "gradient_alignment"),
-            'random': os.path.join(base_path, "random")
-        }
+        self.config = config
+        self.paths = config.get_data_paths()
+        self.fixed_paths = config.get_fixed_paths()
+        logger.info(f"DataManager initialized with config paths")
+        logger.debug(f"Data paths: {self.paths}")
+        logger.debug(f"Fixed paths: {self.fixed_paths}")
     
     def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, dataset="hanna", cold_start=False, use_embedding=False):
-        """
-        Prepare data splits for active learning experiments.
-        
-        Args:
-            num_partition: Total number of examples to use
-            known_human_questions_val: Number of human questions to keep observed in validation set
-            initial_train_ratio: Ratio of data to use for initial training (cold start = 0.0)
-            dataset: Dataset to use ("hanna" or "llm_rubric")
-            cold_start: If True, both LLM and human questions will be unknown in active pool
-            
-        Returns:
-            bool: Success status
-        """
+        """Prepare data splits for active learning experiments."""
+        logger.info(f"Preparing data: num_partition={num_partition}, dataset={dataset}, cold_start={cold_start}, use_embedding={use_embedding}")
         print(f"Use embedding: {use_embedding}")
-        if os.path.exists(os.path.join(self.base_path, "initial_train.json")):
-            print("Data was created before!")
+        print(self.config.INPUT_DATA_DIR)
+        
+        if os.path.exists(self.paths['active_pool']):
+            logger.info("Data already exists, skipping preparation")
             return
+
         if use_embedding and not dataset == "hanna":
             raise ValueError("Not yet support other datasets with text embedding")
         if dataset == "gaussian":
             pass
         try:
-            with open(os.path.join(self.base_path, "gpt-3.5-turbo-data-new.json"), "r") as f:
+            logger.info(f"Loading LLM data from {self.fixed_paths['gpt_data']}")
+            with open(self.fixed_paths['gpt_data'], "r") as f:
                 llm_data = json.load(f)
-            with open(os.path.join(self.base_path, "human-data-new.json"), "r") as f:
+            logger.info(f"Loading human data from {self.fixed_paths['human_data']}")
+            with open(self.fixed_paths['human_data'], "r") as f:
                 human_data = json.load(f)
-        except FileNotFoundError:
+            logger.info(f"Loaded LLM data: {len(llm_data)} entries, Human data: {len(human_data)} entries")
+        except FileNotFoundError as e:
+            logger.error(f"Data files not found: {e}")
             return False
 
-        '''if use_embedding and not os.path.exists(os.path.join(self.base_path, "text_embeddings.json")):
+        if use_embedding and not os.path.exists(os.path.join(self.config.INPUT_DATA_DIR, "text_embeddings.json")):
+            logger.info("Preparing text embeddings with sentence bert")
             print("Preparing all text embeddings with sentence bert")
             self.prepare_text_embeddings(num_partition)
-            print("Done\n")'''
+            print("Done\n")
+            logger.info("Text embeddings preparation completed")
         
         text_ids = list(human_data.keys())
         if dataset == "hanna":
@@ -83,6 +79,7 @@ class DataManager:
         elif dataset == "llm_rubric":
             question_list = ['Q0', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6', 'Q7', 'Q8']
         question_indices = {q: i for i, q in enumerate(question_list)}
+        logger.info(f"Question list: {question_list}")
         
         random.seed(42)
         random.shuffle(text_ids)
@@ -98,37 +95,46 @@ class DataManager:
         active_pool_texts = text_ids[initial_train_size + validation_size + test_size:
                                 initial_train_size + validation_size + test_size + active_pool_size]
         
+        logger.info(f"Data splits - Train: {len(initial_train_texts)}, Val: {len(validation_texts)}, Test: {len(test_texts)}, Active: {len(active_pool_texts)}")
+        
         initial_train_data = []
         validation_data = []
         test_data = []
         active_pool_data = []
 
+        logger.info("Creating annotation data for train split")
         print('-- Creating Annotation for Train --')
         self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        logger.info("Creating annotation data for validation split")
         print('-- Creating Annotation for Validation --')
         self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        logger.info("Creating annotation data for test split")
         print('-- Creating Annotation for Test --')
         self._prepare_entries(test_texts, test_data, 'test', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        logger.info("Creating annotation data for active pool split")
         print('-- Creating Annotation for Active Pool --')
         self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         
+        logger.info("Saving all data splits")
         print('Saving Data')
         for key, data in tqdm(zip(['train', 'validation', 'test', 'active_pool', 'original_train', 'original_validation', 'original_test', 'original_active_pool'],
                              [initial_train_data, validation_data, test_data, active_pool_data, initial_train_data, validation_data, test_data, active_pool_data])):
             with open(self.paths[key], "w") as f:
                 print(self.paths[key])
                 json.dump(data, f)
+            logger.debug(f"Saved {key} with {len(data)} entries to {self.paths[key]}")
 
+        logger.info("Data preparation completed successfully")
         print('ALL DATA CREATED!')
-        
         return True
     
     def prepare_text_embeddings(self, num_partition):
-
-        df = pd.read_csv(os.path.join(self.base_path, "hanna_stories_annotations_updated.csv"))
+        """Prepare text embeddings for HANNA dataset."""
+        logger.info(f"Loading HANNA stories from {self.fixed_paths['hanna_stories']}")
+        df = pd.read_csv(self.fixed_paths['hanna_stories'])
         texts = df['TEXT'].head(num_partition)
+        logger.info(f"Processing {len(texts)} text entries for embeddings")
 
-        # Define a function to extract prompt and story
         def split_text(entry):
             prompt = ""
             story = ""
@@ -139,50 +145,41 @@ class DataManager:
                     story = parts[1].strip()
             return pd.Series([prompt, story])
 
-        # Apply to all 1200 entries
         df_split = texts.apply(split_text)
         df_split.columns = ['Prompt', 'Story']
-
-        # Save as JSON
         data_list = df_split.to_dict(orient='records')
 
-        with open(os.path.join(self.base_path, "prompts_and_stories.json"), 'w', encoding='utf-8') as f:
+        prompts_stories_path = os.path.join(self.config.INPUT_DATA_DIR, "prompts_and_stories.json")
+        with open(prompts_stories_path, 'w', encoding='utf-8') as f:
             json.dump(data_list, f, indent=2, ensure_ascii=False)
+        logger.info(f"Saved prompts and stories to {prompts_stories_path}")
 
+        logger.info("Generating embeddings using SentenceTransformer")
         all_embeddings = []
         for entry in tqdm(data_list):
             all_embeddings.append((model.encode([entry["Story"]])[0, :] + model.encode([entry["Prompt"]])[0, :]).tolist())
-        with open(os.path.join(self.base_path, "text_embeddings.json"), 'w') as f:
-            json.dump(all_embeddings, f, indent=2)
-
-    
-    def _prepare_entries(self, texts, data_list, split_type, llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset, cold_start=False, use_embedding=False):
-        """
-        Prepare data entries for a specific split.
         
-        Args:
-            texts: List of text IDs to process
-            data_list: List to append prepared entries to
-            split_type: Type of data split ('train', 'validation', 'test', 'active_pool')
-            llm_data: Dictionary of LLM-generated answers
-            human_data: Dictionary of human-provided answers
-            question_list: List of question IDs
-            question_indices: Dictionary mapping question IDs to indices
-            known_human_questions_val: Number of human questions to keep observed in validation set
-            dataset: Dataset to use ("hanna" or "llm_rubric")
-            cold_start: If True, both LLM and human questions will be unknown in active pool
-        """
+        embeddings_path = os.path.join(self.config.INPUT_DATA_DIR, "text_embeddings.json")
+        with open(embeddings_path, 'w') as f:
+            json.dump(all_embeddings, f, indent=2)
+        logger.info(f"Saved {len(all_embeddings)} embeddings to {embeddings_path}")
+
+    def _prepare_entries(self, texts, data_list, split_type, llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset, cold_start=False, use_embedding=False):
+        """Prepare data entries for a specific split."""
+        logger.info(f"Preparing {len(texts)} entries for {split_type} split, dataset={dataset}")
+        
         if dataset == "hanna":
             
             if use_embedding:
-                with open(os.path.join(self.base_path, "questions.json"), "r") as file:
+                logger.debug("Loading question data and text data for embeddings")
+                with open(self.fixed_paths['questions'], "r") as file:
                     question_data = json.load(file)
-
-                with open(os.path.join(self.base_path, "prompts_and_stories.json"), "r", encoding="utf-8") as file:
+                with open(os.path.join(self.config.INPUT_DATA_DIR, "prompts_and_stories.json"), "r", encoding="utf-8") as file:
                     text_data = json.load(file)
 
             for text_id in tqdm(texts):
                 if text_id not in llm_data:
+                    logger.debug(f"Skipping text_id {text_id} - not found in LLM data")
                     continue
                 
                 entry = {
@@ -192,25 +189,23 @@ class DataManager:
                     "annotators": [],
                     "questions": [],
                     "orig_split": split_type,
-                    "observation_history": [],  # Track history of observations for this entry
+                    "observation_history": [],
                     "text_embedding": []
                 }
                 
                 annotators = list(human_data[text_id].keys())
+                logger.debug(f"Processing text_id {text_id} with {len(annotators)} annotators")
                 
                 # Process LLM questions
                 for q_idx, question in enumerate(question_list):
                     true_prob = llm_data[text_id][question]
                     
-                    # Determine if this LLM question should be masked based on cold_start and split_type
                     if cold_start and split_type == 'active_pool':
-                        # In cold start mode, mask LLM questions in active pool
-                        mask_bit = 1  # Masked
+                        mask_bit = 1
                         combined_input = [mask_bit] + [0.0] * 5
                         entry["known_questions"].append(0)
                     else:
-                        # Default behavior: LLM questions are known
-                        mask_bit = 0  # Observed
+                        mask_bit = 0
                         combined_input = [mask_bit] + true_prob
                         entry["known_questions"].append(1)
                     
@@ -223,7 +218,6 @@ class DataManager:
                         sentence = text_data[int(text_id)]["Prompt"] + text_data[int(text_id)]["Story"] + question_data[question]
                         embedding = model.encode([sentence])[0, :]
                         entry["text_embedding"].append(embedding.tolist())
-
 
                 # Process human questions
                 for judge_id in annotators:
@@ -245,35 +239,35 @@ class DataManager:
                             raise ValueError(f"Unexpected score type: {true_score}")
                         
                         if split_type == 'active_pool':
-                            mask_bit = 1  # Masked
+                            mask_bit = 1
                             combined_input = [mask_bit] + [0.0] * 5
                             entry["known_questions"].append(0)
                             entry["input"].append(combined_input)
-                            
+
                         elif split_type == 'train':
-                            mask_bit = 0  # Observed
+                            mask_bit = 0
                             combined_input = [mask_bit] + true_prob
                             entry["known_questions"].append(1)
                             entry["input"].append(combined_input)
 
                         elif split_type == 'validation':
                             if q_idx < known_human_questions_val:
-                                mask_bit = 0  # Observed
+                                mask_bit = 0
                                 combined_input = [mask_bit] + true_prob
                                 entry["known_questions"].append(1)
                             else:
-                                mask_bit = 1  # Masked
+                                mask_bit = 1
                                 combined_input = [mask_bit] + [0.0] * 5
                                 entry["known_questions"].append(0)
                             entry["input"].append(combined_input)
-
+                            
                         elif split_type == 'test':
                             if random.random() < 0.5:
-                                mask_bit = 1  # Masked
+                                mask_bit = 1
                                 combined_input = [mask_bit] + [0.0] * 5
                                 entry["known_questions"].append(0)
                             else:
-                                mask_bit = 0  # Observed
+                                mask_bit = 0
                                 combined_input = [mask_bit] + true_prob
                                 entry["known_questions"].append(1)
                             entry["input"].append(combined_input)
@@ -286,17 +280,17 @@ class DataManager:
                             sentence = text_data[int(text_id)]["Prompt"] + text_data[int(text_id)]["Story"] + question_data[question]
                             embedding = model.encode([sentence])[0, :]
                             entry["text_embedding"].append(embedding.tolist())
-                
+
                 data_list.append(entry)
+                logger.debug(f"Created entry for text_id {text_id} with {len(entry['input'])} annotations")
 
         elif dataset == "llm_rubric":
+            logger.info("Processing LLM Rubric dataset entries")
 
             for text_id in texts:
-
                 annotators = list(human_data[text_id].keys())
 
                 for annotator in annotators:
-
                     entry = {
                         "known_questions": [], 
                         "input": [], 
@@ -304,22 +298,19 @@ class DataManager:
                         "annotators": [],
                         "questions": [],
                         "orig_split": split_type,
-                        "observation_history": []  # Track history of observations for this entry
+                        "observation_history": []
                     }
                 
                     # Process LLM questions
                     for q_idx, question in enumerate(question_list):
                         true_prob = llm_data[text_id][question]
                         
-                        # Determine if this LLM question should be masked based on cold_start and split_type
                         if cold_start and split_type in ['active_pool', 'validation']:
-                            # In cold start mode, mask LLM questions in active pool
-                            mask_bit = 1  # Masked
-                            combined_input = [mask_bit] + [0.0] * 4  # Note: llm_rubric uses 4 values
+                            mask_bit = 1
+                            combined_input = [mask_bit] + [0.0] * 4
                             entry["known_questions"].append(0)
                         else:
-                            # Default behavior: LLM questions are known
-                            mask_bit = 0  # Observed
+                            mask_bit = 0
                             combined_input = [mask_bit] + true_prob
                             entry["known_questions"].append(1)
                         
@@ -331,51 +322,51 @@ class DataManager:
                     # Process human questions
                     for q_idx, question in enumerate(question_list):
                         true_score = human_data[text_id][annotator][question]
-                        true_prob = [0.0] * 4  # Note: llm_rubric uses 4 values
+                        true_prob = [0.0] * 4
                         
                         if isinstance(true_score, (int, float)):
                             if true_score % 1 != 0:  
                                 rounded_score = math.ceil(true_score)
-                                rounded_score = max(min(rounded_score, 4), 1)  # Adjusted for 4 values
+                                rounded_score = max(min(rounded_score, 4), 1)
                                 index = rounded_score - 1
                                 true_prob[index] = 1.0
                             else:
-                                true_score = max(min(int(true_score), 4), 1)  # Adjusted for 4 values
+                                true_score = max(min(int(true_score), 4), 1)
                                 index = true_score - 1
                                 true_prob[index] = 1.0
                         else:
                             raise ValueError(f"Unexpected score type: {true_score}")
                         
                         if split_type == 'active_pool':
-                            mask_bit = 1  # Masked
+                            mask_bit = 1
                             combined_input = [mask_bit] + [0.0] * 4
                             entry["known_questions"].append(0)
                             entry["input"].append(combined_input)
-                            
+
                         elif split_type == 'train':
-                            mask_bit = 0  # Observed
+                            mask_bit = 0
                             combined_input = [mask_bit] + true_prob
                             entry["known_questions"].append(1)
                             entry["input"].append(combined_input)
 
                         elif split_type == 'validation':
                             if q_idx < known_human_questions_val:
-                                mask_bit = 0  # Observed
+                                mask_bit = 0
                                 combined_input = [mask_bit] + true_prob
                                 entry["known_questions"].append(1)
                             else:
-                                mask_bit = 1  # Masked
+                                mask_bit = 1
                                 combined_input = [mask_bit] + [0.0] * 4
                                 entry["known_questions"].append(0)
                             entry["input"].append(combined_input)
 
                         elif split_type == 'test':
                             if random.random() < 0.5:
-                                mask_bit = 1  # Masked
+                                mask_bit = 1
                                 combined_input = [mask_bit] + [0.0] * 4
                                 entry["known_questions"].append(0)
                             else:
-                                mask_bit = 0  # Observed
+                                mask_bit = 0
                                 combined_input = [mask_bit] + true_prob
                                 entry["known_questions"].append(1)
                             entry["input"].append(combined_input)
@@ -385,29 +376,24 @@ class DataManager:
                         entry["questions"].append(question_indices[question])
                     
                     data_list.append(entry)
+                    logger.debug(f"Created LLM rubric entry for text_id {text_id}, annotator {annotator}")
 
-            return
+        logger.info(f"Completed preparing {len(data_list)} entries for {split_type} split")
 
 class AnnotationDataset(Dataset):
-    """
-    Dataset class for handling annotated data.
-    """
+    """Dataset class for handling annotated data."""
     
     def __init__(self, data_path_or_list):
-        """
-        Initialize dataset from path or list.
-        
-        Args:
-            data_path_or_list: Either a file path to a JSON file or a list of data entries
-        """
+        """Initialize dataset from path or list."""
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         if isinstance(data_path_or_list, list):
             self.data = data_path_or_list
+            logger.info(f"Created dataset from list with {len(self.data)} entries")
         else:
             with open(data_path_or_list, 'r') as f:
                 self.data = json.load(f)
+            logger.info(f"Loaded dataset from {data_path_or_list} with {len(self.data)} entries")
                 
-        # Add observation history if not present
         for entry in self.data:
             if "observation_history" not in entry:
                 entry["observation_history"] = []
@@ -442,7 +428,8 @@ class AnnotationDataset(Dataset):
         for i in range(len(item['input'])):
             if item['input'][i][0] == 1:
                 masked_positions.append(i)
-                
+        
+        logger.debug(f"Example {idx} has {len(masked_positions)} masked positions")
         return masked_positions
     
     def get_known_positions(self, idx):
@@ -453,11 +440,9 @@ class AnnotationDataset(Dataset):
         for i in range(len(item['input'])):
             if item['input'][i][0] == 0:
                 known_positions.append(i)
-                
+        
+        logger.debug(f"Example {idx} has {len(known_positions)} known positions")
         return known_positions
-
-    def is_position_noisy(self, example_idx, pos):
-        return False
     
     def get_human_positions(self, idx):
         """Get positions of all human annotations."""
@@ -467,7 +452,7 @@ class AnnotationDataset(Dataset):
         for i in range(len(item['annotators'])):
             if item['annotators'][i] >= 0:
                 human_positions.append(i)
-                
+        
         return human_positions
     
     def get_llm_positions(self, idx):
@@ -478,58 +463,19 @@ class AnnotationDataset(Dataset):
         for i in range(len(item['annotators'])):
             if item['annotators'][i] == -1:
                 llm_positions.append(i)
-                
+        
         return llm_positions
-    
-    # def observe_position(self, idx, position):
-    #     """
-    #     Mark a position as observed and update the input tensor.
-        
-    #     Args:
-    #         idx: Example index
-    #         position: Position to observe
-            
-    #     Returns:
-    #         bool: Success status
-    #     """
-    #     item = self.data[idx]
-        
-    #     # Check if already observed
-    #     if item['input'][position][0] == 0:
-    #         return False
-    #     num_class = len(item["answers"][position])
-    #     # Update input tensor
-    #     item['input'][position][0] = 0  # Mark as observed
-    #     for i in range(num_class):  # Assuming 5 classes
-    #         try:
-    #             item['input'][position][i+1] = item['answers'][position][i]
-    #         except IndexError:
-    #             continue
-        
-    #     # Update known_questions
-    #     item['known_questions'][position] = 1
-        
-    #     # Add to observation history
-    #     item['observation_history'].append({
-    #         'position': position,
-    #         'timestamp': len(item['observation_history']),
-    #         'annotator': item['annotators'][position],
-    #         'question': item['questions'][position],
-    #         'answer': item['answers'][position]
-    #     })
-        
-    #     return True
 
     def observe_position(self, idx, position):
-
+        """Mark a position as observed and update the input tensor."""
         item = self.data[idx]
         
-
         if item['input'][position][0] == 0:
+            logger.debug(f"Position {position} in example {idx} already observed")
             return False
         
         num_class = len(item["answers"][position])
-        item['input'][position][0] = 0  # Mark as observed
+        item['input'][position][0] = 0
         
         if 'true_answers' in item and item['true_answers']:
             training_target = item['true_answers'][position]
@@ -542,10 +488,8 @@ class AnnotationDataset(Dataset):
             except IndexError:
                 continue
         
-        # Update known_questions
         item['known_questions'][position] = 1
         
-        # Add to observation history
         item['observation_history'].append({
             'position': position,
             'timestamp': len(item['observation_history']),
@@ -554,29 +498,24 @@ class AnnotationDataset(Dataset):
             'answer': item['answers'][position] 
         })
         
+        logger.debug(f"Observed position {position} in example {idx}, annotator {item['annotators'][position]}, question {item['questions'][position]}")
         return True
     
     def save(self, path):
         """Save dataset to a JSON file."""
         with open(path, 'w') as f:
             json.dump(self.data, f)
+        logger.info(f"Saved dataset to {path}")
     
     def update_data_entry(self, idx, entry):
         """Update a data entry with new values."""
         self.data[idx] = entry
-
+        logger.debug(f"Updated data entry {idx}")
 
 def compute_metrics(preds, true):
-    """
-    Compute evaluation metrics for predictions.
+    """Compute evaluation metrics for predictions."""
+    logger.debug(f"Computing metrics for {len(preds)} predictions")
     
-    Args:
-        preds: Numpy array of predictions
-        true: Numpy array of ground truth
-        
-    Returns:
-        dict: Dictionary of metrics
-    """
     rmse = np.sqrt(np.mean((preds - true) ** 2))
     
     try:
@@ -594,20 +533,16 @@ def compute_metrics(preds, true):
     except:
         kendall_val = 0.0
     
-    # Calculate additional error metrics
     mae = np.mean(np.abs(preds - true))
     
-    # Calculate calibration error if we have probability distributions
     if preds.ndim > 1 and preds.shape[1] > 1:
-        # This is a simplified approach for categorical predictions
         pred_class = np.argmax(preds, axis=1)
         true_class = np.argmax(true, axis=1)
         accuracy = np.mean(pred_class == true_class)
     else:
-        # For scalar predictions, use a simple accuracy within 0.5
         accuracy = np.mean(np.abs(preds - true) <= 0.5)
     
-    return {
+    metrics = {
         "rmse": rmse,
         "mae": mae, 
         "pearson": pearson_val, 
@@ -615,54 +550,36 @@ def compute_metrics(preds, true):
         "kendall": kendall_val,
         "accuracy": accuracy
     }
-
+    
+    logger.debug(f"Computed metrics: RMSE={rmse:.4f}, Pearson={pearson_val:.4f}")
+    return metrics
 
 def minimum_bayes_risk_l2(distribution):
-    """
-    Compute the minimum Bayes risk decision for L2 loss.
-    For L2 loss, this is the mean of the distribution.
-    
-    Args:
-        distribution: PyTorch distribution or tensor of probabilities
-        
-    Returns:
-        float: Minimum Bayes risk decision
-    """
+    """Compute the minimum Bayes risk decision for L2 loss."""
     if hasattr(distribution, 'mean'):
         return distribution.mean.item()
     
-    # For categorical distribution represented as probabilities
     if isinstance(distribution, torch.Tensor):
         values = torch.arange(1, 6, device=distribution.device)
         return torch.sum(distribution * values).item()
     
-    # Numpy fallback
     values = np.arange(1, 6)
     return np.sum(distribution * values)
 
-
 def minimum_bayes_risk_ce(distribution):
-    """
-    Compute the minimum Bayes risk decision for cross-entropy loss.
-    For cross-entropy, this is the most probable class.
-    
-    Args:
-        distribution: Tensor or numpy array of probabilities
-        
-    Returns:
-        int: Most probable class index
-    """
+    """Compute the minimum Bayes risk decision for cross-entropy loss."""
     if isinstance(distribution, torch.Tensor):
         return torch.argmax(distribution).item()
     return np.argmax(distribution)
 
-
 def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotated_examples, 
                                strategy="balanced", update_percentage=25, selected_examples=None, 
                                validation_set_size=50, current_val_indices=None):
-    
+    """Resample validation dataset using various strategies."""
     current_val_size = len(dataset_val)
     validation_example_indices = []
+    
+    logger.info(f"Resampling validation dataset - Strategy: {strategy}, Current size: {current_val_size}")
     
     if strategy == "balanced":
         num_to_update = max(1, int(current_val_size * update_percentage / 100))
@@ -700,6 +617,7 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
             new_dataset_val = AnnotationDataset(new_val_data)
             updated_active_pool = [idx for idx in active_pool if idx not in new_val_indices]
             
+            logger.info(f"Resampled validation set: {len(new_dataset_val)} examples ({len(new_val_indices)} new)")
             print(f"Resampled validation set: {len(new_dataset_val)} examples ({len(new_val_indices)} new)")
             return new_dataset_val, updated_active_pool, validation_example_indices
         
@@ -718,38 +636,35 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
         
         new_dataset_val = AnnotationDataset(new_val_data)
         
+        logger.info(f"Added {examples_added} selected examples to validation set")
         print(f"Added {examples_added} selected examples to validation set (now {len(new_dataset_val)} examples)")
         return new_dataset_val, active_pool, validation_example_indices
 
     elif strategy == "add_selected_partial" and selected_examples:
         new_val_data = []
+        
+        for i in range(current_val_size):
+            new_val_data.append(dataset_val.get_data_entry(i))
+        
         examples_added = 0
+        for idx in selected_examples:
+            if idx not in validation_example_indices and random.random() > 0.5:
+                new_val_data.append(dataset_train.get_data_entry(idx))
+                validation_example_indices.append(idx)
+                examples_added += 1
         
-        added_example = random.sample(annotated_examples, min(len(dataset_val), len(annotated_examples) // 2))
-        remaining_size = len(dataset_val) - len(added_example)
-        remaining_pool = []
-        combined_pool = list(range(len(dataset_train)))
-        for idx in combined_pool:
-            if idx not in added_example:
-                remaining_pool.append(idx)
-        extra_example = random.sample(remaining_pool, remaining_size)
-        validation_pool = added_example + extra_example
-        for idx in validation_pool:
-            new_val_data.append(dataset_train.get_data_entry(idx))
-            validation_example_indices.append(idx)
-            examples_added += 1
-
-        new_dataset_val = AnnotationDataset(new_val_data)  
-        new_active_pool = []
-        for i in combined_pool:
-            if i not in validation_example_indices:
-                new_active_pool.append(i)
+        new_dataset_val = AnnotationDataset(new_val_data)
         
+        logger.info(f"Added {examples_added} selected examples to validation set (partial)")
         print(f"Added {examples_added} selected examples to validation set (now {len(new_dataset_val)} examples)")
-        return new_dataset_val, new_active_pool, validation_example_indices
+        return new_dataset_val, active_pool, validation_example_indices
     
     elif strategy == "fixed_size_resample":
-        combined_pool = list(range(len(dataset_train)))
+        if current_val_indices is None:
+            current_val_indices = list(range(len(dataset_val)))
+        
+        combined_pool = current_val_indices + active_pool
+        
         if len(combined_pool) >= validation_set_size:
             new_val_indices = random.sample(combined_pool, validation_set_size)
         else:
@@ -764,9 +679,9 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
         new_dataset_val = AnnotationDataset(new_val_data)
         validation_example_indices = new_val_indices
         
+        logger.info(f"Fixed size resampled validation set: {len(new_dataset_val)} examples")
         print(f"Fixed size resampled validation set: {len(new_dataset_val)} examples")
         print(f"Updated active pool size: {len(updated_active_pool)}")
-
         
         return new_dataset_val, updated_active_pool, validation_example_indices
 
@@ -802,6 +717,8 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
         new_dataset_val = AnnotationDataset(new_val_data)
         validation_example_indices = new_val_indices
         
+        logger.info(f"Balanced fixed size resampled validation set: {len(new_dataset_val)} examples")
+        logger.info(f"Selected examples: {len(selected_sample)}, Unselected examples: {len(unselected_sample)}")
         print(f"Balanced fixed size resampled validation set: {len(new_dataset_val)} examples")
         print(f"  Selected examples: {len(selected_sample)}, Unselected examples: {len(unselected_sample)}")
         print(f"Updated active pool size: {len(updated_active_pool)}")
@@ -811,6 +728,7 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
     return dataset_val, active_pool, validation_example_indices
 
 if __name__ == "__main__":
-    data_manager = DataManager("../outputs/data_hanna")
-    # data_manager = DataManager("/export/fs06/psingh54/ActiveRubric-Internal/outputs/data")
+    from config import Config
+    config = Config("prabhav")  # or "local"
+    data_manager = DataManager(config)
     data_manager.prepare_data(1200, cold_start=True, use_embedding=True)

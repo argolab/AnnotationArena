@@ -1,3 +1,9 @@
+"""
+Selection {Examples and Variables} for Active Learner framework.
+
+Author: Prabhav Singh / Haojun Shi
+"""
+
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -125,6 +131,7 @@ class RandomExampleSelectionStrategy(ExampleSelectionStrategy):
             list: Indices of selected examples
             list: Scores (set to 1.0) for selected examples
         """
+
         # Get all valid examples (with at least one masked position)
         valid_indices = []
         
@@ -563,87 +570,6 @@ class VOISelectionStrategy(FeatureSelectionStrategy):
         
         return position_vois[:num_to_select]
     
-    # def select_features(self, example_idx, dataset, num_to_select=1, target_questions=None, 
-    #                    loss_type="cross_entropy", costs=None, **kwargs):
-    #     """
-    #     Select features (positions) using VOI within a given example.
-        
-    #     Args:
-    #         example_idx: Index of the example to select features from
-    #         dataset: Dataset containing the example
-    #         num_to_select: Number of features to select
-    #         target_questions: Target questions to compute VOI for
-    #         loss_type: Type of loss to compute
-    #         costs: Dictionary mapping positions to their annotation costs
-    #         **kwargs: Additional arguments
-            
-    #     Returns:
-    #         list: Tuples of (position_idx, benefit, cost, benefit/cost_ratio) for selected positions
-    #     """
-    #     if target_questions is None:
-    #         # Default to first question (Q0)
-    #         target_questions = [0]
-        
-    #     # Convert target questions to indices if needed
-    #     if isinstance(target_questions[0], str):
-    #         question_list = ['Q0', 'Q1', 'Q2', 'Q3', 'Q4', 'Q5', 'Q6']
-    #         target_questions = [question_list.index(q) for q in target_questions if q in question_list]
-        
-    #     # Get masked positions
-    #     masked_positions = dataset.get_masked_positions(example_idx)
-    #     if not masked_positions:
-    #         return []
-        
-    #     # Get data
-    #     known_questions, inputs, answers, annotators, questions, embeddings = dataset[example_idx]
-    #     inputs = inputs.unsqueeze(0).to(self.device)
-    #     answers = answers.unsqueeze(0).to(self.device)
-    #     annotators = annotators.unsqueeze(0).to(self.device)
-    #     questions = questions.unsqueeze(0).to(self.device)
-    #     known_questions = known_questions.unsqueeze(0).to(self.device)
-    #     if embeddings is not None:
-    #         embeddings = embeddings.unsqueeze(0).to(self.device)
-        
-    #     # Find target indices (positions that have the target questions)
-    #     # target_indices = []
-    #     # for q_idx in target_questions:
-    #     #     for i in range(questions.shape[1]):
-    #     #         if questions[0, i].item() == q_idx and annotators[0, i].item() >= 0:  # Human annotation
-    #     #             target_indices.append(i)
-
-    #     target_indices = []
-    #     for q_idx in target_questions:
-    #         for i in range(questions.shape[1]):
-    #             if (questions[0, i].item() == q_idx and 
-    #                 annotators[0, i].item() >= 0 and  # Human annotation (not LLM)
-    #                 not dataset.is_position_noisy(example_idx, i)):  # NOT noisy
-    #                 target_indices.append(i)
-    #                 break  # Take only first original human target per question
-        
-    #     if not target_indices:
-    #         return []
-        
-    #     # Calculate VOI for each masked position
-    #     position_vois = []
-    #     for position in masked_positions:
-    #         # Get cost for this position
-    #         cost = 1.0  # Default cost
-    #         if costs and position in costs:
-    #             cost = costs[position]
-                
-    #         # Compute VOI
-    #         voi, voi_cost_ratio, posterior_loss = self.voi_calculator.compute_voi(
-    #             self.model, inputs, annotators, questions, embeddings, known_questions,
-    #             position, target_indices, loss_type, cost=cost
-    #         )
-            
-    #         position_vois.append((position, voi, cost, voi_cost_ratio))
-        
-    #     # Sort by benefit/cost ratio (highest first)
-    #     position_vois.sort(key=lambda x: x[3], reverse=True)
-        
-    #     # Return top selections
-    #     return position_vois[:num_to_select]
 
 class FastVOISelectionStrategy(FeatureSelectionStrategy):
     """

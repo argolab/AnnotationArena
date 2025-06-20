@@ -1,0 +1,9 @@
+{
+    "Q0": "Overall, how would you rate the quality of the story given the prompt?",
+    "Q1": "Only in terms of relevance, how relevant is the story to the given prompt? Disregard whether they are grounded in the search results or any other parameters to judge the story.",
+    "Q2": "How logically coherent is the response? Does the story make sense? Only consider whether the response flows naturally and maintains internal consistency throughout.",
+    "Q3": "Given the story, how well does it express the characters emotions? Consider whether the response feels emotionally attuned and appropriately responsive to the plot and characters. Ignore all other metrics.",
+    "Q4": "How surprising or unexpected is the story? Does the end of the story cause surpisal? Only consider this metric.",
+    "Q5": "Given this story, how engaging would a reader find it? Is the story capable of engaging readers without feeling bored?",
+    "Q6": "How complex or sophisticated is the story? Is the plot elaborate? Ignore other metrics."
+}
