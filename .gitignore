@@ -197,3 +197,5 @@ cython_debug/
 v1/outputs/
 *.ipynb
 src/input/data/
+src/logs/
+wandb/

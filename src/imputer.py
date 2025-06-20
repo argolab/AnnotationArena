@@ -334,32 +334,17 @@ class ImputerEmbedding(nn.Module):
         return updated_count
     
     def train_on_examples_basic(self, examples_indices=None, epochs=1, batch_size=8, lr=1e-4):
-        """Train the model using current dataset state."""
-        if not self.dataset:
-            logger.error("No dataset set - cannot train")
-            return []
-        
-        logger.info(f"Training basic - epochs: {epochs}, batch_size: {batch_size}, lr: {lr}")
-        
-        # Use training queue indices if no specific examples provided
+        """Train the model on stored examples with prioritized revisiting."""
         if examples_indices is None:
-            if self.examples_to_revisit:
-                # Prioritize examples that need revisiting
-                examples_indices = list(self.examples_to_revisit)
-                logger.info(f"Training on {len(examples_indices)} examples that need revisiting")
-            else:
-                # Use all queue entries
-                examples_indices = list(range(len(self.training_queue)))
-                logger.info(f"Training on all {len(examples_indices)} queue entries")
+            examples_indices = list(range(len(self.training_queue)))
         
         if not examples_indices:
-            logger.warning("No examples to train on")
             return []
         
         self.train()
         optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
-        
         losses = []
+        
         for epoch in range(epochs):
             epoch_loss = 0.0
             batch_count = 0
@@ -369,53 +354,58 @@ class ImputerEmbedding(nn.Module):
             for batch_start in range(0, len(examples_indices), batch_size):
                 batch_indices = examples_indices[batch_start:batch_start + batch_size]
                 
-                # Get current data from dataset using example_idx from training queue
-                batch_data = []
+                # Get current data from dataset using training queue
+                batch_examples = []
                 for queue_idx in batch_indices:
-                    if queue_idx < len(self.training_queue):
-                        queue_entry = self.training_queue[queue_idx]
-                        example_idx = queue_entry['example_idx']
-                        current_data = self.dataset[example_idx]  # Always fresh data
-                        batch_data.append(current_data)
+                    if queue_idx >= len(self.training_queue):
+                        continue
+                    queue_entry = self.training_queue[queue_idx]
+                    example_idx = queue_entry['example_idx']
+                    current_data = self.dataset[example_idx]
+                    
+                    # Prepare example data
+                    known_questions, inputs, answers, annotators, questions, embeddings = current_data
+                    example = {
+                        'inputs': inputs.clone(),
+                        'annotators': annotators.clone(), 
+                        'questions': questions.clone(),
+                        'embeddings': embeddings.clone() if embeddings is not None else torch.zeros(inputs.shape[0], 384),
+                        'weight': queue_entry.get('weight', 1.0)
+                    }
+                    batch_examples.append(example)
                 
-                if not batch_data:
+                if not batch_examples:
                     continue
-                
-                # Prepare batch tensors
-                batch_inputs = torch.stack([data[1] for data in batch_data]).to(self.device)
-                batch_annotators = torch.stack([data[3] for data in batch_data]).to(self.device)
-                batch_questions = torch.stack([data[4] for data in batch_data]).to(self.device)
-                
-                batch_embeddings = None
-                if batch_data[0][5] is not None:
-                    batch_embeddings = torch.stack([data[5] for data in batch_data]).to(self.device)
-                else:
-                    seq_len = batch_inputs.shape[1]
-                    batch_embeddings = torch.zeros(len(batch_data), seq_len, 384).to(self.device)
-                
-                batch_targets = batch_inputs[:, :, 1:].clone()
+                    
+                # Extract batch data
+                batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
+                batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
+                batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
+                batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device)
+                batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
                 
                 optimizer.zero_grad()
                 outputs = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
                 
-                loss = self.compute_log_loss(outputs, batch_targets)
+                # Compute loss on observed positions (where mask bit is 0)
+                batch_targets = batch_inputs[:, :, 1:].clone()
+                observed_mask = (batch_inputs[:, :, 0] == 0).float().unsqueeze(-1).expand_as(outputs)
+                masked_outputs = outputs * observed_mask
+                masked_targets = batch_targets * observed_mask
                 
-                if loss > 0:
+                if observed_mask.sum() > 0:
+                    loss = self.compute_log_loss(masked_outputs, masked_targets, batch_weights)
                     loss.backward()
                     optimizer.step()
-                    epoch_loss += loss.item()
-                    batch_count += 1
                     
-                    # Update individual queue entry losses
+                    # Record individual losses
                     for i, queue_idx in enumerate(batch_indices):
-                        if queue_idx < len(self.training_queue):
+                        if queue_idx < len(self.prediction_history):
                             individual_loss = self.compute_log_loss(
                                 outputs[i:i+1], 
                                 batch_targets[i:i+1]
                             ).item()
-                            # Update prediction history too
-                            if queue_idx < len(self.prediction_history):
-                                self.prediction_history[queue_idx]['loss'] = individual_loss
+                            self.prediction_history[queue_idx]['loss'] = individual_loss
                     
                     if WANDB_AVAILABLE and wandb.run is not None:
                         wandb.log({"batch_loss": loss.item(), "epoch": epoch})
@@ -439,43 +429,28 @@ class ImputerEmbedding(nn.Module):
         
         logger.info(f"Training completed - Final loss: {losses[-1]:.4f}")
         return losses
-    
+
     def train_on_examples_random_masking(self, examples_indices=None, epochs=1, batch_size=8, lr=1e-4):
         """Train with random masking patterns using current dataset state."""
-        if not self.dataset:
-            logger.error("No dataset set - cannot train")
-            return []
-        
-        logger.info(f"Training random masking - epochs: {epochs}, batch_size: {batch_size}")
-        
         if examples_indices is None:
-            if self.examples_to_revisit:
-                examples_indices = list(self.examples_to_revisit)
-            else:
-                examples_indices = list(range(len(self.training_queue)))
+            examples_indices = list(range(len(self.training_queue)))
         
         if not examples_indices:
             return []
         
         self.train()
         optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
+        losses = []
         
+        # Fixed masking patterns from original
         masking_patterns = [
             [0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1],
             [0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0],
             [0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0],
             [0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0],
-            [0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0],
-            [1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0],
-            [0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1],
-            [0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0],
-            [0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0],
-            [0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1],
-            [0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0],
-            [0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0]
+            [0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0]
         ]
         
-        losses = []
         for epoch in range(epochs):
             epoch_loss = 0.0
             batch_count = 0
@@ -485,44 +460,48 @@ class ImputerEmbedding(nn.Module):
             for batch_start in range(0, len(examples_indices), batch_size):
                 batch_indices = examples_indices[batch_start:batch_start + batch_size]
                 
-                # Get current data using training queue
-                batch_data = []
+                # Get current data from dataset using training queue
+                batch_examples = []
                 for queue_idx in batch_indices:
-                    if queue_idx < len(self.training_queue):
-                        queue_entry = self.training_queue[queue_idx]
-                        example_idx = queue_entry['example_idx']
-                        current_data = self.dataset[example_idx]
-                        batch_data.append(current_data)
+                    if queue_idx >= len(self.training_queue):
+                        continue
+                    queue_entry = self.training_queue[queue_idx]
+                    example_idx = queue_entry['example_idx']
+                    current_data = self.dataset[example_idx]
+                    
+                    known_questions, inputs, answers, annotators, questions, embeddings = current_data
+                    example = {
+                        'inputs': inputs.clone(),
+                        'annotators': annotators.clone(),
+                        'questions': questions.clone(), 
+                        'embeddings': embeddings.clone() if embeddings is not None else torch.zeros(inputs.shape[0], 384),
+                        'weight': queue_entry.get('weight', 1.0)
+                    }
+                    batch_examples.append(example)
                 
-                if not batch_data:
+                if not batch_examples:
                     continue
                 
-                batch_inputs = torch.stack([data[1] for data in batch_data]).to(self.device)
-                batch_annotators = torch.stack([data[3] for data in batch_data]).to(self.device)
-                batch_questions = torch.stack([data[4] for data in batch_data]).to(self.device)
+                batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
+                batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
+                batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
+                batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device)
                 
-                batch_embeddings = None
-                if batch_data[0][5] is not None:
-                    batch_embeddings = torch.stack([data[5] for data in batch_data]).to(self.device)
-                else:
-                    seq_len = batch_inputs.shape[1]
-                    batch_embeddings = torch.zeros(len(batch_data), seq_len, 384).to(self.device)
-                
-                # Apply random masking
+                # Apply random masking pattern
+                pattern = masking_patterns[np.random.randint(len(masking_patterns))]
                 temp_inputs = batch_inputs.clone()
-                pattern_idx = np.random.randint(0, len(masking_patterns))
-                pattern = masking_patterns[pattern_idx]
                 
                 for b in range(temp_inputs.shape[0]):
                     for i in range(temp_inputs.shape[1]):
                         q_idx = batch_questions[b, i].item()
                         is_llm = (batch_annotators[b, i].item() == -1)
                         
-                        if temp_inputs[b, i, 0] == 0:
+                        # Only mask positions that are currently observed
+                        if temp_inputs[b, i, 0] == 0:  # Currently observed
                             pattern_pos = 2 * q_idx + (0 if is_llm else 1)
                             if pattern_pos < len(pattern) and pattern[pattern_pos] == 1:
-                                temp_inputs[b, i, 0] = 1
-                                temp_inputs[b, i, 1:] = 0
+                                temp_inputs[b, i, 0] = 1  # Mask it
+                                temp_inputs[b, i, 1:] = 0  # Zero out
                 
                 optimizer.zero_grad()
                 outputs = self(temp_inputs, batch_annotators, batch_questions, batch_embeddings)
@@ -552,88 +531,48 @@ class ImputerEmbedding(nn.Module):
         self.examples_to_revisit.clear()
         
         return losses
-    
+
     def train_on_examples_dynamic_masking(self, examples_indices=None, epochs=5, batch_size=32, lr=1e-4, 
-                                     num_patterns_per_example=5, visible_ratio=0.5):
+                                    num_patterns_per_example=5, visible_ratio=0.5):
         """Train model using dynamic masking patterns based on observed variables."""
-        if not self.dataset:
-            logger.error("No dataset set - cannot train")
-            return []
-        
-        logger.info(f"Training dynamic masking - epochs: {epochs}, patterns: {num_patterns_per_example}, visible_ratio: {visible_ratio}")
-        
         if examples_indices is None:
-            if self.examples_to_revisit:
-                examples_indices = list(self.examples_to_revisit)
-            else:
-                examples_indices = list(range(len(self.training_queue)))
+            examples_indices = list(range(len(self.training_queue)))
         
         if not examples_indices:
             return []
         
         self.train()
         optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
-        
         epoch_losses = []
+        kl_criterion = nn.KLDivLoss(reduction='none', log_target=False)
         
         for epoch in range(epochs):
             epoch_loss = 0.0
             batch_count = 0
             
-            # Generate augmented training instances using current data
-            augmented_examples = []
+            np.random.shuffle(examples_indices)
             
-            for queue_idx in examples_indices:
-                if queue_idx < len(self.training_queue):
+            for batch_start in range(0, len(examples_indices), batch_size):
+                batch_indices = examples_indices[batch_start:batch_start + batch_size]
+                
+                # Get current data from dataset using training queue
+                batch_examples = []
+                for queue_idx in batch_indices:
+                    if queue_idx >= len(self.training_queue):
+                        continue
                     queue_entry = self.training_queue[queue_idx]
                     example_idx = queue_entry['example_idx']
-                    current_data = self.dataset[example_idx]  # Get current data
-                    original_inputs = current_data[1]
+                    current_data = self.dataset[example_idx]
                     
-                    # Find observed positions
-                    observed_positions = []
-                    for pos in range(original_inputs.shape[0]):
-                        if original_inputs[pos, 0] == 0:
-                            observed_positions.append(pos)
-                    
-                    if len(observed_positions) == 0:
-                        continue
-                    
-                    # Generate multiple masking patterns
-                    for pattern_idx in range(num_patterns_per_example):
-                        augmented_example = {
-                            'inputs': original_inputs.clone(),
-                            'annotators': current_data[3].clone(),
-                            'questions': current_data[4].clone(),
-                            'embeddings': current_data[5].clone() if current_data[5] is not None else None,
-                            'weight': queue_entry['weight'],
-                            'original_observed_mask': (original_inputs[:, 0] == 0).float(),
-                            'original_targets': original_inputs[:, 1:].clone()
-                        }
-                        
-                        # Randomly select visible positions
-                        num_visible = max(1, int(len(observed_positions) * visible_ratio))
-                        if num_visible >= len(observed_positions):
-                            visible_positions = observed_positions.copy()
-                        else:
-                            visible_positions = np.random.choice(
-                                observed_positions, size=num_visible, replace=False
-                            ).tolist()
-                        
-                        # Mask non-visible positions
-                        for pos in observed_positions:
-                            if pos not in visible_positions:
-                                augmented_example['inputs'][pos, 0] = 1
-                                augmented_example['inputs'][pos, 1:] = 0
-                        
-                        augmented_examples.append(augmented_example)
-            
-            np.random.shuffle(augmented_examples)
-            
-            # Train in batches
-            for batch_start in range(0, len(augmented_examples), batch_size):
-                batch_end = min(batch_start + batch_size, len(augmented_examples))
-                batch_examples = augmented_examples[batch_start:batch_end]
+                    known_questions, inputs, answers, annotators, questions, embeddings = current_data
+                    batch_examples.append({
+                        'inputs': inputs.clone(),
+                        'annotators': annotators.clone(),
+                        'questions': questions.clone(),
+                        'embeddings': embeddings.clone() if embeddings is not None else torch.zeros(inputs.shape[0], 384),
+                        'weight': queue_entry.get('weight', 1.0),
+                        'original_targets': answers.clone()
+                    })
                 
                 if not batch_examples:
                     continue
@@ -641,25 +580,59 @@ class ImputerEmbedding(nn.Module):
                 batch_inputs = torch.stack([ex['inputs'] for ex in batch_examples]).to(self.device)
                 batch_annotators = torch.stack([ex['annotators'] for ex in batch_examples]).to(self.device)
                 batch_questions = torch.stack([ex['questions'] for ex in batch_examples]).to(self.device)
-                
-                if batch_examples[0]['embeddings'] is not None:
-                    batch_embeddings = torch.stack([ex['embeddings'] for ex in batch_examples]).to(self.device)
-                else:
-                    seq_len = batch_inputs.shape[1]
-                    batch_embeddings = torch.zeros(len(batch_examples), seq_len, 384).to(self.device)
-                
+                batch_embeddings = torch.stack([ex['embeddings'] for ex in batch_examples]).to(self.device)
                 batch_targets = torch.stack([ex['original_targets'] for ex in batch_examples]).to(self.device)
+                batch_weights = torch.tensor([ex['weight'] for ex in batch_examples]).to(self.device)
                 
-                optimizer.zero_grad()
-                outputs = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
+                # Track which positions were originally observed
+                batch_observed_mask = (batch_inputs[:, :, 0] == 0).float()
                 
-                loss = self.compute_log_loss(outputs, batch_targets)
-                
-                if loss > 0:
-                    loss.backward()
-                    optimizer.step()
-                    epoch_loss += loss.item()
-                    batch_count += 1
+                for pattern_idx in range(num_patterns_per_example):
+                    visible_positions = torch.rand_like(batch_observed_mask) < visible_ratio
+                    currently_visible = visible_positions.float()
+                    
+                    # Create masked inputs
+                    temp_inputs = batch_inputs.clone()
+                    temp_inputs[:, :, 0] = (1.0 - currently_visible)  # 1 = masked, 0 = visible
+                    temp_inputs[:, :, 1:] = temp_inputs[:, :, 1:] * currently_visible.unsqueeze(-1)
+                    
+                    optimizer.zero_grad()
+                    outputs = self(temp_inputs, batch_annotators, batch_questions, batch_embeddings)
+                    
+                    # Reshape for loss computation
+                    outputs_flat = outputs.view(-1, outputs.shape[-1])
+                    targets_flat = batch_targets.view(-1, batch_targets.shape[-1])
+                    
+                    # Compute loss only on originally observed AND currently visible positions
+                    loss_mask = batch_observed_mask * currently_visible
+                    loss_mask_flat = loss_mask.view(-1)
+                    
+                    # Use KL divergence loss like original
+                    log_probs = F.log_softmax(outputs_flat, dim=-1)
+                    loss_per_position = kl_criterion(log_probs.unsqueeze(0), targets_flat.unsqueeze(0))
+                    
+                    # Apply masking and weights
+                    weighted_loss = loss_per_position * loss_mask_flat
+                    
+                    if batch_weights.numel() > 0:
+                        batch_weights_expanded = batch_weights.unsqueeze(1).expand(-1, temp_inputs.shape[1]).contiguous().view(-1)
+                        weighted_loss = weighted_loss * batch_weights_expanded
+                    
+                    # Average loss over valid positions
+                    total_valid = loss_mask_flat.sum()
+                    if total_valid > 0:
+                        loss = weighted_loss.sum() / total_valid
+                    else:
+                        loss = weighted_loss.sum()
+                    
+                    if loss > 0:
+                        loss.backward()
+                        optimizer.step()
+                        epoch_loss += loss.item()
+                        batch_count += 1
+                        
+                        if WANDB_AVAILABLE and wandb.run is not None:
+                            wandb.log({"batch_loss": loss.item(), "epoch": epoch})
             
             avg_epoch_loss = epoch_loss / max(1, batch_count)
             epoch_losses.append(avg_epoch_loss)
