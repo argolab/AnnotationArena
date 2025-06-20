@@ -436,11 +436,11 @@ def main():
 
     if args.dataset == "hanna":
         data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, 
-                                dataset=args.dataset, cold_start=False, 
+                                dataset=args.dataset, cold_start=True, 
                                 use_embedding=args.use_embedding)
     elif args.dataset == "llm_rubric":
         data_manager.prepare_data(num_partition=1000, initial_train_ratio=0.0, 
-                                dataset=args.dataset, cold_start=False, 
+                                dataset=args.dataset, cold_start=True, 
                                 use_embedding=args.use_embedding)
 
     train_dataset = AnnotationDataset(data_manager.paths['train'])

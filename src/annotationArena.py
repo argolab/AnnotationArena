@@ -342,7 +342,7 @@ class AnnotationArena:
                 num_patterns_per_example=getattr(self, 'num_patterns_per_example', 5),
                 visible_ratio=getattr(self, 'visible_ratio', 0.5)
             )
-        elif training_type == 'basic':
+        elif training_type == 'random_masking':
             epoch_losses = self.model.train_on_examples_random_masking(
             examples_indices=examples_to_train,
             epochs=epochs, 
@@ -505,7 +505,7 @@ class AnnotationArena:
             metrics = ["rmse", "pearson", "spearman", "kendall"]
             
         if target_questions is None:
-            target_questions = [0]  # Default to Q0
+            target_questions = [0, 1, 2, 3, 4, 5, 6]  # Default to Q0
             
         all_preds = []
         all_true = []
@@ -552,7 +552,7 @@ class AnnotationArena:
         results["avg_expected_loss"] = np.mean(all_losses) if all_losses else 0.0
         
         return results
-
+    
     def get_metrics_history(self):
         """Get the history of training metrics for plotting."""
         return {

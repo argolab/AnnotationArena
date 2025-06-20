@@ -7,6 +7,7 @@ import numpy as np
 from tqdm.auto import tqdm
 import os
 import json
+from torch import nn
 
 # Base paths (for consistency with utils.py)
 BASE_PATH = "/export/fs06/psingh54/ActiveRubric-Internal/outputs"
@@ -758,6 +759,7 @@ class ImputerEmbedding(nn.Module):
         
         self.train()
         optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
+        kl_criterion = torch.nn.KLDivLoss(reduction='batchmean')
         
         epoch_losses = []
         
@@ -836,30 +838,40 @@ class ImputerEmbedding(nn.Module):
                 optimizer.zero_grad()
                 outputs = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
                 
-                # Compute loss only for originally observed positions
+                # Compute loss only for originally observed AND currently visible positions
                 batch_size_actual, seq_len, num_classes = outputs.shape
                 outputs_flat = outputs.view(-1, num_classes)
                 targets_flat = batch_targets.view(-1, num_classes)
-                observed_mask_flat = batch_observed_mask.view(-1)
-                
-                # Compute loss only where originally observed
-                loss_per_position = F.cross_entropy(
-                    outputs_flat, 
-                    targets_flat.argmax(dim=1), 
-                    reduction='none'
-                )
-                
+
+                # Get current mask state (0 = visible, 1 = masked)
+                current_mask = batch_inputs[:, :, 0]
+                currently_visible = (current_mask == 0).float()
+
+                # Combine: originally observed AND currently visible
+                loss_mask = batch_observed_mask * currently_visible
+                loss_mask_flat = loss_mask.view(-1)
+
+                # Compute loss only where mask allows
+                # loss_per_position = F.cross_entropy(
+                #     outputs_flat,
+                #     targets_flat.argmax(dim=1),
+                #     reduction='none'
+                # )
+
+                log_probs = F.log_softmax(outputs_flat, dim=-1)
+                loss_per_position = kl_criterion(log_probs.unsqueeze(0), targets_flat.unsqueeze(0))
+
                 # Apply masking and weights
-                weighted_loss = loss_per_position * observed_mask_flat
-                
+                weighted_loss = loss_per_position * loss_mask_flat
+
                 if batch_weights.numel() > 0:
                     batch_weights_expanded = batch_weights.unsqueeze(1).expand(-1, seq_len).contiguous().view(-1)
                     weighted_loss = weighted_loss * batch_weights_expanded
-                
-                # Average loss over originally observed positions
-                total_observed = observed_mask_flat.sum()
-                if total_observed > 0:
-                    loss = weighted_loss.sum() / total_observed
+
+                # Average loss over valid positions (originally observed AND currently visible)
+                total_valid = loss_mask_flat.sum()
+                if total_valid > 0:
+                    loss = weighted_loss.sum() / total_valid
                 else:
                     loss = weighted_loss.sum()
                 
