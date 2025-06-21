@@ -200,3 +200,4 @@ src/input/data/
 src/logs/
 wandb/
 slurm*
+src/output

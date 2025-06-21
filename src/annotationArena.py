@@ -205,23 +205,28 @@ class AnnotationArena:
     
     def decode(self, variable_id):
         """
-        Return minimum-Bayes-risk value for a variable.
+        Return minimum-Bayes-risk value for a variable and its expected loss.
         
         Args:
             variable_id: Identifier for the variable
             
         Returns:
-            Decoded value
+            tuple: (decoded_value, expected_loss)
         """
         prediction = self.predict(variable_id, train=False)
         if prediction is None:
-            return None
-        
-        # For categorical distributions, return the argmax
+            return None, 1.0
+
         if isinstance(prediction, torch.Tensor):
-            return torch.argmax(prediction).item()
+
+            probs = torch.softmax(prediction, dim=-1)
+            decoded_value = torch.argmax(prediction).item()
+            entropy = -torch.sum(probs * torch.log(probs + 1e-10)).item()
+            expected_loss = entropy
+            
+            return decoded_value, expected_loss
         else:
-            return prediction
+            return prediction, 1.0  # Fallback
     
     def register_example(self, example_idx, add_all_positions=True, costs=None):
         """
@@ -399,13 +404,11 @@ class AnnotationArena:
                     
                     # Predict value and get expected loss
                     if variable_id in self.variables:
-                        pred = self.decode(variable_id)
-                        expected_loss = 1.0  # Default loss
+                        pred, expected_loss = self.decode(variable_id)
                     else:
                         # If not registered, register and predict
                         self.add(variable_id)
-                        pred = self.decode(variable_id)
-                        expected_loss = 1.0  # Default loss
+                        pred, expected_loss = self.decode(variable_id)
                     
                     # Get true value - USE TRUE_ANSWERS for evaluation if available
                     if 'true_answers' in entry:
