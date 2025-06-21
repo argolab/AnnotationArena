@@ -358,7 +358,7 @@ def run_enhanced_experiment(
         logger.info(f"Selected {len(selected_examples)} examples for annotation")
         
         # Track question selections for this cycle
-        question_counts = {f"Q{i}": 0 for i in range(14)}
+        question_counts = {f"Pos-{i}": 0 for i in range(14)}
         total_features_annotated = 0
         cycle_benefit_cost_ratios = []
         cycle_observation_costs = []
@@ -378,7 +378,7 @@ def run_enhanced_experiment(
                         
                         test_entry = dataset_train.get_data_entry(example_idx)
                         test_question = test_entry['questions'][pos]
-                        question_counts[f"Q{test_question}"] += 1
+                        question_counts[f"Pos-{pos}"] += 1
                         
                         if example_idx < len(dataset_test):
                             if example_idx not in test_overlap_annotations:
@@ -422,7 +422,7 @@ def run_enhanced_experiment(
                         
                         test_entry = dataset_train.get_data_entry(example_idx)
                         test_question = test_entry['questions'][pos]
-                        question_counts[f"Q{test_question}"] += 1
+                        question_counts[f"Pos-{pos}"] += 1
                         
                         if example_idx < len(dataset_test):
                             if example_idx not in test_overlap_annotations:
@@ -442,7 +442,7 @@ def run_enhanced_experiment(
                         
                         test_entry = dataset_train.get_data_entry(example_idx)
                         test_question = test_entry['questions'][pos]
-                        question_counts[f"Q{test_question}"] += 1
+                        question_counts[f"Pos-{pos}"] += 1
                         
                         if example_idx < len(dataset_test):
                             if example_idx not in test_overlap_annotations:
