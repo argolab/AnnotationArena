@@ -199,3 +199,4 @@ v1/outputs/
 src/input/data/
 src/logs/
 wandb/
+slurm*
