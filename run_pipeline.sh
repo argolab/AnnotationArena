@@ -21,7 +21,7 @@ wandb login
 
 python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --examples_per_cycle 50 \
-    --experiment comparison \
+    --experiment gradient_voi_q0_human \
     --loss_type cross_entropy \
     --resample_validation \
     --dataset hanna \
@@ -30,14 +30,14 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --cold_start True \
     --validation_set_size 50 \
     --active_set_size 100 \
-    --epochs_per_cycle 10 \
+    --epochs_per_cycle 5 \
     --train_option dynamic_masking \
     --gradient_top_only True \
     --num_patterns_per_example 5 \
     --visible_ratio 0.5 \
     --features_per_example 5 \
     --experiment_name EXHAUST_GVOI0_DM \
-    --log_level INFO \
+    --log_level DEBUG \
     --use_wandb \
     --wandb_project active-learning-hanna \
     --wandb_entity prabhavsingh55221-johns-hopkins-university \

@@ -132,7 +132,8 @@ class DataManager:
         """Prepare text embeddings for HANNA dataset."""
         logger.info(f"Loading HANNA stories from {self.fixed_paths['hanna_stories']}")
         df = pd.read_csv(self.fixed_paths['hanna_stories'])
-        texts = df['TEXT'].head(num_partition)
+        # texts = df['TEXT'].head(num_partition)
+        texts = df['TEXT']
         logger.info(f"Processing {len(texts)} text entries for embeddings")
 
         def split_text(entry):
@@ -201,6 +202,10 @@ class DataManager:
                     true_prob = llm_data[text_id][question]
                     
                     if cold_start and split_type == 'active_pool':
+                        mask_bit = 1
+                        combined_input = [mask_bit] + [0.0] * 5
+                        entry["known_questions"].append(0)
+                    elif cold_start and split_type == 'validation':
                         mask_bit = 1
                         combined_input = [mask_bit] + [0.0] * 5
                         entry["known_questions"].append(0)

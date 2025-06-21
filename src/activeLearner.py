@@ -159,24 +159,10 @@ def run_enhanced_experiment(
 ):
     """Enhanced experiment runner with dynamic K-centers and improved validation resampling."""
     
-    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     logger = logging.getLogger(__name__)
-    logger.info(f"Starting experiment: {example_strategy}, features: {feature_strategy}")
-    
-    metrics = {
-        'val_losses': [],
-        'test_expected_losses': [],
-        'test_annotated_losses': [],
-        'examples_annotated': [],
-        'features_annotated': [],
-        'benefit_cost_ratios': [],
-        'observation_costs': [],
-        'remaining_pool_size': []
-    }
-    
-    active_pool = list(range(len(dataset_train)))
-    selected_examples = []
     
     if initial_train_dataset is not None and len(initial_train_dataset) > 0:
         arena = AnnotationArena(model, device)
@@ -202,40 +188,98 @@ def run_enhanced_experiment(
 
     if training_type == 'dynamic_masking':
         arena.set_dynamic_masking_params(num_patterns_per_example, visible_ratio)
-
-    cycle_count = 0
     
-    while cycle_count < cycles:
-        if run_until_exhausted and len(active_pool) == 0:
-            logger.info("Active pool exhausted, stopping experiment")
-            break
-            
-        if len(active_pool) < examples_per_cycle:
-            examples_per_cycle = len(active_pool)
-            if examples_per_cycle == 0:
-                break
+    metrics = {
+        'val_losses': [],
+        'val_metrics': [],
+        'test_expected_losses': [],
+        'test_annotated_losses': [],
+        'examples_annotated': [],
+        'features_annotated': [],
+        'benefit_cost_ratios': [],
+        'observation_costs': [],
+        'remaining_pool_size': []
+    }
+    
+    active_pool = list(range(len(dataset_train)))
+    annotated_examples = []
+    validation_example_indices = list(range(len(dataset_val)))
+    test_overlap_annotations = {}
+    cycle_count = 0
 
-        logger.info(f"\n=== CYCLE {cycle_count + 1} ===")
+    logger.info(f"Starting experiment: {example_strategy} strategy, {cycles} cycles, {examples_per_cycle} examples/cycle")
+
+    arena.set_dataset(dataset_val)
+    val_metrics = arena.evaluate(list(range(len(dataset_val))))
+    metrics['val_metrics'].append(val_metrics)
+    metrics['val_losses'].append(val_metrics["avg_expected_loss"])
+    
+    arena.set_dataset(dataset_test)
+    test_metrics = arena.evaluate(list(range(len(dataset_test))))
+    metrics['test_expected_losses'].append(test_metrics["avg_expected_loss"])
+    metrics['test_annotated_losses'].append(test_metrics["avg_expected_loss"])
+    
+    metrics['examples_annotated'].append(0)
+    metrics['features_annotated'].append(0)
+    metrics['benefit_cost_ratios'].append(0.0)
+    metrics['observation_costs'].append(0.0)
+    metrics['remaining_pool_size'].append(len(active_pool))
+
+    max_cycles = float('inf') if run_until_exhausted else cycles
+
+    while cycle_count < max_cycles:
+        
+        if not active_pool:
+            logger.info(f"Active pool exhausted after {cycle_count} cycles")
+            break
+    
+        logger.info(f"\n\n\n============================ Cycle {cycle_count + 1}/{cycles} ==============================")
         logger.info(f"Active pool size: {len(active_pool)}")
         
-        if cold_start and len(dataset_train) > 0:
-            embeddings = extract_embeddings_features([dataset_train.get_data_entry(idx) for idx in active_pool])
+        valid_active_pool = []
+        for idx in active_pool:
+            masked_positions = dataset_train.get_masked_positions(idx)
+            if masked_positions:
+                valid_active_pool.append(idx)
+        
+        if len(valid_active_pool) != len(active_pool):
+            logger.info(f"Filtered active pool: {len(valid_active_pool)} (removed examples with no masked positions)")
+            active_pool = valid_active_pool
+        
+        if not active_pool:
+            logger.info("No examples with masked positions remaining")
+            break
+        
+        if resample_validation and cycle_count > 0:
+            logger.info("Resampling validation set...")
+            current_val_indices = list(range(len(dataset_val)))
+            active_pool.extend(current_val_indices)
+            
+            dataset_val, active_pool, validation_example_indices = resample_validation_dataset(
+                dataset_train, dataset_val, active_pool, annotated_examples, 
+                strategy="balanced_fixed_size", 
+                selected_examples=annotated_examples[-examples_per_cycle:] if annotated_examples else [],
+                validation_set_size=validation_set_size
+            )
+        
+        logger.info(f"Applying dynamic K-centers to select {min(active_set_size, len(active_pool))} from {len(active_pool)} examples...")
+        if len(active_pool) > active_set_size:
+            model_embeddings = extract_model_embeddings(dataset_train, active_pool, model, device)
+            selected_subset_indices = greedy_k_centers(model_embeddings, active_set_size, random_seed=42 + cycle_count)
+            active_subset = [active_pool[i] for i in selected_subset_indices]
+            logger.info(f"K-centers selected {len(active_subset)} diverse examples from pool")
         else:
-            embeddings = extract_model_embeddings(dataset_train, active_pool, model, device)
+            active_subset = active_pool.copy()
+            logger.info(f"Pool smaller than target, using all {len(active_subset)} examples")
         
-        k_centers_size = min(active_set_size, len(active_pool))
-        active_subset_indices = greedy_k_centers(embeddings, k_centers_size)
-        active_subset = [active_pool[i] for i in active_subset_indices]
-        
-        logger.info(f"Selected active subset of size {len(active_subset)} using K-centers")
-
         if example_strategy == "random":
-            selected_indices = random.sample(range(len(active_subset)), min(examples_per_cycle, len(active_subset)))
-            selected_examples_current_cycle = [active_subset[idx] for idx in selected_indices]
-
+            selected_examples = random.sample(active_subset, min(examples_per_cycle, len(active_subset)))
+            
         elif example_strategy == "gradient":
             active_subset_dataset = AnnotationDataset([dataset_train.get_data_entry(idx) for idx in active_subset])
-            example_selector = SelectionFactory.create_example_strategy("gradient", model, device)
+            example_selector = SelectionFactory.create_example_strategy(
+                example_strategy, model, device, gradient_top_only=gradient_top_only
+            )
             
             selected_indices, scores = example_selector.select_examples(
                 active_subset_dataset, 
@@ -245,7 +289,23 @@ def run_enhanced_experiment(
                 batch_size=batch_size
             )
             
-            selected_examples_current_cycle = [active_subset[idx] for idx in selected_indices]
+            selected_examples = [active_subset[idx] for idx in selected_indices]
+
+        elif example_strategy == "entropy":
+            active_subset_dataset = AnnotationDataset([dataset_train.get_data_entry(idx) for idx in active_subset])
+            example_selector = SelectionFactory.create_example_strategy(
+                example_strategy, model, device
+            )
+            
+            selected_indices, scores = example_selector.select_examples(
+                active_subset_dataset, 
+                num_to_select=min(examples_per_cycle, len(active_subset)),
+                val_dataset=dataset_val,
+                num_samples=3,
+                batch_size=batch_size
+            )
+            
+            selected_examples = [active_subset[idx] for idx in selected_indices]
 
         elif example_strategy == "combine":
             active_subset_dataset = AnnotationDataset([dataset_train.get_data_entry(idx) for idx in active_subset])
@@ -279,25 +339,34 @@ def run_enhanced_experiment(
                 selected_examples_dict_fixed[global_idx].append(pos)
                 total_features_selected += 1
 
-            selected_examples_current_cycle = list(selected_examples_dict_fixed.keys())[:examples_per_cycle]
-            selected_examples_dict = selected_examples_dict_fixed
+            selected_examples = list(selected_examples_dict_fixed.keys())
+
+            final_feature_count = sum(len(positions) for example, positions in selected_examples_dict_fixed.items() 
+                                        if example in selected_examples)
+
+            logger.info(f"Variable gradient selection summary:")
+            logger.info(f"  Target features: {total_features_needed}")
+            logger.info(f"  Selected features: {final_feature_count}")
+            logger.info(f"  Selected examples: {len(selected_examples)}")
+            logger.info(f"  Avg features per example: {final_feature_count / len(selected_examples) if selected_examples else 0:.1f}")
+
+            selected_examples_dict = {ex: selected_examples_dict_fixed[ex] for ex in selected_examples}
 
         else:
             raise ValueError(f"Unknown example strategy: {example_strategy}")
-
-        for example_idx in selected_examples_current_cycle:
-            selected_examples.append(example_idx)
-            active_pool.remove(example_idx)
-
-        arena.set_dataset(dataset_train)
         
+        logger.info(f"Selected {len(selected_examples)} examples for annotation")
+        
+        # Track question selections for this cycle
+        question_counts = {f"Q{i}": 0 for i in range(14)}
         total_features_annotated = 0
         cycle_benefit_cost_ratios = []
         cycle_observation_costs = []
         selected_variables_info = []
-        test_overlap_annotations = {}
-
-        for example_idx in selected_examples_current_cycle:
+        
+        arena.set_dataset(dataset_train)
+        
+        for example_idx in tqdm(selected_examples, desc="Annotating selected examples"):
             arena.register_example(example_idx, add_all_positions=False)
             
             if observe_all_features:
@@ -305,9 +374,16 @@ def run_enhanced_experiment(
                 for pos in masked_positions:
                     if arena.observe_position(example_idx, pos):
                         total_features_annotated += 1
-                        cycle_benefit_cost_ratios.append(1.0)
-                        cycle_observation_costs.append(1.0)
                         selected_variables_info.append((example_idx, pos))
+                        
+                        test_entry = dataset_train.get_data_entry(example_idx)
+                        test_question = test_entry['questions'][pos]
+                        question_counts[f"Q{test_question}"] += 1
+                        
+                        if example_idx < len(dataset_test):
+                            if example_idx not in test_overlap_annotations:
+                                test_overlap_annotations[example_idx] = []
+                            test_overlap_annotations[example_idx].append(pos)
                         
                         variable_id = f"example_{example_idx}_position_{pos}"
                         arena.predict(variable_id, train=True)
@@ -329,6 +405,8 @@ def run_enhanced_experiment(
                         loss_type=loss_type,
                         **feature_kwargs
                     )
+
+                logger.debug(f"SELECTED FEATURE POSITIONS ARE {selected_features}")
                 
                 for feature_info in selected_features:
                     pos = feature_info[0]
@@ -344,7 +422,7 @@ def run_enhanced_experiment(
                         
                         test_entry = dataset_train.get_data_entry(example_idx)
                         test_question = test_entry['questions'][pos]
-                        test_annotator = test_entry['annotators'][pos]
+                        question_counts[f"Q{test_question}"] += 1
                         
                         if example_idx < len(dataset_test):
                             if example_idx not in test_overlap_annotations:
@@ -353,16 +431,42 @@ def run_enhanced_experiment(
                         
                         variable_id = f"example_{example_idx}_position_{pos}"
                         arena.predict(variable_id, train=True)
+            
+            else:
+                masked_positions = dataset_train.get_masked_positions(example_idx)
+                if masked_positions:
+                    pos = random.choice(masked_positions)
+                    if arena.observe_position(example_idx, pos):
+                        total_features_annotated += 1
+                        selected_variables_info.append((example_idx, pos))
+                        
+                        test_entry = dataset_train.get_data_entry(example_idx)
+                        test_question = test_entry['questions'][pos]
+                        question_counts[f"Q{test_question}"] += 1
+                        
+                        if example_idx < len(dataset_test):
+                            if example_idx not in test_overlap_annotations:
+                                test_overlap_annotations[example_idx] = []
+                            test_overlap_annotations[example_idx].append(pos)
+                        
+                        variable_id = f"example_{example_idx}_position_{pos}"
+                        arena.predict(variable_id, train=True)
+        
+        logger.info(f"Total features annotated this cycle: {total_features_annotated}")
+        
+        annotated_examples.extend(selected_examples)
+        
+        if not cold_start:
+            for example_idx in selected_examples:
+                if example_idx in active_pool:
+                    active_pool.remove(example_idx)
 
-        training_metrics = arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, training_type=training_type)
-        logger.info(f"Training completed - Loss: {training_metrics['avg_loss']:.4f}")
-
-        if resample_validation:
-            logger.info("Resampling validation set...")
-            dataset_val, active_pool, validation_example_indices = resample_validation_dataset(
-                dataset_train, dataset_val, active_pool, selected_examples, validation_set_size
-            )
-
+        if training_type == 'dynamic_masking':
+            arena.set_dynamic_masking_params(num_patterns_per_example, visible_ratio)
+        
+        logger.info(f"Training model for {epochs_per_cycle} epochs...")
+        arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, training_type=training_type)
+        
         # Evaluation using eval.py
         if config and use_wandb:
             evaluator = ModelEvaluator(config, use_wandb)
@@ -377,11 +481,14 @@ def run_enhanced_experiment(
             arena.set_dataset(dataset_test)
             test_metrics = arena.evaluate(list(range(len(dataset_test))))
 
+        metrics['val_metrics'].append(val_metrics)
         metrics['val_losses'].append(val_metrics["avg_expected_loss"])
         logger.info(f"Validation - RMSE: {val_metrics['rmse']:.4f}, "
                    f"Pearson: {val_metrics['pearson']:.4f}, "
                    f"Expected Loss: {val_metrics['avg_expected_loss']:.4f}")
         
+        arena.set_dataset(dataset_test)
+        test_metrics = arena.evaluate(list(range(len(dataset_test))))
         metrics['test_expected_losses'].append(test_metrics["avg_expected_loss"])
         
         annotated_test_dataset = copy.deepcopy(dataset_test)
@@ -404,7 +511,21 @@ def run_enhanced_experiment(
         
         logger.info(f"Test loss: {test_metrics['avg_expected_loss']:.4f}")
         
-        metrics['examples_annotated'].append(len(selected_examples_current_cycle))
+        # Log question selection counts to WandB
+        if use_wandb and WANDB_AVAILABLE and wandb.run is not None:
+            wandb_data = {
+                'cycle': cycle_count,
+                'total_features_selected': total_features_annotated,
+                'examples_selected': len(selected_examples),
+                'pool_size_remaining': len(active_pool)
+            }
+            
+            for question, count in question_counts.items():
+                wandb_data[f"selected_{question}_count"] = count
+            
+            wandb.log(wandb_data)
+        
+        metrics['examples_annotated'].append(len(selected_examples))
         metrics['features_annotated'].append(total_features_annotated)
         metrics['benefit_cost_ratios'].append(np.mean(cycle_benefit_cost_ratios) if cycle_benefit_cost_ratios else 0.0)
         metrics['observation_costs'].append(np.sum(cycle_observation_costs) if cycle_observation_costs else 0.0)
@@ -415,11 +536,7 @@ def run_enhanced_experiment(
     logger.info(f"Experiment complete - {cycle_count} cycles")
     
     metrics['test_metrics'] = test_metrics
-    arena_metrics = {
-        'training_losses': arena.get_training_history(),
-        'observation_history': arena.observation_history,
-        'prediction_history': arena.prediction_history
-    }
+    arena_metrics = arena.get_metrics_history()
     metrics['arena_training_losses'] = arena_metrics["training_losses"]
     metrics['observation_history'] = arena_metrics["observation_history"]
     metrics['prediction_history'] = arena_metrics["prediction_history"]
