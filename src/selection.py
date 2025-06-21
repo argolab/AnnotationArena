@@ -547,7 +547,11 @@ class VOISelectionStrategy(FeatureSelectionStrategy):
         target_indices = []
         for q_idx in target_questions:
             for i in range(questions.shape[1]):
-                if questions[0, i].item() == q_idx and annotators[0, i].item() >= 0:
+                # if questions[0, i].item() == q_idx and annotators[0, i].item() >= 0:
+                #     target_indices.append(i)
+
+                # TODO: @Haojun - Maybe we shouldn't be focusing only on Questions for Human?
+                if questions[0, i].item() == q_idx:
                     target_indices.append(i)
         
         if not target_indices:
@@ -3018,7 +3022,10 @@ class NewVariableGradientTopOnlySelector:
         self.num_subset_samples = num_subset_samples  # Number of different subset combinations to try
 
     def _is_top_layer_param(self, param_name):
-        top_layer_identifiers = ['encoder.layers.5.out']
+
+        # TODO: @Haojun - Changed This
+        # top_layer_identifiers = ['encoder.layers.5.out']
+        top_layer_identifiers = ['encoder.layers.5.smoothing']
         return any(identifier in param_name.lower() for identifier in top_layer_identifiers)
     
     def _sample_subset(self, all_positions, min_size=1):
