@@ -606,7 +606,7 @@ def main():
                        help='Logging level')
     
     args = parser.parse_args()
-    
+    print(args.use_wandb)
     # Initialize config
     config = Config(args.runner)
     config.ensure_directories()

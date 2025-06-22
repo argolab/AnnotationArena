@@ -47,9 +47,9 @@ class DataManager:
         print(f"Use embedding: {use_embedding}")
         print(self.config.INPUT_DATA_DIR)
         
-        '''if os.path.exists(self.paths['active_pool']):
+        if os.path.exists(self.paths['active_pool']):
             logger.info("Data already exists, skipping preparation")
-            return'''
+            return
 
         if use_embedding and not dataset == "hanna":
             raise ValueError("Not yet support other datasets with text embedding")
@@ -105,16 +105,16 @@ class DataManager:
 
         logger.info("Creating annotation data for train split")
         print('-- Creating Annotation for Train --')
-        #self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         logger.info("Creating annotation data for validation split")
         print('-- Creating Annotation for Validation --')
-        #self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         logger.info("Creating annotation data for test split")
         print('-- Creating Annotation for Test --')
         self._prepare_entries(test_texts, test_data, 'test', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         logger.info("Creating annotation data for active pool split")
         print('-- Creating Annotation for Active Pool --')
-        #self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         
         logger.info("Saving all data splits")
         print('Saving Data')
@@ -159,7 +159,7 @@ class DataManager:
         logger.info("Generating embeddings using SentenceTransformer")
         all_embeddings = []
         for entry in tqdm(data_list):
-            all_embeddings.append((model.encode([entry["Story"]])[0, :] + model.encode([entry["Prompt"]])[0, :]).tolist())
+            all_embeddings.append((model.encode([entry["Story"]], show_progress_bar=False)[0, :] + model.encode([entry["Prompt"]], show_progress_bar=False)[0, :]).tolist())
         
         embeddings_path = os.path.join(self.config.INPUT_DATA_DIR, "text_embeddings.json")
         with open(embeddings_path, 'w') as f:
@@ -226,7 +226,7 @@ class DataManager:
 
                     if use_embedding:
                         sentence = text_data[int(text_id)]["Prompt"] + text_data[int(text_id)]["Story"] + question_data[question]
-                        embedding = model.encode([sentence])[0, :]
+                        embedding = model.encode([sentence], show_progress_bar=False)[0, :]
                         entry["text_embedding"].append(embedding.tolist())
 
                 # Process human questions
@@ -283,7 +283,7 @@ class DataManager:
 
                         if use_embedding:
                             sentence = text_data[int(text_id)]["Prompt"] + text_data[int(text_id)]["Story"] + question_data[question]
-                            embedding = model.encode([sentence])[0, :]
+                            embedding = model.encode([sentence], show_progress_bar=False)[0, :]
                             entry["text_embedding"].append(embedding.tolist())
 
                 data_list.append(entry)

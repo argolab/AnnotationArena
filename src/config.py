@@ -17,7 +17,7 @@ class Config:
         if runner == "prabhav":
             self.BASE_PATH = "/export/fs06/psingh54/ActiveRubric-Internal/src"
         else:
-            self.BASE_PATH = "."
+            self.BASE_PATH = "src/"
     
     @property
     def INPUT_DATA_DIR(self):

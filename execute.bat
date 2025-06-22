@@ -1,8 +1,1 @@
-@echo off
-setlocal enabledelayedexpansion
-
-
-python src/post_training.py --model_path outputs/models/enhanced_gradient_voi_all_questions.pth --results_path outputs/results_enhanced_hanna/enhanced_gradient_voi_all_questions_new_loss_random_mask.json --dataset hanna --epochs 20 --batch_size 8 --lr 1e-4 --plot_trends --use_embedding --training_type random_mask
-
-
-
+python src/activeLearner.py --examples_per_cycle 50 --experiment gradient_voi_q0_human --loss_type cross_entropy --resample_validation --dataset hanna --runner haojun --use_embedding True --cold_start True --validation_set_size 50 --active_set_size 100 --epochs_per_cycle 10 --train_option dynamic_masking --gradient_top_only True --num_patterns_per_example 3 --visible_ratio 0.5 --features_per_example 5 --experiment_name EXHAUST_GVOI0_5_Features_5_Epochs_OLDVAL_DM --log_level INFO --wandb_project active-learning-hanna --wandb_entity stonehj-johns-hopkins-university --run_until_exhausted --use_wandb
