@@ -13,6 +13,8 @@ import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple, Any
 from utils import compute_metrics, AnnotationDataset
 from config import Config
+from annotationArena import AnnotationArena
+from selection import SelectionFactory
 
 logger = logging.getLogger(__name__)
 
@@ -200,11 +202,126 @@ class ModelEvaluator:
         
         return evaluation_result
     
+    def evaluate_model_test(self, model, dataset: AnnotationDataset, dataset_name: str = "unknown", target_questions: Optional[List[int]] = None, split_type: str = "test", feature_selection_type: str = "voi") -> Dict[str, Any]:
+        """Comprehensive model evaluation on a dataset using active learning with feature selection."""
+        
+        print(f"Evaluating model on {dataset_name} {split_type} set ({len(dataset)} examples) with {feature_selection_type} feature selection")
+        
+        if target_questions is None:
+            target_questions = list(range(7))
+        all_results = []
+        model.eval()
+        
+        # Initialize arena and feature selector
+        arena = AnnotationArena(model, self.device)
+        arena.set_dataset(dataset)
+        feature_selector = SelectionFactory.create_feature_strategy(feature_selection_type, model, self.device)
+        
+        # Initialize metrics tracking
+        metrics_trends = {
+            'rmse': [],
+            'pearson': [],
+            'spearman': [],
+            'kendall': [],
+            'accuracy': [],
+            'mae': [],
+            'avg_expected_loss': []
+        }
+        
+        # Count total features across all examples
+        total_features = 0
+        for example_idx in range(len(dataset)):
+            data_entry = dataset.get_data_entry(example_idx)
+            total_features += len(data_entry['questions'])
+        
+        print(f"Starting evaluation with {total_features} total features to collect")
+        
+        # Initial evaluation with no features observed (all positions unknown)
+        initial_eval = self.evaluate_model(model, dataset, dataset_name, target_questions, f"{split_type}_initial")
+        for metric_name in metrics_trends.keys():
+            if metric_name in initial_eval['overall']:
+                metrics_trends[metric_name].append(initial_eval['overall'][metric_name])
+            else:
+                metrics_trends[metric_name].append(0.0)
+        
+        print(f"Initial evaluation (0 features): RMSE={initial_eval['overall']['rmse']:.4f}, Pearson={initial_eval['overall']['pearson']:.4f}")
+        
+        # Iteratively select and observe features
+        features_collected = 0
+        
+        while features_collected < total_features:
+            # For each example, select one feature if available
+            features_selected_this_round = 0
+            
+            for example_idx in tqdm(range(len(dataset))):
+                # Select features for this example (limit to 1 per round)
+                selected_features = feature_selector.select_features(
+                    example_idx, dataset, 
+                    num_to_select=1,
+                    loss_type="l2"
+                )
+                
+                # Observe selected features
+                for feature_info in selected_features:
+                    pos = feature_info[0]  # Position index
+                    arena.observe_position(example_idx, pos)
+                    features_selected_this_round += 1
+                    features_collected += 1
+                    
+                    logger.debug(f"Observed feature at example {example_idx}, position {pos} (total collected: {features_collected})")
+                    
+                    # Break after selecting one feature per example per round
+                    break
+            
+            # If no features were selected this round, break
+            if features_selected_this_round == 0:
+                print("No more features available for selection")
+                break
+            
+            # Evaluate model with newly observed features
+            current_eval = self.evaluate_model(model, dataset, dataset_name, target_questions, f"{split_type}_step_{features_collected/len(dataset)}")
+            all_results.append(current_eval)
+            # Track metrics
+            for metric_name in metrics_trends.keys():
+                if metric_name in current_eval['overall']:
+                    metrics_trends[metric_name].append(current_eval['overall'][metric_name])
+                else:
+                    metrics_trends[metric_name].append(0.0)
+            
+            print(f"After {features_collected} features: RMSE={current_eval['overall']['rmse']:.4f}, "
+                    f"Pearson={current_eval['overall']['pearson']:.4f}, "
+                    f"Features selected this round: {features_selected_this_round}")
+            
+            # Early termination if all features have been collected
+            if features_collected >= total_features:
+                break
+        
+        # Final evaluation summary
+        final_metrics = {metric: values[-1] for metric, values in metrics_trends.items() if values}
+        print(f"Final evaluation after {features_collected} features: RMSE={final_metrics.get('rmse', 0):.4f}, "
+                f"Pearson={final_metrics.get('pearson', 0):.4f}")
+        
+        # Return results with trends
+        result = {
+            'dataset_name': dataset_name,
+            'split_type': split_type,
+            'feature_selection_type': feature_selection_type,
+            'total_features_collected': features_collected,
+            'total_features_available': total_features,
+            'metrics_trends': metrics_trends,
+            'final_metrics': final_metrics,
+            'evaluation_steps': len(metrics_trends['rmse'])
+        }
+        
+        print(f"Evaluation completed: {len(metrics_trends['rmse'])} evaluation steps from 0 to {features_collected} features")
+        
+        return result, all_results[len(all_results) // 2]
+    
     def evaluate_active_learning_cycle(self, model, datasets: Dict[str, AnnotationDataset], 
-                                     cycle_num: int, additional_metrics: Optional[Dict] = None) -> Dict[str, Any]:
+                                 cycle_num: int, additional_metrics: Optional[Dict] = None) -> Dict[str, Any]:
         """Evaluate model at the end of an active learning cycle."""
         
-        logger.info(f"Evaluating active learning cycle {cycle_num}")
+        print(f"Evaluating active learning cycle {cycle_num}")
         
         cycle_results = {
             'cycle': cycle_num,
@@ -214,15 +331,20 @@ class ModelEvaluator:
         
         # Evaluate on all provided datasets
         for dataset_name, dataset in datasets.items():
-            eval_result = self.evaluate_model(model, dataset, dataset_name, split_type=dataset_name)
-            cycle_results['evaluations'][dataset_name] = eval_result
+            if not dataset_name == "test":
+                eval_result = self.evaluate_model(model, dataset, dataset_name, split_type=dataset_name)
+                cycle_results['evaluations'][dataset_name] = eval_result
+            else:
+                test_trend, eval_result = self.evaluate_model_test(model, dataset)
+                cycle_results["evaluations"]["test"] = eval_result
+                cycle_results["test_trend"] = test_trend
         
         # Add additional metrics if provided
         if additional_metrics:
             cycle_results['additional_metrics'] = additional_metrics
             logger.debug(f"Added {len(additional_metrics)} additional metrics")
         
-        # Log cycle summary to wandb
+        # Log cycle summary and create wandb plots
         if self.use_wandb and wandb.run is not None:
             wandb_metrics = {f"cycle_{cycle_num}": cycle_num}
             
@@ -234,6 +356,30 @@ class ModelEvaluator:
                     f"{prefix}expected_loss": eval_result['overall']['avg_expected_loss'],
                     f"{prefix}predictions": eval_result['overall']['total_predictions']
                 })
+            
+            # Create wandb plots for test trend if available
+            if 'test_trend' in cycle_results:
+                test_trend = cycle_results['test_trend']
+                metrics_trends = test_trend.get('metrics_trends', {})
+                
+                if 'rmse' in metrics_trends and 'pearson' in metrics_trends:
+                    steps = list(range(len(metrics_trends['rmse'])))
+                    
+                    # Create RMSE trend plot
+                    rmse_data = [[step, rmse] for step, rmse in enumerate(metrics_trends['rmse'])]
+                    rmse_table = wandb.Table(data=rmse_data, columns=["step", "rmse"])
+                    wandb_metrics[f"cycle_{cycle_num}_rmse_trend"] = wandb.plot.line(
+                        rmse_table, "step", "rmse", 
+                        title=f"Cycle {cycle_num} - RMSE Trend"
+                    )
+                    
+                    # Create Pearson trend plot
+                    pearson_data = [[step, pearson] for step, pearson in enumerate(metrics_trends['pearson'])]
+                    pearson_table = wandb.Table(data=pearson_data, columns=["step", "pearson"])
+                    wandb_metrics[f"cycle_{cycle_num}_pearson_trend"] = wandb.plot.line(
+                        pearson_table, "step", "pearson", 
+                        title=f"Cycle {cycle_num} - Pearson Trend"
+                    )
             
             if additional_metrics:
                 wandb_metrics.update({f"cycle_{k}": v for k, v in additional_metrics.items()})

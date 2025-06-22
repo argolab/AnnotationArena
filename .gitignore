@@ -201,3 +201,4 @@ src/logs/
 wandb/
 slurm*
 src/output
+outputs/*

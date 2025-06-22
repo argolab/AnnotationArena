@@ -32,6 +32,7 @@ class DataManager:
     
     def __init__(self, config):
         """Initialize data manager with config."""
+        print("here")
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.config = config
         self.paths = config.get_data_paths()
@@ -46,9 +47,9 @@ class DataManager:
         print(f"Use embedding: {use_embedding}")
         print(self.config.INPUT_DATA_DIR)
         
-        if os.path.exists(self.paths['active_pool']):
+        '''if os.path.exists(self.paths['active_pool']):
             logger.info("Data already exists, skipping preparation")
-            return
+            return'''
 
         if use_embedding and not dataset == "hanna":
             raise ValueError("Not yet support other datasets with text embedding")
@@ -104,16 +105,16 @@ class DataManager:
 
         logger.info("Creating annotation data for train split")
         print('-- Creating Annotation for Train --')
-        self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        #self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         logger.info("Creating annotation data for validation split")
         print('-- Creating Annotation for Validation --')
-        self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        #self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         logger.info("Creating annotation data for test split")
         print('-- Creating Annotation for Test --')
         self._prepare_entries(test_texts, test_data, 'test', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         logger.info("Creating annotation data for active pool split")
         print('-- Creating Annotation for Active Pool --')
-        self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        #self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         
         logger.info("Saving all data splits")
         print('Saving Data')
@@ -209,6 +210,10 @@ class DataManager:
                         mask_bit = 1
                         combined_input = [mask_bit] + [0.0] * 5
                         entry["known_questions"].append(0)
+                    elif split_type == "test":
+                        mask_bit = 1
+                        combined_input = [mask_bit] + [0.0] * 5
+                        entry["known_questions"].append(0)
                     else:
                         mask_bit = 0
                         combined_input = [mask_bit] + true_prob
@@ -267,14 +272,9 @@ class DataManager:
                             entry["input"].append(combined_input)
                             
                         elif split_type == 'test':
-                            if random.random() < 0.5:
-                                mask_bit = 1
-                                combined_input = [mask_bit] + [0.0] * 5
-                                entry["known_questions"].append(0)
-                            else:
-                                mask_bit = 0
-                                combined_input = [mask_bit] + true_prob
-                                entry["known_questions"].append(1)
+                            mask_bit = 1
+                            combined_input = [mask_bit] + [0.0] * 5
+                            entry["known_questions"].append(0)
                             entry["input"].append(combined_input)
                             
                         entry["answers"].append(true_prob)   
