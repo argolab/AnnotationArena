@@ -47,9 +47,9 @@ class DataManager:
         print(f"Use embedding: {use_embedding}")
         print(self.config.INPUT_DATA_DIR)
         
-        '''if os.path.exists(self.paths['active_pool']):
+        if os.path.exists(self.paths['active_pool']):
             logger.info("Data already exists, skipping preparation")
-            return'''
+            return
 
         if use_embedding and not dataset == "hanna":
             raise ValueError("Not yet support other datasets with text embedding")
@@ -105,16 +105,16 @@ class DataManager:
 
         logger.info("Creating annotation data for train split")
         print('-- Creating Annotation for Train --')
-        #self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         logger.info("Creating annotation data for validation split")
         print('-- Creating Annotation for Validation --')
-        #self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        self._prepare_entries(validation_texts, validation_data, 'validation', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         logger.info("Creating annotation data for test split")
         print('-- Creating Annotation for Test --')
         self._prepare_entries(test_texts, test_data, 'test', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         logger.info("Creating annotation data for active pool split")
         print('-- Creating Annotation for Active Pool --')
-        #self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
+        self._prepare_entries(active_pool_texts, active_pool_data, 'active_pool', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
         
         logger.info("Saving all data splits")
         print('Saving Data')
