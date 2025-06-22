@@ -3215,6 +3215,7 @@ class NewVariableGradientTopOnlySelector:
         
         return all_position_grads
     
+    # TODO: Check with @Haojun once.
     def compute_validation_gradient_sampled(self, model, val_dataloader, num_samples=5):
         """
         Compute validation gradients using the correct approach:

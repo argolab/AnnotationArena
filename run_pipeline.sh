@@ -6,7 +6,7 @@
 
 #SBATCH --job-name=ActiveLearner
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=18GB
+#SBATCH --mem-per-cpu=12GB
 #SBATCH --gpus=1
 #SBATCH --partition=gpu
 #SBATCH --account=a100acct
@@ -28,6 +28,7 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --runner prabhav \
     --use_embedding True \
     --cold_start True \
+    --cycles 15 \
     --validation_set_size 50 \
     --active_set_size 100 \
     --epochs_per_cycle 10 \
@@ -36,9 +37,8 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --num_patterns_per_example 3 \
     --visible_ratio 0.5 \
     --features_per_example 5 \
-    --experiment_name EXHAUST_GVOI0_5_Features_5_Epochs_OLDVAL_DM \
+    --experiment_name EXHAUST_GVOI0_5FEATS_10EPOCHS_EVAL_15CYCLES_DM \
     --log_level INFO \
     --use_wandb \
     --wandb_project active-learning-hanna \
     --wandb_entity prabhavsingh55221-johns-hopkins-university \
-    --run_until_exhausted

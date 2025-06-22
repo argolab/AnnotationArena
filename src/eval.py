@@ -9,6 +9,7 @@ import json
 import logging
 import numpy as np
 import torch
+from tqdm import tqdm
 import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple, Any
 from utils import compute_metrics, AnnotationDataset
@@ -205,7 +206,7 @@ class ModelEvaluator:
     def evaluate_model_test(self, model, dataset: AnnotationDataset, dataset_name: str = "unknown", target_questions: Optional[List[int]] = None, split_type: str = "test", feature_selection_type: str = "voi") -> Dict[str, Any]:
         """Comprehensive model evaluation on a dataset using active learning with feature selection."""
         
-        print(f"Evaluating model on {dataset_name} {split_type} set ({len(dataset)} examples) with {feature_selection_type} feature selection")
+        logger.info(f"\n-- Evaluating model on {dataset_name} {split_type} set ({len(dataset)} examples) with {feature_selection_type} feature selection --")
         
         if target_questions is None:
             target_questions = list(range(7))
@@ -234,7 +235,7 @@ class ModelEvaluator:
             data_entry = dataset.get_data_entry(example_idx)
             total_features += len(data_entry['questions'])
         
-        print(f"Starting evaluation with {total_features} total features to collect")
+        logger.info(f"Starting evaluation with {total_features} total features to collect")
         
         # Initial evaluation with no features observed (all positions unknown)
         initial_eval = self.evaluate_model(model, dataset, dataset_name, target_questions, f"{split_type}_initial")
@@ -244,12 +245,13 @@ class ModelEvaluator:
             else:
                 metrics_trends[metric_name].append(0.0)
         
-        print(f"Initial evaluation (0 features): RMSE={initial_eval['overall']['rmse']:.4f}, Pearson={initial_eval['overall']['pearson']:.4f}")
+        logger.info(f"Initial evaluation (0 features): RMSE={initial_eval['overall']['rmse']:.4f}, Pearson={initial_eval['overall']['pearson']:.4f}")
         
         # Iteratively select and observe features
         features_collected = 0
         
         while features_collected < total_features:
+
             # For each example, select one feature if available
             features_selected_this_round = 0
             
@@ -258,24 +260,25 @@ class ModelEvaluator:
                 selected_features = feature_selector.select_features(
                     example_idx, dataset, 
                     num_to_select=1,
-                    loss_type="l2"
+                    loss_type="cross_entropy",
+                    target_questions=[0,1,2,3,4,5]
                 )
                 
                 # Observe selected features
                 for feature_info in selected_features:
                     pos = feature_info[0]  # Position index
-                    arena.observe_position(example_idx, pos)
+                    success_criteria = arena.observe_position(example_idx, pos)
                     features_selected_this_round += 1
                     features_collected += 1
                     
-                    logger.debug(f"Observed feature at example {example_idx}, position {pos} (total collected: {features_collected})")
+                    logger.info(f"Observed feature at example {example_idx}, position {pos} (total collected: {features_collected}). Success - {success_criteria}")
                     
                     # Break after selecting one feature per example per round
                     break
             
             # If no features were selected this round, break
             if features_selected_this_round == 0:
-                print("No more features available for selection")
+                logger.info("No more features available for selection")
                 break
             
             # Evaluate model with newly observed features
@@ -288,7 +291,7 @@ class ModelEvaluator:
                 else:
                     metrics_trends[metric_name].append(0.0)
             
-            print(f"After {features_collected} features: RMSE={current_eval['overall']['rmse']:.4f}, "
+            logger.info(f"After {features_collected} features: RMSE={current_eval['overall']['rmse']:.4f}, "
                     f"Pearson={current_eval['overall']['pearson']:.4f}, "
                     f"Features selected this round: {features_selected_this_round}")
             
@@ -298,7 +301,7 @@ class ModelEvaluator:
         
         # Final evaluation summary
         final_metrics = {metric: values[-1] for metric, values in metrics_trends.items() if values}
-        print(f"Final evaluation after {features_collected} features: RMSE={final_metrics.get('rmse', 0):.4f}, "
+        logger.info(f"Final evaluation after {features_collected} features: RMSE={final_metrics.get('rmse', 0):.4f}, "
                 f"Pearson={final_metrics.get('pearson', 0):.4f}")
         
         # Return results with trends
@@ -313,7 +316,7 @@ class ModelEvaluator:
             'evaluation_steps': len(metrics_trends['rmse'])
         }
         
-        print(f"Evaluation completed: {len(metrics_trends['rmse'])} evaluation steps from 0 to {features_collected} features")
+        logger.info(f"Evaluation completed: {len(metrics_trends['rmse'])} evaluation steps from 0 to {features_collected} features")
         
         return result, all_results[len(all_results) // 2]
     
@@ -321,7 +324,7 @@ class ModelEvaluator:
                                  cycle_num: int, additional_metrics: Optional[Dict] = None) -> Dict[str, Any]:
         """Evaluate model at the end of an active learning cycle."""
         
-        print(f"Evaluating active learning cycle {cycle_num}")
+        logger.info(f"Evaluating active learning cycle {cycle_num}")
         
         cycle_results = {
             'cycle': cycle_num,
