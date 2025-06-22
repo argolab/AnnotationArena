@@ -13,6 +13,8 @@ import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple, Any
 from utils import compute_metrics, AnnotationDataset
 from config import Config
+from annotationArena import AnnotationArena
+from selection import SelectionFactory
 
 logger = logging.getLogger(__name__)
 
@@ -213,7 +215,7 @@ class ModelEvaluator:
         # Initialize arena and feature selector
         arena = AnnotationArena(model, self.device)
         arena.set_dataset(dataset)
-        feature_selector = selection.SelectionFactory.create_feature_strategy(feature_selection_type, model, self.device)
+        feature_selector = SelectionFactory.create_feature_strategy(feature_selection_type, model, self.device)
         
         # Initialize metrics tracking
         metrics_trends = {
@@ -316,7 +318,7 @@ class ModelEvaluator:
         return result, all_results[len(all_results) // 2]
     
     def evaluate_active_learning_cycle(self, model, datasets: Dict[str, AnnotationDataset], 
-                                     cycle_num: int, additional_metrics: Optional[Dict] = None) -> Dict[str, Any]:
+                                 cycle_num: int, additional_metrics: Optional[Dict] = None) -> Dict[str, Any]:
         """Evaluate model at the end of an active learning cycle."""
         
         print(f"Evaluating active learning cycle {cycle_num}")
@@ -342,7 +344,7 @@ class ModelEvaluator:
             cycle_results['additional_metrics'] = additional_metrics
             logger.debug(f"Added {len(additional_metrics)} additional metrics")
         
-        # Log cycle summary to wandb
+        # Log cycle summary and create wandb plots
         if self.use_wandb and wandb.run is not None:
             wandb_metrics = {f"cycle_{cycle_num}": cycle_num}
             
@@ -354,6 +356,30 @@ class ModelEvaluator:
                     f"{prefix}expected_loss": eval_result['overall']['avg_expected_loss'],
                     f"{prefix}predictions": eval_result['overall']['total_predictions']
                 })
+            
+            # Create wandb plots for test trend if available
+            if 'test_trend' in cycle_results:
+                test_trend = cycle_results['test_trend']
+                metrics_trends = test_trend.get('metrics_trends', {})
+                
+                if 'rmse' in metrics_trends and 'pearson' in metrics_trends:
+                    steps = list(range(len(metrics_trends['rmse'])))
+                    
+                    # Create RMSE trend plot
+                    rmse_data = [[step, rmse] for step, rmse in enumerate(metrics_trends['rmse'])]
+                    rmse_table = wandb.Table(data=rmse_data, columns=["step", "rmse"])
+                    wandb_metrics[f"cycle_{cycle_num}_rmse_trend"] = wandb.plot.line(
+                        rmse_table, "step", "rmse", 
+                        title=f"Cycle {cycle_num} - RMSE Trend"
+                    )
+                    
+                    # Create Pearson trend plot
+                    pearson_data = [[step, pearson] for step, pearson in enumerate(metrics_trends['pearson'])]
+                    pearson_table = wandb.Table(data=pearson_data, columns=["step", "pearson"])
+                    wandb_metrics[f"cycle_{cycle_num}_pearson_trend"] = wandb.plot.line(
+                        pearson_table, "step", "pearson", 
+                        title=f"Cycle {cycle_num} - Pearson Trend"
+                    )
             
             if additional_metrics:
                 wandb_metrics.update({f"cycle_{k}": v for k, v in additional_metrics.items()})
