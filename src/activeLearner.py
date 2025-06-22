@@ -511,17 +511,20 @@ def run_enhanced_experiment(
         
         logger.info(f"Test loss: {test_metrics['avg_expected_loss']:.4f}")
         
-        # Log question selection counts to WandB
+        # Log selection metrics to WandB with organized structure
         if use_wandb and WANDB_AVAILABLE and wandb.run is not None:
             wandb_data = {
                 'cycle': cycle_count,
-                'total_features_selected': total_features_annotated,
-                'examples_selected': len(selected_examples),
-                'pool_size_remaining': len(active_pool)
+                'training/features_selected': total_features_annotated,
+                'training/examples_selected': len(selected_examples),
+                'training/pool_size_remaining': len(active_pool),
+                'training/benefit_cost_ratio': np.mean(cycle_benefit_cost_ratios) if cycle_benefit_cost_ratios else 0.0,
+                'training/observation_costs': np.sum(cycle_observation_costs) if cycle_observation_costs else 0.0
             }
             
+            # Question-wise selection counts
             for question, count in question_counts.items():
-                wandb_data[f"selected_{question}_count"] = count
+                wandb_data[f"training/selection_{question}_count"] = count
             
             wandb.log(wandb_data)
         
