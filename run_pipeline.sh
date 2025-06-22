@@ -6,10 +6,10 @@
 
 #SBATCH --job-name=ActiveLearner
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=18GB
+#SBATCH --mem-per-cpu=24GB
 #SBATCH --gpus=1
 #SBATCH --partition=gpu
-#SBATCH --account=a100acct
+##--##SBATCH --account=a100acct
 #SBATCH --mail-user="psingh54@jhu.edu"
 
 source /home/psingh54/.bashrc
@@ -36,7 +36,7 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --num_patterns_per_example 3 \
     --visible_ratio 0.5 \
     --features_per_example 5 \
-    --experiment_name EXHAUST_GVOI0_5_Features_5_Epochs_OLDVAL_DM \
+    --experiment_name EXHAUST_GVOI0_5FEATS_10EPOCHS_NEWFIXES_DM \
     --log_level INFO \
     --use_wandb \
     --wandb_project active-learning-hanna \
