@@ -6,9 +6,9 @@
 
 #SBATCH --job-name=ActiveLearner
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=12GB
+#SBATCH --mem-per-cpu=18GB
 #SBATCH --gpus=1
-#SBATCH --partition=gpu-a100
+#SBATCH --partition=gpu
 #SBATCH --account=a100acct
 #SBATCH --mail-user="psingh54@jhu.edu"
 
@@ -21,7 +21,7 @@ wandb login
 
 python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --examples_per_cycle 50 \
-    --experiment comparison \
+    --experiment gradient_voi_q0_human \
     --loss_type cross_entropy \
     --resample_validation \
     --dataset hanna \
@@ -33,10 +33,10 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --epochs_per_cycle 10 \
     --train_option dynamic_masking \
     --gradient_top_only True \
-    --num_patterns_per_example 5 \
+    --num_patterns_per_example 3 \
     --visible_ratio 0.5 \
     --features_per_example 5 \
-    --experiment_name EXHAUST_GVOI0_DM \
+    --experiment_name EXHAUST_GVOI0_5_Features_5_Epochs_OLDVAL_DM \
     --log_level INFO \
     --use_wandb \
     --wandb_project active-learning-hanna \

@@ -707,12 +707,12 @@ class ImputerEmbedding(nn.Module):
         self.examples_to_revisit.clear()
         
         return losses
-
+    
     def train_on_examples_dynamic_masking(self, examples_indices=None, epochs=5, batch_size=32, lr=1e-4, 
-                                     num_patterns_per_example=5, visible_ratio=0.5):
+                                 num_patterns_per_example=5, visible_ratio=0.5):
         """
         Train model using dynamic masking patterns based on observed variables.
-        
+
         Args:
             examples_indices: Indices of queue entries to train on (default: all)
             epochs: Number of training epochs
@@ -727,16 +727,28 @@ class ImputerEmbedding(nn.Module):
         # FIXED: Use training queue instead of training_examples
         if examples_indices is None:
             examples_indices = list(range(len(self.training_queue)))
-        
+
         if not examples_indices:
             return []
-        
+
+        # FIX: Extract unique example_idx values to avoid training same example multiple times
+        unique_examples = {}  # example_idx -> queue_entry (for weight)
+        for queue_idx in examples_indices:
+            if queue_idx < len(self.training_queue):
+                queue_entry = self.training_queue[queue_idx]
+                example_idx = queue_entry['example_idx']
+                if example_idx not in unique_examples:
+                    unique_examples[example_idx] = queue_entry
+
+        if not unique_examples:
+            return []
+
         self.train()
         optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
         kl_criterion = torch.nn.KLDivLoss(reduction='batchmean')
-        
+
         epoch_losses = []
-        
+
         for epoch in range(epochs):
             epoch_loss = 0.0
             batch_count = 0
@@ -744,12 +756,8 @@ class ImputerEmbedding(nn.Module):
             # Generate augmented training instances with dynamic masking
             augmented_examples = []
             
-            for queue_idx in examples_indices:
-                if queue_idx >= len(self.training_queue):
-                    continue
-                    
-                queue_entry = self.training_queue[queue_idx]
-                example_idx = queue_entry['example_idx']
+            # FIX: Iterate over unique examples instead of all queue entries
+            for example_idx, queue_entry in unique_examples.items():
                 current_data = self.dataset[example_idx]
                 
                 known_questions, inputs, answers, annotators, questions, embeddings = current_data
@@ -771,7 +779,7 @@ class ImputerEmbedding(nn.Module):
                         'annotators': annotators.clone(),
                         'questions': questions.clone(),
                         'embeddings': embeddings.clone() if embeddings is not None else None,
-                        'weight': queue_entry.get('weight', 1.0),
+                        'weight': queue_entry.get('weight', 1.0),  # Preserve original weight logic
                         'original_observed_mask': (inputs[:, 0] == 0).float(),
                         'original_targets': inputs[:, 1:].clone()
                     }
@@ -866,13 +874,13 @@ class ImputerEmbedding(nn.Module):
             
             if WANDB_AVAILABLE and wandb.run is not None:
                 wandb.log({"epoch_loss_dynamic": avg_epoch_loss, "epoch": epoch})
-        
+
         # Clear revisit flags
         for queue_idx in examples_indices:
             if queue_idx < len(self.training_queue):
                 self.training_queue[queue_idx]['needs_revisit'] = False
         self.examples_to_revisit.clear()
-        
+
         return epoch_losses
     
     def compute_total_loss(self, outputs, labels, inputs, questions, embeddings, full_supervision=False):

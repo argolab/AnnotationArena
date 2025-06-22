@@ -494,3 +494,14 @@ class AnnotationArena:
     def get_unobserved_variables(self):
         """Get list of all unobserved variable IDs."""
         return [vid for vid in self.variables.keys() if vid not in self.observations]
+    
+    def get_metrics_history(self):
+        """Get the history of training metrics for plotting."""
+        return {
+            "training_losses": self.training_losses,
+            "observation_history": self.observation_history,
+            "prediction_history": [
+                {"timestamp": ex["timestamp"], "loss": ex["loss"]} 
+                for ex in self.prediction_history if ex["loss"] is not None
+            ]
+        }
