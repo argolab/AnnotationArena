@@ -6,9 +6,9 @@
 
 #SBATCH --job-name=ActiveLearner
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=18GB
+#SBATCH --mem-per-cpu=12GB
 #SBATCH --gpus=1
-#SBATCH --partition=gpu-a100
+#SBATCH --partition=gpu
 #SBATCH --account=a100acct
 #SBATCH --mail-user="psingh54@jhu.edu"
 
@@ -17,14 +17,6 @@ module load cuda/12.1
 
 conda activate llm_rubric_env
 
-python /export/fs06/psingh54/ActiveRubric-Internal/src/post_training_prabhav.py \
---results_path /export/fs06/psingh54/ActiveRubric-Internal/outputs/results_enhanced_hanna/DynamicMasking_NewSelectionLoss/TEST1/enhanced_gradient_voi_q0_human_with_embedding.json \
---output_dir /export/fs06/psingh54/ActiveRubric-Internal/outputs/results_enhanced_hanna/PostTrainingAnalysis \
---dataset hanna \
---epochs 15 \
---batch_size 32 \
---lr 1e-5 \
---runner prabhav \
---use_embedding \
---num_patterns_per_example 3 \
---visible_ratio 0.5
+python /export/fs06/psingh54/ActiveRubric-Internal/src/post_analysis.py \
+ --model_path /export/fs06/psingh54/ActiveRubric-Internal/src/output/models/15_CYCLES_DM-3-0.5_50-Examples-5-Features_G-VOI-Q0_20250622_023141.pth \
+ --experiment_name 15_CYCLES_DM-3-0.5_50-Examples-5-Features_G-VOI-Q0 --dataset hanna --runner prabhav --log_level INFO --attention_samples 200

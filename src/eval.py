@@ -285,7 +285,7 @@ class ModelEvaluator:
                     features_selected_this_round += 1
                     features_collected += 1
                     
-                    #logger.info(f"Observed feature at example {example_idx}, position {pos} (total collected: {features_collected}). Success - {success_criteria}")
+                    logger.debug(f"Observed feature at example {example_idx}, position {pos} (total collected: {features_collected}). Success - {success_criteria}")
                     
                     # Break after selecting one feature per example per round
                     break

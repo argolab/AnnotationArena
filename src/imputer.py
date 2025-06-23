@@ -11,6 +11,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import numpy as np
 import logging
+import time
 from tqdm.auto import tqdm
 import random
 
@@ -773,6 +774,8 @@ class ImputerEmbedding(nn.Module):
 
         if not unique_examples:
             return []
+        
+        logger.info(f'Unique Examples Training On : {len(unique_examples)}')
 
         self.train()
         optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
@@ -780,6 +783,7 @@ class ImputerEmbedding(nn.Module):
 
         epoch_losses = []
 
+        start_time = time.start()
         for epoch in range(epochs):
             epoch_loss = 0.0
             batch_count = 0
@@ -905,6 +909,9 @@ class ImputerEmbedding(nn.Module):
             
             if WANDB_AVAILABLE and wandb.run is not None:
                 wandb.log({"epoch_loss_dynamic": avg_epoch_loss, "epoch": epoch})
+
+        end_time = time.start()
+        logger.info(f'Time taken for all Epoch: {end_time - start_time}')
 
         # Clear revisit flags
         for queue_idx in examples_indices:

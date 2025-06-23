@@ -547,10 +547,6 @@ class VOISelectionStrategy(FeatureSelectionStrategy):
         target_indices = []
         for q_idx in target_questions:
             for i in range(questions.shape[1]):
-                # if questions[0, i].item() == q_idx and annotators[0, i].item() >= 0:
-                #     target_indices.append(i)
-
-                # TODO: @Haojun - Maybe we shouldn't be focusing only on Questions for Human?
                 if questions[0, i].item() == q_idx:
                     target_indices.append(i)
         
@@ -3316,6 +3312,7 @@ class NewVariableGradientTopOnlySelector:
                         outputs = model(output_inputs, annotators, questions, embeddings)
                         
                         # Compute loss using loss_inputs (all positions use actual loss)
+                        # TODO: Check once with KL
                         example_loss = model.compute_total_loss(
                             outputs[i:i+1], loss_labels[i:i+1], loss_inputs[i:i+1], 
                             questions[i:i+1], embeddings[i:i+1] if embeddings is not None else None,

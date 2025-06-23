@@ -19,7 +19,9 @@ import math
 import pandas as pd
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import pairwise_distances
+
 os.environ.update({"TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "HF_HUB_OFFLINE": "1"})
+
 from config import Config, ModelConfig, DefaultHyperparams
 from utils import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset
 from annotationArena import AnnotationArena
@@ -47,9 +49,12 @@ except ImportError:
 random.seed(90)
 torch.manual_seed(90)
 np.random.seed(90)
+
 os.environ.update({"TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "HF_HUB_OFFLINE": "1"})
 
-model = SentenceTransformer("C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf")
+# Change Based on Usage.
+model = SentenceTransformer("all-MiniLM-L6-v2")
+# model = SentenceTransformer("C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf")
 
 def extract_embeddings_features(dataset_entries, model_name='all-MiniLM-L6-v2'):
     """Extract sentence transformer embeddings for K-centers algorithm."""
