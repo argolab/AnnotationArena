@@ -202,3 +202,5 @@ wandb/
 slurm*
 src/output
 outputs/*
+output/*
+src/plot.py
