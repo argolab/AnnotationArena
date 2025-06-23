@@ -21,7 +21,7 @@ import pandas as pd
 from sentence_transformers import SentenceTransformer
 
 logger = logging.getLogger(__name__)
-model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer("C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf")
 
 random.seed(90)
 torch.manual_seed(90)
@@ -47,9 +47,9 @@ class DataManager:
         print(f"Use embedding: {use_embedding}")
         print(self.config.INPUT_DATA_DIR)
         
-        '''if os.path.exists(self.paths['active_pool']):
+        if os.path.exists(self.paths['active_pool']):
             logger.info("Data already exists, skipping preparation")
-            return'''
+            return
 
         if use_embedding and not dataset == "hanna":
             raise ValueError("Not yet support other datasets with text embedding")

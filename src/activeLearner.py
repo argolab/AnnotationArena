@@ -49,7 +49,7 @@ torch.manual_seed(90)
 np.random.seed(90)
 os.environ.update({"TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "HF_HUB_OFFLINE": "1"})
 
-model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer("C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf")
 
 def extract_embeddings_features(dataset_entries, model_name='all-MiniLM-L6-v2'):
     """Extract sentence transformer embeddings for K-centers algorithm."""
@@ -512,20 +512,17 @@ def run_enhanced_experiment(
         
         logger.info(f"Test loss: {test_metrics['avg_expected_loss']:.4f}")
         
-        # Log selection metrics to WandB with organized structure
+        # Log question selection counts to WandB
         if use_wandb and WANDB_AVAILABLE and wandb.run is not None:
             wandb_data = {
                 'cycle': cycle_count,
-                'training/features_selected': total_features_annotated,
-                'training/examples_selected': len(selected_examples),
-                'training/pool_size_remaining': len(active_pool),
-                'training/benefit_cost_ratio': np.mean(cycle_benefit_cost_ratios) if cycle_benefit_cost_ratios else 0.0,
-                'training/observation_costs': np.sum(cycle_observation_costs) if cycle_observation_costs else 0.0
+                'total_features_selected': total_features_annotated,
+                'examples_selected': len(selected_examples),
+                'pool_size_remaining': len(active_pool)
             }
             
-            # Question-wise selection counts
             for question, count in question_counts.items():
-                wandb_data[f"training/selection_{question}_count"] = count
+                wandb_data[f"selected_{question}_count"] = count
             
             wandb.log(wandb_data)
         

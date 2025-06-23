@@ -301,6 +301,7 @@ class ImputerEmbedding(nn.Module):
         self.training_losses = []
         self.dataset = None
         self.training_queue_size = training_queue_size
+        self.unique_examples = []
         
         logger.info(f"ImputerEmbedding initialized: {question_num} questions, {max_choices} choices, {num_annotator} annotators")
     
@@ -314,18 +315,25 @@ class ImputerEmbedding(nn.Module):
         param_x = self.encoder(x, annotators, questions, embeddings)
         return param_x
     
-    def replace_training_queue_entry(self, new_entry, clear_buffer_size=50):
-        old_indices = [i for i in range(len(self.training_queue)) if not self.recent_indicators[i]]
+    def replace_training_queue_entry(self, new_entry, clear_buffer_size=1):
+        old_indices = [i for i in range(len(self.unique_examples)) if not self.recent_indicators[i]] #avoid recent examples
         
         indices = random.sample(old_indices, clear_buffer_size)
         indices.sort(reverse=True)
         
         for index in indices:
-            del self.training_queue[index]
+            del self.unique_examples[index]
             del self.recent_indicators[index]
+        
+        index_to_remove = []
+        for i, entry in enumerate(self.training_queue):
+            if entry["example_idx"] in indices:
+                index_to_remove.append(i)
+        index_to_remove.sort(reverse=True)
+        for index in index_to_remove:
+            del self.training_queue[index]
 
         self.training_queue.append(new_entry)
-        self.recent_indicators.append(True)
     
     def predict(self, inputs, annotators, questions, embeddings, positions=None, train=True, weight=1.0, example_idx=None):
         """
@@ -371,9 +379,12 @@ class ImputerEmbedding(nn.Module):
                     'timestamp': len(self.training_queue),
                     'needs_revisit': False
                 }
-                if self.training_queue_size is not None and len(self.training_queue) == self.training_queue_size:
+                if example_idx not in self.unique_examples:
+                    self.unique_examples.append(example_idx)
+                    self.recent_indicators.append(True) #The example is not seen before, so should me marked as recent
+                if self.training_queue_size is not None and len(self.unique_examples) == self.training_queue_size:
                     self.replace_training_queue_entry(queue_entry)
-                
+                assert len(self.unique_examples) == len(self.recent_indicators)
                 # Keep prediction history for analysis (preserve original functionality)
                 history_entry = {
                     'example_idx': example_idx,
@@ -899,6 +910,10 @@ class ImputerEmbedding(nn.Module):
         for queue_idx in examples_indices:
             if queue_idx < len(self.training_queue):
                 self.training_queue[queue_idx]['needs_revisit'] = False
+        for i in range(len(self.recent_indicators)):
+            self.recent_indicators[i] = False
+        logger.info(f"Current examples in the training buffer: {self.unique_examples}")
+        logger.debug(f"Indicators for recent examples: {self.recent_indicators}")
         self.examples_to_revisit.clear()
 
         return epoch_losses
