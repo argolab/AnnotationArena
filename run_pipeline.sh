@@ -6,9 +6,9 @@
 
 #SBATCH --job-name=ActiveLearner
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=12GB
+#SBATCH --mem-per-cpu=18GB
 #SBATCH --gpus=1
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu-a100
 #SBATCH --account=a100acct
 #SBATCH --mail-user="psingh54@jhu.edu"
 
@@ -37,7 +37,7 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --num_patterns_per_example 3 \
     --visible_ratio 0.5 \
     --features_per_example 5 \
-    --experiment_name 15_CYCLES_DM-3-0.5_50-Examples-5-Features_G-VOI-Q0 \
+    --experiment_name 15_CYCLES_DM-3-0.5_50-Examples-5-Features_G-VOI-Q0_SMOOTH2 \
     --log_level INFO \
     --use_wandb \
     --wandb_project active-learning-hanna \

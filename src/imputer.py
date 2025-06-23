@@ -77,7 +77,7 @@ class FullyVectorizedSimilaritySmoothing(nn.Module):
         # Temperature parameter
         self.temp_projection = nn.Linear(hidden_dim, 1, bias=False)
         with torch.no_grad():
-            self.temp_projection.weight.normal_(0, 0.01)
+            self.temp_projection.weight.normal_(0, 0.1)
         
         with torch.no_grad():
             # Johnson-Lindenstrauss: entries ~ N(0, 1/k)
@@ -102,7 +102,7 @@ class FullyVectorizedSimilaritySmoothing(nn.Module):
         Q = self.Q(hidden_states)  # [B, L, H]
         K = self.K(hidden_states)  # [B, L, H]
         
-        variable_temps = F.relu(self.temp_projection(hidden_states)) + 0.01 # [B, L, 1]
+        variable_temps = F.relu(self.temp_projection(hidden_states)) + 0.1 # [B, L, 1]
 
         # Expand temperatures for broadcasting: [B, L, L]
         temp_matrix = variable_temps.expand(-1, -1, seq_len)  # [B, L, L]
@@ -112,10 +112,10 @@ class FullyVectorizedSimilaritySmoothing(nn.Module):
         
         # Create question type mask - only allow attention within same question type
         question_mask = questions.unsqueeze(-1) == questions.unsqueeze(-2)  # [B, L, L]
-        
+
         # Apply question type mask
         scores = scores.masked_fill(~question_mask, float('-inf'))
-        
+
         # Compute attention weights
         attention_weights = F.softmax(scores, dim=-1)  # [B, L, L]
         attention_weights = self.dropout(attention_weights)
@@ -383,10 +383,15 @@ class ImputerEmbedding(nn.Module):
                 if example_idx not in self.unique_examples:
                     self.unique_examples.append(example_idx)
                     self.recent_indicators.append(True) #The example is not seen before, so should me marked as recent
+
                 if self.training_queue_size is not None and len(self.unique_examples) == self.training_queue_size:
                     self.replace_training_queue_entry(queue_entry)
+                else:
+                    self.training_queue.append(queue_entry)
+
                 assert len(self.unique_examples) == len(self.recent_indicators)
                 # Keep prediction history for analysis (preserve original functionality)
+
                 history_entry = {
                     'example_idx': example_idx,
                     'inputs': inputs[i].detach().cpu().clone(),
@@ -783,7 +788,7 @@ class ImputerEmbedding(nn.Module):
 
         epoch_losses = []
 
-        start_time = time.start()
+        start_time = time.time()
         for epoch in range(epochs):
             epoch_loss = 0.0
             batch_count = 0
@@ -910,7 +915,7 @@ class ImputerEmbedding(nn.Module):
             if WANDB_AVAILABLE and wandb.run is not None:
                 wandb.log({"epoch_loss_dynamic": avg_epoch_loss, "epoch": epoch})
 
-        end_time = time.start()
+        end_time = time.time()
         logger.info(f'Time taken for all Epoch: {end_time - start_time}')
 
         # Clear revisit flags

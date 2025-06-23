@@ -243,10 +243,10 @@ class ModelEvaluator:
         }
         
         # Count total features across all examples
-        total_features = 0
-        for example_idx in range(len(dataset_copy)):
-            data_entry = dataset_copy.get_data_entry(example_idx)
-            total_features += len(data_entry['questions'])
+        total_features = 14 * len(dataset_copy)
+        # for example_idx in range(len(dataset_copy)):
+        #     data_entry = dataset_copy.get_data_entry(example_idx)
+        #     total_features += len(data_entry['questions'])
         
         logger.info(f"Starting evaluation with {total_features} total features to collect")
         
@@ -275,7 +275,7 @@ class ModelEvaluator:
                     example_idx, dataset_copy, 
                     num_to_select=1,
                     loss_type="cross_entropy",
-                    target_questions=[0,1,2,3,4,5]
+                    target_questions=[0,1,2,3,4,5,6]
                 )
                 
                 # Observe selected features
