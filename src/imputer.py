@@ -12,6 +12,7 @@ import torch.nn.functional as F
 import numpy as np
 import logging
 from tqdm.auto import tqdm
+import random
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +283,8 @@ class ImputerEmbedding(nn.Module):
                  hidden_dim=64, 
                  num_annotator=15, 
                  annotator_embedding_dim=8, 
-                 dropout=0.1):
+                 dropout=0.1,
+                 training_queue_size=None):
         """Initialize Imputer model."""
         super().__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -293,10 +295,12 @@ class ImputerEmbedding(nn.Module):
         
         # FIXED: Training queue system instead of training_examples
         self.training_queue = []
+        self.recent_indicators = []
         self.prediction_history = []
         self.examples_to_revisit = set()
         self.training_losses = []
         self.dataset = None
+        self.training_queue_size = training_queue_size
         
         logger.info(f"ImputerEmbedding initialized: {question_num} questions, {max_choices} choices, {num_annotator} annotators")
     
@@ -309,6 +313,19 @@ class ImputerEmbedding(nn.Module):
         """Forward pass through the model."""
         param_x = self.encoder(x, annotators, questions, embeddings)
         return param_x
+    
+    def replace_training_queue_entry(self, new_entry, clear_buffer_size=50):
+        old_indices = [i for i in range(len(self.training_queue)) if not self.recent_indicators[i]]
+        
+        indices = random.sample(old_indices, clear_buffer_size)
+        indices.sort(reverse=True)
+        
+        for index in indices:
+            del self.training_queue[index]
+            del self.recent_indicators[index]
+
+        self.training_queue.append(new_entry)
+        self.recent_indicators.append(True)
     
     def predict(self, inputs, annotators, questions, embeddings, positions=None, train=True, weight=1.0, example_idx=None):
         """
@@ -354,7 +371,8 @@ class ImputerEmbedding(nn.Module):
                     'timestamp': len(self.training_queue),
                     'needs_revisit': False
                 }
-                self.training_queue.append(queue_entry)
+                if self.training_queue_size is not None and len(self.training_queue) == self.training_queue_size:
+                    self.replace_training_queue_entry(queue_entry)
                 
                 # Keep prediction history for analysis (preserve original functionality)
                 history_entry = {
@@ -567,6 +585,8 @@ class ImputerEmbedding(nn.Module):
         for queue_idx in examples_indices:
             if queue_idx < len(self.training_queue):
                 self.training_queue[queue_idx]['needs_revisit'] = False
+                #After training, no longer recent examples
+                self.recent_indicators[queue_idx] = False
             if queue_idx < len(self.prediction_history):
                 self.prediction_history[queue_idx]['needs_revisit'] = False
         self.examples_to_revisit.clear()
