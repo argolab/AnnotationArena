@@ -9,6 +9,7 @@ import json
 import logging
 import numpy as np
 import torch
+import copy
 from tqdm import tqdm
 import torch.nn.functional as F
 from typing import Dict, List, Optional, Tuple, Any
@@ -37,6 +38,15 @@ class ModelEvaluator:
         
         # Track evaluation history
         self.evaluation_history = []
+        
+        # Setup WandB metric organization
+        if self.use_wandb and wandb.run is not None:
+            wandb.define_metric("cycle")
+            wandb.define_metric("training/*", step_metric="cycle")
+            wandb.define_metric("validation/*", step_metric="cycle") 
+            wandb.define_metric("test/*", step_metric="cycle")
+            wandb.define_metric("questions/*", step_metric="cycle")
+            wandb.define_metric("test_incremental/*", step_metric="features_observed")
         
         logger.info(f"ModelEvaluator initialized - Wandb: {self.use_wandb}")
     
@@ -213,9 +223,12 @@ class ModelEvaluator:
         all_results = []
         model.eval()
         
+        # Create deep copy of dataset to avoid state persistence between cycles
+        dataset_copy = copy.deepcopy(dataset)
+        
         # Initialize arena and feature selector
         arena = AnnotationArena(model, self.device)
-        arena.set_dataset(dataset)
+        arena.set_dataset(dataset_copy)
         feature_selector = SelectionFactory.create_feature_strategy(feature_selection_type, model, self.device)
         
         # Initialize metrics tracking
@@ -231,14 +244,15 @@ class ModelEvaluator:
         
         # Count total features across all examples
         total_features = 0
-        for example_idx in range(len(dataset)):
-            data_entry = dataset.get_data_entry(example_idx)
+        for example_idx in range(len(dataset_copy)):
+            data_entry = dataset_copy.get_data_entry(example_idx)
             total_features += len(data_entry['questions'])
         
         logger.info(f"Starting evaluation with {total_features} total features to collect")
         
         # Initial evaluation with no features observed (all positions unknown)
-        initial_eval = self.evaluate_model(model, dataset, dataset_name, target_questions, f"{split_type}_initial")
+        initial_eval = self.evaluate_model(model, dataset_copy, dataset_name, target_questions, f"{split_type}_initial")
+        all_results.append(initial_eval)
         for metric_name in metrics_trends.keys():
             if metric_name in initial_eval['overall']:
                 metrics_trends[metric_name].append(initial_eval['overall'][metric_name])
@@ -255,10 +269,10 @@ class ModelEvaluator:
             # For each example, select one feature if available
             features_selected_this_round = 0
             
-            for example_idx in tqdm(range(len(dataset))):
+            for example_idx in tqdm(range(len(dataset_copy))):
                 # Select features for this example (limit to 1 per round)
                 selected_features = feature_selector.select_features(
-                    example_idx, dataset, 
+                    example_idx, dataset_copy, 
                     num_to_select=1,
                     loss_type="cross_entropy",
                     target_questions=[0,1,2,3,4,5]
@@ -282,7 +296,7 @@ class ModelEvaluator:
                 break
             
             # Evaluate model with newly observed features
-            current_eval = self.evaluate_model(model, dataset, dataset_name, target_questions, f"{split_type}_step_{features_collected/len(dataset)}")
+            current_eval = self.evaluate_model(model, dataset_copy, dataset_name, target_questions, f"{split_type}_step_{features_collected/len(dataset_copy)}")
             all_results.append(current_eval)
             # Track metrics
             for metric_name in metrics_trends.keys():
@@ -318,7 +332,7 @@ class ModelEvaluator:
         
         logger.info(f"Evaluation completed: {len(metrics_trends['rmse'])} evaluation steps from 0 to {features_collected} features")
         
-        return result, all_results[len(all_results) // 2]
+        return result, all_results[len(all_results) // 2] if all_results else initial_eval
     
     def evaluate_active_learning_cycle(self, model, datasets: Dict[str, AnnotationDataset], 
                                  cycle_num: int, additional_metrics: Optional[Dict] = None) -> Dict[str, Any]:
@@ -347,51 +361,112 @@ class ModelEvaluator:
             cycle_results['additional_metrics'] = additional_metrics
             logger.debug(f"Added {len(additional_metrics)} additional metrics")
         
-        # Log cycle summary and create wandb plots
+        # Log cycle summary with organized WandB metrics
         if self.use_wandb and wandb.run is not None:
-            wandb_metrics = {f"cycle_{cycle_num}": cycle_num}
+            wandb_data = {"cycle": cycle_num}
             
+            # Organize metrics by dataset type
             for dataset_name, eval_result in cycle_results['evaluations'].items():
-                prefix = f"{dataset_name}_"
-                wandb_metrics.update({
-                    f"{prefix}rmse": eval_result['overall']['rmse'],
-                    f"{prefix}pearson": eval_result['overall']['pearson'],
-                    f"{prefix}expected_loss": eval_result['overall']['avg_expected_loss'],
-                    f"{prefix}predictions": eval_result['overall']['total_predictions']
+                metrics = eval_result['overall']
+                
+                # Core metrics for each dataset
+                wandb_data.update({
+                    f"{dataset_name}/rmse": metrics['rmse'],
+                    f"{dataset_name}/pearson": metrics['pearson'],
+                    f"{dataset_name}/spearman": metrics['spearman'],
+                    f"{dataset_name}/kendall": metrics['kendall'],
+                    f"{dataset_name}/accuracy": metrics['accuracy'],
+                    f"{dataset_name}/expected_loss": metrics['avg_expected_loss'],
+                    f"{dataset_name}/total_predictions": metrics['total_predictions']
                 })
-            
-            # Create wandb plots for test trend if available
+                
+                # Question-wise metrics
+                for q_name, q_metrics in eval_result['by_question'].items():
+                    if q_metrics['count'] > 0:
+                        wandb_data[f"questions/{dataset_name}_{q_name}_rmse"] = q_metrics['rmse']
+                        wandb_data[f"questions/{dataset_name}_{q_name}_pearson"] = q_metrics['pearson']
+                        wandb_data[f"questions/{dataset_name}_{q_name}_count"] = q_metrics['count']
+        
+            # Test incremental metrics
             if 'test_trend' in cycle_results:
                 test_trend = cycle_results['test_trend']
                 metrics_trends = test_trend.get('metrics_trends', {})
                 
-                if 'rmse' in metrics_trends and 'pearson' in metrics_trends:
-                    steps = list(range(len(metrics_trends['rmse'])))
+                if metrics_trends:
+                    # Get the number of steps in this cycle
+                    num_steps = len(next(iter(metrics_trends.values())))
                     
-                    # Create RMSE trend plot
-                    rmse_data = [[step, rmse] for step, rmse in enumerate(metrics_trends['rmse'])]
-                    rmse_table = wandb.Table(data=rmse_data, columns=["step", "rmse"])
-                    wandb_metrics[f"cycle_{cycle_num}_rmse_trend"] = wandb.plot.line(
-                        rmse_table, "step", "rmse", 
-                        title=f"Cycle {cycle_num} - RMSE Trend"
-                    )
+                    # For each step, log all metrics together with features_observed as step
+                    for step_idx in range(num_steps):
+                        features_observed = step_idx
+                        
+                        # 1. Log current values for each metric at this step
+                        step_data = {
+                            "features_observed": features_observed,
+                            "cycle": cycle_num
+                        }
+                        
+                        for metric_name, values in metrics_trends.items():
+                            if step_idx < len(values):
+                                # Log raw value with cycle in name for cycle-specific plots
+                                step_data[f"test_incremental/cycle_{cycle_num}_{metric_name}"] = values[step_idx]
+                        
+                        wandb.log(step_data)
                     
-                    # Create Pearson trend plot
-                    pearson_data = [[step, pearson] for step, pearson in enumerate(metrics_trends['pearson'])]
-                    pearson_table = wandb.Table(data=pearson_data, columns=["step", "pearson"])
-                    wandb_metrics[f"cycle_{cycle_num}_pearson_trend"] = wandb.plot.line(
-                        pearson_table, "step", "pearson", 
-                        title=f"Cycle {cycle_num} - Pearson Trend"
-                    )
+                    # 2. Log final values separately for cycle summary
+                    cycle_data = {"cycle": cycle_num}
+                    for metric_name, values in metrics_trends.items():
+                        if values:
+                            final_value = values[-1]
+                            # Add to cycle summary
+                            cycle_data[f"test_incremental/final_{metric_name}_by_cycle"] = final_value
+                    
+                    # Log cycle summary
+                    wandb.log(cycle_data)
             
+            # Additional metrics from training
             if additional_metrics:
-                wandb_metrics.update({f"cycle_{k}": v for k, v in additional_metrics.items()})
+                for key, value in additional_metrics.items():
+                    wandb_data[f"training/{key}"] = value
             
-            wandb.log(wandb_metrics)
+            wandb.log(wandb_data)
+            
+            # Create summary table for final cycle
+            if cycle_num > 0 and cycle_num % 5 == 0:
+                self._log_summary_table(cycle_results, cycle_num)
         
         self.evaluation_history.append(cycle_results)
         
         return cycle_results
+    
+    def _log_summary_table(self, cycle_results: Dict[str, Any], cycle_num: int):
+        """Log summary table to WandB."""
+        
+        if not self.use_wandb or wandb.run is None:
+            return
+        
+        table_data = []
+        
+        for dataset_name, eval_result in cycle_results['evaluations'].items():
+            metrics = eval_result['overall']
+            table_data.append([
+                dataset_name,
+                cycle_num,
+                f"{metrics['rmse']:.4f}",
+                f"{metrics['pearson']:.4f}",
+                f"{metrics['spearman']:.4f}",
+                f"{metrics['kendall']:.4f}",
+                f"{metrics['accuracy']:.4f}",
+                f"{metrics['avg_expected_loss']:.4f}",
+                metrics['total_predictions']
+            ])
+        
+        table = wandb.Table(
+            data=table_data,
+            columns=["Dataset", "Cycle", "RMSE", "Pearson", "Spearman", "Kendall", "Accuracy", "Expected Loss", "Predictions"]
+        )
+        
+        wandb.log({f"summary_table_cycle_{cycle_num}": table})
     
     def compare_models(self, models: Dict[str, Any], dataset: AnnotationDataset, 
                       dataset_name: str = "comparison") -> Dict[str, Any]:
@@ -496,23 +571,6 @@ class ModelEvaluator:
         for q_name, q_metrics in eval_result['by_question'].items():
             if q_metrics['count'] > 0:
                 logger.debug(f"{q_name}: RMSE={q_metrics['rmse']:.4f}, Count={q_metrics['count']}")
-        
-        # Wandb logging
-        if self.use_wandb and wandb.run is not None:
-            wandb_data = {
-                f"{eval_result['dataset_name']}_rmse": overall['rmse'],
-                f"{eval_result['dataset_name']}_pearson": overall['pearson'],
-                f"{eval_result['dataset_name']}_expected_loss": overall['avg_expected_loss'],
-                f"{eval_result['dataset_name']}_predictions": overall['total_predictions']
-            }
-            
-            # Add question-wise metrics
-            for q_name, q_metrics in eval_result['by_question'].items():
-                if q_metrics['count'] > 0:
-                    wandb_data[f"{eval_result['dataset_name']}_{q_name}_rmse"] = q_metrics['rmse']
-                    wandb_data[f"{eval_result['dataset_name']}_{q_name}_count"] = q_metrics['count']
-            
-            wandb.log(wandb_data)
     
     def _empty_evaluation_result(self, dataset_name: str, split_type: str) -> Dict[str, Any]:
         """Return empty evaluation result structure."""
@@ -576,9 +634,9 @@ class TrainingMetricsTracker:
         if self.use_wandb and wandb.run is not None:
             wandb_data = {
                 'cycle': cycle,
-                'epoch': epoch,
-                'training_loss': metrics.get('loss', 0),
-                'examples_trained': metrics.get('examples_trained', 0)
+                'training/epoch': epoch,
+                'training/loss': metrics.get('loss', 0),
+                'training/examples_trained': metrics.get('examples_trained', 0)
             }
             wandb.log(wandb_data)
     
@@ -592,12 +650,12 @@ class TrainingMetricsTracker:
         if self.use_wandb and wandb.run is not None:
             wandb_data = {
                 'cycle': cycle,
-                'examples_selected': selection_metrics.get('examples_selected', 0),
-                'features_selected': selection_metrics.get('features_selected', 0),
-                'pool_size_remaining': selection_metrics.get('pool_size_remaining', 0)
+                'training/examples_selected': selection_metrics.get('examples_selected', 0),
+                'training/features_selected': selection_metrics.get('features_selected', 0),
+                'training/pool_size_remaining': selection_metrics.get('pool_size_remaining', 0)
             }
             if 'benefit_cost_ratio' in selection_metrics:
-                wandb_data['avg_benefit_cost_ratio'] = selection_metrics['benefit_cost_ratio']
+                wandb_data['training/avg_benefit_cost_ratio'] = selection_metrics['benefit_cost_ratio']
             
             wandb.log(wandb_data)
     

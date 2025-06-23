@@ -37,7 +37,7 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --num_patterns_per_example 3 \
     --visible_ratio 0.5 \
     --features_per_example 5 \
-    --experiment_name EXHAUST_GVOI0_5FEATS_10EPOCHS_EVAL_15CYCLES_DM \
+    --experiment_name 15_CYCLES_DM-3-0.5_50-Examples-5-Features_G-VOI-Q0 \
     --log_level INFO \
     --use_wandb \
     --wandb_project active-learning-hanna \
