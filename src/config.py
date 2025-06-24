@@ -124,14 +124,17 @@ class ModelConfig:
     }
     
     @classmethod
-    def get_config(cls, dataset):
+    def get_config(cls, dataset, training_buffer_size):
         """Get model configuration for dataset."""
         if dataset == "hanna":
-            return cls.HANNA
+            config = cls.HANNA
         elif dataset == "llm_rubric":
-            return cls.LLM_RUBRIC
+            config = cls.LLM_RUBRIC
         else:
-            return cls.HANNA
+            config = cls.HANNA
+        if not training_buffer_size == 0:
+            config["training_queue_size"] = training_buffer_size
+        return config
 
 class DefaultHyperparams:
     """Default hyperparameters for experiments."""

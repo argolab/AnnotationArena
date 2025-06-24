@@ -53,8 +53,8 @@ np.random.seed(90)
 os.environ.update({"TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "HF_HUB_OFFLINE": "1"})
 
 # Change Based on Usage.
-model = SentenceTransformer("all-MiniLM-L6-v2")
-# model = SentenceTransformer("C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf")
+#model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
 
 def extract_embeddings_features(dataset_entries, model_name='all-MiniLM-L6-v2'):
     """Extract sentence transformer embeddings for K-centers algorithm."""
@@ -605,6 +605,8 @@ def main():
                        help='Wandb entity name')
     parser.add_argument('--experiment_name', type=str,
                        help='Experiment name for logging and file naming')
+    parser.add_argument('--training_buffer_size', type=int, default=0,
+                       help='Buffer size for maximum number of examples seen in the training')
     
     # Logging arguments
     parser.add_argument('--log_level', type=str, default='INFO',
@@ -658,7 +660,7 @@ def main():
     logger.info(f"Using device: {device}")
     
     # Initialize model using ModelConfig
-    model_config = ModelConfig.get_config(args.dataset)
+    model_config = ModelConfig.get_config(args.dataset, args.training_buffer_size)
     if args.use_embedding:
         ModelClass = ImputerEmbedding
     else:

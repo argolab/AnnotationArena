@@ -940,13 +940,12 @@ class ImputerEmbedding(nn.Module):
         device = self.device
         loss = torch.tensor(0.0, device=device)
         position_count = 0
-        
+        kl_loss = nn.KLDivLoss(reduction="batchmean")
         for i in range(batch_size):
             for j in range(var_num):
                 if inputs[i, j, 0] == 0 and full_supervision:
-                    target_idx = torch.argmax(labels[i, j]).item()
-                    target = torch.tensor([target_idx], device=device)
-                    position_loss = F.cross_entropy(outputs[i:i+1, j], target)
+                    input_log_probs = F.log_softmax(outputs[i:i+1, j], dim=-1)
+                    position_loss = kl_loss(input_log_probs, labels[i, j].unsqueeze(0))
                 else:
                     probs = F.softmax(outputs[i, j], dim=0)
                     expected_loss = torch.tensor(0.0, device=device)
