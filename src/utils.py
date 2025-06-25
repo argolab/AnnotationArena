@@ -23,8 +23,8 @@ from sentence_transformers import SentenceTransformer
 logger = logging.getLogger(__name__)
 
 # Change Based on Usage
-#model = SentenceTransformer("all-MiniLM-L6-v2")
-model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
+model = SentenceTransformer("all-MiniLM-L6-v2")
+# model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
 
 random.seed(90)
 torch.manual_seed(90)

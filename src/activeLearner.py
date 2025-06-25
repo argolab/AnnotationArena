@@ -53,8 +53,8 @@ np.random.seed(90)
 os.environ.update({"TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "HF_HUB_OFFLINE": "1"})
 
 # Change Based on Usage.
-#model = SentenceTransformer("all-MiniLM-L6-v2")
-model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
+model = SentenceTransformer("all-MiniLM-L6-v2")
+# model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
 
 def extract_embeddings_features(dataset_entries, model_name='all-MiniLM-L6-v2'):
     """Extract sentence transformer embeddings for K-centers algorithm."""
@@ -682,7 +682,10 @@ def main():
         ]
     elif args.experiment == "comparison":
         experiments_to_run = [
+            "entropy_voi",
+            "random_5",
             "gradient_voi_q0_human",
+            "gradient_voi_all_questions",
             "variable_gradient_comparison"
         ]
     else:

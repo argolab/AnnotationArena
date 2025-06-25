@@ -205,3 +205,4 @@ outputs/*
 output/*
 src/plot.py
 src/post_analysis.py
+src/analysis
