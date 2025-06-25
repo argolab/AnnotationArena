@@ -23,7 +23,7 @@ from sklearn.metrics.pairwise import pairwise_distances
 os.environ.update({"TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "HF_HUB_OFFLINE": "1"})
 
 from config import Config, ModelConfig, DefaultHyperparams
-from utils import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset
+from utils import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset, get_experiment_config
 from annotationArena import AnnotationArena
 from imputer import ImputerEmbedding
 from selection import (
@@ -161,7 +161,8 @@ def run_enhanced_experiment(
     num_patterns_per_example=5,
     visible_ratio=0.5,
     config=None,
-    use_wandb=False
+    use_wandb=False,
+    experiment_config=None
 ):
     """Enhanced experiment runner with dynamic K-centers and improved validation resampling."""
     
@@ -477,7 +478,7 @@ def run_enhanced_experiment(
         if config and use_wandb:
             evaluator = ModelEvaluator(config, use_wandb)
             datasets = {'train': dataset_train, 'validation': dataset_val, 'test': dataset_test}
-            cycle_eval = evaluator.evaluate_active_learning_cycle(model, datasets, cycle_count)
+            cycle_eval = evaluator.evaluate_active_learning_cycle(model, datasets, cycle_count, experiment_config=experiment_config)
             
             val_metrics = cycle_eval['evaluations']['validation']['overall']
             test_metrics = cycle_eval['evaluations']['test']['overall']
@@ -638,24 +639,6 @@ def main():
     logger.info(f"Starting experiment: {args.experiment_name}")
     logger.info(f"Arguments: {vars(args)}")
     
-    # Initialize Wandb if requested
-    if args.use_wandb and WANDB_AVAILABLE:
-        wandb_config = vars(args).copy()
-        wandb_config.update({
-            'config_timestamp': config.timestamp,
-            'base_path': config.BASE_PATH
-        })
-        
-        wandb.init(
-            project=args.wandb_project,
-            entity=args.wandb_entity,
-            name=f"{args.experiment_name}_{config.timestamp}",
-            config=wandb_config
-        )
-        logger.info("Wandb initialized")
-    elif args.use_wandb:
-        logger.warning("Wandb requested but not available")
-    
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     
@@ -690,9 +673,38 @@ def main():
         ]
     else:
         experiments_to_run = [args.experiment]
-    
+
     for experiment in experiments_to_run:
-        logger.info(f"Running experiment: {experiment}")
+
+        logger.info(f"============ Running experiment: {experiment} ============")
+        
+        # Get experiment-specific configuration
+        experiment_config = get_experiment_config(experiment)
+        
+        # Create experiment-specific paths
+        experiment_exp_name = f"{args.experiment_name}_{experiment}"
+        experiment_paths = config.get_experiment_paths(experiment_exp_name)
+        
+        # Initialize Wandb for this specific experiment
+        if args.use_wandb and WANDB_AVAILABLE:
+            wandb_config = vars(args).copy()
+            wandb_config.update({
+                'config_timestamp': config.timestamp,
+                'base_path': config.BASE_PATH,
+                'experiment_type': experiment,
+                'feature_selection_strategy': experiment_config['feature_selection_strategy'],
+                'target_questions': experiment_config['target_questions']
+            })
+            
+            wandb.init(
+                project=args.wandb_project,
+                entity=args.wandb_entity,
+                name=f"{experiment_exp_name}_{config.timestamp}",
+                config=wandb_config
+            )
+            logger.info(f"Wandb initialized for experiment: {experiment}")
+        elif args.use_wandb:
+            logger.warning("Wandb requested but not available")
         
         model_copy = copy.deepcopy(model)
         
@@ -737,7 +749,8 @@ def main():
             'num_patterns_per_example': args.num_patterns_per_example,
             'visible_ratio': args.visible_ratio,
             'config': config,
-            'use_wandb': args.use_wandb
+            'use_wandb': args.use_wandb,
+            'experiment_config': experiment_config
         }
 
         if experiment == "random_all":
@@ -814,11 +827,11 @@ def main():
         
         experiment_results[experiment] = results
         
-        # Save model
-        torch.save(model_copy.state_dict(), exp_paths['model_file'])
+        # Save model with experiment-specific path
+        torch.save(model_copy.state_dict(), experiment_paths['model_file'])
         
-        # Save results
-        results_file = os.path.join(exp_paths['results_dir'], f"{experiment}_results.json")
+        # Save results with experiment-specific path
+        results_file = os.path.join(experiment_paths['results_dir'], f"{experiment}_results.json")
         with open(results_file, "w") as f:
             json.dump(results, f, indent=4)
         
@@ -827,6 +840,10 @@ def main():
         logger.info(f"Final test loss: {results['test_expected_losses'][-1]:.4f}")
         logger.info(f"Total examples annotated: {sum(results['examples_annotated'])}")
         logger.info(f"Total features annotated: {sum(results['features_annotated'])}")
+        
+        # Finish WandB run for this experiment
+        if args.use_wandb and WANDB_AVAILABLE and wandb.run is not None:
+            wandb.finish()
     
     # Save combined results
     if experiment_results:
@@ -835,9 +852,6 @@ def main():
             json.dump(experiment_results, f, indent=4)
             
         logger.info(f"All results saved to {exp_paths['results_dir']}")
-
-    if args.use_wandb and WANDB_AVAILABLE:
-        wandb.finish()
-
+        
 if __name__ == "__main__":
     main()

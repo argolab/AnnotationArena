@@ -735,6 +735,65 @@ def resample_validation_dataset(dataset_train, dataset_val, active_pool, annotat
     
     return dataset_val, active_pool, validation_example_indices
 
+def get_experiment_config(experiment_name):
+    """Get experiment-specific configuration for evaluation."""
+    
+    config_map = {
+        "entropy_voi": {
+            "feature_selection_strategy": "voi",
+            "target_questions": [0, 1, 2, 3, 4, 5, 6]
+        },
+        "random_5": {
+            "feature_selection_strategy": "random", 
+            "target_questions": [0, 1, 2, 3, 4, 5, 6]
+        },
+        "gradient_voi_q0_human": {
+            "feature_selection_strategy": "voi",
+            "target_questions": [0]
+        },
+        "gradient_voi_all_questions": {
+            "feature_selection_strategy": "voi", 
+            "target_questions": [0, 1, 2, 3, 4, 5, 6]
+        },
+        "variable_gradient_comparison": {
+            "feature_selection_strategy": "voi",
+            "target_questions": [0, 1, 2, 3, 4, 5, 6]
+        },
+        "random_all": {
+            "feature_selection_strategy": "random",
+            "target_questions": [0, 1, 2, 3, 4, 5, 6]
+        },
+        "gradient_all": {
+            "feature_selection_strategy": "voi", 
+            "target_questions": [0, 1, 2, 3, 4, 5, 6]
+        },
+        "entropy_all": {
+            "feature_selection_strategy": "entropy",
+            "target_questions": [0, 1, 2, 3, 4, 5, 6]
+        },
+        "gradient_voi": {
+            "feature_selection_strategy": "voi",
+            "target_questions": [0, 1, 2, 3, 4, 5, 6]
+        },
+        "gradient_entropy": {
+            "feature_selection_strategy": "entropy", 
+            "target_questions": [0, 1, 2, 3, 4, 5, 6]
+        },
+        "gradient_sequential": {
+            "feature_selection_strategy": "random",
+            "target_questions": [0, 1, 2, 3, 4, 5, 6]
+        },
+        "gradient_voi_q0_both": {
+            "feature_selection_strategy": "voi",
+            "target_questions": [0]
+        }
+    }
+    
+    return config_map.get(experiment_name, {
+        "feature_selection_strategy": "voi",
+        "target_questions": [0, 1, 2, 3, 4, 5, 6]
+    })
+
 if __name__ == "__main__":
     from config import Config
     config = Config("prabhav")  # or "local"

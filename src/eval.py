@@ -213,13 +213,22 @@ class ModelEvaluator:
         
         return evaluation_result
     
-    def evaluate_model_test(self, model, dataset: AnnotationDataset, dataset_name: str = "unknown", target_questions: Optional[List[int]] = None, split_type: str = "test", feature_selection_type: str = "voi") -> Dict[str, Any]:
+    def evaluate_model_test(self, model, dataset: AnnotationDataset, dataset_name: str = "unknown", 
+                       target_questions: Optional[List[int]] = None, split_type: str = "test", 
+                       experiment_config: Optional[Dict] = None) -> Dict[str, Any]:
+        
         """Comprehensive model evaluation on a dataset using active learning with feature selection."""
+        
+        # Extract configuration from experiment_config
+        if experiment_config:
+            feature_selection_type = experiment_config.get('feature_selection_strategy', 'voi')
+            eval_target_questions = experiment_config.get('target_questions', list(range(7)))
+        else:
+            feature_selection_type = 'voi'
+            eval_target_questions = target_questions if target_questions is not None else list(range(7))
         
         logger.info(f"\n-- Evaluating model on {dataset_name} {split_type} set ({len(dataset)} examples) with {feature_selection_type} feature selection --")
         
-        if target_questions is None:
-            target_questions = list(range(7))
         all_results = []
         model.eval()
         
@@ -244,14 +253,11 @@ class ModelEvaluator:
         
         # Count total features across all examples
         total_features = 14 * len(dataset_copy)
-        # for example_idx in range(len(dataset_copy)):
-        #     data_entry = dataset_copy.get_data_entry(example_idx)
-        #     total_features += len(data_entry['questions'])
         
         logger.info(f"Starting evaluation with {total_features} total features to collect")
         
         # Initial evaluation with no features observed (all positions unknown)
-        initial_eval = self.evaluate_model(model, dataset_copy, dataset_name, target_questions, f"{split_type}_initial")
+        initial_eval = self.evaluate_model(model, dataset_copy, dataset_name, eval_target_questions, f"{split_type}_initial")
         all_results.append(initial_eval)
         for metric_name in metrics_trends.keys():
             if metric_name in initial_eval['overall']:
@@ -275,7 +281,7 @@ class ModelEvaluator:
                     example_idx, dataset_copy, 
                     num_to_select=1,
                     loss_type="cross_entropy",
-                    target_questions=[0,1,2,3,4,5,6]
+                    target_questions=eval_target_questions
                 )
                 
                 # Observe selected features
@@ -296,8 +302,9 @@ class ModelEvaluator:
                 break
             
             # Evaluate model with newly observed features
-            current_eval = self.evaluate_model(model, dataset_copy, dataset_name, target_questions, f"{split_type}_step_{features_collected/len(dataset_copy)}")
+            current_eval = self.evaluate_model(model, dataset_copy, dataset_name, eval_target_questions, f"{split_type}_step_{features_collected/len(dataset_copy)}")
             all_results.append(current_eval)
+
             # Track metrics
             for metric_name in metrics_trends.keys():
                 if metric_name in current_eval['overall']:
@@ -335,7 +342,8 @@ class ModelEvaluator:
         return result, all_results[len(all_results) // 2] if all_results else initial_eval
     
     def evaluate_active_learning_cycle(self, model, datasets: Dict[str, AnnotationDataset], 
-                                 cycle_num: int, additional_metrics: Optional[Dict] = None) -> Dict[str, Any]:
+                             cycle_num: int, additional_metrics: Optional[Dict] = None,
+                             experiment_config: Optional[Dict] = None) -> Dict[str, Any]:
         """Evaluate model at the end of an active learning cycle."""
         
         logger.info(f"Evaluating active learning cycle {cycle_num}")
@@ -352,7 +360,7 @@ class ModelEvaluator:
                 eval_result = self.evaluate_model(model, dataset, dataset_name, split_type=dataset_name)
                 cycle_results['evaluations'][dataset_name] = eval_result
             else:
-                test_trend, eval_result = self.evaluate_model_test(model, dataset)
+                test_trend, eval_result = self.evaluate_model_test(model, dataset, experiment_config=experiment_config)
                 cycle_results["evaluations"]["test"] = eval_result
                 cycle_results["test_trend"] = test_trend
         
