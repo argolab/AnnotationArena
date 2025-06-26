@@ -665,7 +665,6 @@ def main():
         ]
     elif args.experiment == "comparison":
         experiments_to_run = [
-            "entropy_voi",
             "random_5",
             "gradient_voi_q0_human",
             "gradient_voi_all_questions",

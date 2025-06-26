@@ -3311,15 +3311,21 @@ class NewVariableGradientTopOnlySelector:
                         # Compute outputs using output_inputs (with proper masking)
                         outputs = model(output_inputs, annotators, questions, embeddings)
                         
-                        # Compute loss using loss_inputs (all positions use actual loss)
-                        # TODO: Check once with KL
+                        # Compute loss for single example to maintain gradient flow
+                        single_outputs = outputs[i:i+1]
+                        single_loss_labels = loss_labels[i:i+1] 
+                        single_loss_inputs = loss_inputs[i:i+1]
+                        single_questions = questions[i:i+1]
+                        single_embeddings = embeddings[i:i+1] if embeddings is not None else None
+                        
                         example_loss = model.compute_total_loss(
-                            outputs[i:i+1], loss_labels[i:i+1], loss_inputs[i:i+1], 
-                            questions[i:i+1], embeddings[i:i+1] if embeddings is not None else None,
+                            single_outputs, single_loss_labels, single_loss_inputs, 
+                            single_questions, single_embeddings,
                             full_supervision=True
                         )
-                        
-                        if example_loss > 0:
+
+                        if example_loss.item() > 0:
+                            
                             example_loss.backward()
                             sample_count += 1
                             

@@ -222,10 +222,11 @@ class ModelEvaluator:
         # Extract configuration from experiment_config
         if experiment_config:
             feature_selection_type = experiment_config.get('feature_selection_strategy', 'voi')
-            eval_target_questions = experiment_config.get('target_questions', list(range(7)))
         else:
             feature_selection_type = 'voi'
-            eval_target_questions = target_questions if target_questions is not None else list(range(7))
+            eval_target_questions = list(range(7))
+
+        eval_target_questions = list(range(7))
         
         logger.info(f"\n-- Evaluating model on {dataset_name} {split_type} set ({len(dataset)} examples) with {feature_selection_type} feature selection --")
         
