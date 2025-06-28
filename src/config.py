@@ -46,26 +46,47 @@ class Config:
     def get_data_paths(self, dataset="hanna"):
         """Get data file paths for a specific dataset."""
         data_dir = self.INPUT_DATA_DIR
-        return {
-            'train': os.path.join(data_dir, "initial_train.json"),
-            'validation': os.path.join(data_dir, "validation.json"),
-            'test': os.path.join(data_dir, "test.json"),
-            'active_pool': os.path.join(data_dir, "active_pool.json"),
-            'original_train': os.path.join(data_dir, "original_initial_train.json"),
-            'original_validation': os.path.join(data_dir, "original_validation.json"),
-            'original_test': os.path.join(data_dir, "original_test.json"),
-            'original_active_pool': os.path.join(data_dir, "original_active_pool.json"),
-        }
+        
+        if dataset == "summeval":
+            return {
+                'train': os.path.join(data_dir, "summeval_train.json"),
+                'validation': os.path.join(data_dir, "summeval_validation.json"),
+                'test': os.path.join(data_dir, "summeval_test.json"),
+                'active_pool': os.path.join(data_dir, "summeval_active_pool.json"),
+                'original_train': os.path.join(data_dir, "summeval_original_train.json"),
+                'original_validation': os.path.join(data_dir, "summeval_original_validation.json"),
+                'original_test': os.path.join(data_dir, "summeval_original_test.json"),
+                'original_active_pool': os.path.join(data_dir, "summeval_original_active_pool.json"),
+            }
+        else:
+            # Default HANNA paths
+            return {
+                'train': os.path.join(data_dir, "initial_train.json"),
+                'validation': os.path.join(data_dir, "validation.json"),
+                'test': os.path.join(data_dir, "test.json"),
+                'active_pool': os.path.join(data_dir, "active_pool.json"),
+                'original_train': os.path.join(data_dir, "original_initial_train.json"),
+                'original_validation': os.path.join(data_dir, "original_validation.json"),
+                'original_test': os.path.join(data_dir, "original_test.json"),
+                'original_active_pool': os.path.join(data_dir, "original_active_pool.json"),
+            }
     
-    def get_fixed_paths(self):
+    def get_fixed_paths(self, dataset="hanna"):
         """Get paths to fixed data files."""
         fixed_dir = self.INPUT_FIXED_DIR
-        return {
-            'questions': os.path.join(fixed_dir, "questions.json"),
-            'human_data': os.path.join(fixed_dir, "human-data-new.json"),
-            'gpt_data': os.path.join(fixed_dir, "gpt-3.5-turbo-data-new.json"),
-            'hanna_stories': os.path.join(fixed_dir, "hanna_stories_annotations_updated.csv")
-        }
+        
+        if dataset == "summeval":
+            return {
+                'summeval_annotations': os.path.join(fixed_dir, "model_annotations.aligned.jsonl"),
+            }
+        else:
+            # Default HANNA paths
+            return {
+                'questions': os.path.join(fixed_dir, "questions.json"),
+                'human_data': os.path.join(fixed_dir, "human-data-new.json"),
+                'gpt_data': os.path.join(fixed_dir, "gpt-3.5-turbo-data-new.json"),
+                'hanna_stories': os.path.join(fixed_dir, "hanna_stories_annotations_updated.csv")
+            }
     
     def get_experiment_paths(self, experiment_name):
         """Get paths for a specific experiment."""
@@ -123,17 +144,32 @@ class ModelConfig:
         'dropout': 0.1
     }
     
+    SUMMEVAL = {
+        'question_num': 4,           # coherence, consistency, fluency, relevance
+        'max_choices': 5,            # 1-5 rating scale
+        'encoder_layers_num': 6,     # Same transformer architecture
+        'attention_heads': 4,        # Same attention heads
+        'hidden_dim': 64,            # Same hidden dimension
+        'num_annotator': 8,          # 3 experts + 5 crowdworkers
+        'annotator_embedding_dim': 12,  # Embedding dimension for annotators
+        'dropout': 0.1               # Same dropout rate
+    }
+    
     @classmethod
-    def get_config(cls, dataset, training_buffer_size):
+    def get_config(cls, dataset, training_buffer_size=0):
         """Get model configuration for dataset."""
         if dataset == "hanna":
-            config = cls.HANNA
+            config = cls.HANNA.copy()
         elif dataset == "llm_rubric":
-            config = cls.LLM_RUBRIC
+            config = cls.LLM_RUBRIC.copy()
+        elif dataset == "summeval":
+            config = cls.SUMMEVAL.copy()
         else:
-            config = cls.HANNA
-        if not training_buffer_size == 0:
+            config = cls.HANNA.copy()  # Default fallback
+        
+        if training_buffer_size != 0:
             config["training_queue_size"] = training_buffer_size
+            
         return config
 
 class DefaultHyperparams:
@@ -156,3 +192,7 @@ class DefaultHyperparams:
     COLD_START = True
     RESAMPLE_VALIDATION = True
     RUN_UNTIL_EXHAUSTED = False
+    
+    # SummEval specific defaults
+    SUMMEVAL_FEATURES_PER_EXAMPLE = 8
+    SUMMEVAL_JSONL_PATH = "/export/fs06/psingh54/ActiveRubric-Internal/src/input/fixed/model_annotations.aligned.jsonl"

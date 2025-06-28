@@ -56,8 +56,17 @@ class ModelEvaluator:
         
         logger.info(f"Evaluating model on {dataset_name} {split_type} set ({len(dataset)} examples)")
         
+        # Auto-detect target questions based on model configuration
         if target_questions is None:
-            target_questions = list(range(7))  # Default for HANNA
+            if hasattr(model, 'question_num'):
+                if model.question_num == 4:  # SummEval
+                    target_questions = [0, 1, 2, 3]  # coherence, consistency, fluency, relevance
+                elif model.question_num == 7:  # HANNA
+                    target_questions = [0, 1, 2, 3, 4, 5, 6]  # All 7 questions
+                else:
+                    target_questions = list(range(model.question_num))
+            else:
+                target_questions = [0, 1, 2, 3]  # Default to SummEval
         
         model.eval()
         
@@ -182,9 +191,11 @@ class ModelEvaluator:
                 )
                 ann_metrics['count'] = len(annotator_predictions[ann_idx])
                 
-                # Determine annotator type
+                # Determine annotator type (works for both HANNA and SummEval)
                 if ann_idx == -1:
                     annotator_metrics['LLM'] = ann_metrics
+                elif ann_idx < 3:  # For SummEval: experts (0-2), for HANNA: first 3 humans
+                    annotator_metrics[f'Expert_{ann_idx}'] = ann_metrics
                 else:
                     annotator_metrics[f'Human_{ann_idx}'] = ann_metrics
         
@@ -222,11 +233,19 @@ class ModelEvaluator:
         # Extract configuration from experiment_config
         if experiment_config:
             feature_selection_type = experiment_config.get('feature_selection_strategy', 'voi')
+            eval_target_questions = experiment_config.get('target_questions', [0, 1, 2, 3])
         else:
             feature_selection_type = 'voi'
-            eval_target_questions = list(range(7))
-
-        eval_target_questions = list(range(7))
+            # Auto-detect target questions
+            if hasattr(model, 'question_num'):
+                if model.question_num == 4:  # SummEval
+                    eval_target_questions = [0, 1, 2, 3]
+                elif model.question_num == 7:  # HANNA
+                    eval_target_questions = [0, 1, 2, 3, 4, 5, 6]
+                else:
+                    eval_target_questions = list(range(model.question_num))
+            else:
+                eval_target_questions = [0, 1, 2, 3]  # Default to SummEval
         
         logger.info(f"\n-- Evaluating model on {dataset_name} {split_type} set ({len(dataset)} examples) with {feature_selection_type} feature selection --")
         
@@ -252,8 +271,18 @@ class ModelEvaluator:
             'avg_expected_loss': []
         }
         
-        # Count total features across all examples
-        total_features = 14 * len(dataset_copy)
+        # Count total features across all examples (depends on dataset)
+        if hasattr(model, 'question_num'):
+            if model.question_num == 4:  # SummEval: 8 annotators × 4 dimensions = 32
+                positions_per_example = 32
+            elif model.question_num == 7:  # HANNA: 2 annotators × 7 questions = 14
+                positions_per_example = 14
+            else:
+                positions_per_example = model.question_num * 2  # Estimate
+        else:
+            positions_per_example = 32  # Default to SummEval
+            
+        total_features = positions_per_example * len(dataset_copy)
         
         logger.info(f"Starting evaluation with {total_features} total features to collect")
         
@@ -357,7 +386,7 @@ class ModelEvaluator:
         
         # Evaluate on all provided datasets
         for dataset_name, dataset in datasets.items():
-            if not dataset_name == "test":
+            if dataset_name != "test":
                 eval_result = self.evaluate_model(model, dataset, dataset_name, split_type=dataset_name)
                 cycle_results['evaluations'][dataset_name] = eval_result
             else:

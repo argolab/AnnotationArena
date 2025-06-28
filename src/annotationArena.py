@@ -382,8 +382,18 @@ class AnnotationArena:
         if metrics is None:
             metrics = ["rmse", "pearson", "spearman", "kendall"]
             
+        # Default target questions based on dataset type
         if target_questions is None:
-            target_questions = [0, 1, 2, 3, 4, 5, 6]  # Default to Q0
+            # Check if model has question_num to determine dataset type
+            if hasattr(self.model, 'question_num'):
+                if self.model.question_num == 4:  # SummEval
+                    target_questions = [0, 1, 2, 3]  # All 4 dimensions
+                elif self.model.question_num == 7:  # HANNA
+                    target_questions = [0, 1, 2, 3, 4, 5, 6]  # All 7 questions
+                else:
+                    target_questions = list(range(self.model.question_num))
+            else:
+                target_questions = [0, 1, 2, 3]  # Default to SummEval
             
         all_preds = []
         all_true = []
@@ -417,7 +427,7 @@ class AnnotationArena:
                         # Fallback to answers if true_answers not available (backward compatibility)
                         true_label = torch.argmax(torch.tensor(entry['answers'][position])).item()
                     
-                    # Convert to scores (1-5 for HANNA, 1-4 for LLM_RUBRIC)
+                    # Convert to scores (1-5 for both HANNA and SummEval)
                     pred_score = pred + 1 if pred is not None else 1
                     true_score = true_label + 1
                     
