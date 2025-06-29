@@ -259,14 +259,9 @@ def run_enhanced_experiment(
         
         if resample_validation and cycle_count > 0:
             logger.info("Resampling validation set...")
-            current_val_indices = list(range(len(dataset_val)))
-            active_pool.extend(current_val_indices)
-            
             dataset_val, active_pool, validation_example_indices = resample_validation_dataset(
-                dataset_train, dataset_val, active_pool, annotated_examples, 
-                strategy="balanced_fixed_size", 
-                selected_examples=annotated_examples[-examples_per_cycle:] if annotated_examples else [],
-                validation_set_size=validation_set_size
+                dataset_train, active_pool, annotated_examples, 
+                validation_set_size, validation_example_indices
             )
         
         logger.info(f"Applying dynamic K-centers to select {min(active_set_size, len(active_pool))} from {len(active_pool)} examples...")
@@ -365,7 +360,7 @@ def run_enhanced_experiment(
         logger.info(f"Selected {len(selected_examples)} examples for annotation")
         
         # Track question selections for this cycle
-        question_counts = {f"Pos-{i}": 0 for i in range(14)}
+        question_counts = {f"Pos-{i}": 0 for i in range(32)}  # Changed from 14 to 32 for SummEval
         total_features_annotated = 0
         cycle_benefit_cost_ratios = []
         cycle_observation_costs = []
@@ -573,7 +568,7 @@ def main():
                        help="Whether to resample validation set during training")
     parser.add_argument("--run_until_exhausted", action="store_true", default=DefaultHyperparams.RUN_UNTIL_EXHAUSTED,
                        help="Whether to run until the active pool is exhausted")
-    parser.add_argument("--dataset", type=str, default="hanna", 
+    parser.add_argument("--dataset", type=str, default="summeval", 
                        help="Dataset to use")
     parser.add_argument("--runner", type=str, default="local", 
                        help="Runner identifier")
@@ -654,19 +649,17 @@ def main():
     
     experiment_results = {}
     
-    # Define experiments to run
+    # Define experiments to run - ONLY CHANGE: Reduced to 3 experiments for SummEval
     experiments_to_run = []
     if args.experiment == "all":
         experiments_to_run = [
-            "random_all", "gradient_all", "entropy_all", "random_5", 
-            "gradient_voi", "gradient_entropy", "entropy_voi", "gradient_sequential",
-            "gradient_voi_q0_human", "gradient_voi_q0_both", "gradient_voi_all_questions",
+            "random_5",
+            "gradient_voi_all_questions",
             "variable_gradient_comparison"
         ]
     elif args.experiment == "comparison":
         experiments_to_run = [
             "random_5",
-            "gradient_voi_q0_human",
             "gradient_voi_all_questions",
             "variable_gradient_comparison"
         ]
@@ -707,15 +700,14 @@ def main():
         
         model_copy = copy.deepcopy(model)
         
-        # Initialize data manager with config
+        # Initialize data manager with config - ONLY CHANGE: Use SummEval data preparation
         data_manager = DataManager(config)
-
-        if args.dataset == "hanna":
-            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=args.dataset, 
-                        cold_start=args.cold_start, use_embedding=args.use_embedding)
-        elif args.dataset == "llm_rubric":
-            data_manager.prepare_data(num_partition=1000, initial_train_ratio=0.0, dataset=args.dataset, 
-                        cold_start=args.cold_start, use_embedding=args.use_embedding)
+        data_manager.prepare_data(
+            jsonl_path=DefaultHyperparams.SUMMEVAL_JSONL_PATH,
+            num_partition=1600,
+            cold_start=args.cold_start,
+            use_embedding=args.use_embedding
+        )
 
         train_dataset = AnnotationDataset(data_manager.paths['train'])
         val_dataset = AnnotationDataset(data_manager.paths['validation'])
@@ -752,53 +744,11 @@ def main():
             'experiment_config': experiment_config
         }
 
-        if experiment == "random_all":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="random", model=model_copy,
-                observe_all_features=True,
-                **common_kwargs
-            )
-
-        elif experiment == "gradient_all":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="gradient", model=model_copy,
-                observe_all_features=True,
-                **common_kwargs
-            )
-
-        elif experiment == "entropy_all":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="entropy", model=model_copy,
-                observe_all_features=True,
-                **common_kwargs
-            )
-
-        elif experiment == "random_5":
+        if experiment == "random_5":
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="random", feature_strategy="random", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
-                **common_kwargs
-            )
-
-        elif experiment == "gradient_voi":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="gradient", feature_strategy="voi", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                loss_type=args.loss_type,
-                **common_kwargs
-            )
-
-        elif experiment == "gradient_voi_q0_human":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="gradient", feature_strategy="voi", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                loss_type=args.loss_type, target_questions=[0],
                 **common_kwargs
             )
 
@@ -807,7 +757,7 @@ def main():
                 active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="gradient", feature_strategy="voi", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
-                loss_type=args.loss_type, target_questions=[0, 1, 2, 3, 4, 5, 6],
+                loss_type=args.loss_type, target_questions=[0, 1, 2, 3],
                 **common_kwargs
             )
 
