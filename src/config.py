@@ -151,7 +151,7 @@ class ModelConfig:
         'attention_heads': 4,        # Same attention heads
         'hidden_dim': 64,            # Same hidden dimension
         'num_annotator': 8,          # 3 experts + 5 crowdworkers
-        'annotator_embedding_dim': 12,  # Embedding dimension for annotators
+        'annotator_embedding_dim': 15,  # Embedding dimension for annotators
         'dropout': 0.1               # Same dropout rate
     }
     
