@@ -260,8 +260,10 @@ def run_enhanced_experiment(
         if resample_validation and cycle_count > 0:
             logger.info("Resampling validation set...")
             dataset_val, active_pool, validation_example_indices = resample_validation_dataset(
-                dataset_train, active_pool, annotated_examples, 
-                validation_set_size, validation_example_indices
+                dataset_train, dataset_val, active_pool, annotated_examples, 
+                strategy="balanced_fixed_size", 
+                selected_examples=annotated_examples[-examples_per_cycle:] if annotated_examples else [],
+                validation_set_size=validation_set_size
             )
         
         logger.info(f"Applying dynamic K-centers to select {min(active_set_size, len(active_pool))} from {len(active_pool)} examples...")
