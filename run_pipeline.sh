@@ -42,3 +42,4 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --use_wandb \
     --wandb_project active-learning-hanna \
     --wandb_entity prabhavsingh55221-johns-hopkins-university \
+    --fast_eval

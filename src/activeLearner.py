@@ -613,7 +613,7 @@ def main():
                        help='Experiment name for logging and file naming')
     parser.add_argument('--training_buffer_size', type=int, default=0,
                        help='Buffer size for maximum number of examples seen in the training')
-    parser.add_argument("--fast_eval", action="store_true", default=False,
+    parser.add_argument("--fast_eval", action="store_true", default=True,
                    help="Use fast evaluation by pre-computing position rankings")
     
     # Logging arguments
