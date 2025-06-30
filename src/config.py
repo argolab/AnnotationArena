@@ -10,10 +10,10 @@ from datetime import datetime
 class Config:
     """Configuration management for Active Learner framework."""
     
-    def __init__(self, runner="local"):
+    def __init__(self, runner="local", dataset="hanna"):
         self.runner = runner
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
+        self.dataset = dataset
         if runner == "prabhav":
             self.BASE_PATH = "/export/fs06/psingh54/ActiveRubric-Internal/src"
         else:
@@ -21,27 +21,27 @@ class Config:
     
     @property
     def INPUT_DATA_DIR(self):
-        return os.path.join(self.BASE_PATH, "input", "data")
+        return os.path.join(self.BASE_PATH, f"input_{self.dataset}", "data")
     
     @property
     def INPUT_FIXED_DIR(self):
-        return os.path.join(self.BASE_PATH, "input", "fixed")
+        return os.path.join(self.BASE_PATH, f"input_{self.dataset}", "fixed")
     
     @property
     def LOGS_DIR(self):
-        return os.path.join(self.BASE_PATH, "logs")
+        return os.path.join(self.BASE_PATH, f"logs_{self.dataset}")
     
     @property
     def OUTPUT_RESULTS_DIR(self):
-        return os.path.join(self.BASE_PATH, "output", "results")
+        return os.path.join(self.BASE_PATH, f"output_{self.dataset}", "results")
     
     @property
     def OUTPUT_PLOTS_DIR(self):
-        return os.path.join(self.BASE_PATH, "output", "plots")
+        return os.path.join(self.BASE_PATH, f"output_{self.dataset}", "plots")
     
     @property
     def MODELS_DIR(self):
-        return os.path.join(self.BASE_PATH, "output", "models")
+        return os.path.join(self.BASE_PATH, f"output_{self.dataset}", "models")
     
     def get_data_paths(self, dataset="hanna"):
         """Get data file paths for a specific dataset."""
@@ -57,7 +57,7 @@ class Config:
             'original_active_pool': os.path.join(data_dir, "original_active_pool.json"),
         }
     
-    def get_fixed_paths(self):
+    def get_fixed_paths(self, dataset="hanna"):
         """Get paths to fixed data files."""
         fixed_dir = self.INPUT_FIXED_DIR
         return {

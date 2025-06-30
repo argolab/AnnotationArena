@@ -197,6 +197,7 @@ cython_debug/
 v1/outputs/
 *.ipynb
 src/input/data/
+src/input_llm_rubric/data/
 src/logs/
 wandb/
 slurm*
@@ -206,4 +207,6 @@ output/*
 src/plot.py
 src/post_analysis.py
 src/analysis
-LLMRubric/*
+LLM-Rubric/*
+logs_llm_rubric/*
+output_llm_rubric/*

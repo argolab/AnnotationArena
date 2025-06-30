@@ -53,8 +53,8 @@ np.random.seed(90)
 os.environ.update({"TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "HF_HUB_OFFLINE": "1"})
 
 # Change Based on Usage.
-model = SentenceTransformer("all-MiniLM-L6-v2")
-# model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
+# model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
 
 def extract_embeddings_features(dataset_entries, model_name='all-MiniLM-L6-v2'):
     """Extract sentence transformer embeddings for K-centers algorithm."""
@@ -617,7 +617,7 @@ def main():
     args = parser.parse_args()
     
     # Initialize config
-    config = Config(args.runner)
+    config = Config(args.runner, args.dataset)
     config.ensure_directories()
     
     # Set experiment name if not provided
@@ -714,7 +714,7 @@ def main():
             data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=args.dataset, 
                         cold_start=args.cold_start, use_embedding=args.use_embedding)
         elif args.dataset == "llm_rubric":
-            data_manager.prepare_data(num_partition=1000, initial_train_ratio=0.0, dataset=args.dataset, 
+            data_manager.prepare_data(num_partition=225, initial_train_ratio=0.0, dataset=args.dataset, 
                         cold_start=args.cold_start, use_embedding=args.use_embedding)
 
         train_dataset = AnnotationDataset(data_manager.paths['train'])

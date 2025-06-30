@@ -23,8 +23,8 @@ from sentence_transformers import SentenceTransformer
 logger = logging.getLogger(__name__)
 
 # Change Based on Usage
-model = SentenceTransformer("all-MiniLM-L6-v2")
-# model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
+# model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
 
 random.seed(90)
 torch.manual_seed(90)
@@ -54,7 +54,7 @@ class DataManager:
             logger.info("Data already exists, skipping preparation")
             return
 
-        if use_embedding and not dataset == "hanna":
+        if use_embedding and not dataset in ["hanna", "llm_rubric"]:
             raise ValueError("Not yet support other datasets with text embedding")
         if dataset == "gaussian":
             pass
@@ -73,7 +73,7 @@ class DataManager:
         if use_embedding and not os.path.exists(os.path.join(self.config.INPUT_DATA_DIR, "text_embeddings.json")):
             logger.info("Preparing text embeddings with sentence bert")
             print("Preparing all text embeddings with sentence bert")
-            self.prepare_text_embeddings(num_partition)
+            self.prepare_text_embeddings(num_partition, dataset)
             print("Done\n")
             logger.info("Text embeddings preparation completed")
         
@@ -87,10 +87,17 @@ class DataManager:
         
         random.seed(42)
         random.shuffle(text_ids)
+
+        if dataset == "hanna":
+            validation_ratio = 0.3
+            test_ratio = 0.2
+        else:
+            validation_ratio = 0.1
+            test_ratio = 0.1
         
         initial_train_size = int(num_partition * initial_train_ratio)
-        validation_size = int(num_partition * 0.3)
-        test_size = int(num_partition * 0.2)
+        validation_size = int(num_partition * validation_ratio)
+        test_size = int(num_partition * test_ratio)
         active_pool_size = num_partition - initial_train_size - validation_size - test_size
 
         initial_train_texts = text_ids[:initial_train_size]
@@ -132,42 +139,55 @@ class DataManager:
         print('ALL DATA CREATED!')
         return True
     
-    def prepare_text_embeddings(self, num_partition):
+    def prepare_text_embeddings(self, num_partition, dataset):
         """Prepare text embeddings for HANNA dataset."""
-        logger.info(f"Loading HANNA stories from {self.fixed_paths['hanna_stories']}")
-        df = pd.read_csv(self.fixed_paths['hanna_stories'])
-        # texts = df['TEXT'].head(num_partition)
-        texts = df['TEXT']
-        logger.info(f"Processing {len(texts)} text entries for embeddings")
+        if dataset == "hanna":
+            logger.info(f"Loading HANNA stories from {self.fixed_paths['hanna_stories']}")
+            df = pd.read_csv(self.fixed_paths['hanna_stories'])
+            # texts = df['TEXT'].head(num_partition)
+            texts = df['TEXT']
+            logger.info(f"Processing {len(texts)} text entries for embeddings")
 
-        def split_text(entry):
-            prompt = ""
-            story = ""
-            if isinstance(entry, str):
-                if "Prompt:" in entry and "Story:" in entry:
-                    parts = entry.split("Story:", 1)
-                    prompt = parts[0].replace("Prompt:", "").strip()
-                    story = parts[1].strip()
-            return pd.Series([prompt, story])
+            def split_text(entry):
+                prompt = ""
+                story = ""
+                if isinstance(entry, str):
+                    if "Prompt:" in entry and "Story:" in entry:
+                        parts = entry.split("Story:", 1)
+                        prompt = parts[0].replace("Prompt:", "").strip()
+                        story = parts[1].strip()
+                return pd.Series([prompt, story])
 
-        df_split = texts.apply(split_text)
-        df_split.columns = ['Prompt', 'Story']
-        data_list = df_split.to_dict(orient='records')
+            df_split = texts.apply(split_text)
+            df_split.columns = ['Prompt', 'Story']
+            data_list = df_split.to_dict(orient='records')
 
-        prompts_stories_path = os.path.join(self.config.INPUT_DATA_DIR, "prompts_and_stories.json")
-        with open(prompts_stories_path, 'w', encoding='utf-8') as f:
-            json.dump(data_list, f, indent=2, ensure_ascii=False)
-        logger.info(f"Saved prompts and stories to {prompts_stories_path}")
+            prompts_stories_path = os.path.join(self.config.INPUT_DATA_DIR, "prompts_and_stories.json")
+            with open(prompts_stories_path, 'w', encoding='utf-8') as f:
+                json.dump(data_list, f, indent=2, ensure_ascii=False)
+            logger.info(f"Saved prompts and stories to {prompts_stories_path}")
 
-        logger.info("Generating embeddings using SentenceTransformer")
-        all_embeddings = []
-        for entry in tqdm(data_list):
-            all_embeddings.append((model.encode([entry["Story"]], show_progress_bar=False)[0, :] + model.encode([entry["Prompt"]], show_progress_bar=False)[0, :]).tolist())
-        
-        embeddings_path = os.path.join(self.config.INPUT_DATA_DIR, "text_embeddings.json")
-        with open(embeddings_path, 'w') as f:
-            json.dump(all_embeddings, f, indent=2)
-        logger.info(f"Saved {len(all_embeddings)} embeddings to {embeddings_path}")
+            logger.info("Generating embeddings using SentenceTransformer")
+            all_embeddings = []
+            for entry in tqdm(data_list):
+                all_embeddings.append((model.encode([entry["Story"]], show_progress_bar=False)[0, :] + model.encode([entry["Prompt"]], show_progress_bar=False)[0, :]).tolist())
+            
+            embeddings_path = os.path.join(self.config.INPUT_DATA_DIR, "text_embeddings.json")
+            with open(embeddings_path, 'w') as f:
+                json.dump(all_embeddings, f, indent=2)
+            logger.info(f"Saved {len(all_embeddings)} embeddings to {embeddings_path}")
+        elif dataset == "llm_rubric":
+            logger.info("Loading LLM Rubric data")
+            all_embeddings = {}
+            with open(os.path.join(self.config.INPUT_DATA_DIR, "texts.json")) as file:
+                data = json.load(file)
+            for key, text in data.items():
+                all_embeddings[key] = model.encode([text], show_progress_bar=False)[0, :].tolist()
+            embeddings_path = os.path.join(self.config.INPUT_DATA_DIR, "text_embeddings.json")
+            with open(embeddings_path, 'w') as f:
+                json.dump(all_embeddings, f, indent=2)
+            logger.info(f"Saved {len(all_embeddings.keys())} embeddings to {embeddings_path}")
+
 
     def _prepare_entries(self, texts, data_list, split_type, llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset, cold_start=False, use_embedding=False):
         """Prepare data entries for a specific split."""
@@ -295,7 +315,17 @@ class DataManager:
         elif dataset == "llm_rubric":
             logger.info("Processing LLM Rubric dataset entries")
 
+            if use_embedding:
+                logger.debug("Loading question data and text data for embeddings")
+                print(self.fixed_paths['questions'])
+                with open(self.fixed_paths['questions'], "r", encoding='utf-8') as file:
+                    question_data = json.load(file)
+                with open(os.path.join(self.config.INPUT_DATA_DIR, "texts.json"), "r", encoding="utf-8") as file:
+                    text_data = json.load(file)
+
             for text_id in texts:
+                if use_embedding and text_id not in text_data.keys():
+                    continue
                 annotators = list(human_data[text_id].keys())
 
                 for annotator in annotators:
@@ -306,7 +336,8 @@ class DataManager:
                         "annotators": [],
                         "questions": [],
                         "orig_split": split_type,
-                        "observation_history": []
+                        "observation_history": [],
+                        "text_embedding": []
                     }
                 
                     # Process LLM questions
@@ -314,6 +345,10 @@ class DataManager:
                         true_prob = llm_data[text_id][question]
                         
                         if cold_start and split_type in ['active_pool', 'validation']:
+                            mask_bit = 1
+                            combined_input = [mask_bit] + [0.0] * 4
+                            entry["known_questions"].append(0)
+                        elif split_type == "test":
                             mask_bit = 1
                             combined_input = [mask_bit] + [0.0] * 4
                             entry["known_questions"].append(0)
@@ -326,6 +361,12 @@ class DataManager:
                         entry["answers"].append(true_prob)
                         entry["annotators"].append(-1)
                         entry["questions"].append(question_indices[question])
+
+                        if use_embedding:
+                            sentence = text_data[text_id] + question_data[question]
+                            embedding = model.encode([sentence], show_progress_bar=False)[0, :]
+                            entry["text_embedding"].append(embedding.tolist())
+
 
                     # Process human questions
                     for q_idx, question in enumerate(question_list):
@@ -369,19 +410,18 @@ class DataManager:
                             entry["input"].append(combined_input)
 
                         elif split_type == 'test':
-                            if random.random() < 0.5:
-                                mask_bit = 1
-                                combined_input = [mask_bit] + [0.0] * 4
-                                entry["known_questions"].append(0)
-                            else:
-                                mask_bit = 0
-                                combined_input = [mask_bit] + true_prob
-                                entry["known_questions"].append(1)
+                            mask_bit = 1
+                            combined_input = [mask_bit] + [0.0] * 4
+                            entry["known_questions"].append(0)
                             entry["input"].append(combined_input)
                             
                         entry["answers"].append(true_prob)   
                         entry["annotators"].append(int(annotator))
                         entry["questions"].append(question_indices[question])
+                        if use_embedding:
+                            sentence = text_data[text_id] + question_data[question]
+                            embedding = model.encode([sentence], show_progress_bar=False)[0, :]
+                            entry["text_embedding"].append(embedding.tolist())
                     
                     data_list.append(entry)
                     logger.debug(f"Created LLM rubric entry for text_id {text_id}, annotator {annotator}")
