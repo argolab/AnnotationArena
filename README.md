@@ -231,7 +231,7 @@ The framework supports two main datasets:
 
 Data preparation is handled automatically with proper train/validation/test splits and active pool management.
 
-## Advanced Usage
+## More Detail
 
 ### Custom Selection Strategies
 
