@@ -30,6 +30,40 @@ random.seed(90)
 torch.manual_seed(90)
 np.random.seed(90)
 
+def get_annotator_cost(annotator_id):
+    """
+    Get cost for annotating based on annotator type.
+    
+    Args:
+        annotator_id: ID of the annotator (0-2 for experts, 3-7 for turkers)
+    
+    Returns:
+        float: Cost of annotation (5.0 for experts, 1.0 for turkers)
+    """
+    if annotator_id < 3:  # Expert annotators (0, 1, 2)
+        return 5.0
+    else:  # Turker annotators (3, 4, 5, 6, 7)
+        return 1.0
+    
+def create_position_costs(dataset, example_idx):
+    """
+    Create costs dictionary for all positions in an example based on annotator types.
+    
+    Args:
+        dataset: Dataset containing the example
+        example_idx: Index of the example
+        
+    Returns:
+        dict: Mapping from position to cost
+    """
+    data_entry = dataset.get_data_entry(example_idx)
+    position_costs = {}
+    
+    for pos, annotator_id in enumerate(data_entry['annotators']):
+        position_costs[pos] = get_annotator_cost(annotator_id)
+    
+    return position_costs
+
 class DataManager:
     """Manages SummEval data preparation using existing JSONL file."""
     

@@ -224,7 +224,7 @@ class ModelEvaluator:
         
         return evaluation_result
     
-    def evaluate_model_test(self, model, dataset: AnnotationDataset, dataset_name: str = "unknown", 
+    def evaluate_model_test(self, model, fast_eval, dataset: AnnotationDataset, dataset_name: str = "unknown", 
                        target_questions: Optional[List[int]] = None, split_type: str = "test", 
                        experiment_config: Optional[Dict] = None) -> Dict[str, Any]:
         
@@ -299,6 +299,23 @@ class ModelEvaluator:
         
         # Iteratively select and observe features
         features_collected = 0
+
+        if fast_eval and split_type == "test":
+            logger.info("Pre-computing position rankings for fast evaluation...")
+            example_rankings = {}
+            for example_idx in tqdm(range(len(dataset_copy)), desc="Pre-computing rankings"):
+                masked_positions = dataset_copy.get_masked_positions(example_idx)
+                if masked_positions:
+                    all_ranked_features = feature_selector.select_features(
+                        example_idx, dataset_copy,
+                        num_to_select=len(masked_positions),  # Rank ALL positions
+                        loss_type="cross_entropy",
+                        target_questions=eval_target_questions
+                    )
+                    example_rankings[example_idx] = all_ranked_features
+                else:
+                    example_rankings[example_idx] = []
+
         
         while features_collected < total_features:
 
@@ -306,13 +323,31 @@ class ModelEvaluator:
             features_selected_this_round = 0
             
             for example_idx in tqdm(range(len(dataset_copy))):
-                # Select features for this example (limit to 1 per round)
-                selected_features = feature_selector.select_features(
-                    example_idx, dataset_copy, 
-                    num_to_select=1,
-                    loss_type="cross_entropy",
-                    target_questions=eval_target_questions
-                )
+
+                if fast_eval and split_type == "test":
+                    if example_idx in example_rankings:
+
+                        rankings = example_rankings[example_idx]
+                        # Find next unobserved position
+                        selected_features = []
+                        for feature_info in rankings:
+                            pos = feature_info[0]
+                            # Check if position is still masked (unobserved)
+                            if pos in dataset_copy.get_masked_positions(example_idx):
+                                selected_features = [feature_info]
+                                break
+
+                    else:
+                        selected_features = []
+
+                else:
+                    # Select features for this example (limit to 1 per round)
+                    selected_features = feature_selector.select_features(
+                        example_idx, dataset_copy, 
+                        num_to_select=1,
+                        loss_type="cross_entropy",
+                        target_questions=eval_target_questions
+                    )
                 
                 # Observe selected features
                 for feature_info in selected_features:
@@ -372,11 +407,11 @@ class ModelEvaluator:
         return result, all_results[len(all_results) // 2] if all_results else initial_eval
     
     def evaluate_active_learning_cycle(self, model, datasets: Dict[str, AnnotationDataset], 
-                             cycle_num: int, additional_metrics: Optional[Dict] = None,
+                             cycle_num: int, fast_eval, additional_metrics: Optional[Dict] = None,
                              experiment_config: Optional[Dict] = None) -> Dict[str, Any]:
         """Evaluate model at the end of an active learning cycle."""
         
-        logger.info(f"Evaluating active learning cycle {cycle_num}")
+        logger.info(f"Evaluating active learning cycle {cycle_num} with Fast Eval as {fast_eval}")
         
         cycle_results = {
             'cycle': cycle_num,
@@ -390,7 +425,7 @@ class ModelEvaluator:
                 eval_result = self.evaluate_model(model, dataset, dataset_name, split_type=dataset_name)
                 cycle_results['evaluations'][dataset_name] = eval_result
             else:
-                test_trend, eval_result = self.evaluate_model_test(model, dataset, experiment_config=experiment_config)
+                test_trend, eval_result = self.evaluate_model_test(model, dataset, fast_eval, experiment_config=experiment_config)
                 cycle_results["evaluations"]["test"] = eval_result
                 cycle_results["test_trend"] = test_trend
         

@@ -23,7 +23,7 @@ from sklearn.metrics.pairwise import pairwise_distances
 os.environ.update({"TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "HF_HUB_OFFLINE": "1"})
 
 from config import Config, ModelConfig, DefaultHyperparams
-from utils import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset, get_experiment_config
+from utils import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset, get_experiment_config, create_position_costs
 from annotationArena import AnnotationArena
 from imputer import ImputerEmbedding
 from selection import (
@@ -162,7 +162,8 @@ def run_enhanced_experiment(
     visible_ratio=0.5,
     config=None,
     use_wandb=False,
-    experiment_config=None
+    experiment_config=None,
+    fast_eval=False
 ):
     """Enhanced experiment runner with dynamic K-centers and improved validation resampling."""
     
@@ -396,16 +397,23 @@ def run_enhanced_experiment(
                 feature_selector = SelectionFactory.create_feature_strategy(feature_strategy, model, device)
                 
                 if example_strategy == "combine" and example_idx in selected_examples_dict:
+                    
                     selected_positions = selected_examples_dict[example_idx][:features_per_example]
                     selected_features = [(pos, 1.0, 1.0, 1.0) for pos in selected_positions]
+
                 else:
+                    
                     feature_kwargs = {}
                     if target_questions is not None:
                         feature_kwargs['target_questions'] = target_questions
                     
+                    # Create costs dictionary based on annotator types
+                    position_costs = create_position_costs(dataset_train, example_idx)
+                    
                     selected_features = feature_selector.select_features(
                         example_idx, dataset_train, 
                         num_to_select=features_per_example,
+                        costs=position_costs,
                         loss_type=loss_type,
                         **feature_kwargs
                     )
@@ -475,8 +483,8 @@ def run_enhanced_experiment(
         if config and use_wandb:
             evaluator = ModelEvaluator(config, use_wandb)
             datasets = {'train': dataset_train, 'validation': dataset_val, 'test': dataset_test}
-            cycle_eval = evaluator.evaluate_active_learning_cycle(model, datasets, cycle_count, experiment_config=experiment_config)
-            
+            cycle_eval = evaluator.evaluate_active_learning_cycle(model, datasets, cycle_count, experiment_config=experiment_config, fast_eval=fast_eval)
+
             val_metrics = cycle_eval['evaluations']['validation']['overall']
             test_metrics = cycle_eval['evaluations']['test']['overall']
         else:
@@ -605,6 +613,8 @@ def main():
                        help='Experiment name for logging and file naming')
     parser.add_argument('--training_buffer_size', type=int, default=0,
                        help='Buffer size for maximum number of examples seen in the training')
+    parser.add_argument("--fast_eval", action="store_true", default=False,
+                   help="Use fast evaluation by pre-computing position rankings")
     
     # Logging arguments
     parser.add_argument('--log_level', type=str, default='INFO',
@@ -723,6 +733,8 @@ def main():
         logger.info(f"Loaded datasets: Train={len(train_dataset)}, Val={len(val_dataset)}, "
               f"Test={len(test_dataset)}, Active Pool={len(active_pool_dataset)}")
 
+        logger.info(f"Fast Evaluation Method: {args.fast_eval}")
+
         # Run experiments based on type
         common_kwargs = {
             'cycles': args.cycles,
@@ -743,7 +755,8 @@ def main():
             'visible_ratio': args.visible_ratio,
             'config': config,
             'use_wandb': args.use_wandb,
-            'experiment_config': experiment_config
+            'experiment_config': experiment_config,
+            'fast_eval': args.fast_eval
         }
 
         if experiment == "random_5":
