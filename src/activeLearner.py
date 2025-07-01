@@ -483,7 +483,12 @@ def run_enhanced_experiment(
         if config and use_wandb:
             evaluator = ModelEvaluator(config, use_wandb)
             datasets = {'train': dataset_train, 'validation': dataset_val, 'test': dataset_test}
-            cycle_eval = evaluator.evaluate_active_learning_cycle(model, datasets, cycle_count, experiment_config=experiment_config, fast_eval=fast_eval)
+            cycle_eval = evaluator.evaluate_active_learning_cycle(
+                model=model,
+                datasets=datasets,
+                cycle_num=cycle_count,
+                fast_eval=fast_eval,
+                experiment_config=experiment_config)
 
             val_metrics = cycle_eval['evaluations']['validation']['overall']
             test_metrics = cycle_eval['evaluations']['test']['overall']

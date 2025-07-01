@@ -224,7 +224,7 @@ class ModelEvaluator:
         
         return evaluation_result
     
-    def evaluate_model_test(self, model, fast_eval, dataset: AnnotationDataset, dataset_name: str = "unknown", 
+    def evaluate_model_test(self, model, fast_eval: bool, dataset: AnnotationDataset, dataset_name: str = "unknown", 
                        target_questions: Optional[List[int]] = None, split_type: str = "test", 
                        experiment_config: Optional[Dict] = None) -> Dict[str, Any]:
         
@@ -407,7 +407,7 @@ class ModelEvaluator:
         return result, all_results[len(all_results) // 2] if all_results else initial_eval
     
     def evaluate_active_learning_cycle(self, model, datasets: Dict[str, AnnotationDataset], 
-                             cycle_num: int, fast_eval, additional_metrics: Optional[Dict] = None,
+                             cycle_num: int, fast_eval: bool = True, additional_metrics: Optional[Dict] = None,
                              experiment_config: Optional[Dict] = None) -> Dict[str, Any]:
         """Evaluate model at the end of an active learning cycle."""
         
@@ -425,7 +425,12 @@ class ModelEvaluator:
                 eval_result = self.evaluate_model(model, dataset, dataset_name, split_type=dataset_name)
                 cycle_results['evaluations'][dataset_name] = eval_result
             else:
-                test_trend, eval_result = self.evaluate_model_test(model, dataset, fast_eval, experiment_config=experiment_config)
+                test_trend, eval_result = self.evaluate_model_test(
+                    model,
+                    fast_eval=fast_eval,
+                    dataset=dataset,
+                    experiment_config=experiment_config
+                )
                 cycle_results["evaluations"]["test"] = eval_result
                 cycle_results["test_trend"] = test_trend
         
