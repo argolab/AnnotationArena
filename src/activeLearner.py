@@ -596,6 +596,9 @@ def main():
                    help='Ratio of observed positions to keep visible in dynamic masking')
     parser.add_argument('--output_path', type=str,
                    help='Folder to Save In')
+
+    parser.add_argument("--calibration_holdout_ratio", type=float, default=0.1,
+                      help="Ratio of data to hold out for conformal calibration (default: 0.1)")
     
     # Wandb arguments
     parser.add_argument('--use_wandb', action='store_true',
@@ -712,10 +715,10 @@ def main():
 
         if args.dataset == "hanna":
             data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=args.dataset, 
-                        cold_start=args.cold_start, use_embedding=args.use_embedding)
+                        cold_start=args.cold_start, use_embedding=args.use_embedding, calibration_holdout_ratio=args.calibration_holdout_ratio)
         elif args.dataset == "llm_rubric":
             data_manager.prepare_data(num_partition=1000, initial_train_ratio=0.0, dataset=args.dataset, 
-                        cold_start=args.cold_start, use_embedding=args.use_embedding)
+                        cold_start=args.cold_start, use_embedding=args.use_embedding, calibration_holdout_ratio=args.calibration_holdout_ratio)
 
         train_dataset = AnnotationDataset(data_manager.paths['train'])
         val_dataset = AnnotationDataset(data_manager.paths['validation'])
@@ -825,6 +828,13 @@ def main():
             continue
         
         experiment_results[experiment] = results
+
+        calibration_path = os.path.join(config.INPUT_DATA_DIR, "calibration_holdout.json")
+        if os.path.exists(calibration_path):
+            logger.info(f"Calibration holdout saved at: {calibration_path}")
+            print(f"Calibration holdout available at: {calibration_path}")
+        else:
+            logger.warning("No calibration holdout found - may need to regenerate data")
         
         # Save model with experiment-specific path
         torch.save(model_copy.state_dict(), experiment_paths['model_file'])

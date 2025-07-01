@@ -44,10 +44,13 @@ class DataManager:
         logger.debug(f"Data paths: {self.paths}")
         logger.debug(f"Fixed paths: {self.fixed_paths}")
     
-    def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, dataset="hanna", cold_start=False, use_embedding=False):
-        """Prepare data splits for active learning experiments."""
-        logger.info(f"Preparing data: num_partition={num_partition}, dataset={dataset}, cold_start={cold_start}, use_embedding={use_embedding}")
+    def prepare_data(self, num_partition=1200, known_human_questions_val=0, initial_train_ratio=0.0, 
+                 dataset="hanna", cold_start=False, use_embedding=False, calibration_holdout_ratio=0.1):
+        """Prepare data splits for active learning experiments with calibration holdout."""
+
+        logger.info(f"Preparing data: num_partition={num_partition}, dataset={dataset}, cold_start={cold_start}, use_embedding={use_embedding}, calibration_holdout_ratio={calibration_holdout_ratio}")
         print(f"Use embedding: {use_embedding}")
+        print(f"Calibration holdout ratio: {calibration_holdout_ratio}")
         print(self.config.INPUT_DATA_DIR)
         
         if os.path.exists(self.paths['active_pool']):
@@ -88,15 +91,61 @@ class DataManager:
         random.seed(42)
         random.shuffle(text_ids)
         
-        initial_train_size = int(num_partition * initial_train_ratio)
-        validation_size = int(num_partition * 0.3)
-        test_size = int(num_partition * 0.2)
-        active_pool_size = num_partition - initial_train_size - validation_size - test_size
+        # === NEW: Extract calibration holdout FIRST ===
+        total_available = len(text_ids)
+        calibration_size = int(total_available * calibration_holdout_ratio)
+        
+        # Split text_ids into calibration holdout and active learning pool
+        calibration_text_ids = text_ids[:calibration_size]
+        remaining_text_ids = text_ids[calibration_size:]
+        
+        logger.info(f"Calibration holdout: {len(calibration_text_ids)} examples ({calibration_holdout_ratio*100:.1f}%)")
+        logger.info(f"Available for active learning: {len(remaining_text_ids)} examples")
+        
+        # Create fully annotated calibration dataset (NO MASKING)
+        calibration_data = []
+        logger.info("Creating fully annotated calibration holdout")
+        print('-- Creating Calibration Holdout (Fully Annotated) --')
+        self._prepare_entries(calibration_text_ids, calibration_data, 'calibration', llm_data, human_data, 
+                            question_list, question_indices, known_human_questions_val, 
+                            dataset=dataset, cold_start=False, use_embedding=use_embedding)
+        
+        # Save calibration holdout
+        calibration_path = os.path.join(self.config.INPUT_DATA_DIR, "calibration_holdout.json")
+        with open(calibration_path, "w") as f:
+            json.dump(calibration_data, f)
+        logger.info(f"Saved calibration holdout: {len(calibration_data)} entries to {calibration_path}")
+        print(f"Saved calibration holdout: {len(calibration_data)} entries")
+        
+        # Save calibration metadata for reference
+        calibration_metadata = {
+            'calibration_text_ids': calibration_text_ids,
+            'calibration_ratio': calibration_holdout_ratio,
+            'calibration_size': len(calibration_text_ids),
+            'total_original_size': total_available,
+            'remaining_for_active_learning': len(remaining_text_ids)
+        }
+        metadata_path = os.path.join(self.config.INPUT_DATA_DIR, "calibration_metadata.json")
+        with open(metadata_path, "w") as f:
+            json.dump(calibration_metadata, f)
+        logger.info(f"Saved calibration metadata to {metadata_path}")
+        
+        # === Continue with normal active learning data preparation using remaining_text_ids ===
+        # Adjust num_partition to work with remaining data
+        available_for_splits = len(remaining_text_ids)
+        actual_partition_size = min(num_partition, available_for_splits)
+        
+        logger.info(f"Creating active learning splits from {available_for_splits} examples (requested: {num_partition})")
+        
+        initial_train_size = int(actual_partition_size * initial_train_ratio)
+        validation_size = int(actual_partition_size * 0.3)
+        test_size = int(actual_partition_size * 0.2)
+        active_pool_size = actual_partition_size - initial_train_size - validation_size - test_size
 
-        initial_train_texts = text_ids[:initial_train_size]
-        validation_texts = text_ids[initial_train_size:initial_train_size + validation_size]
-        test_texts = text_ids[initial_train_size + validation_size:initial_train_size + validation_size + test_size]
-        active_pool_texts = text_ids[initial_train_size + validation_size + test_size:
+        initial_train_texts = remaining_text_ids[:initial_train_size]
+        validation_texts = remaining_text_ids[initial_train_size:initial_train_size + validation_size]
+        test_texts = remaining_text_ids[initial_train_size + validation_size:initial_train_size + validation_size + test_size]
+        active_pool_texts = remaining_text_ids[initial_train_size + validation_size + test_size:
                                 initial_train_size + validation_size + test_size + active_pool_size]
         
         logger.info(f"Data splits - Train: {len(initial_train_texts)}, Val: {len(validation_texts)}, Test: {len(test_texts)}, Active: {len(active_pool_texts)}")
@@ -106,6 +155,7 @@ class DataManager:
         test_data = []
         active_pool_data = []
 
+        # Rest of the method remains unchanged
         logger.info("Creating annotation data for train split")
         print('-- Creating Annotation for Train --')
         self._prepare_entries(initial_train_texts, initial_train_data, 'train', llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset=dataset, cold_start=cold_start, use_embedding=use_embedding)
@@ -122,7 +172,7 @@ class DataManager:
         logger.info("Saving all data splits")
         print('Saving Data')
         for key, data in tqdm(zip(['train', 'validation', 'test', 'active_pool', 'original_train', 'original_validation', 'original_test', 'original_active_pool'],
-                             [initial_train_data, validation_data, test_data, active_pool_data, initial_train_data, validation_data, test_data, active_pool_data])):
+                            [initial_train_data, validation_data, test_data, active_pool_data, initial_train_data, validation_data, test_data, active_pool_data])):
             with open(self.paths[key], "w") as f:
                 print(self.paths[key])
                 json.dump(data, f)
@@ -217,6 +267,11 @@ class DataManager:
                         mask_bit = 1
                         combined_input = [mask_bit] + [0.0] * 5
                         entry["known_questions"].append(0)
+                    elif split_type == 'calibration':
+                        mask_bit = 0
+                        combined_input = [mask_bit] + true_prob
+                        entry["known_questions"].append(1)
+                        entry["input"].append(combined_input)
                     else:
                         mask_bit = 0
                         combined_input = [mask_bit] + true_prob
