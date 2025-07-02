@@ -221,6 +221,7 @@ class DataManager:
 
     def _prepare_entries(self, texts, data_list, split_type, llm_data, human_data, question_list, question_indices, known_human_questions_val, dataset, cold_start=False, use_embedding=False):
         """Prepare data entries for a specific split."""
+        
         logger.info(f"Preparing {len(texts)} entries for {split_type} split, dataset={dataset}")
         
         if dataset == "hanna":
@@ -271,7 +272,6 @@ class DataManager:
                         mask_bit = 0
                         combined_input = [mask_bit] + true_prob
                         entry["known_questions"].append(1)
-                        entry["input"].append(combined_input)
                     else:
                         mask_bit = 0
                         combined_input = [mask_bit] + true_prob
@@ -335,6 +335,12 @@ class DataManager:
                             entry["known_questions"].append(0)
                             entry["input"].append(combined_input)
                             
+                        elif split_type == 'calibration':
+                            mask_bit = 0
+                            combined_input = [mask_bit] + true_prob
+                            entry["known_questions"].append(1)
+                            entry["input"].append(combined_input)
+                            
                         entry["answers"].append(true_prob)   
                         entry["annotators"].append(int(judge_id))
                         entry["questions"].append(question_indices[question])
@@ -372,6 +378,10 @@ class DataManager:
                             mask_bit = 1
                             combined_input = [mask_bit] + [0.0] * 4
                             entry["known_questions"].append(0)
+                        elif split_type == 'calibration':
+                            mask_bit = 0
+                            combined_input = [mask_bit] + true_prob
+                            entry["known_questions"].append(1)
                         else:
                             mask_bit = 0
                             combined_input = [mask_bit] + true_prob
@@ -432,6 +442,12 @@ class DataManager:
                                 mask_bit = 0
                                 combined_input = [mask_bit] + true_prob
                                 entry["known_questions"].append(1)
+                            entry["input"].append(combined_input)
+                            
+                        elif split_type == 'calibration':
+                            mask_bit = 0
+                            combined_input = [mask_bit] + true_prob
+                            entry["known_questions"].append(1)
                             entry["input"].append(combined_input)
                             
                         entry["answers"].append(true_prob)   

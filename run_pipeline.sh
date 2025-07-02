@@ -8,7 +8,7 @@
 #SBATCH --nodes=1
 #SBATCH --mem-per-cpu=12GB
 #SBATCH --gpus=1
-#SBATCH --partition=gpu-a100
+#SBATCH --partition=gpu
 #SBATCH --account=a100acct
 #SBATCH --mail-user="psingh54@jhu.edu"
 
@@ -21,14 +21,14 @@ wandb login
 
 python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --examples_per_cycle 50 \
-    --experiment comparison \
+    --experiment gradient_voi_all_questions \
     --loss_type cross_entropy \
     --resample_validation \
     --dataset hanna \
     --runner prabhav \
     --use_embedding True \
     --cold_start True \
-    --cycles 15 \
+    --cycles 12 \
     --validation_set_size 50 \
     --active_set_size 100 \
     --epochs_per_cycle 10 \
