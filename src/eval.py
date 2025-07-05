@@ -27,6 +27,7 @@ except ImportError:
     WANDB_AVAILABLE = False
     logger.warning("Wandb not available, evaluation logging disabled")
 
+
 class ModelEvaluator:
     """Comprehensive model evaluation with logging and metrics tracking."""
     
@@ -47,11 +48,47 @@ class ModelEvaluator:
             wandb.define_metric("test/*", step_metric="cycle")
             wandb.define_metric("questions/*", step_metric="cycle")
             wandb.define_metric("test_incremental/*", step_metric="features_observed")
+            wandb.define_metric("calibration/*", step_metric="features_observed")
         
         logger.info(f"ModelEvaluator initialized - Wandb: {self.use_wandb}")
     
+    def _compute_calibration_metrics(self, all_pred_probs, all_true_labels):
+        """Compute calibration metrics (smECE) for each class and overall."""
+        import reliability_plots as rp  # Assuming this is available
+        
+        calibration_metrics = {}
+        
+        # Convert to numpy arrays if they aren't already
+        all_pred_probs = np.array(all_pred_probs)
+        all_true_labels = np.array(all_true_labels)
+        
+        # Compute smECE for each class
+        class_smECE = []
+        for class_idx in range(all_pred_probs.shape[1]):  # Number of classes
+            y_true = (all_true_labels == class_idx).astype(int)
+            y_pred = all_pred_probs[:, class_idx]
+            
+            if len(np.unique(y_true)) > 1:  # Only compute if both classes are present
+                try:
+                    smECE = rp.smECE(y_pred, y_true)
+                    class_smECE.append(smECE)
+                    calibration_metrics[f'smECE_class_{class_idx}'] = smECE
+                except:
+                    calibration_metrics[f'smECE_class_{class_idx}'] = 0.0
+            else:
+                calibration_metrics[f'smECE_class_{class_idx}'] = 0.0
+        
+        # Overall smECE (average across classes)
+        if class_smECE:
+            calibration_metrics['smECE_overall'] = np.mean(class_smECE)
+        else:
+            calibration_metrics['smECE_overall'] = 0.0
+        
+        return calibration_metrics
+    
     def evaluate_model(self, model, dataset: AnnotationDataset, dataset_name: str = "unknown", 
-                      target_questions: Optional[List[int]] = None, split_type: str = "test") -> Dict[str, Any]:
+                      target_questions: Optional[List[int]] = None, split_type: str = "test", 
+                      compute_calibration: bool = False) -> Dict[str, Any]:
         """Comprehensive model evaluation on a dataset."""
         
         logger.info(f"Evaluating model on {dataset_name} {split_type} set ({len(dataset)} examples)")
@@ -65,6 +102,10 @@ class ModelEvaluator:
         all_predictions = []
         all_true_values = []
         all_losses = []
+        
+        # Calibration data (if requested)
+        all_pred_probs = []
+        all_true_labels = []
         
         # Question-wise metrics
         question_predictions = {q: [] for q in target_questions}
@@ -118,6 +159,11 @@ class ModelEvaluator:
                             true_class = torch.argmax(torch.tensor(data_entry['answers'][pos])).item()
                         true_score = true_class + 1
                         
+                        # Store calibration data if requested and position is known
+                        if compute_calibration and known_questions[pos].item() == 0:
+                            all_pred_probs.append(pred_probs.cpu().numpy())
+                            all_true_labels.append(true_class)
+                        
                         # Compute loss
                         loss = F.cross_entropy(
                             outputs[0:1, pos], 
@@ -157,6 +203,12 @@ class ModelEvaluator:
         overall_metrics = compute_metrics(np.array(all_predictions), np.array(all_true_values))
         overall_metrics['avg_expected_loss'] = np.mean(all_losses)
         overall_metrics['total_predictions'] = len(all_predictions)
+        
+        # Compute calibration metrics if requested
+        if compute_calibration and len(all_pred_probs) > 0:
+            calibration_metrics = self._compute_calibration_metrics(all_pred_probs, all_true_labels)
+            overall_metrics.update(calibration_metrics)
+            logger.debug(f"Computed calibration metrics: smECE_overall = {calibration_metrics.get('smECE_overall', 0.0):.4f}")
         
         # Compute question-wise metrics
         question_metrics = {}
@@ -211,6 +263,9 @@ class ModelEvaluator:
                    f"Pearson: {overall_metrics['pearson']:.4f}, "
                    f"Predictions: {overall_metrics['total_predictions']}")
         
+        if compute_calibration and 'smECE_overall' in overall_metrics:
+            logger.info(f"Calibration - smECE Overall: {overall_metrics['smECE_overall']:.4f}")
+        
         return evaluation_result
     
     def evaluate_model_test(self, model, dataset: AnnotationDataset, dataset_name: str = "unknown", 
@@ -249,7 +304,13 @@ class ModelEvaluator:
             'kendall': [],
             'accuracy': [],
             'mae': [],
-            'avg_expected_loss': []
+            'avg_expected_loss': [],
+            'smECE_overall': [],
+            'smECE_class_0': [],
+            'smECE_class_1': [],
+            'smECE_class_2': [],
+            'smECE_class_3': [],
+            'smECE_class_4': []
         }
         
         # Count total features across all examples
@@ -257,16 +318,23 @@ class ModelEvaluator:
         
         logger.info(f"Starting evaluation with {total_features} total features to collect")
         
-        # Initial evaluation with no features observed (all positions unknown)
-        initial_eval = self.evaluate_model(model, dataset_copy, dataset_name, eval_target_questions, f"{split_type}_initial")
+        # Initial evaluation with no features observed (all positions unknown) - with calibration
+        initial_eval = self.evaluate_model(
+            model, dataset_copy, dataset_name, eval_target_questions, 
+            f"{split_type}_initial", compute_calibration=True
+        )
         all_results.append(initial_eval)
+        
+        # Update metrics trends including calibration
         for metric_name in metrics_trends.keys():
             if metric_name in initial_eval['overall']:
                 metrics_trends[metric_name].append(initial_eval['overall'][metric_name])
             else:
                 metrics_trends[metric_name].append(0.0)
         
-        logger.info(f"Initial evaluation (0 features): RMSE={initial_eval['overall']['rmse']:.4f}, Pearson={initial_eval['overall']['pearson']:.4f}")
+        logger.info(f"Initial evaluation (0 features): RMSE={initial_eval['overall']['rmse']:.4f}, "
+                   f"Pearson={initial_eval['overall']['pearson']:.4f}, "
+                   f"smECE={initial_eval['overall'].get('smECE_overall', 0.0):.4f}")
         
         # Iteratively select and observe features
         features_collected = 0
@@ -302,11 +370,15 @@ class ModelEvaluator:
                 logger.info("No more features available for selection")
                 break
             
-            # Evaluate model with newly observed features
-            current_eval = self.evaluate_model(model, dataset_copy, dataset_name, eval_target_questions, f"{split_type}_step_{features_collected/len(dataset_copy)}")
+            # Evaluate model with newly observed features - including calibration
+            current_eval = self.evaluate_model(
+                model, dataset_copy, dataset_name, eval_target_questions, 
+                f"{split_type}_step_{features_collected/len(dataset_copy)}", 
+                compute_calibration=True
+            )
             all_results.append(current_eval)
 
-            # Track metrics
+            # Track metrics including calibration
             for metric_name in metrics_trends.keys():
                 if metric_name in current_eval['overall']:
                     metrics_trends[metric_name].append(current_eval['overall'][metric_name])
@@ -315,6 +387,7 @@ class ModelEvaluator:
             
             logger.info(f"After {features_collected} features: RMSE={current_eval['overall']['rmse']:.4f}, "
                     f"Pearson={current_eval['overall']['pearson']:.4f}, "
+                    f"smECE={current_eval['overall'].get('smECE_overall', 0.0):.4f}, "
                     f"Features selected this round: {features_selected_this_round}")
             
             # Early termination if all features have been collected
@@ -324,7 +397,8 @@ class ModelEvaluator:
         # Final evaluation summary
         final_metrics = {metric: values[-1] for metric, values in metrics_trends.items() if values}
         logger.info(f"Final evaluation after {features_collected} features: RMSE={final_metrics.get('rmse', 0):.4f}, "
-                f"Pearson={final_metrics.get('pearson', 0):.4f}")
+                f"Pearson={final_metrics.get('pearson', 0):.4f}, "
+                f"smECE={final_metrics.get('smECE_overall', 0):.4f}")
         
         # Return results with trends
         result = {
@@ -389,6 +463,13 @@ class ModelEvaluator:
                     f"{dataset_name}/total_predictions": metrics['total_predictions']
                 })
                 
+                # Add calibration metrics if available
+                if 'smECE_overall' in metrics:
+                    wandb_data[f"{dataset_name}/smECE_overall"] = metrics['smECE_overall']
+                    for i in range(5):  # Classes 0-4
+                        if f'smECE_class_{i}' in metrics:
+                            wandb_data[f"{dataset_name}/smECE_class_{i}"] = metrics[f'smECE_class_{i}']
+                
                 # Question-wise metrics
                 for q_name, q_metrics in eval_result['by_question'].items():
                     if q_metrics['count'] > 0:
@@ -396,7 +477,7 @@ class ModelEvaluator:
                         wandb_data[f"questions/{dataset_name}_{q_name}_pearson"] = q_metrics['pearson']
                         wandb_data[f"questions/{dataset_name}_{q_name}_count"] = q_metrics['count']
         
-            # Test incremental metrics
+            # Test incremental metrics with calibration
             if 'test_trend' in cycle_results:
                 test_trend = cycle_results['test_trend']
                 metrics_trends = test_trend.get('metrics_trends', {})
@@ -419,6 +500,10 @@ class ModelEvaluator:
                             if step_idx < len(values):
                                 # Log raw value with cycle in name for cycle-specific plots
                                 step_data[f"test_incremental/cycle_{cycle_num}_{metric_name}"] = values[step_idx]
+                                
+                                # Also log calibration metrics separately
+                                if metric_name.startswith('smECE'):
+                                    step_data[f"calibration/cycle_{cycle_num}_{metric_name}"] = values[step_idx]
                         
                         wandb.log(step_data)
                     
@@ -429,6 +514,10 @@ class ModelEvaluator:
                             final_value = values[-1]
                             # Add to cycle summary
                             cycle_data[f"test_incremental/final_{metric_name}_by_cycle"] = final_value
+                            
+                            # Add calibration summary
+                            if metric_name.startswith('smECE'):
+                                cycle_data[f"calibration/final_{metric_name}_by_cycle"] = final_value
                     
                     # Log cycle summary
                     wandb.log(cycle_data)
@@ -458,6 +547,10 @@ class ModelEvaluator:
         
         for dataset_name, eval_result in cycle_results['evaluations'].items():
             metrics = eval_result['overall']
+            
+            # Include calibration metrics in summary if available
+            smECE_str = f"{metrics.get('smECE_overall', 0.0):.4f}" if 'smECE_overall' in metrics else "N/A"
+            
             table_data.append([
                 dataset_name,
                 cycle_num,
@@ -467,12 +560,14 @@ class ModelEvaluator:
                 f"{metrics['kendall']:.4f}",
                 f"{metrics['accuracy']:.4f}",
                 f"{metrics['avg_expected_loss']:.4f}",
+                smECE_str,
                 metrics['total_predictions']
             ])
         
         table = wandb.Table(
             data=table_data,
-            columns=["Dataset", "Cycle", "RMSE", "Pearson", "Spearman", "Kendall", "Accuracy", "Expected Loss", "Predictions"]
+            columns=["Dataset", "Cycle", "RMSE", "Pearson", "Spearman", "Kendall", 
+                    "Accuracy", "Expected Loss", "smECE", "Predictions"]
         )
         
         wandb.log({f"summary_table_cycle_{cycle_num}": table})
@@ -492,20 +587,21 @@ class ModelEvaluator:
         
         for model_name, model in models.items():
             logger.info(f"Evaluating model: {model_name}")
-            eval_result = self.evaluate_model(model, dataset, dataset_name, split_type="comparison")
+            eval_result = self.evaluate_model(model, dataset, dataset_name, split_type="comparison", compute_calibration=True)
             comparison_results['models'][model_name] = eval_result
         
         # Generate comparison summary
         if len(models) > 1:
             model_names = list(models.keys())
-            metrics = ['rmse', 'pearson', 'avg_expected_loss']
+            metrics = ['rmse', 'pearson', 'avg_expected_loss', 'smECE_overall']
             
             for metric in metrics:
-                values = [comparison_results['models'][name]['overall'][metric] for name in model_names]
-                comparison_results['summary'][metric] = {
-                    'best_model': model_names[np.argmin(values) if metric in ['rmse', 'avg_expected_loss'] else np.argmax(values)],
-                    'values': dict(zip(model_names, values))
-                }
+                if all(metric in comparison_results['models'][name]['overall'] for name in model_names):
+                    values = [comparison_results['models'][name]['overall'][metric] for name in model_names]
+                    comparison_results['summary'][metric] = {
+                        'best_model': model_names[np.argmin(values) if metric in ['rmse', 'avg_expected_loss', 'smECE_overall'] else np.argmax(values)],
+                        'values': dict(zip(model_names, values))
+                    }
         
         self.evaluation_history.append(comparison_results)
         
@@ -544,15 +640,20 @@ class ModelEvaluator:
         # Find best performance across all evaluations
         all_rmse = []
         all_pearson = []
+        all_smECE = []
         
         for eval_entry in self.evaluation_history:
             if 'overall' in eval_entry:
                 all_rmse.append(eval_entry['overall']['rmse'])
                 all_pearson.append(eval_entry['overall']['pearson'])
+                if 'smECE_overall' in eval_entry['overall']:
+                    all_smECE.append(eval_entry['overall']['smECE_overall'])
             elif 'evaluations' in eval_entry:
                 for dataset_name, eval_result in eval_entry['evaluations'].items():
                     all_rmse.append(eval_result['overall']['rmse'])
                     all_pearson.append(eval_result['overall']['pearson'])
+                    if 'smECE_overall' in eval_result['overall']:
+                        all_smECE.append(eval_result['overall']['smECE_overall'])
         
         if all_rmse:
             summary['best_performance'] = {
@@ -561,6 +662,12 @@ class ModelEvaluator:
                 'avg_rmse': np.mean(all_rmse),
                 'avg_pearson': np.mean(all_pearson)
             }
+            
+            if all_smECE:
+                summary['best_performance'].update({
+                    'best_smECE': min(all_smECE),
+                    'avg_smECE': np.mean(all_smECE)
+                })
         
         return summary
     
@@ -575,6 +682,9 @@ class ModelEvaluator:
         logger.info(f"Pearson: {overall['pearson']:.4f}")
         logger.info(f"Expected Loss: {overall['avg_expected_loss']:.4f}")
         logger.info(f"Total Predictions: {overall['total_predictions']}")
+        
+        if 'smECE_overall' in overall:
+            logger.info(f"Calibration (smECE): {overall['smECE_overall']:.4f}")
         
         # Question-wise logging
         for q_name, q_metrics in eval_result['by_question'].items():
@@ -605,7 +715,13 @@ class ModelEvaluator:
             'accuracy': 0.0,
             'mae': 0.0,
             'avg_expected_loss': 0.0,
-            'total_predictions': 0
+            'total_predictions': 0,
+            'smECE_overall': 0.0,
+            'smECE_class_0': 0.0,
+            'smECE_class_1': 0.0,
+            'smECE_class_2': 0.0,
+            'smECE_class_3': 0.0,
+            'smECE_class_4': 0.0
         }
     
     def _empty_question_metrics(self) -> Dict[str, float]:

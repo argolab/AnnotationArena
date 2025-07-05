@@ -171,6 +171,16 @@ def run_enhanced_experiment(
 
     logger = logging.getLogger(__name__)
     
+    # Track calibration metrics across cycles
+    cycle_calibration_metrics = {
+        'smECE_overall': [],
+        'smECE_class_0': [],
+        'smECE_class_1': [],
+        'smECE_class_2': [],
+        'smECE_class_3': [],
+        'smECE_class_4': []
+    }
+    
     if initial_train_dataset is not None and len(initial_train_dataset) > 0:
         arena = AnnotationArena(model, device)
         logger.info(f"Initial training on {len(initial_train_dataset)} clean examples...")
@@ -279,6 +289,13 @@ def run_enhanced_experiment(
             active_subset = active_pool.copy()
             logger.info(f"Pool smaller than target, using all {len(active_subset)} examples")
         
+        # Count available positions in active subset for frequency calculation
+        available_positions = {f"Pos-{i}": 0 for i in range(14)}
+        for example_idx in active_subset:
+            masked_positions = dataset_train.get_masked_positions(example_idx)
+            for pos in masked_positions:
+                available_positions[f"Pos-{pos}"] += 1
+        
         if example_strategy == "random":
             selected_examples = random.sample(active_subset, min(examples_per_cycle, len(active_subset)))
             
@@ -366,6 +383,7 @@ def run_enhanced_experiment(
         
         # Track question selections for this cycle
         question_counts = {f"Pos-{i}": 0 for i in range(14)}
+        question_frequencies = {f"Pos-{i}": 0.0 for i in range(14)}
         total_features_annotated = 0
         cycle_benefit_cost_ratios = []
         cycle_observation_costs = []
@@ -459,6 +477,13 @@ def run_enhanced_experiment(
                         variable_id = f"example_{example_idx}_position_{pos}"
                         arena.predict(variable_id, train=True)
         
+        # Calculate frequencies (proportion of available positions selected)
+        for pos_key in question_frequencies.keys():
+            if available_positions[pos_key] > 0:
+                question_frequencies[pos_key] = question_counts[pos_key] / available_positions[pos_key]
+            else:
+                question_frequencies[pos_key] = 0.0
+        
         logger.info(f"Total features annotated this cycle: {total_features_annotated}")
         
         annotated_examples.extend(selected_examples)
@@ -482,11 +507,38 @@ def run_enhanced_experiment(
             
             val_metrics = cycle_eval['evaluations']['validation']['overall']
             test_metrics = cycle_eval['evaluations']['test']['overall']
+            
+            # Extract calibration metrics from step 7 of test evaluation
+            if 'test_trend' in cycle_eval:
+                test_trend = cycle_eval['test_trend']
+                metrics_trends = test_trend.get('metrics_trends', {})
+                
+                # Use step 7 (index 7) for cycle calibration tracking
+                step_index = min(7, len(metrics_trends.get('smECE_overall', [])) - 1)
+                if step_index >= 0:
+                    for metric_name in cycle_calibration_metrics.keys():
+                        if metric_name in metrics_trends and len(metrics_trends[metric_name]) > step_index:
+                            cycle_calibration_metrics[metric_name].append(metrics_trends[metric_name][step_index])
+                        else:
+                            cycle_calibration_metrics[metric_name].append(0.0)
+                else:
+                    # If no step 7, use zeros
+                    for metric_name in cycle_calibration_metrics.keys():
+                        cycle_calibration_metrics[metric_name].append(0.0)
+            else:
+                # No test trend available, use zeros
+                for metric_name in cycle_calibration_metrics.keys():
+                    cycle_calibration_metrics[metric_name].append(0.0)
+                    
         else:
             arena.set_dataset(dataset_val)
             val_metrics = arena.evaluate(list(range(len(dataset_val))))
             arena.set_dataset(dataset_test)
             test_metrics = arena.evaluate(list(range(len(dataset_test))))
+            
+            # No calibration tracking for non-wandb runs
+            for metric_name in cycle_calibration_metrics.keys():
+                cycle_calibration_metrics[metric_name].append(0.0)
 
         metrics['val_metrics'].append(val_metrics)
         metrics['val_losses'].append(val_metrics["avg_expected_loss"])
@@ -518,7 +570,7 @@ def run_enhanced_experiment(
         
         logger.info(f"Test loss: {test_metrics['avg_expected_loss']:.4f}")
         
-        # Log question selection counts to WandB
+        # Log question selection counts and frequencies to WandB
         if use_wandb and WANDB_AVAILABLE and wandb.run is not None:
             wandb_data = {
                 'cycle': cycle_count,
@@ -527,8 +579,15 @@ def run_enhanced_experiment(
                 'pool_size_remaining': len(active_pool)
             }
             
+            # Log both counts and frequencies using organized metrics
             for question, count in question_counts.items():
-                wandb_data[f"selected_{question}_count"] = count
+                pos_num = question.split('-')[1]  # Extract position number
+                wandb_data[f"position_selection/{question}_count"] = count
+                wandb_data[f"position_selection/{question}_frequency"] = question_frequencies[question]
+                wandb_data[f"position_selection/{question}_available"] = available_positions[question]
+                
+                # Also log selection proportion (same as frequency but clearer naming)
+                wandb_data[f"position_selection/Pos-{pos_num}_proportion"] = question_frequencies[question]
             
             wandb.log(wandb_data)
         
@@ -542,7 +601,36 @@ def run_enhanced_experiment(
         
     logger.info(f"Experiment complete - {cycle_count} cycles")
     
+    # Log final calibration trends using WandB's automatic plotting system
+    if use_wandb and WANDB_AVAILABLE and wandb.run is not None and cycle_count > 0:
+        # Log calibration trends across cycles using WandB's metric system
+        for cycle_idx in range(cycle_count):
+            calibration_data = {"cycle": cycle_idx}
+            
+            # Log overall and per-class calibration metrics for this cycle
+            for metric_name, values in cycle_calibration_metrics.items():
+                if len(values) > cycle_idx:
+                    calibration_data[f"calibration_trends/{metric_name}"] = values[cycle_idx]
+            
+            wandb.log(calibration_data)
+        
+        # Log final calibration summary statistics
+        final_calibration_data = {'experiment_complete': True}
+        for metric_name, values in cycle_calibration_metrics.items():
+            if len(values) >= cycle_count and cycle_count > 0:
+                final_calibration_data[f"calibration_summary/final_{metric_name}"] = values[cycle_count-1]
+                final_calibration_data[f"calibration_summary/mean_{metric_name}"] = np.mean(values[:cycle_count])
+                final_calibration_data[f"calibration_summary/std_{metric_name}"] = np.std(values[:cycle_count])
+        
+        wandb.log(final_calibration_data)
+        
+        logger.info("Final calibration trends:")
+        for metric_name, values in cycle_calibration_metrics.items():
+            if len(values) >= cycle_count and cycle_count > 0:
+                logger.info(f"  {metric_name}: Final={values[cycle_count-1]:.4f}, Mean={np.mean(values[:cycle_count]):.4f}")
+    
     metrics['test_metrics'] = test_metrics
+    metrics['calibration_trends'] = cycle_calibration_metrics
     arena_metrics = arena.get_metrics_history()
     metrics['arena_training_losses'] = arena_metrics["training_losses"]
     metrics['observation_history'] = arena_metrics["observation_history"]
