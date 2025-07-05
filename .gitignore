@@ -206,3 +206,8 @@ output/*
 src/plot.py
 src/post_analysis.py
 src/analysis
+src/*.png 
+LLM-Rubric/*
+src/input_llm_rubric/data
+src/output_llm_rubric
+src/logs_llm_rubric
