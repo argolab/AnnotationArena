@@ -49,6 +49,9 @@ class ModelEvaluator:
             wandb.define_metric("questions/*", step_metric="cycle")
             wandb.define_metric("test_incremental/*", step_metric="features_observed")
             wandb.define_metric("calibration/*", step_metric="features_observed")
+            wandb.define_metric("calibration_trends/*", step_metric="cycle")
+            wandb.define_metric("calibration_summary/*", step_metric="cycle")
+            wandb.define_metric("position_selection/*", step_metric="cycle")
         
         logger.info(f"ModelEvaluator initialized - Wandb: {self.use_wandb}")
     
