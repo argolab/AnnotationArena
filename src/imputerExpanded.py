@@ -14,6 +14,8 @@ import logging
 import time
 from tqdm.auto import tqdm
 import random
+import json
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -273,6 +275,9 @@ class ImputerEmbedding(nn.Module):
         
         self.masking_head = nn.Linear(self.encoder.feature_dim, 1)
         
+        # NEW: Historical pattern prediction head (professor's approach)
+        self.historical_head = nn.Linear(self.encoder.feature_dim, 1)
+        
         self.training_queue = []
         self.recent_indicators = []
         self.prediction_history = []
@@ -282,6 +287,13 @@ class ImputerEmbedding(nn.Module):
         self.training_queue_size = training_queue_size
         self.unique_examples = []
         self.masking_losses = []
+        
+        # NEW: Simple pattern effectiveness tracking
+        self.pattern_effectiveness_history = []
+        self.current_cycle = 0
+        
+        # NEW: Historical pattern storage (professor's approach)
+        self.historical_patterns = []
         
         logger.info(f"ImputerEmbedding initialized: {question_num} questions, {max_choices} choices, {num_annotator} annotators")
     
@@ -294,6 +306,90 @@ class ImputerEmbedding(nn.Module):
         """Forward pass through the model."""
         feature_x, param_x = self.encoder(x, annotators, questions, embeddings)
         return param_x
+    
+    # NEW: Simple tracking methods
+    def set_current_cycle(self, cycle):
+        """Set current cycle for tracking"""
+        self.current_cycle = cycle
+    
+    def collect_pattern_effectiveness(self, example_idx, masking_patterns, pattern_losses):
+        """Simple collection of what worked"""
+        self.pattern_effectiveness_history.append({
+            'example_idx': example_idx,
+            'cycle': self.current_cycle,
+            'patterns': masking_patterns,  # Which positions were masked
+            'losses': pattern_losses,      # How well each pattern worked
+            'timestamp': time.time()
+        })
+    
+    def export_pattern_logs(self, output_dir):
+        """Simple JSON export"""
+        log_file = os.path.join(output_dir, f"pattern_effectiveness_{self.current_cycle}.json")
+        with open(log_file, 'w') as f:
+            json.dump(self.pattern_effectiveness_history, f, indent=2, default=str)
+        logger.info(f"Exported pattern effectiveness logs to {log_file}")
+    
+    # NEW: Historical pattern methods (professor's approach)
+    def collect_historical_pattern(self, current_state, query_pattern, cycle):
+        """
+        Collect (current_state, historical_pattern) training pairs for professor's approach
+        
+        Args:
+            current_state: Current observed positions [14] (0=masked, 1=observed)
+            query_pattern: Which positions were queried to reach this state [14] (0=not_queried, 1=queried) 
+            cycle: Current active learning cycle
+        """
+        self.historical_patterns.append({
+            'current_state': current_state.tolist() if isinstance(current_state, torch.Tensor) else current_state,
+            'query_pattern': query_pattern.tolist() if isinstance(query_pattern, torch.Tensor) else query_pattern,
+            'cycle': cycle,
+            'timestamp': time.time()
+        })
+    
+    def compute_historical_pattern_loss(self, masking_scores, example_idx):
+        """
+        Train masking head to predict historical query patterns (professor's approach)
+        
+        Given current state, predict which positions were likely queried historically
+        """
+        if len(self.historical_patterns) < 10:
+            return torch.tensor(0.0, device=self.device)
+        
+        # Get current observed state
+        current_data = self.dataset[example_idx]
+        current_state = (current_data[1][:, 0] == 0).float().to(self.device)  # Which positions are currently observed
+        
+        # Find similar historical states (where current is subset of historical)
+        relevant_patterns = []
+        for pattern in self.historical_patterns[-100:]:  # Use recent history
+            historical_state = torch.tensor(pattern['current_state'], device=self.device).float()
+            # Find patterns where current state matches or is subset of historical state
+            if torch.all(current_state <= historical_state):  # Current is subset of historical
+                relevant_patterns.append(pattern)
+        
+        if not relevant_patterns:
+            return torch.tensor(0.0, device=self.device)
+        
+        # Train to predict query patterns using historical head
+        total_loss = 0
+        for pattern in relevant_patterns[-20:]:  # Use recent relevant patterns
+            target_query_pattern = torch.tensor(pattern['query_pattern'], device=self.device).float()
+            
+            # Get historical predictions from historical head
+            inputs_batch = current_data[1].unsqueeze(0).to(self.device)
+            annotators_batch = current_data[3].unsqueeze(0).to(self.device) 
+            questions_batch = current_data[4].unsqueeze(0).to(self.device)
+            embeddings_batch = current_data[5].unsqueeze(0).to(self.device) if current_data[5] is not None else None
+            
+            feature_x, _ = self.encoder(inputs_batch, annotators_batch, questions_batch, embeddings_batch)
+            historical_scores = self.historical_head(feature_x[0])  # [14, 1]
+            predicted_query_probs = torch.sigmoid(historical_scores.squeeze(-1))  # [14]
+            
+            # Binary cross-entropy loss
+            loss = F.binary_cross_entropy(predicted_query_probs, target_query_pattern)
+            total_loss += loss
+        
+        return total_loss / len(relevant_patterns)
     
     def get_masking_scores(self, x, annotators, questions, embeddings):
         """
@@ -355,7 +451,7 @@ class ImputerEmbedding(nn.Module):
     
     def generate_masking_pattern(self, inputs, annotators, questions, embeddings, visible_ratio=0.5):
         """
-        Generate intelligent masking pattern using masking head predictions.
+        Generate intelligent masking pattern using both masking head and historical head.
         
         Args:
             inputs: Input tensor [sequence_length, input_dim]
@@ -378,13 +474,30 @@ class ImputerEmbedding(nn.Module):
         embeddings_batch = embeddings.unsqueeze(0).to(self.device) if embeddings is not None else None
         
         with torch.no_grad():
-            masking_scores = self.get_masking_scores(inputs_batch, annotators_batch, questions_batch, embeddings_batch)
-            masking_scores = masking_scores[0]
+            # Get encoder features
+            feature_x, _ = self.encoder(inputs_batch, annotators_batch, questions_batch, embeddings_batch)
+            
+            # Get scores from both heads
+            masking_scores = self.masking_head(feature_x[0]).squeeze(-1)  # Cross-positional influence
+            historical_scores = self.historical_head(feature_x[0]).squeeze(-1)  # Historical patterns
+            
+            # Blend both approaches
+            if len(self.historical_patterns) > 20:  # Use historical only if we have enough data
+                # Convert to probabilities
+                masking_probs = torch.softmax(masking_scores, dim=0)
+                historical_probs = torch.sigmoid(historical_scores) 
+                
+                # Blend: 70% current influence, 30% historical patterns
+                combined_scores = 0.7 * masking_probs + 0.3 * historical_probs
+            else:
+                # Fallback to current approach only
+                combined_scores = torch.softmax(masking_scores, dim=0)
         
+        # Apply constraint: only observed positions can be masked
         observed_mask = torch.zeros(inputs.shape[0], device=self.device)
         observed_mask[observed_positions] = 1.0
         
-        constrained_scores = masking_scores * observed_mask + (1 - observed_mask) * (-1e9)
+        constrained_scores = combined_scores * observed_mask + (1 - observed_mask) * (-1e9)
         
         num_to_mask = max(1, len(observed_positions) - int(len(observed_positions) * visible_ratio))
         
@@ -839,17 +952,6 @@ class ImputerEmbedding(nn.Module):
                             )
                             
                             example_idx = example['example_idx']
-                            
-                            # FIX: Get patterns for THIS example only
-                            # if example_idx in example_masking_patterns:
-                            #     current_example_patterns = example_masking_patterns[example_idx]
-                            #     example_losses = [main_loss.item()] * len(current_example_patterns)
-                            #     originally_observed = example['original_observed_mask']
-                                
-                            #     example_masking_loss = self.compute_masking_loss(
-                            #         masking_scores, example_losses, current_example_patterns, originally_observed
-                            #     )
-                            #     masking_loss += example_masking_loss
 
                             if example_idx in example_masking_patterns:
                                 current_example_patterns = example_masking_patterns[example_idx]
@@ -861,9 +963,16 @@ class ImputerEmbedding(nn.Module):
                                 
                                 originally_observed = example['original_observed_mask']
                                 
-                                example_masking_loss = self.compute_ranking_masking_loss(
+                                # Existing ranking loss (cross-positional influence)
+                                ranking_loss = self.compute_ranking_masking_loss(
                                     masking_scores, supervision_scores, current_example_patterns, originally_observed
                                 )
+                                
+                                # NEW: Historical pattern loss (professor's approach)
+                                historical_loss = self.compute_historical_pattern_loss(masking_scores, example_idx)
+                                
+                                # Combined masking loss
+                                example_masking_loss = ranking_loss + 0.3 * historical_loss
                                 masking_loss += example_masking_loss
                 
                 total_loss = main_loss + masking_lambda * masking_loss
@@ -881,6 +990,14 @@ class ImputerEmbedding(nn.Module):
                             "batch_masking_loss": masking_loss.item(),
                             "epoch": epoch
                         })
+            
+            # NEW: Collect pattern effectiveness after each epoch
+            for example_idx in unique_examples.keys():
+                if example_idx in example_masking_patterns:
+                    patterns_as_lists = [pattern.tolist() if isinstance(pattern, torch.Tensor) else pattern 
+                                       for pattern in example_masking_patterns[example_idx]]
+                    pattern_losses = [epoch_loss / max(1, batch_count)] * len(patterns_as_lists)
+                    self.collect_pattern_effectiveness(example_idx, patterns_as_lists, pattern_losses)
             
             avg_epoch_loss = epoch_loss / max(1, batch_count)
             avg_masking_loss = epoch_masking_loss / max(1, batch_count)

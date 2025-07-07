@@ -57,7 +57,7 @@ class ModelEvaluator:
     
     def _compute_calibration_metrics(self, all_pred_probs, all_true_labels):
         """Compute calibration metrics (smECE) for each class and overall."""
-        import reliability_plots as rp  # Assuming this is available
+        import relplot as rp  # Assuming this is available
         
         calibration_metrics = {}
         

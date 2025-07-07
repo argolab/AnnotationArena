@@ -253,6 +253,8 @@ def run_enhanced_experiment(
     
         logger.info(f"\n\n\n============================ Cycle {cycle_count + 1}/{cycles} ==============================")
         logger.info(f"Active pool size: {len(active_pool)}")
+
+        arena.model.set_current_cycle(cycle_count)
         
         valid_active_pool = []
         for idx in active_pool:
@@ -486,6 +488,21 @@ def run_enhanced_experiment(
                 question_frequencies[pos_key] = 0.0
         
         logger.info(f"Total features annotated this cycle: {total_features_annotated}")
+
+        # NEW: Collect historical patterns for professor's approach
+        for example_idx in selected_examples:
+
+            current_data = dataset_train[example_idx]
+            current_state = (current_data[1][:, 0] == 0).float() 
+            
+            # Get query pattern for this cycle (which positions were annotated this cycle)
+            query_pattern = torch.zeros(14)
+            for (ex_idx, pos) in selected_variables_info:
+                if ex_idx == example_idx:
+                    query_pattern[pos] = 1.0
+            
+            # Collect the historical pattern
+            arena.model.collect_historical_pattern(current_state, query_pattern, cycle_count)
         
         annotated_examples.extend(selected_examples)
         
@@ -499,6 +516,14 @@ def run_enhanced_experiment(
         
         logger.info(f"Training model for {epochs_per_cycle} epochs...")
         arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, training_type=training_type)
+
+        # NEW: Export pattern logs every 5 cycles
+        if cycle_count % 3 == 0 and config:
+            try:
+                experiment_paths = config.get_experiment_paths("current_experiment")
+                arena.model.export_pattern_logs(experiment_paths['results_dir'])
+            except:
+                logger.warning("Could not export pattern logs - continuing without export")
         
         # Evaluation using eval.py
         if config and use_wandb:
