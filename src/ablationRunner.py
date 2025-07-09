@@ -26,6 +26,7 @@ os.environ.update({"TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "HF_
 from config import Config, ModelConfig, DefaultHyperparams
 from utils import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset, get_experiment_config
 from annotationArena import AnnotationArena
+# ABLATION CHANGE: Use ablation version of imputer
 from imputerExpandedAblation import ImputerEmbedding
 from selection import (
     SelectionFactory, 
@@ -53,40 +54,70 @@ np.random.seed(90)
 
 os.environ.update({"TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "HF_HUB_OFFLINE": "1"})
 
+# Change Based on Usage.
 model = SentenceTransformer("all-MiniLM-L6-v2")
+# model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
 
 def extract_embeddings_features(dataset_entries, model_name='all-MiniLM-L6-v2'):
     """Extract sentence transformer embeddings for K-centers algorithm."""
-    embeddings = []
+    embedding_model = SentenceTransformer(model_name)
+    features = []
+    
     for entry in dataset_entries:
-        text = entry['text'] if 'text' in entry else entry['content']
-        embedding = model.encode(text)
-        embeddings.append(embedding)
-    return np.array(embeddings)
+        if 'text_embedding' in entry and entry['text_embedding']:
+            embedding = np.array(entry['text_embedding'][0])
+        else:
+            inputs = np.array(entry['input'])
+            answer_dists = inputs[:, 1:] 
+            mean_dist = np.mean(answer_dists, axis=0)
+            std_dist = np.std(answer_dists, axis=0)
+            entropy_per_pos = []
+            
+            for dist in answer_dists:
+                if np.sum(dist) > 0:
+                    normalized = dist / np.sum(dist)
+                    entropy = -np.sum(normalized * np.log(normalized + 1e-10))
+                    entropy_per_pos.append(entropy)
+                else:
+                    entropy_per_pos.append(0.0)
 
-def extract_model_embeddings(dataset, indices, model, device):
-    """Extract embeddings using model encoder."""
+            embedding = np.concatenate([
+                mean_dist, 
+                std_dist, 
+                [np.mean(entropy_per_pos), np.std(entropy_per_pos)]
+            ])
+        
+        features.append(embedding)
+    
+    return np.array(features)
+
+def extract_model_embeddings(dataset, example_indices, model, device):
+    """Extract embeddings using the current imputer model state."""
     embeddings = []
     
-    model.eval()
-    with torch.no_grad():
-        for idx in indices:
-            known_questions, inputs, answers, annotators, questions, text_embeddings = dataset[idx]
+    for idx in example_indices:
+        entry = dataset.get_data_entry(idx)
+        
+        inputs = torch.tensor(entry['input'], dtype=torch.float32).unsqueeze(0).to(device)
+        annotators = torch.tensor(entry['annotators'], dtype=torch.long).unsqueeze(0).to(device)
+        questions = torch.tensor(entry['questions'], dtype=torch.long).unsqueeze(0).to(device)
+        text_embeddings = torch.tensor(entry['text_embedding'], dtype=torch.float32).unsqueeze(0).to(device)
+        
+        with torch.no_grad():
+            feature_x, param_x = model.encoder.position_encoder(inputs, annotators, questions, text_embeddings)
             
-            text_embeddings = text_embeddings.unsqueeze(0).to(device)
-            inputs = inputs.unsqueeze(0).to(device)
-            annotators = annotators.unsqueeze(0).to(device) 
-            questions = questions.unsqueeze(0).to(device)
+            mask = inputs[:, :, 0]
             
-            feature_x, param_x = model.encoder(inputs, annotators, questions, text_embeddings)
-            
-            pooled_features = feature_x.mean(dim=1).squeeze(0)
-            embeddings.append(pooled_features.cpu().numpy())
+            for layer in model.encoder.layers:
+                feature_x, param_x = layer(feature_x, param_x, questions, mask)
+                
+            embedding = feature_x.mean(dim=1).squeeze().cpu().numpy()
+            embeddings.append(embedding)
     
     return np.array(embeddings)
 
 def greedy_k_centers(embeddings, k, random_seed=42):
-    """Greedy k-centers algorithm for diverse subset selection."""
+    """Greedy K-centers algorithm for diverse subset selection."""
     np.random.seed(random_seed)
     n = len(embeddings)
     if k >= n:
@@ -142,6 +173,7 @@ def run_enhanced_experiment(
 
     logger = logging.getLogger(__name__)
     
+    # Track calibration metrics across cycles
     cycle_calibration_metrics = {
         'smECE_overall': [],
         'smECE_class_0': [],
@@ -169,11 +201,14 @@ def run_enhanced_experiment(
         
         arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, training_type=training_type)
         logger.info("Initial training completed!")
+        
+        # Set model back to dataset_train for active learning
+        arena.set_dataset(dataset_train)
     else:
         arena = AnnotationArena(model, device)
         arena.set_dataset(dataset_train)
 
-    if training_type == 'dynamic_masking' or training_type == 'dynamic_masking_simple':
+    if training_type == 'dynamic_masking':
         arena.set_dynamic_masking_params(num_patterns_per_example, visible_ratio)
     
     metrics = {
@@ -261,6 +296,7 @@ def run_enhanced_experiment(
             active_subset = active_pool.copy()
             logger.info(f"Pool smaller than target, using all {len(active_subset)} examples")
         
+        # Count available positions in active subset for frequency calculation
         available_positions = {f"Pos-{i}": 0 for i in range(14)}
         for example_idx in active_subset:
             masked_positions = dataset_train.get_masked_positions(example_idx)
@@ -274,6 +310,22 @@ def run_enhanced_experiment(
             active_subset_dataset = AnnotationDataset([dataset_train.get_data_entry(idx) for idx in active_subset])
             example_selector = SelectionFactory.create_example_strategy(
                 example_strategy, model, device, gradient_top_only=gradient_top_only
+            )
+            
+            selected_indices, scores = example_selector.select_examples(
+                active_subset_dataset, 
+                num_to_select=min(examples_per_cycle, len(active_subset)),
+                val_dataset=dataset_val,
+                num_samples=3,
+                batch_size=batch_size
+            )
+            
+            selected_examples = [active_subset[idx] for idx in selected_indices]
+
+        elif example_strategy == "entropy":
+            active_subset_dataset = AnnotationDataset([dataset_train.get_data_entry(idx) for idx in active_subset])
+            example_selector = SelectionFactory.create_example_strategy(
+                example_strategy, model, device
             )
             
             selected_indices, scores = example_selector.select_examples(
@@ -324,25 +376,31 @@ def run_enhanced_experiment(
                                         if example in selected_examples)
 
             logger.info(f"Variable gradient selection summary:")
-            logger.info(f"  - Selected {len(selected_examples)} examples")
-            logger.info(f"  - Selected {final_feature_count} features total")
-            logger.info(f"  - Average features per example: {final_feature_count / len(selected_examples):.2f}")
+            logger.info(f"  Target features: {total_features_needed}")
+            logger.info(f"  Selected features: {final_feature_count}")
+            logger.info(f"  Selected examples: {len(selected_examples)}")
+            logger.info(f"  Avg features per example: {final_feature_count / len(selected_examples) if selected_examples else 0:.1f}")
+
+            selected_examples_dict = {ex: selected_examples_dict_fixed[ex] for ex in selected_examples}
 
         else:
             raise ValueError(f"Unknown example strategy: {example_strategy}")
-
-        logger.info(f"Selected {len(selected_examples)} examples from active subset of {len(active_subset)}")
-
-        for example_idx in selected_examples:
-            arena.register_example(example_idx, add_all_positions=False)
-
+        
+        logger.info(f"Selected {len(selected_examples)} examples for annotation")
+        
+        # Track question selections for this cycle
+        question_counts = {f"Pos-{i}": 0 for i in range(14)}
+        question_frequencies = {f"Pos-{i}": 0.0 for i in range(14)}
+        total_features_annotated = 0
         cycle_benefit_cost_ratios = []
         cycle_observation_costs = []
         selected_variables_info = []
-        total_features_annotated = 0
-        question_counts = {f"Pos-{i}": 0 for i in range(14)}
-
-        for example_idx in selected_examples:
+        
+        arena.set_dataset(dataset_train)
+        
+        for example_idx in tqdm(selected_examples, desc="Annotating selected examples"):
+            arena.register_example(example_idx, add_all_positions=False)
+            
             if observe_all_features:
                 masked_positions = dataset_train.get_masked_positions(example_idx)
                 for pos in masked_positions:
@@ -361,12 +419,12 @@ def run_enhanced_experiment(
                         
                         variable_id = f"example_{example_idx}_position_{pos}"
                         arena.predict(variable_id, train=True)
-
-            elif feature_strategy is not None and feature_strategy != "combine":
+            
+            elif feature_strategy and features_per_example:
                 feature_selector = SelectionFactory.create_feature_strategy(feature_strategy, model, device)
                 
-                if example_strategy == "combine" and example_idx in selected_examples_dict_fixed:
-                    selected_positions = selected_examples_dict_fixed[example_idx][:features_per_example]
+                if example_strategy == "combine" and example_idx in selected_examples_dict:
+                    selected_positions = selected_examples_dict[example_idx][:features_per_example]
                     selected_features = [(pos, 1.0, 1.0, 1.0) for pos in selected_positions]
                 else:
                     feature_kwargs = {}
@@ -425,42 +483,144 @@ def run_enhanced_experiment(
                         
                         variable_id = f"example_{example_idx}_position_{pos}"
                         arena.predict(variable_id, train=True)
+        
+        # Calculate frequencies (proportion of available positions selected)
+        for pos_key in question_frequencies.keys():
+            if available_positions[pos_key] > 0:
+                question_frequencies[pos_key] = question_counts[pos_key] / available_positions[pos_key]
+            else:
+                question_frequencies[pos_key] = 0.0
+        
+        logger.info(f"Total features annotated this cycle: {total_features_annotated}")
 
-        logger.info(f"Feature annotation summary:")
-        logger.info(f"  Total features annotated this cycle: {total_features_annotated}")
-        for pos_name, count in question_counts.items():
-            if count > 0:
-                logger.info(f"  {pos_name}: {count} annotations")
+        # NEW: Collect historical patterns for professor's approach
+        for example_idx in selected_examples:
 
-        if len(selected_examples) > 0:
-            logger.info(f"Training on {len(arena.model.training_queue)} examples...")
-            training_metrics = arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, training_type=training_type)
-            logger.info(f"Training completed - Average loss: {training_metrics['avg_loss']:.4f}")
+            current_data = dataset_train[example_idx]
+            current_state = (current_data[1][:, 0] == 0).float() 
+            
+            # Get query pattern for this cycle (which positions were annotated this cycle)
+            query_pattern = torch.zeros(14)
+            for (ex_idx, pos) in selected_variables_info:
+                if ex_idx == example_idx:
+                    query_pattern[pos] = 1.0
+            
+            # Collect the historical pattern
+            arena.model.collect_historical_pattern(current_state, query_pattern, cycle_count)
+        
+        annotated_examples.extend(selected_examples)
+        
+        if not cold_start:
+            for example_idx in selected_examples:
+                if example_idx in active_pool:
+                    active_pool.remove(example_idx)
 
-        arena.set_dataset(dataset_val)
-        val_metrics = arena.evaluate(list(range(len(dataset_val))))
+        if training_type == 'dynamic_masking':
+            arena.set_dynamic_masking_params(num_patterns_per_example, visible_ratio)
+        
+        logger.info(f"Training model for {epochs_per_cycle} epochs...")
+        arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, training_type=training_type)
+
+        # NEW: Export pattern logs every 5 cycles
+        if cycle_count % 3 == 0 and config:
+            try:
+                experiment_paths = config.get_experiment_paths("current_experiment")
+                arena.model.export_pattern_logs(experiment_paths['results_dir'])
+            except:
+                logger.warning("Could not export pattern logs - continuing without export")
+        
+        # Evaluation using eval.py
+        if config and use_wandb:
+            evaluator = ModelEvaluator(config, use_wandb)
+            datasets = {'train': dataset_train, 'validation': dataset_val, 'test': dataset_test}
+            cycle_eval = evaluator.evaluate_active_learning_cycle(model, datasets, cycle_count, experiment_config=experiment_config)
+            
+            val_metrics = cycle_eval['evaluations']['validation']['overall']
+            test_metrics = cycle_eval['evaluations']['test']['overall']
+            
+            # Extract calibration metrics from step 7 of test evaluation
+            if 'test_trend' in cycle_eval:
+                test_trend = cycle_eval['test_trend']
+                metrics_trends = test_trend.get('metrics_trends', {})
+                
+                # Use step 7 (index 7) for cycle calibration tracking
+                step_index = min(7, len(metrics_trends.get('smECE_overall', [])) - 1)
+                if step_index >= 0:
+                    for metric_name in cycle_calibration_metrics.keys():
+                        if metric_name in metrics_trends and len(metrics_trends[metric_name]) > step_index:
+                            cycle_calibration_metrics[metric_name].append(metrics_trends[metric_name][step_index])
+                        else:
+                            cycle_calibration_metrics[metric_name].append(0.0)
+                else:
+                    # If no step 7, use zeros
+                    for metric_name in cycle_calibration_metrics.keys():
+                        cycle_calibration_metrics[metric_name].append(0.0)
+            else:
+                # No test trend available, use zeros
+                for metric_name in cycle_calibration_metrics.keys():
+                    cycle_calibration_metrics[metric_name].append(0.0)
+                    
+        else:
+            arena.set_dataset(dataset_val)
+            val_metrics = arena.evaluate(list(range(len(dataset_val))))
+            arena.set_dataset(dataset_test)
+            test_metrics = arena.evaluate(list(range(len(dataset_test))))
+            
+            # No calibration tracking for non-wandb runs
+            for metric_name in cycle_calibration_metrics.keys():
+                cycle_calibration_metrics[metric_name].append(0.0)
+
         metrics['val_metrics'].append(val_metrics)
         metrics['val_losses'].append(val_metrics["avg_expected_loss"])
-
+        logger.info(f"Validation - RMSE: {val_metrics['rmse']:.4f}, "
+                   f"Pearson: {val_metrics['pearson']:.4f}, "
+                   f"Expected Loss: {val_metrics['avg_expected_loss']:.4f}")
+        
         arena.set_dataset(dataset_test)
         test_metrics = arena.evaluate(list(range(len(dataset_test))))
         metrics['test_expected_losses'].append(test_metrics["avg_expected_loss"])
+        
+        annotated_test_dataset = copy.deepcopy(dataset_test)
+        annotations_applied = 0
+        
+        test_arena = AnnotationArena(model, device)
+        test_arena.set_dataset(annotated_test_dataset)
+        
+        for test_idx, positions in test_overlap_annotations.items():
+            for pos in positions:
+                if test_arena.observe_position(test_idx, pos):
+                    annotations_applied += 1
 
-        test_subset_indices = list(test_overlap_annotations.keys()) if test_overlap_annotations else []
-        if test_subset_indices:
-            arena.set_dataset(dataset_test)
-            test_subset_metrics = arena.evaluate(test_subset_indices)
-            metrics['test_annotated_losses'].append(test_subset_metrics["avg_expected_loss"])
+        if annotations_applied > 0:
+            test_arena.set_dataset(annotated_test_dataset)
+            annotated_test_metrics = test_arena.evaluate(list(range(len(annotated_test_dataset))))
+            metrics['test_annotated_losses'].append(annotated_test_metrics["avg_expected_loss"])
         else:
             metrics['test_annotated_losses'].append(test_metrics["avg_expected_loss"])
-
-        arena.set_dataset(dataset_train)
-
-        for example_idx in selected_examples:
-            if example_idx not in annotated_examples:
-                annotated_examples.append(example_idx)
-            active_pool.remove(example_idx)
-
+        
+        logger.info(f"Test loss: {test_metrics['avg_expected_loss']:.4f}")
+        
+        # Log question selection counts and frequencies to WandB
+        if use_wandb and WANDB_AVAILABLE and wandb.run is not None:
+            wandb_data = {
+                'cycle': cycle_count,
+                'total_features_selected': total_features_annotated,
+                'examples_selected': len(selected_examples),
+                'pool_size_remaining': len(active_pool)
+            }
+            
+            # Log both counts and frequencies using organized metrics
+            for question, count in question_counts.items():
+                pos_num = question.split('-')[1]  # Extract position number
+                wandb_data[f"position_selection/{question}_count"] = count
+                wandb_data[f"position_selection/{question}_frequency"] = question_frequencies[question]
+                wandb_data[f"position_selection/{question}_available"] = available_positions[question]
+                
+                # Also log selection proportion (same as frequency but clearer naming)
+                wandb_data[f"position_selection/Pos-{pos_num}_proportion"] = question_frequencies[question]
+            
+            wandb.log(wandb_data)
+        
         metrics['examples_annotated'].append(len(selected_examples))
         metrics['features_annotated'].append(total_features_annotated)
         metrics['benefit_cost_ratios'].append(np.mean(cycle_benefit_cost_ratios) if cycle_benefit_cost_ratios else 0.0)
@@ -471,16 +631,20 @@ def run_enhanced_experiment(
         
     logger.info(f"Experiment complete - {cycle_count} cycles")
     
+    # Log final calibration trends using WandB's automatic plotting system
     if use_wandb and WANDB_AVAILABLE and wandb.run is not None and cycle_count > 0:
+        # Log calibration trends across cycles using WandB's metric system
         for cycle_idx in range(cycle_count):
             calibration_data = {"cycle": cycle_idx}
             
+            # Log overall and per-class calibration metrics for this cycle
             for metric_name, values in cycle_calibration_metrics.items():
                 if len(values) > cycle_idx:
                     calibration_data[f"calibration_trends/{metric_name}"] = values[cycle_idx]
             
             wandb.log(calibration_data)
         
+        # Log final calibration summary statistics
         final_calibration_data = {'experiment_complete': True}
         for metric_name, values in cycle_calibration_metrics.items():
             if len(values) >= cycle_count and cycle_count > 0:
@@ -507,7 +671,7 @@ def run_enhanced_experiment(
 def main():
     parser = argparse.ArgumentParser(description="Run Enhanced Active Learning Experiments with AnnotationArena.")
     
-    parser.add_argument("--experiment", type=str, default="random_5_base_training", 
+    parser.add_argument("--experiment", type=str, default="gradient_voi", 
                        help="Experiment to run")
     parser.add_argument("--cycles", type=int, default=DefaultHyperparams.CYCLES, 
                        help="Number of active learning cycles")
@@ -554,14 +718,16 @@ def main():
     parser.add_argument("--calibration_holdout_ratio", type=float, default=0.1,
                       help="Ratio of data to hold out for conformal calibration (default: 0.1)")
     
+    # ABLATION CHANGE: Add historical_weight and influence_weight arguments
     parser.add_argument('--historical_weight', type=float, default=0.3,
                        help='Weight for historical loss in dynamic masking generation')
     parser.add_argument('--influence_weight', type=float, default=0.7,
                        help='Weight for influence loss in dynamic masking generation')
     
+    # Wandb arguments
     parser.add_argument('--use_wandb', action='store_true',
                        help='Use Wandb for logging')
-    parser.add_argument('--wandb_project', type=str, default='active-learner-ablation',
+    parser.add_argument('--wandb_project', type=str, default='active-learner',
                        help='Wandb project name')
     parser.add_argument('--wandb_entity', type=str,
                        help='Wandb entity name')
@@ -570,18 +736,22 @@ def main():
     parser.add_argument('--training_buffer_size', type=int, default=0,
                        help='Buffer size for maximum number of examples seen in the training')
     
+    # Logging arguments
     parser.add_argument('--log_level', type=str, default='INFO',
                        choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
                        help='Logging level')
     
     args = parser.parse_args()
     
+    # Initialize config
     config = Config(args.runner)
     config.ensure_directories()
     
+    # Set experiment name if not provided
     if not args.experiment_name:
         args.experiment_name = f"{args.experiment}_{args.dataset}"
     
+    # Setup logging
     exp_paths = config.get_experiment_paths(args.experiment_name)
     logging.basicConfig(
         level=getattr(logging, args.log_level.upper()),
@@ -599,10 +769,8 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")
     
+    # Initialize model using ModelConfig
     model_config = ModelConfig.get_config(args.dataset, args.training_buffer_size)
-    model_config['historical_weight'] = args.historical_weight
-    model_config['influence_weight'] = args.influence_weight
-    
     if args.use_embedding:
         ModelClass = ImputerEmbedding
     else:
@@ -613,10 +781,10 @@ def main():
     
     experiment_results = {}
     
+    # ABLATION CHANGE: Define ablation experiments to run
     experiments_to_run = []
     if args.experiment == "ablation_all":
         experiments_to_run = [
-            "random_5_base_training",
             "var_grad_base_training", 
             "var_grad_random_masking",
             "var_grad_dynamic_masking",
@@ -640,11 +808,14 @@ def main():
 
         logger.info(f"============ Running experiment: {experiment} ============")
         
+        # Get experiment-specific configuration
         experiment_config = get_experiment_config(experiment)
         
+        # Create experiment-specific paths
         experiment_exp_name = f"{args.experiment_name}_{experiment}"
         experiment_paths = config.get_experiment_paths(experiment_exp_name)
         
+        # Initialize Wandb for this specific experiment
         if args.use_wandb and WANDB_AVAILABLE:
             wandb_config = vars(args).copy()
             wandb_config.update({
@@ -667,6 +838,25 @@ def main():
         
         model_copy = copy.deepcopy(model)
         
+        # ABLATION CHANGE: Set model weights for specific experiments
+        if hasattr(model_copy, 'historical_weight') and hasattr(model_copy, 'influence_weight'):
+            if experiment == "var_grad_dynamic_masking_hist_only":
+                model_copy.historical_weight = 1.0
+                model_copy.influence_weight = 0.0
+            elif experiment == "var_grad_dynamic_masking_inf_only":
+                model_copy.historical_weight = 0.0
+                model_copy.influence_weight = 1.0
+            elif experiment == "var_grad_dynamic_masking_70_30":
+                model_copy.historical_weight = 0.3
+                model_copy.influence_weight = 0.7
+            elif experiment == "var_grad_dynamic_masking_30_70":
+                model_copy.historical_weight = 0.7
+                model_copy.influence_weight = 0.3
+            else:
+                model_copy.historical_weight = args.historical_weight
+                model_copy.influence_weight = args.influence_weight
+        
+        # Initialize data manager with config
         data_manager = DataManager(config)
 
         if args.dataset == "hanna":
@@ -688,6 +878,7 @@ def main():
         logger.info(f"Loaded datasets: Train={len(train_dataset)}, Val={len(val_dataset)}, "
               f"Test={len(test_dataset)}, Active Pool={len(active_pool_dataset)}")
 
+        # Run experiments based on type
         common_kwargs = {
             'cycles': args.cycles,
             'examples_per_cycle': args.examples_per_cycle,
@@ -709,6 +900,7 @@ def main():
             'experiment_config': experiment_config
         }
 
+        # ABLATION CHANGE: Run specific ablation experiments
         if experiment == "random_5_base_training":
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
@@ -748,45 +940,8 @@ def main():
                 **common_kwargs
             )
 
-        elif experiment == "var_grad_dynamic_masking_hist_only":
-            model_copy.historical_weight = 1.0
-            model_copy.influence_weight = 0.0
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="combine", feature_strategy="gradient", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                loss_type=args.loss_type,
-                training_type='dynamic_masking',
-                **common_kwargs
-            )
-
-        elif experiment == "var_grad_dynamic_masking_inf_only":
-            model_copy.historical_weight = 0.0
-            model_copy.influence_weight = 1.0
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="combine", feature_strategy="gradient", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                loss_type=args.loss_type,
-                training_type='dynamic_masking',
-                **common_kwargs
-            )
-
-        elif experiment == "var_grad_dynamic_masking_70_30":
-            model_copy.historical_weight = 0.3
-            model_copy.influence_weight = 0.7
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="combine", feature_strategy="gradient", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                loss_type=args.loss_type,
-                training_type='dynamic_masking',
-                **common_kwargs
-            )
-
-        elif experiment == "var_grad_dynamic_masking_30_70":
-            model_copy.historical_weight = 0.7
-            model_copy.influence_weight = 0.3
+        elif experiment in ["var_grad_dynamic_masking_hist_only", "var_grad_dynamic_masking_inf_only", 
+                          "var_grad_dynamic_masking_70_30", "var_grad_dynamic_masking_30_70"]:
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="combine", feature_strategy="gradient", model=model_copy,
@@ -809,8 +964,10 @@ def main():
         else:
             logger.warning("No calibration holdout found - may need to regenerate data")
         
+        # Save model with experiment-specific path
         torch.save(model_copy.state_dict(), experiment_paths['model_file'])
         
+        # Save results with experiment-specific path
         results_file = os.path.join(experiment_paths['results_dir'], f"{experiment}_results.json")
         with open(results_file, "w") as f:
             json.dump(results, f, indent=4)
@@ -821,9 +978,11 @@ def main():
         logger.info(f"Total examples annotated: {sum(results['examples_annotated'])}")
         logger.info(f"Total features annotated: {sum(results['features_annotated'])}")
         
+        # Finish WandB run for this experiment
         if args.use_wandb and WANDB_AVAILABLE and wandb.run is not None:
             wandb.finish()
     
+    # Save combined results
     if experiment_results:
         combined_file = os.path.join(exp_paths['results_dir'], "combined_results.json")
         with open(combined_file, "w") as f:

@@ -863,31 +863,31 @@ def get_experiment_config(experiment_name):
             "target_questions": [0, 1, 2, 3, 4, 5, 6]
         },
         "var_grad_base_training": {
-            "feature_selection_strategy": "gradient",
+            "feature_selection_strategy": "voi",
             "target_questions": [0, 1, 2, 3, 4, 5, 6]
         },
         "var_grad_random_masking": {
-            "feature_selection_strategy": "gradient",
+            "feature_selection_strategy": "voi",
             "target_questions": [0, 1, 2, 3, 4, 5, 6]
         },
         "var_grad_dynamic_masking": {
-            "feature_selection_strategy": "gradient",
+            "feature_selection_strategy": "voi",
             "target_questions": [0, 1, 2, 3, 4, 5, 6]
         },
         "var_grad_dynamic_masking_hist_only": {
-            "feature_selection_strategy": "gradient",
+            "feature_selection_strategy": "voi",
             "target_questions": [0, 1, 2, 3, 4, 5, 6]
         },
         "var_grad_dynamic_masking_inf_only": {
-            "feature_selection_strategy": "gradient",
+            "feature_selection_strategy": "voi",
             "target_questions": [0, 1, 2, 3, 4, 5, 6]
         },
         "var_grad_dynamic_masking_70_30": {
-            "feature_selection_strategy": "gradient",
+            "feature_selection_strategy": "voi",
             "target_questions": [0, 1, 2, 3, 4, 5, 6]
         },
         "var_grad_dynamic_masking_30_70": {
-            "feature_selection_strategy": "gradient",
+            "feature_selection_strategy": "voi",
             "target_questions": [0, 1, 2, 3, 4, 5, 6]
         }
     }

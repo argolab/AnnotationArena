@@ -28,7 +28,7 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/ablationRunner.py \
     --runner prabhav \
     --use_embedding True \
     --cold_start True \
-    --cycles 15 \
+    --cycles 6 \
     --validation_set_size 50 \
     --active_set_size 100 \
     --epochs_per_cycle 10 \

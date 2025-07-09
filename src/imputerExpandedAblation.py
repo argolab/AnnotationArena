@@ -814,9 +814,6 @@ class ImputerEmbedding(nn.Module):
         for queue_idx in examples_indices:
             if queue_idx < len(self.training_queue):
                 self.training_queue[queue_idx]['needs_revisit'] = False
-                self.recent_indicators[queue_idx] = False
-            if queue_idx < len(self.prediction_history):
-                self.prediction_history[queue_idx]['needs_revisit'] = False
         self.examples_to_revisit.clear()
         
         logger.info(f"Training completed - Final loss: {losses[-1]:.4f}")
