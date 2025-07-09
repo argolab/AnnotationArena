@@ -353,6 +353,29 @@ class AnnotationArena:
                 batch_size=batch_size,
                 lr=lr
             )
+        elif training_type == 'basic_ablation':
+            epoch_losses = self.model.train_on_examples_basic_ablation(
+                examples_indices=examples_to_train,
+                epochs=epochs,
+                batch_size=batch_size,
+                lr=lr
+            )
+        elif training_type == 'random_masking_ablation':
+            epoch_losses = self.model.train_on_examples_random_masking_ablation(
+                examples_indices=examples_to_train,
+                epochs=epochs,
+                batch_size=batch_size,
+                lr=lr
+            )
+        elif training_type == 'dynamic_masking_simple':
+            epoch_losses = self.model.train_on_examples_dynamic_masking_simple(
+                examples_indices=examples_to_train,
+                epochs=epochs,
+                batch_size=batch_size,
+                lr=lr,
+                num_patterns_per_example=self.num_patterns_per_example,
+                visible_ratio=self.visible_ratio
+            )
         else:
             raise ValueError(f"Unknown training type: {training_type}")
         

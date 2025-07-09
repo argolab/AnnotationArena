@@ -19,9 +19,9 @@ conda activate llm_rubric_env
 
 wandb login
 
-python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
+python /export/fs06/psingh54/ActiveRubric-Internal/src/ablationRunner.py \
     --examples_per_cycle 50 \
-    --experiment variable_gradient_comparison \
+    --experiment ablation_all \
     --loss_type cross_entropy \
     --resample_validation \
     --dataset hanna \
@@ -37,8 +37,10 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --num_patterns_per_example 3 \
     --visible_ratio 0.5 \
     --features_per_example 5 \
-    --experiment_name VariableGradient_5F-50E_HistoricalPatternTraining_0.5Lambda_0.3H \
+    --historical_weight 0.3 \
+    --influence_weight 0.7 \
+    --experiment_name AblationStudy_VarGrad_3Patterns_0.5_Ratio \
     --log_level INFO \
     --use_wandb \
     --wandb_project active-learning-hanna \
-    --wandb_entity prabhavsingh55221-johns-hopkins-university \
+    --wandb_entity prabhavsingh55221-johns-hopkins-university
