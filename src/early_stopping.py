@@ -21,10 +21,84 @@ from annotationArena import AnnotationArena
 from selection import SelectionFactory
 from utils import AnnotationDataset
 from eval import ModelEvaluator
+import pickle
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
+
+
+def save_cache_to_disk(cache_file_path: str):
+    """Save the current calibration cache to disk."""
+    global _calibration_cache
+    
+    try:
+        # Convert frozenset keys to tuples for JSON serialization compatibility
+        serializable_cache = {}
+        for key, value in _calibration_cache.items():
+            if isinstance(key, tuple) and len(key) == 3:
+                observed_positions, next_position, target_question = key
+                # Convert frozenset to sorted tuple
+                if isinstance(observed_positions, frozenset):
+                    serializable_key = (tuple(sorted(observed_positions)), next_position, target_question)
+                else:
+                    serializable_key = key
+                serializable_cache[serializable_key] = value
+            else:
+                serializable_cache[key] = value
+        
+        with open(cache_file_path, 'wb') as f:
+            pickle.dump(serializable_cache, f)
+        
+        logger.info(f"Cache saved to {cache_file_path} ({len(_calibration_cache)} entries)")
+        
+    except Exception as e:
+        logger.warning(f"Failed to save cache to {cache_file_path}: {e}")
+
+def load_cache_from_disk(cache_file_path: str) -> bool:
+    """
+    Load calibration cache from disk.
+    
+    Args:
+        cache_file_path: Path to the cache file
+        
+    Returns:
+        True if cache was loaded successfully, False otherwise
+    """
+    global _calibration_cache
+    
+    if not os.path.exists(cache_file_path):
+        logger.info(f"Cache file {cache_file_path} not found, starting with empty cache")
+        return False
+    
+    try:
+        with open(cache_file_path, 'rb') as f:
+            loaded_cache = pickle.load(f)
+        
+        # Convert back to frozenset keys
+        _calibration_cache = {}
+        for key, value in loaded_cache.items():
+            if isinstance(key, tuple) and len(key) == 3:
+                observed_positions_tuple, next_position, target_question = key
+                # Convert tuple back to frozenset
+                frozenset_key = (frozenset(observed_positions_tuple), next_position, target_question)
+                _calibration_cache[frozenset_key] = value
+            else:
+                _calibration_cache[key] = value
+        
+        logger.info(f"Cache loaded from {cache_file_path} ({len(_calibration_cache)} entries)")
+        return True
+        
+    except Exception as e:
+        logger.warning(f"Failed to load cache from {cache_file_path}: {e}")
+        _calibration_cache = {}
+        return False
+
+def clear_cache():
+    """Clear the calibration cache."""
+    global _calibration_cache
+    _calibration_cache = {}
+    logger.info("Cache cleared")
 
 # Global cache for dynamic calibration computations
 _calibration_cache = {}
@@ -135,6 +209,8 @@ def compute_voi_p_value(predicted_voi: float, observed_positions: Set[int],
         # Cache the result
         _calibration_cache[cache_key] = calibration_errors
         logger.debug(f"Cached {len(calibration_errors)} calibration errors for key {cache_key}")
+
+        save_cache_to_disk("cache.pik")
     
     if len(calibration_errors) == 0:
         return 1.0, 0
@@ -222,7 +298,8 @@ def evaluate_human_q0_workflow_with_statistical_stopping(model, dataset, calibra
     # Get initial RMSE
     initial_rmse, initial_smece = evaluate_model_q0_only(model, dataset, target_question, device)
     logger.info(f"Initial Q{target_question} RMSE: {initial_rmse:.4f}")
-    
+    if os.path.exists("cache.pik"):
+        load_cache_from_disk("cache.pik")
     # =================================================================
     # PHASE 1: INDIVIDUAL EXAMPLE STOPPING DECISIONS
     # =================================================================
