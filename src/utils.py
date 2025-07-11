@@ -23,7 +23,7 @@ from sentence_transformers import SentenceTransformer
 logger = logging.getLogger(__name__)
 
 # Change Based on Usage
-model = SentenceTransformer("all-MiniLM-L6-v2")
+#model = SentenceTransformer("all-MiniLM-L6-v2")
 # model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
 
 random.seed(90)
@@ -820,7 +820,7 @@ def get_experiment_config(experiment_name):
         },
         "gradient_voi_q0_human": {
             "feature_selection_strategy": "voi",
-            "target_questions": [0]
+            "target_questions": [0, 1, 2, 3, 4, 5, 6]
         },
         "gradient_voi_all_questions": {
             "feature_selection_strategy": "voi", 

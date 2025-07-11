@@ -568,7 +568,7 @@ class VOISelectionStrategy(FeatureSelectionStrategy):
         
         position_vois.sort(key=lambda x: x[3], reverse=True)
         
-        return position_vois[:num_to_select]
+        return position_vois[:min(num_to_select, len(masked_positions))]
     
 
 class FastVOISelectionStrategy(FeatureSelectionStrategy):

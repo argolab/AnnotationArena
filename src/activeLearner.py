@@ -601,8 +601,46 @@ def run_enhanced_experiment(
         
     logger.info(f"Experiment complete - {cycle_count} cycles")
     
-    # Log final calibration trends using WandB's automatic plotting system
+    # Create explicit plots and log to WandB
     if use_wandb and WANDB_AVAILABLE and wandb.run is not None and cycle_count > 0:
+        import matplotlib.pyplot as plt
+        
+        # Create calibration trend plot
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # Plot 1: Overall smECE trend
+        cycles_x = list(range(cycle_count))
+        if len(cycle_calibration_metrics['smECE_overall']) >= cycle_count:
+            ax1.plot(cycles_x, cycle_calibration_metrics['smECE_overall'][:cycle_count], 'b-o', linewidth=2, markersize=6)
+            ax1.set_xlabel('Cycle')
+            ax1.set_ylabel('smECE Overall')
+            ax1.set_title('Model Calibration (smECE) Across Active Learning Cycles')
+            ax1.grid(True, alpha=0.3)
+            ax1.set_ylim(bottom=0)
+        
+        # Plot 2: Per-class smECE trends
+        colors = ['red', 'green', 'blue', 'orange', 'purple']
+        for i, color in enumerate(colors):
+            metric_name = f'smECE_class_{i}'
+            if len(cycle_calibration_metrics[metric_name]) >= cycle_count:
+                ax2.plot(cycles_x, cycle_calibration_metrics[metric_name][:cycle_count], 
+                        color=color, marker='o', linewidth=2, markersize=4, label=f'Class {i}')
+        
+        ax2.set_xlabel('Cycle')
+        ax2.set_ylabel('smECE by Class')
+        ax2.set_title('Per-Class Calibration Trends')
+        ax2.grid(True, alpha=0.3)
+        ax2.legend()
+        ax2.set_ylim(bottom=0)
+        
+        plt.tight_layout()
+        
+        # Save calibration plot to WandB
+        wandb.log({"Model_Calibration_Trends_Across_Cycles": wandb.Image(fig)})
+        plt.close(fig)
+
+        
+        
         # Log calibration trends across cycles using WandB's metric system
         for cycle_idx in range(cycle_count):
             calibration_data = {"cycle": cycle_idx}
@@ -756,9 +794,6 @@ def main():
         ]
     elif args.experiment == "comparison":
         experiments_to_run = [
-            "random_5",
-            "gradient_voi_q0_human",
-            "gradient_voi_all_questions",
             "variable_gradient_comparison"
         ]
     else:
