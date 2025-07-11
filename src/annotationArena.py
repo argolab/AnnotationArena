@@ -49,6 +49,7 @@ class AnnotationArena:
         # Dynamic masking parameters (optional)
         self.num_patterns_per_example = 5
         self.visible_ratio = 0.5
+        self.masking_lambda = 0.5
         
         logger.info(f"AnnotationArena initialized with model: {type(model).__name__}")
     
@@ -68,7 +69,7 @@ class AnnotationArena:
         logger.info(f"Dataset set with {len(dataset)} examples")
         return True
     
-    def set_dynamic_masking_params(self, num_patterns_per_example=5, visible_ratio=0.5):
+    def set_dynamic_masking_params(self, num_patterns_per_example=5, visible_ratio=0.5, masking_lambda=0.1):
         """
         Set parameters for dynamic masking training.
         
@@ -78,6 +79,7 @@ class AnnotationArena:
         """
         self.num_patterns_per_example = num_patterns_per_example
         self.visible_ratio = visible_ratio
+        self.masking_lambda = masking_lambda
         logger.debug(f"Dynamic masking params set: patterns={num_patterns_per_example}, visible_ratio={visible_ratio}")
     
     def add(self, variable_id, loss_function="cross_entropy", distribution_family="categorical", cost=1.0):
@@ -341,7 +343,8 @@ class AnnotationArena:
                 batch_size=batch_size,
                 lr=lr,
                 num_patterns_per_example=self.num_patterns_per_example,
-                visible_ratio=self.visible_ratio
+                visible_ratio=self.visible_ratio,
+                masking_lambda=self.masking_lambda
             )
         elif training_type == 'random_masking':
             epoch_losses = self.model.train_on_examples_random_masking(
@@ -349,6 +352,29 @@ class AnnotationArena:
                 epochs=epochs,
                 batch_size=batch_size,
                 lr=lr
+            )
+        elif training_type == 'basic_ablation':
+            epoch_losses = self.model.train_on_examples_basic_ablation(
+                examples_indices=examples_to_train,
+                epochs=epochs,
+                batch_size=batch_size,
+                lr=lr
+            )
+        elif training_type == 'random_masking_ablation':
+            epoch_losses = self.model.train_on_examples_random_masking_ablation(
+                examples_indices=examples_to_train,
+                epochs=epochs,
+                batch_size=batch_size,
+                lr=lr
+            )
+        elif training_type == 'dynamic_masking_simple':
+            epoch_losses = self.model.train_on_examples_dynamic_masking_simple(
+                examples_indices=examples_to_train,
+                epochs=epochs,
+                batch_size=batch_size,
+                lr=lr,
+                num_patterns_per_example=self.num_patterns_per_example,
+                visible_ratio=self.visible_ratio
             )
         else:
             raise ValueError(f"Unknown training type: {training_type}")

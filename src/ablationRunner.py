@@ -1,5 +1,6 @@
 """
 Enhanced active learning experiments with configuration management and logging.
+Ablation study version for testing variable gradient methods with different training approaches.
 
 Author: Prabhav Singh / Haojun Shi
 """
@@ -25,8 +26,8 @@ os.environ.update({"TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "HF_
 from config import Config, ModelConfig, DefaultHyperparams
 from utils import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset, get_experiment_config
 from annotationArena import AnnotationArena
-# from imputer import ImputerEmbedding
-from imputerExpanded import ImputerEmbedding
+# ABLATION CHANGE: Use ablation version of imputer
+from imputerExpandedAblation import ImputerEmbedding
 from selection import (
     SelectionFactory, 
     VOISelectionStrategy, 
@@ -200,6 +201,9 @@ def run_enhanced_experiment(
         
         arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, training_type=training_type)
         logger.info("Initial training completed!")
+        
+        # Set model back to dataset_train for active learning
+        arena.set_dataset(dataset_train)
     else:
         arena = AnnotationArena(model, device)
         arena.set_dataset(dataset_train)
@@ -627,46 +631,8 @@ def run_enhanced_experiment(
         
     logger.info(f"Experiment complete - {cycle_count} cycles")
     
-    # Create explicit plots and log to WandB
+    # Log final calibration trends using WandB's automatic plotting system
     if use_wandb and WANDB_AVAILABLE and wandb.run is not None and cycle_count > 0:
-        import matplotlib.pyplot as plt
-        
-        # Create calibration trend plot
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-        
-        # Plot 1: Overall smECE trend
-        cycles_x = list(range(cycle_count))
-        if len(cycle_calibration_metrics['smECE_overall']) >= cycle_count:
-            ax1.plot(cycles_x, cycle_calibration_metrics['smECE_overall'][:cycle_count], 'b-o', linewidth=2, markersize=6)
-            ax1.set_xlabel('Cycle')
-            ax1.set_ylabel('smECE Overall')
-            ax1.set_title('Model Calibration (smECE) Across Active Learning Cycles')
-            ax1.grid(True, alpha=0.3)
-            ax1.set_ylim(bottom=0)
-        
-        # Plot 2: Per-class smECE trends
-        colors = ['red', 'green', 'blue', 'orange', 'purple']
-        for i, color in enumerate(colors):
-            metric_name = f'smECE_class_{i}'
-            if len(cycle_calibration_metrics[metric_name]) >= cycle_count:
-                ax2.plot(cycles_x, cycle_calibration_metrics[metric_name][:cycle_count], 
-                        color=color, marker='o', linewidth=2, markersize=4, label=f'Class {i}')
-        
-        ax2.set_xlabel('Cycle')
-        ax2.set_ylabel('smECE by Class')
-        ax2.set_title('Per-Class Calibration Trends')
-        ax2.grid(True, alpha=0.3)
-        ax2.legend()
-        ax2.set_ylim(bottom=0)
-        
-        plt.tight_layout()
-        
-        # Save calibration plot to WandB
-        wandb.log({"Model_Calibration_Trends_Across_Cycles": wandb.Image(fig)})
-        plt.close(fig)
-
-        
-        
         # Log calibration trends across cycles using WandB's metric system
         for cycle_idx in range(cycle_count):
             calibration_data = {"cycle": cycle_idx}
@@ -752,6 +718,12 @@ def main():
     parser.add_argument("--calibration_holdout_ratio", type=float, default=0.1,
                       help="Ratio of data to hold out for conformal calibration (default: 0.1)")
     
+    # ABLATION CHANGE: Add historical_weight and influence_weight arguments
+    parser.add_argument('--historical_weight', type=float, default=0.3,
+                       help='Weight for historical loss in dynamic masking generation')
+    parser.add_argument('--influence_weight', type=float, default=0.7,
+                       help='Weight for influence loss in dynamic masking generation')
+    
     # Wandb arguments
     parser.add_argument('--use_wandb', action='store_true',
                        help='Use Wandb for logging')
@@ -809,18 +781,25 @@ def main():
     
     experiment_results = {}
     
-    # Define experiments to run
+    # ABLATION CHANGE: Define ablation experiments to run
     experiments_to_run = []
-    if args.experiment == "all":
+    if args.experiment == "ablation_all":
         experiments_to_run = [
-            "random_all", "gradient_all", "entropy_all", "random_5", 
-            "gradient_voi", "gradient_entropy", "entropy_voi", "gradient_sequential",
-            "gradient_voi_q0_human", "gradient_voi_q0_both", "gradient_voi_all_questions",
-            "variable_gradient_comparison"
+            "var_grad_base_training", 
+            "var_grad_random_masking",
+            "var_grad_dynamic_masking",
+            "var_grad_dynamic_masking_hist_only",
+            "var_grad_dynamic_masking_inf_only",
+            "var_grad_dynamic_masking_70_30",
+            "var_grad_dynamic_masking_30_70"
         ]
-    elif args.experiment == "comparison":
+    elif args.experiment == "ablation_comparison":
         experiments_to_run = [
-            "variable_gradient_comparison"
+            "random_5_base_training",
+            "var_grad_base_training",
+            "var_grad_dynamic_masking",
+            "var_grad_dynamic_masking_hist_only",
+            "var_grad_dynamic_masking_inf_only"
         ]
     else:
         experiments_to_run = [args.experiment]
@@ -859,6 +838,24 @@ def main():
         
         model_copy = copy.deepcopy(model)
         
+        # ABLATION CHANGE: Set model weights for specific experiments
+        if hasattr(model_copy, 'historical_weight') and hasattr(model_copy, 'influence_weight'):
+            if experiment == "var_grad_dynamic_masking_hist_only":
+                model_copy.historical_weight = 1.0
+                model_copy.influence_weight = 0.0
+            elif experiment == "var_grad_dynamic_masking_inf_only":
+                model_copy.historical_weight = 0.0
+                model_copy.influence_weight = 1.0
+            elif experiment == "var_grad_dynamic_masking_70_30":
+                model_copy.historical_weight = 0.3
+                model_copy.influence_weight = 0.7
+            elif experiment == "var_grad_dynamic_masking_30_70":
+                model_copy.historical_weight = 0.7
+                model_copy.influence_weight = 0.3
+            else:
+                model_copy.historical_weight = args.historical_weight
+                model_copy.influence_weight = args.influence_weight
+        
         # Initialize data manager with config
         data_manager = DataManager(config)
 
@@ -896,7 +893,6 @@ def main():
             'validation_set_size': args.validation_set_size,
             'initial_train_dataset': initial_train_dataset,
             'gradient_top_only': args.gradient_top_only,
-            'training_type': args.train_option,
             'num_patterns_per_example': args.num_patterns_per_example,
             'visible_ratio': args.visible_ratio,
             'config': config,
@@ -904,71 +900,54 @@ def main():
             'experiment_config': experiment_config
         }
 
-        if experiment == "random_all":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="random", model=model_copy,
-                observe_all_features=True,
-                **common_kwargs
-            )
-
-        elif experiment == "gradient_all":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="gradient", model=model_copy,
-                observe_all_features=True,
-                **common_kwargs
-            )
-
-        elif experiment == "entropy_all":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="entropy", model=model_copy,
-                observe_all_features=True,
-                **common_kwargs
-            )
-
-        elif experiment == "random_5":
+        # ABLATION CHANGE: Run specific ablation experiments
+        if experiment == "random_5_base_training":
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="random", feature_strategy="random", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
+                training_type='basic_ablation',
                 **common_kwargs
             )
 
-        elif experiment == "gradient_voi":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="gradient", feature_strategy="voi", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                loss_type=args.loss_type,
-                **common_kwargs
-            )
-
-        elif experiment == "gradient_voi_q0_human":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="gradient", feature_strategy="voi", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                loss_type=args.loss_type, target_questions=[0],
-                **common_kwargs
-            )
-
-        elif experiment == "gradient_voi_all_questions":
-            results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset,
-                example_strategy="gradient", feature_strategy="voi", model=model_copy,
-                observe_all_features=False, features_per_example=args.features_per_example,
-                loss_type=args.loss_type, target_questions=[0, 1, 2, 3, 4, 5, 6],
-                **common_kwargs
-            )
-
-        elif experiment == "variable_gradient_comparison":
+        elif experiment == "var_grad_base_training":
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="combine", feature_strategy="gradient", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
                 loss_type=args.loss_type,
+                training_type='basic_ablation',
+                **common_kwargs
+            )
+
+        elif experiment == "var_grad_random_masking":
+            results = run_enhanced_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="combine", feature_strategy="gradient", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                loss_type=args.loss_type,
+                training_type='random_masking_ablation',
+                **common_kwargs
+            )
+
+        elif experiment == "var_grad_dynamic_masking":
+            results = run_enhanced_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="combine", feature_strategy="gradient", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                loss_type=args.loss_type,
+                training_type='dynamic_masking_simple',
+                **common_kwargs
+            )
+
+        elif experiment in ["var_grad_dynamic_masking_hist_only", "var_grad_dynamic_masking_inf_only", 
+                          "var_grad_dynamic_masking_70_30", "var_grad_dynamic_masking_30_70"]:
+            results = run_enhanced_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="combine", feature_strategy="gradient", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                loss_type=args.loss_type,
+                training_type='dynamic_masking',
                 **common_kwargs
             )
 
