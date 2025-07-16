@@ -55,7 +55,6 @@ class Config:
             'original_validation': os.path.join(data_dir, "original_validation.json"),
             'original_test': os.path.join(data_dir, "original_test.json"),
             'original_active_pool': os.path.join(data_dir, "original_active_pool.json"),
-            "calibration": os.path.join(data_dir, "calibration_holdout.json")
         }
     
     def get_fixed_paths(self):

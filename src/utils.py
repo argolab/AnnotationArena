@@ -23,8 +23,8 @@ from sentence_transformers import SentenceTransformer
 logger = logging.getLogger(__name__)
 
 # Change Based on Usage
-#model = SentenceTransformer("all-MiniLM-L6-v2")
-model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
+model = SentenceTransformer("all-MiniLM-L6-v2")
+# model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
 
 random.seed(90)
 torch.manual_seed(90)
@@ -53,9 +53,9 @@ class DataManager:
         print(f"Calibration holdout ratio: {calibration_holdout_ratio}")
         print(self.config.INPUT_DATA_DIR)
         
-        # if os.path.exists(self.paths['active_pool']):
-        #     logger.info("Data already exists, skipping preparation")
-        #     return
+        if os.path.exists(self.paths['active_pool']):
+            logger.info("Data already exists, skipping preparation")
+            return
 
         if use_embedding and not dataset == "hanna":
             raise ValueError("Not yet support other datasets with text embedding")
@@ -104,8 +104,8 @@ class DataManager:
         
         # Create fully annotated calibration dataset (NO MASKING)
         calibration_data = []
-        logger.info("Creating calibration holdout")
-        print('-- Creating Calibration Holdout--')
+        logger.info("Creating fully annotated calibration holdout")
+        print('-- Creating Calibration Holdout (Fully Annotated) --')
         self._prepare_entries(calibration_text_ids, calibration_data, 'calibration', llm_data, human_data, 
                             question_list, question_indices, known_human_questions_val, 
                             dataset=dataset, cold_start=False, use_embedding=use_embedding)
@@ -264,10 +264,14 @@ class DataManager:
                         mask_bit = 1
                         combined_input = [mask_bit] + [0.0] * 5
                         entry["known_questions"].append(0)
-                    elif split_type == "test" or split_type == 'calibration':
+                    elif split_type == "test":
                         mask_bit = 1
                         combined_input = [mask_bit] + [0.0] * 5
                         entry["known_questions"].append(0)
+                    elif split_type == 'calibration':
+                        mask_bit = 0
+                        combined_input = [mask_bit] + true_prob
+                        entry["known_questions"].append(1)
                     else:
                         mask_bit = 0
                         combined_input = [mask_bit] + true_prob
@@ -325,12 +329,17 @@ class DataManager:
                                 entry["known_questions"].append(0)
                             entry["input"].append(combined_input)
                             
-                        elif split_type == 'test' or split_type == 'calibration':
+                        elif split_type == 'test':
                             mask_bit = 1
                             combined_input = [mask_bit] + [0.0] * 5
                             entry["known_questions"].append(0)
                             entry["input"].append(combined_input)
                             
+                        elif split_type == 'calibration':
+                            mask_bit = 0
+                            combined_input = [mask_bit] + true_prob
+                            entry["known_questions"].append(1)
+                            entry["input"].append(combined_input)
                             
                         entry["answers"].append(true_prob)   
                         entry["annotators"].append(int(judge_id))
@@ -485,11 +494,6 @@ class AnnotationDataset(Dataset):
             return known_questions, inputs, answers, annotators, questions, embedding
         
         return known_questions, inputs, answers, annotators, questions, None
-    
-    def export(self, json_path):
-        with open(json_path, "w") as file:
-            json.dump(self.data, file, indent=4)
-        logger.info(f"Saved dataset with {len(self.data)} entries to {json_path}")
     
     def get_data_entry(self, idx):
         """Get the raw data entry for an index."""
@@ -816,7 +820,7 @@ def get_experiment_config(experiment_name):
         },
         "gradient_voi_q0_human": {
             "feature_selection_strategy": "voi",
-            "target_questions": [0, 1, 2, 3, 4, 5, 6]
+            "target_questions": [0]
         },
         "gradient_voi_all_questions": {
             "feature_selection_strategy": "voi", 
@@ -894,16 +898,7 @@ def get_experiment_config(experiment_name):
     })
 
 if __name__ == "__main__":
-    from annotationArena import AnnotationArena
-    from imputer import ImputerEmbedding
     from config import Config
-    data_manager = DataManager(config=Config("local"))
-    data_manager.prepare_data(1200, use_embedding=True)
-    dataset = AnnotationDataset("C:\\Users\\stone\\Projects\\AnnotationArena\\src\\input\\data\\calibration_holdout.json")
-    model = ImputerEmbedding(7, 5, 6, 4, 64, 15, 8, 0.1)
-    arena = AnnotationArena(model=model, device="cpu")
-    arena.set_dataset(dataset)
-    for example_idx in range(len(dataset)):
-        for i in range(14):
-            arena.observe_position(example_idx, i)
-    dataset.export("calibration.json")
+    config = Config("prabhav")  # or "local"
+    data_manager = DataManager(config)
+    data_manager.prepare_data(1200, cold_start=True, use_embedding=True)

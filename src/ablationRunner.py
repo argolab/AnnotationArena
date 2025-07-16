@@ -785,13 +785,7 @@ def main():
     experiments_to_run = []
     if args.experiment == "ablation_all":
         experiments_to_run = [
-            "var_grad_base_training", 
-            "var_grad_random_masking",
-            "var_grad_dynamic_masking",
-            "var_grad_dynamic_masking_hist_only",
-            "var_grad_dynamic_masking_inf_only",
-            "var_grad_dynamic_masking_70_30",
-            "var_grad_dynamic_masking_30_70"
+            "var_grad_dynamic_masking_hist_only"
         ]
     elif args.experiment == "ablation_comparison":
         experiments_to_run = [
@@ -852,6 +846,9 @@ def main():
             elif experiment == "var_grad_dynamic_masking_30_70":
                 model_copy.historical_weight = 0.7
                 model_copy.influence_weight = 0.3
+            elif experiment == "var_grad_dynamic_masking_50_50":
+                model_copy.historical_weight = 0.5
+                model_copy.influence_weight = 0.5
             else:
                 model_copy.historical_weight = args.historical_weight
                 model_copy.influence_weight = args.influence_weight
@@ -941,7 +938,7 @@ def main():
             )
 
         elif experiment in ["var_grad_dynamic_masking_hist_only", "var_grad_dynamic_masking_inf_only", 
-                          "var_grad_dynamic_masking_70_30", "var_grad_dynamic_masking_30_70"]:
+                          "var_grad_dynamic_masking_70_30", "var_grad_dynamic_masking_30_70", "var_grad_dynamic_masking_50_50"]:
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="combine", feature_strategy="gradient", model=model_copy,

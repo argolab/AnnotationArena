@@ -138,9 +138,8 @@ def greedy_k_centers(embeddings, k, random_seed=42):
     return centers
 
 def run_enhanced_experiment(
-    dataset_train, dataset_val, dataset_test,
+    dataset_train, dataset_val, dataset_test, 
     example_strategy, model,
-    dataset_calibration=None,
     feature_strategy=None,
     cycles=5, 
     examples_per_cycle=10, 
@@ -223,8 +222,6 @@ def run_enhanced_experiment(
     active_pool = list(range(len(dataset_train)))
     annotated_examples = []
     validation_example_indices = list(range(len(dataset_val)))
-    if dataset_calibration:
-        calibration_pool = list(range(len(dataset_calibration)))
     test_overlap_annotations = {}
     cycle_count = 0
 
@@ -304,8 +301,6 @@ def run_enhanced_experiment(
         
         if example_strategy == "random":
             selected_examples = random.sample(active_subset, min(examples_per_cycle, len(active_subset)))
-            if dataset_calibration:
-                selected_calibration_examples = random.sample(active_subset, min(examples_per_cycle, len(calibration_pool)))
             
         elif example_strategy == "gradient":
             active_subset_dataset = AnnotationDataset([dataset_train.get_data_entry(idx) for idx in active_subset])
@@ -322,17 +317,6 @@ def run_enhanced_experiment(
             )
             
             selected_examples = [active_subset[idx] for idx in selected_indices]
-
-            calibration_subset_dataset = AnnotationDataset([dataset_calibration.get_data_entry(idx) for idx in calibration_pool])
-            selected_calibration_indices, scores = example_selector.select_examples(
-                calibration_subset_dataset, 
-                num_to_select=min(examples_per_cycle, len(active_subset)),
-                val_dataset=dataset_val,
-                num_samples=3,
-                batch_size=batch_size
-            )
-            
-            selected_calibration_examples = [calibration_pool[idx] for idx in selected_calibration_indices]
 
         elif example_strategy == "entropy":
             active_subset_dataset = AnnotationDataset([dataset_train.get_data_entry(idx) for idx in active_subset])
@@ -495,12 +479,6 @@ def run_enhanced_experiment(
                         
                         variable_id = f"example_{example_idx}_position_{pos}"
                         arena.predict(variable_id, train=True)
-
-        for example_idx in selected_calibration_examples:
-            masked_positions = dataset_calibration.get_masked_positions(example_idx)
-            for pos in masked_positions:
-                arena.observe_position(example_idx, pos)
-            calibration_pool.remove(example_idx)
         
         # Calculate frequencies (proportion of available positions selected)
         for pos_key in question_frequencies.keys():
@@ -649,46 +627,8 @@ def run_enhanced_experiment(
         
     logger.info(f"Experiment complete - {cycle_count} cycles")
     
-    # Create explicit plots and log to WandB
+    # Log final calibration trends using WandB's automatic plotting system
     if use_wandb and WANDB_AVAILABLE and wandb.run is not None and cycle_count > 0:
-        import matplotlib.pyplot as plt
-        
-        # Create calibration trend plot
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
-        
-        # Plot 1: Overall smECE trend
-        cycles_x = list(range(cycle_count))
-        if len(cycle_calibration_metrics['smECE_overall']) >= cycle_count:
-            ax1.plot(cycles_x, cycle_calibration_metrics['smECE_overall'][:cycle_count], 'b-o', linewidth=2, markersize=6)
-            ax1.set_xlabel('Cycle')
-            ax1.set_ylabel('smECE Overall')
-            ax1.set_title('Model Calibration (smECE) Across Active Learning Cycles')
-            ax1.grid(True, alpha=0.3)
-            ax1.set_ylim(bottom=0)
-        
-        # Plot 2: Per-class smECE trends
-        colors = ['red', 'green', 'blue', 'orange', 'purple']
-        for i, color in enumerate(colors):
-            metric_name = f'smECE_class_{i}'
-            if len(cycle_calibration_metrics[metric_name]) >= cycle_count:
-                ax2.plot(cycles_x, cycle_calibration_metrics[metric_name][:cycle_count], 
-                        color=color, marker='o', linewidth=2, markersize=4, label=f'Class {i}')
-        
-        ax2.set_xlabel('Cycle')
-        ax2.set_ylabel('smECE by Class')
-        ax2.set_title('Per-Class Calibration Trends')
-        ax2.grid(True, alpha=0.3)
-        ax2.legend()
-        ax2.set_ylim(bottom=0)
-        
-        plt.tight_layout()
-        
-        # Save calibration plot to WandB
-        wandb.log({"Model_Calibration_Trends_Across_Cycles": wandb.Image(fig)})
-        plt.close(fig)
-
-        
-        
         # Log calibration trends across cycles using WandB's metric system
         for cycle_idx in range(cycle_count):
             calibration_data = {"cycle": cycle_idx}
@@ -842,6 +782,9 @@ def main():
         ]
     elif args.experiment == "comparison":
         experiments_to_run = [
+            "random_5",
+            "gradient_voi_q0_human",
+            "gradient_voi_all_questions",
             "variable_gradient_comparison"
         ]
     else:
@@ -895,7 +838,6 @@ def main():
         val_dataset = AnnotationDataset(data_manager.paths['validation'])
         test_dataset = AnnotationDataset(data_manager.paths['test'])
         active_pool_dataset = AnnotationDataset(data_manager.paths['active_pool'])
-        calibration_dataset = AnnotationDataset(data_manager.paths["calibration"])
         
         initial_train_dataset = None
         if len(train_dataset) > 0:
@@ -929,8 +871,7 @@ def main():
 
         if experiment == "random_all":
             results = run_enhanced_experiment(
-                active_pool_dataset, val_dataset, test_dataset, 
-                calibration_dataset=calibration_dataset,
+                active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="random", model=model_copy,
                 observe_all_features=True,
                 **common_kwargs
@@ -939,7 +880,6 @@ def main():
         elif experiment == "gradient_all":
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
-                calibration_dataset=calibration_dataset,
                 example_strategy="gradient", model=model_copy,
                 observe_all_features=True,
                 **common_kwargs
@@ -948,7 +888,6 @@ def main():
         elif experiment == "entropy_all":
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
-                calibration_dataset=calibration_dataset,
                 example_strategy="entropy", model=model_copy,
                 observe_all_features=True,
                 **common_kwargs
@@ -957,7 +896,6 @@ def main():
         elif experiment == "random_5":
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
-                calibration_dataset=calibration_dataset,
                 example_strategy="random", feature_strategy="random", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
                 **common_kwargs
@@ -966,7 +904,6 @@ def main():
         elif experiment == "gradient_voi":
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
-                calibration_dataset=calibration_dataset,
                 example_strategy="gradient", feature_strategy="voi", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
                 loss_type=args.loss_type,
@@ -976,7 +913,6 @@ def main():
         elif experiment == "gradient_voi_q0_human":
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
-                calibration_dataset=calibration_dataset,
                 example_strategy="gradient", feature_strategy="voi", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
                 loss_type=args.loss_type, target_questions=[0],
@@ -986,7 +922,6 @@ def main():
         elif experiment == "gradient_voi_all_questions":
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
-                calibration_dataset=calibration_dataset,
                 example_strategy="gradient", feature_strategy="voi", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
                 loss_type=args.loss_type, target_questions=[0, 1, 2, 3, 4, 5, 6],
@@ -996,7 +931,6 @@ def main():
         elif experiment == "variable_gradient_comparison":
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
-                calibration_dataset=calibration_dataset,
                 example_strategy="combine", feature_strategy="gradient", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
                 loss_type=args.loss_type,

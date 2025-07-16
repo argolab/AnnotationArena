@@ -276,9 +276,8 @@ class ImputerEmbedding(nn.Module):
                                num_annotator, annotator_embedding_dim, dropout)
         
         self.masking_head = nn.Linear(self.encoder.feature_dim, 1)
-        
         self.historical_head = nn.Linear(self.encoder.feature_dim, 1)
-        
+
         self.training_queue = []
         self.recent_indicators = []
         self.prediction_history = []
@@ -359,7 +358,7 @@ class ImputerEmbedding(nn.Module):
         current_state = (current_data[1][:, 0] == 0).float().to(self.device)
         
         relevant_patterns = []
-        for pattern in self.historical_patterns[-100:]:
+        for pattern in self.historical_patterns:
             historical_state = torch.tensor(pattern['current_state'], device=self.device).float()
             if torch.all(current_state <= historical_state):
                 relevant_patterns.append(pattern)
@@ -1239,7 +1238,14 @@ class ImputerEmbedding(nn.Module):
                 current_mask = batch_inputs[:, :, 0]
                 currently_visible = (current_mask == 0).float()
 
-                loss_mask = batch_observed_mask * currently_visible
+                # Two-component loss: reconstruction (masked) + consistency (observed)
+                artificially_masked = batch_observed_mask * (1 - currently_visible)
+                still_observed = batch_observed_mask * currently_visible 
+
+                # Combined loss with different weights
+                reconstruction_weight = 0.5
+                consistency_weight = 0.5
+                loss_mask = reconstruction_weight * artificially_masked + consistency_weight * still_observed
                 loss_mask_flat = loss_mask.view(-1)
 
                 log_probs = F.log_softmax(outputs_flat, dim=-1)

@@ -51,7 +51,7 @@ class AnnotationArena:
         self.visible_ratio = 0.5
         self.masking_lambda = 0.5
         
-        #logger.info(f"AnnotationArena initialized with model: {type(model).__name__}")
+        logger.info(f"AnnotationArena initialized with model: {type(model).__name__}")
     
     def set_dataset(self, dataset):
         """
@@ -66,7 +66,7 @@ class AnnotationArena:
         self.dataset = dataset
         # CRITICAL: Provide dataset reference to the model
         self.model.set_dataset(dataset)
-        #logger.info(f"Dataset set with {len(dataset)} examples")
+        logger.info(f"Dataset set with {len(dataset)} examples")
         return True
     
     def set_dynamic_masking_params(self, num_patterns_per_example=5, visible_ratio=0.5, masking_lambda=0.1):
