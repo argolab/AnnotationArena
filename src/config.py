@@ -50,6 +50,7 @@ class Config:
             'train': os.path.join(data_dir, "initial_train.json"),
             'validation': os.path.join(data_dir, "validation.json"),
             'test': os.path.join(data_dir, "test.json"),
+            'calibration': os.path.join(data_dir, "calibration.json"),
             'active_pool': os.path.join(data_dir, "active_pool.json"),
             'original_train': os.path.join(data_dir, "original_initial_train.json"),
             'original_validation': os.path.join(data_dir, "original_validation.json"),

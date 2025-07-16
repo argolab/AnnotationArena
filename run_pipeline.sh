@@ -28,7 +28,7 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/ablationRunner.py \
     --runner prabhav \
     --use_embedding True \
     --cold_start True \
-    --cycles 6 \
+    --cycles 12 \
     --validation_set_size 50 \
     --active_set_size 100 \
     --epochs_per_cycle 10 \
@@ -37,8 +37,8 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/ablationRunner.py \
     --num_patterns_per_example 3 \
     --visible_ratio 0.5 \
     --features_per_example 5 \
-    --historical_weight 0.3 \
-    --influence_weight 0.7 \
+    --historical_weight 1 \
+    --influence_weight 0 \
     --experiment_name AblationStudy_VarGrad_3Patterns_0.5_Ratio \
     --log_level INFO \
     --use_wandb \
