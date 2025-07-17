@@ -195,7 +195,7 @@ class RandomFeatureSelectionStrategy(FeatureSelectionStrategy):
             cost = 1.0
             if costs and pos in costs:
                 cost = costs[pos]
-                
+
             # For random selection, benefit equals cost (benefit/cost ratio = 1.0)
             benefit = cost
             ratio = 1.0
@@ -205,7 +205,7 @@ class RandomFeatureSelectionStrategy(FeatureSelectionStrategy):
         return result
 
 
-class VOICalculator:
+class VOICalculator:#
     """
     Value of Information (VOI) calculator.
     

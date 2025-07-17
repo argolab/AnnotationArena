@@ -15,7 +15,7 @@ class Config:
         self.timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         
         if runner == "prabhav":
-            self.BASE_PATH = "/export/fs06/psingh54/ActiveRubric-Internal/src"
+            self.BASE_PATH = "/export/fs06/psingh54/AnnotationArena/src"
         else:
             self.BASE_PATH = "src/"
     
