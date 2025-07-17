@@ -758,7 +758,7 @@ class GradientSelector:
         
         for pos in masked_positions:
             with torch.no_grad():
-                current_outputs = model(temp_inputs, annotators, questions, embeddings)
+                current_outputs, _ = model(temp_inputs, annotators, questions, embeddings)
                 var_outputs = current_outputs[0, pos]
                 var_probs = F.softmax(var_outputs, dim=0)
             
@@ -775,7 +775,7 @@ class GradientSelector:
         # Compute loss with full supervision
         model.zero_grad()
         
-        outputs = model(temp_inputs, annotators, questions, embeddings)
+        outputs, _ = model(temp_inputs, annotators, questions, embeddings)
         loss = model.compute_total_loss(
             outputs, temp_labels, temp_inputs, questions, embeddings,
             full_supervision=True
@@ -871,7 +871,7 @@ class GradientSelector:
                     # Sample values for masked positions
                     for pos in masked_positions:
                         with torch.no_grad():
-                            current_outputs = model(temp_inputs, annotators, questions, embeddings)
+                            current_outputs, _ = model(temp_inputs, annotators, questions, embeddings)
                             var_outputs = current_outputs[i, pos]
                             var_probs = F.softmax(var_outputs, dim=0)
                         
@@ -889,7 +889,7 @@ class GradientSelector:
                 # Compute loss with full supervision
                 model.zero_grad()
                 
-                outputs = model(temp_inputs, annotators, questions, embeddings)
+                outputs, _ = model(temp_inputs, annotators, questions, embeddings)
                 batch_loss = model.compute_total_loss(
                     outputs, labels, temp_inputs, questions, embeddings,
                     full_supervision=True
@@ -984,7 +984,7 @@ class GradientTopOnlySelector(GradientSelector):
         
         for pos in masked_positions:
             with torch.no_grad():
-                current_outputs = model(temp_inputs, annotators, questions, embeddings)
+                current_outputs, _ = model(temp_inputs, annotators, questions, embeddings)
                 var_outputs = current_outputs[0, pos]
                 var_probs = F.softmax(var_outputs, dim=0)
             
@@ -1001,7 +1001,7 @@ class GradientTopOnlySelector(GradientSelector):
         # Compute loss with full supervision
         model.zero_grad()
         
-        outputs = model(temp_inputs, annotators, questions, embeddings)
+        outputs, _ = model(temp_inputs, annotators, questions, embeddings)
         loss = model.compute_total_loss(
             outputs, temp_labels, temp_inputs, questions, embeddings,
             full_supervision=True
@@ -1015,7 +1015,7 @@ class GradientTopOnlySelector(GradientSelector):
                     non_top_params.append(param)
 
         model.zero_grad()
-        outputs = model(temp_inputs, annotators, questions, embeddings)
+        outputs, _ = model(temp_inputs, annotators, questions, embeddings)
         loss = model.compute_total_loss(
             outputs, temp_labels, temp_inputs, questions, embeddings,
             full_supervision=True
@@ -1078,7 +1078,7 @@ class GradientTopOnlySelector(GradientSelector):
                     # Sample values for masked positions
                     for pos in masked_positions:
                         with torch.no_grad():
-                            current_outputs = model(temp_inputs, annotators, questions, embeddings)
+                            current_outputs, _ = model(temp_inputs, annotators, questions, embeddings)
                             var_outputs = current_outputs[i, pos]
                             var_probs = F.softmax(var_outputs, dim=0)
                         
@@ -1104,7 +1104,7 @@ class GradientTopOnlySelector(GradientSelector):
                             param.requires_grad = False
                             non_top_params.append(param)
                 model.zero_grad()
-                outputs = model(temp_inputs, annotators, questions, embeddings)
+                outputs, _ = model(temp_inputs, annotators, questions, embeddings)
                 batch_loss = model.compute_total_loss(
                     outputs, temp_labels, temp_inputs, questions, embeddings,
                     full_supervision=True
@@ -2355,7 +2355,7 @@ class VariableGradientTopOnlySelector:
         
         # Single forward pass to get predictions for all masked positions
         with torch.no_grad():
-            current_outputs = model(temp_inputs, annotators, questions, embeddings)
+            current_outputs, _ = model(temp_inputs, annotators, questions, embeddings)
             
             # Sample values for ALL masked positions at once
             for pos in masked_positions:
@@ -2381,7 +2381,7 @@ class VariableGradientTopOnlySelector:
                     non_top_params.append(param)
 
         model.zero_grad()
-        outputs = model(temp_inputs, annotators, questions, embeddings)
+        outputs, _ = model(temp_inputs, annotators, questions, embeddings)
         
         # Compute loss only for the target position
         position_output = outputs[0, position]
@@ -2444,7 +2444,7 @@ class VariableGradientTopOnlySelector:
             
             # Single forward pass to get predictions for all masked positions
             with torch.no_grad():
-                current_outputs = model(temp_inputs, annotators, questions, embeddings)
+                current_outputs, _ = model(temp_inputs, annotators, questions, embeddings)
                 
                 # Sample values for ALL masked positions at once
                 for pos in masked_positions:
@@ -2471,7 +2471,7 @@ class VariableGradientTopOnlySelector:
             
             # Compute gradient for the target position
             model.zero_grad()
-            outputs = model(temp_inputs, annotators, questions, embeddings)
+            outputs, _ = model(temp_inputs, annotators, questions, embeddings)
             
             # Compute loss only for the target position
             position_output = outputs[0, position]
@@ -2530,7 +2530,7 @@ class VariableGradientTopOnlySelector:
             
             # Single forward pass to get predictions for all masked positions
             with torch.no_grad():
-                current_outputs = model(temp_inputs, annotators, questions, embeddings)
+                current_outputs,_ = model(temp_inputs, annotators, questions, embeddings)
                 
                 # Sample values for ALL masked positions at once
                 for pos in masked_positions:
@@ -2558,7 +2558,7 @@ class VariableGradientTopOnlySelector:
             # Compute gradients for each position
             for target_pos in masked_positions:
                 model.zero_grad()
-                outputs = model(temp_inputs, annotators, questions, embeddings)
+                outputs, _ = model(temp_inputs, annotators, questions, embeddings)
                 
                 # Compute loss only for the target position
                 position_output = outputs[0, target_pos]
@@ -2631,7 +2631,7 @@ class VariableGradientTopOnlySelector:
                     
                     for pos in masked_positions:
                         with torch.no_grad():
-                            current_outputs = model(temp_inputs, annotators, questions, embeddings)
+                            current_outputs, _ = model(temp_inputs, annotators, questions, embeddings)
                             var_outputs = current_outputs[i, pos]
                             var_probs = F.softmax(var_outputs, dim=0)
                         
@@ -2652,7 +2652,7 @@ class VariableGradientTopOnlySelector:
                             non_top_params.append(param)
                 
                 model.zero_grad()
-                outputs = model(temp_inputs, annotators, questions, embeddings)
+                outputs, _ = model(temp_inputs, annotators, questions, embeddings)
                 batch_loss = model.compute_total_loss(
                     outputs, temp_labels, temp_inputs, questions, embeddings,
                     full_supervision=True

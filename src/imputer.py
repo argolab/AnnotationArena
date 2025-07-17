@@ -242,11 +242,15 @@ class EncoderLayer(nn.Module):
         query_attention_output = self.query_attention(query_x_norm)
         query_x = query_x + self.dropout_query(query_attention_output)
         
-        # Cross-attention between param and query streams
-        param_query_combined = torch.cat([param_x, query_x], dim=-1)
+        # Store original values before cross-attention
+        original_param_x = param_x.clone()
+        original_query_x = query_x.clone()
+
+        # Cross-attention between param and query streams using original values
+        param_query_combined = torch.cat([original_param_x, original_query_x], dim=-1)
         param_x = self.param_query_attn(param_query_combined)
-        
-        query_param_combined = torch.cat([query_x, param_x], dim=-1)
+
+        query_param_combined = torch.cat([original_query_x, original_param_x], dim=-1)
         query_x = self.query_param_attn(query_param_combined)
         
         # Param update and smoothing
@@ -460,6 +464,7 @@ class ImputerEmbedding(nn.Module):
             masked_indices = torch.multinomial(probs, num_to_mask, replacement=False)
             return masked_indices.cpu().tolist()
         except:
+            logger.info('ERROR! ERROR! Stop Code.')
             return random.sample(observed_positions, num_to_mask)
 
     def compute_log_loss(self, outputs, targets, weights=None):
