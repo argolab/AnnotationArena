@@ -179,10 +179,6 @@ class EncoderLayer(nn.Module):
         self.query_V = nn.Linear(2, 2)
         self.query_out = nn.Linear(2, 2)
         
-        # Cross-attention between param and query streams
-        self.param_query_attn = nn.Linear(param_dim + 2, param_dim)
-        self.query_param_attn = nn.Linear(2 + param_dim, 2)
-        
         self.norm_1 = NormLayer(feature_dim)
         self.norm_2 = NormLayer(feature_dim)
         self.norm_query = NormLayer(2)
@@ -242,17 +238,10 @@ class EncoderLayer(nn.Module):
         query_attention_output = self.query_attention(query_x_norm)
         query_x = query_x + self.dropout_query(query_attention_output)
         
-        # Store original values before cross-attention
-        original_param_x = param_x.clone()
-        original_query_x = query_x.clone()
+        query_x_norm = self.norm_query(query_x)
+        query_attention_output = self.query_attention(query_x_norm)
+        query_x = query_x + self.dropout_query(query_attention_output)
 
-        # Cross-attention between param and query streams using original values
-        param_query_combined = torch.cat([original_param_x, original_query_x], dim=-1)
-        param_x = self.param_query_attn(param_query_combined)
-
-        query_param_combined = torch.cat([original_query_x, original_param_x], dim=-1)
-        query_x = self.query_param_attn(query_param_combined)
-        
         # Param update and smoothing
         combined = torch.cat([feature_x, param_x], dim=-1)
         param_x = self.param_update(combined)
@@ -402,7 +391,7 @@ class ImputerEmbedding(nn.Module):
             return torch.tensor(0.0, device=self.device)
         
         total_loss = 0
-        for pattern in relevant_patterns[-20:]:
+        for pattern in relevant_patterns:
             target_query_pattern = torch.tensor(pattern['query_pattern'], device=self.device).float()
             
             # Use query stream predictions - binary decisions
@@ -780,7 +769,7 @@ class ImputerEmbedding(nn.Module):
                     main_loss = weighted_loss.sum()
                 
                 query_loss = torch.tensor(0.0, device=self.device)
-                if epoch > 0 and len(batch_examples) > 0:
+                if len(batch_examples) > 0:
                     for i, example in enumerate(batch_examples):
                         if i < batch_inputs.shape[0]:
                             example_idx = example['example_idx']
