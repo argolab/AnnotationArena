@@ -211,3 +211,4 @@ LLM-Rubric/*
 src/input_llm_rubric/data
 src/output_llm_rubric
 src/logs_llm_rubric
+src/*.pik
