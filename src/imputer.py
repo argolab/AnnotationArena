@@ -401,6 +401,12 @@ class ImputerEmbedding(nn.Module):
             total_loss += loss
         
         return total_loss / len(relevant_patterns)
+    
+    def compute_weight_stream_loss(self, query_predictions, weight_target):
+        predicted_query_weights = F.log_softmax(query_predictions[0, :, 1], dim=-1)
+        kl_criterion = torch.nn.KLDivLoss(reduction='batchmean')
+        loss = kl_criterion(predicted_query_weights, weight_target)
+        return loss
 
     def generate_masking_pattern_from_query_stream(self, inputs, annotators, questions, embeddings, visible_ratio):
         """
@@ -511,6 +517,54 @@ class ImputerEmbedding(nn.Module):
             del self.training_queue[index]
 
         self.training_queue.append(new_entry)
+
+    def normalize_gradient(self, grad_dict):
+        """
+        Normalize gradients by their total L2 norm.
+
+        Args:
+            grad_dict: Dictionary of gradients
+
+        Returns:
+            dict: Normalized gradients
+        """
+        total_norm_squared = 0.0
+        for name, grad in grad_dict.items():
+            total_norm_squared += torch.sum(grad ** 2).item()
+
+        if total_norm_squared <= 1e-10:
+            return grad_dict
+
+        total_norm = math.sqrt(total_norm_squared)
+        normalized_grad_dict = {}
+
+        for name, grad in grad_dict.items():
+            normalized_grad_dict[name] = grad / total_norm
+
+        return normalized_grad_dict
+
+    def compute_grad_dot_product(self, grad_dict1, grad_dict2):
+        """
+        Compute dot product between two gradient dictionaries.
+
+        Args:
+            grad_dict1: First gradient dictionary
+            grad_dict2: Second gradient dictionary
+
+        Returns:
+            float: Dot product
+        """
+        dot_product = 0.0
+
+        for name in grad_dict1:
+            if name in grad_dict2:
+                dot_product += torch.sum(-grad_dict1[name] * grad_dict2[name]).item()
+
+        return dot_product
+    
+    def _is_top_layer_param(self, param_name):
+        top_layer_identifiers = ['encoder.layers.5.out']
+        return any(identifier in param_name.lower() for identifier in top_layer_identifiers)
     
     def predict(self, inputs, annotators, questions, embeddings, positions=None, train=True, weight=1.0, example_idx=None):
         """
@@ -615,7 +669,7 @@ class ImputerEmbedding(nn.Module):
         
         logger.debug(f"Updated {updated_count} training queue entries with new observations")
         return updated_count
-
+    
     def train_on_examples_dynamic_masking(self, examples_indices=None, epochs=5, batch_size=32, lr=1e-4, num_patterns_per_example=5, visible_ratio=0.5, masking_lambda=0.1):
         """
         Train model using intelligent masking patterns based on query stream predictions.
@@ -826,6 +880,913 @@ class ImputerEmbedding(nn.Module):
         self.examples_to_revisit.clear()
 
         return epoch_losses
+    
+    def train_on_examples_dynamic_masking_imputed(self, examples_indices=None, epochs=5, batch_size=32, lr=1e-4, num_patterns_per_example=5, visible_ratio=0.5, masking_lambda=0.1):
+        """
+        Train model using intelligent masking patterns based on query stream predictions.
+        
+        Args:
+            examples_indices: Indices of queue entries to train on (default: all)
+            epochs: Number of training epochs
+            batch_size: Batch size
+            lr: Learning rate
+            num_patterns_per_example: Number of different masking patterns to generate per example
+            visible_ratio: Ratio of observed positions to keep visible (vs masked)
+            masking_lambda: Weight for query stream loss component
+            
+        Returns:
+            List of training losses
+        """
+        if examples_indices is None:
+            examples_indices = list(range(len(self.training_queue)))
+
+        if not examples_indices:
+            return []
+
+        unique_examples = {}
+        for queue_idx in examples_indices:
+            if queue_idx < len(self.training_queue):
+                queue_entry = self.training_queue[queue_idx]
+                example_idx = queue_entry['example_idx']
+                if example_idx not in unique_examples:
+                    unique_examples[example_idx] = queue_entry
+
+        if not unique_examples:
+            return []
+        
+        logger.info(f'Unique Examples Training On : {len(unique_examples)}')
+
+        self.train()
+        optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
+        kl_criterion = torch.nn.KLDivLoss(reduction='batchmean')
+
+        epoch_losses = []
+
+        start_time = time.time()
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            epoch_query_loss = 0.0
+            batch_count = 0
+            
+            augmented_examples = []
+            example_masking_patterns = {}
+            
+            for example_idx, queue_entry in unique_examples.items():
+                current_data = self.dataset[example_idx]
+                
+                known_questions, inputs, answers, annotators, questions, embeddings = current_data
+                
+                observed_positions = [pos for pos in range(inputs.shape[0]) if inputs[pos, 0] == 0]
+                
+                if len(observed_positions) == 0:
+                    continue
+                
+                example_patterns = []
+                
+                for pattern_idx in range(num_patterns_per_example):
+                    augmented_example = {
+                        'inputs': inputs.clone(),
+                        'annotators': annotators.clone(),
+                        'questions': questions.clone(),
+                        'embeddings': embeddings.clone() if embeddings is not None else None,
+                        'weight': queue_entry.get('weight', 1.0),
+                        'original_observed_mask': (inputs[:, 0] == 0).float(),
+                        'original_targets': inputs[:, 1:].clone(),
+                        'example_idx': example_idx
+                    }
+                    
+                    if epoch == 0:
+                        num_visible = max(1, int(len(observed_positions) * visible_ratio))
+                        if num_visible >= len(observed_positions):
+                            visible_positions = observed_positions.copy()
+                        else:
+                            visible_positions = np.random.choice(
+                                observed_positions, size=num_visible, replace=False
+                            ).tolist()
+                        
+                        positions_to_mask = [pos for pos in observed_positions if pos not in visible_positions]
+                    else:
+                        positions_to_mask = self.generate_masking_pattern_from_query_stream(
+                            inputs, annotators, questions, embeddings, visible_ratio
+                        )
+                    
+                    masking_pattern = torch.zeros(inputs.shape[0])
+                    for pos in positions_to_mask:
+                        augmented_example['inputs'][pos, 0] = 1
+                        augmented_example['inputs'][pos, 1:] = 0
+                        masking_pattern[pos] = 1.0
+                    
+                    example_patterns.append(masking_pattern)
+                    augmented_examples.append(augmented_example)
+                
+                example_masking_patterns[example_idx] = example_patterns
+            
+            np.random.shuffle(augmented_examples)
+            
+            for batch_start in range(0, len(augmented_examples), batch_size):
+                batch_examples = augmented_examples[batch_start:batch_start + batch_size]
+                
+                if not batch_examples:
+                    continue
+                
+                batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
+                batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
+                batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
+                batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device) if batch_examples[0]['embeddings'] is not None else None
+                batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
+                
+                batch_targets = torch.stack([e['original_targets'] for e in batch_examples]).to(self.device)
+                batch_observed_mask = torch.stack([e['original_observed_mask'] for e in batch_examples]).to(self.device)
+                
+                optimizer.zero_grad()
+                outputs, query_predictions = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
+                
+                batch_size_actual, seq_len, num_classes = outputs.shape
+                outputs_flat = outputs.view(-1, num_classes)
+                targets_flat = batch_targets.view(-1, num_classes)
+
+                current_mask = batch_inputs[:, :, 0]
+                currently_visible = (current_mask == 0).float()
+
+                # EXACT SAME COMPUTATION AS FIRST FUNCTION
+                # Two-component loss: reconstruction (masked) + consistency (observed)
+                artificially_masked = batch_observed_mask * (1 - currently_visible)
+                still_observed = batch_observed_mask * currently_visible 
+
+                # Combined loss with different weights
+                reconstruction_weight = 0.5
+                consistency_weight = 0.5
+                loss_mask = reconstruction_weight * artificially_masked + consistency_weight * still_observed
+                loss_mask_flat = loss_mask.view(-1)
+
+                log_probs = F.log_softmax(outputs_flat, dim=-1)
+                loss_per_position = kl_criterion(log_probs.unsqueeze(0), targets_flat.unsqueeze(0))
+
+                weighted_loss = loss_per_position * loss_mask_flat
+
+                if batch_weights.numel() > 0:
+                    batch_weights_expanded = batch_weights.unsqueeze(1).expand(-1, seq_len).contiguous().view(-1)
+                    weighted_loss = weighted_loss * batch_weights_expanded
+
+                total_valid = loss_mask_flat.sum()
+                if total_valid > 0:
+                    main_loss = weighted_loss.sum() / total_valid
+                else:
+                    main_loss = weighted_loss.sum()
+
+                # ADD BACK THE ORIGINALLY MISSING PARTS (EXPECTED LOSS)
+                originally_missing = 1 - batch_observed_mask  # 1 where originally missing, 0 where originally observed
+                originally_missing_flat = originally_missing.view(-1)
+                
+                # Originally missing positions: use expected KL divergence
+                if originally_missing_flat.sum() > 0:
+                    missing_indices = originally_missing_flat.bool()
+                    outputs_missing = outputs_flat[missing_indices]
+                    current_pred_dist = F.softmax(outputs_missing, dim=-1)
+                    log_probs_missing = F.log_softmax(outputs_missing, dim=-1)
+                    
+                    # Expected KL = sum over classes: p(class) * KL(pred || onehot_class)
+                    expected_kl_per_position = -(current_pred_dist * log_probs_missing).sum(dim=-1)
+                    
+                    # Add this to the main loss
+                    expected_kl_loss = expected_kl_per_position.mean()  # or sum(), depending on desired weighting
+                    main_loss = main_loss + expected_kl_loss
+                
+                query_loss = torch.tensor(0.0, device=self.device)
+                if len(batch_examples) > 0:
+                    for i, example in enumerate(batch_examples):
+                        if i < batch_inputs.shape[0]:
+                            example_idx = example['example_idx']
+                            example_query_loss = self.compute_query_stream_loss(query_predictions[i:i+1], example_idx)
+                            query_loss += example_query_loss
+                
+                total_loss = main_loss + masking_lambda * query_loss
+                
+                if total_loss > 0:
+                    total_loss.backward()
+                    optimizer.step()
+                    epoch_loss += main_loss.item()
+                    epoch_query_loss += query_loss.item()
+                    batch_count += 1
+                    
+                    if WANDB_AVAILABLE and wandb.run is not None:
+                        wandb.log({
+                            "batch_loss": main_loss.item(), 
+                            "batch_query_loss": query_loss.item(),
+                            "epoch": epoch
+                        })
+            
+            for example_idx in unique_examples.keys():
+                if example_idx in example_masking_patterns:
+                    patterns_as_lists = [pattern.tolist() if isinstance(pattern, torch.Tensor) else pattern 
+                                    for pattern in example_masking_patterns[example_idx]]
+                    pattern_losses = [epoch_loss / max(1, batch_count)] * len(patterns_as_lists)
+                    self.collect_pattern_effectiveness(example_idx, patterns_as_lists, pattern_losses)
+            
+            avg_epoch_loss = epoch_loss / max(1, batch_count)
+            avg_query_loss = epoch_query_loss / max(1, batch_count)
+            epoch_losses.append(avg_epoch_loss)
+            self.training_losses.append(avg_epoch_loss)
+            
+            logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}, Query Loss: {avg_query_loss:.4f}")
+            
+            if WANDB_AVAILABLE and wandb.run is not None:
+                wandb.log({
+                    "epoch_loss_dynamic": avg_epoch_loss, 
+                    "epoch_query_loss": avg_query_loss,
+                    "epoch": epoch
+                })
+
+        end_time = time.time()
+        logger.info(f'Time taken for all Epoch: {end_time - start_time}')
+
+        for queue_idx in examples_indices:
+            if queue_idx < len(self.training_queue):
+                self.training_queue[queue_idx]['needs_revisit'] = False
+        for i in range(len(self.recent_indicators)):
+            self.recent_indicators[i] = False
+        logger.info(f"Current examples in the training buffer: {self.unique_examples}")
+        logger.debug(f"Indicators for recent examples: {self.recent_indicators}")
+        self.examples_to_revisit.clear()
+
+        return epoch_losses
+    
+   
+    def compute_aggregated_position_gradients(self, examples_indices):
+        """
+        Compute aggregated gradients for each position across all examples.
+        
+        Args:
+            examples_indices: List of example indices to process
+            
+        Returns:
+            dict: Mapping from position index to aggregated normalized gradient dictionary
+        """
+        unique_examples = {}
+        for queue_idx in examples_indices:
+            if queue_idx < len(self.training_queue):
+                queue_entry = self.training_queue[queue_idx]
+                example_idx = queue_entry['example_idx']
+                if example_idx not in unique_examples:
+                    unique_examples[example_idx] = queue_entry
+        
+        # Dictionary to store aggregated gradients per position
+        # Key: position_idx, Value: dict of accumulated gradients
+        position_gradients = {}
+        position_counts = {}
+        
+        logger.info(f"Computing aggregated position gradients for {len(unique_examples)} examples...")
+        
+        for example_idx, queue_entry in tqdm(unique_examples.items(), desc="Processing examples for gradients"):
+            current_data = self.dataset[example_idx]
+            known_questions, inputs, answers, annotators, questions, embeddings = current_data
+            
+            # Find originally masked positions
+            masked_positions = [pos for pos in range(inputs.shape[0]) if inputs[pos, 0] == 1]
+            
+            if not masked_positions:
+                continue
+            
+            # Create batch with single example
+            batch_inputs = inputs.unsqueeze(0).to(self.device)
+            batch_annotators = annotators.unsqueeze(0).to(self.device)
+            batch_questions = questions.unsqueeze(0).to(self.device)
+            batch_embeddings = embeddings.unsqueeze(0).to(self.device) if embeddings is not None else None
+            
+            for pos in masked_positions:
+                # Disable gradients for non-top layer parameters
+                non_top_params = []
+                for name, param in self.named_parameters():
+                    if not self._is_top_layer_param(name):
+                        if param.requires_grad:
+                            param.requires_grad = False
+                            non_top_params.append(param)
+                
+                self.zero_grad()
+                
+                # Forward pass
+                outputs, _ = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
+                
+                # Get prediction for this position
+                position_output = outputs[0, pos]  # Shape: [num_classes]
+                position_probs = F.softmax(position_output, dim=0)
+                
+                # Compute expected loss (entropy) for this position
+                log_probs = F.log_softmax(position_output, dim=0)
+                expected_loss = -(position_probs * log_probs).sum()
+                
+                # Backward pass
+                if expected_loss > 0:
+                    expected_loss.backward()
+                    
+                    # Collect gradients for top layer only
+                    for name, param in self.named_parameters():
+                        if param.grad is not None and self._is_top_layer_param(name):
+                            if pos not in position_gradients:
+                                position_gradients[pos] = {}
+                                position_counts[pos] = 0
+                            
+                            if name not in position_gradients[pos]:
+                                position_gradients[pos][name] = param.grad.detach().clone()
+                            else:
+                                position_gradients[pos][name] += param.grad.detach().clone()
+                    
+                    position_counts[pos] = position_counts.get(pos, 0) + 1
+                
+                # Re-enable gradients
+                for param in non_top_params:
+                    param.requires_grad = True
+        
+        # Average and normalize gradients for each position
+        normalized_position_gradients = {}
+        for pos in position_gradients:
+            if position_counts[pos] > 0:
+                # Average the gradients
+                avg_grad_dict = {}
+                for name in position_gradients[pos]:
+                    avg_grad_dict[name] = position_gradients[pos][name] / position_counts[pos]
+                
+                # Normalize the averaged gradient
+                normalized_position_gradients[pos] = self.normalize_gradient(avg_grad_dict)
+        
+        logger.info(f"Computed aggregated gradients for {len(normalized_position_gradients)} positions")
+        return normalized_position_gradients
+
+    def compute_position_weights_from_aggregated_gradients(self, validation_gradient, aggregated_position_gradients):
+        """
+        Compute position weights using pre-computed aggregated position gradients.
+        
+        Args:
+            validation_gradient: Normalized validation gradient dictionary
+            aggregated_position_gradients: Pre-computed aggregated gradients per position
+            
+        Returns:
+            dict: Mapping from position_idx to weight value
+        """
+        position_weights = {}
+        
+        logger.info(f"Computing position weights from aggregated gradients for {len(aggregated_position_gradients)} positions...")
+        
+        for pos in aggregated_position_gradients:
+            total_weights = 0
+            for val_grad in validation_gradient:
+                # Compute alignment with validation gradient
+                alignment = self.compute_grad_dot_product(
+                    aggregated_position_gradients[pos], validation_gradient
+                )
+            
+                weight = 1 - (alignment + 1) / 2
+                total_weights += weight
+            position_weights[pos] = total_weights / len(validation_gradient)
+            
+        logger.info(f"Position weights: {position_weights}")
+        
+        
+        return position_weights
+
+    def train_on_examples_dynamic_masking_gradient_weighted(self, examples_indices=None, epochs=5, batch_size=32, lr=1e-4, 
+                                                        num_patterns_per_example=5, visible_ratio=0.5, masking_lambda=0.1, 
+                                                        validation_gradient=None):
+        """
+        Train model using gradient-based position weighting for originally masked positions.
+        
+        Args:
+            examples_indices: Indices of queue entries to train on (default: all)
+            epochs: Number of training epochs
+            batch_size: Batch size
+            lr: Learning rate
+            num_patterns_per_example: Number of different masking patterns to generate per example
+            visible_ratio: Ratio of observed positions to keep visible (vs masked)
+            masking_lambda: Weight for query stream loss component
+            validation_gradient: Normalized validation gradient for alignment computation
+            position_weight_scale: Scale factor for position weights (higher = more aggressive downweighting)
+            
+        Returns:
+            List of training losses
+        """
+        if examples_indices is None:
+            examples_indices = list(range(len(self.training_queue)))
+
+        if not examples_indices:
+            return []
+
+        unique_examples = {}
+        for queue_idx in examples_indices:
+            if queue_idx < len(self.training_queue):
+                queue_entry = self.training_queue[queue_idx]
+                example_idx = queue_entry['example_idx']
+                if example_idx not in unique_examples:
+                    unique_examples[example_idx] = queue_entry
+
+        if not unique_examples:
+            return []
+        
+        logger.info(f'Unique Examples Training On: {len(unique_examples)}')
+
+        # Compute position weights if validation gradient is provided
+        position_weights = {}
+        if validation_gradient is not None:
+            # First compute aggregated gradients for all positions
+            aggregated_position_gradients = self.compute_aggregated_position_gradients(examples_indices)
+            
+            # Then compute position weights using the aggregated gradients
+            position_weights = self.compute_position_weights_from_aggregated_gradients(
+                validation_gradient, aggregated_position_gradients
+            )
+            logger.info(f"Computed position weights for {len(position_weights)} positions using aggregated gradients")
+
+        self.train()
+        optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
+        kl_criterion = torch.nn.KLDivLoss(reduction='batchmean')
+
+        epoch_losses = []
+
+        start_time = time.time()
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            epoch_query_loss = 0.0
+            batch_count = 0
+            
+            augmented_examples = []
+            example_masking_patterns = {}
+            
+            for example_idx, queue_entry in unique_examples.items():
+                current_data = self.dataset[example_idx]
+                
+                known_questions, inputs, answers, annotators, questions, embeddings = current_data
+                
+                observed_positions = [pos for pos in range(inputs.shape[0]) if inputs[pos, 0] == 0]
+                
+                if len(observed_positions) == 0:
+                    continue
+                
+                example_patterns = []
+                
+                for pattern_idx in range(num_patterns_per_example):
+                    augmented_example = {
+                        'inputs': inputs.clone(),
+                        'annotators': annotators.clone(),
+                        'questions': questions.clone(),
+                        'embeddings': embeddings.clone() if embeddings is not None else None,
+                        'weight': queue_entry.get('weight', 1.0),
+                        'original_observed_mask': (inputs[:, 0] == 0).float(),
+                        'original_targets': inputs[:, 1:].clone(),
+                        'example_idx': example_idx
+                    }
+                    
+                    if epoch == 0:
+                        num_visible = max(1, int(len(observed_positions) * visible_ratio))
+                        if num_visible >= len(observed_positions):
+                            visible_positions = observed_positions.copy()
+                        else:
+                            visible_positions = np.random.choice(
+                                observed_positions, size=num_visible, replace=False
+                            ).tolist()
+                        
+                        positions_to_mask = [pos for pos in observed_positions if pos not in visible_positions]
+                    else:
+                        positions_to_mask = self.generate_masking_pattern_from_query_stream(
+                            inputs, annotators, questions, embeddings, visible_ratio
+                        )
+                    
+                    masking_pattern = torch.zeros(inputs.shape[0])
+                    for pos in positions_to_mask:
+                        augmented_example['inputs'][pos, 0] = 1
+                        augmented_example['inputs'][pos, 1:] = 0
+                        masking_pattern[pos] = 1.0
+                    
+                    example_patterns.append(masking_pattern)
+                    augmented_examples.append(augmented_example)
+                
+                example_masking_patterns[example_idx] = example_patterns
+            
+            np.random.shuffle(augmented_examples)
+            
+            for batch_start in range(0, len(augmented_examples), batch_size):
+                batch_examples = augmented_examples[batch_start:batch_start + batch_size]
+                
+                if not batch_examples:
+                    continue
+                
+                batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
+                batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
+                batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
+                batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device) if batch_examples[0]['embeddings'] is not None else None
+                batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
+                
+                batch_targets = torch.stack([e['original_targets'] for e in batch_examples]).to(self.device)
+                batch_observed_mask = torch.stack([e['original_observed_mask'] for e in batch_examples]).to(self.device)
+                
+                optimizer.zero_grad()
+                outputs, query_predictions = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
+                
+                batch_size_actual, seq_len, num_classes = outputs.shape
+                outputs_flat = outputs.view(-1, num_classes)
+                targets_flat = batch_targets.view(-1, num_classes)
+
+                current_mask = batch_inputs[:, :, 0]
+                currently_visible = (current_mask == 0).float()
+
+                # EXACT SAME COMPUTATION AS FIRST FUNCTION
+                # Two-component loss: reconstruction (masked) + consistency (observed)
+                artificially_masked = batch_observed_mask * (1 - currently_visible)
+                still_observed = batch_observed_mask * currently_visible 
+
+                # Combined loss with different weights
+                reconstruction_weight = 0.5
+                consistency_weight = 0.5
+                loss_mask = reconstruction_weight * artificially_masked + consistency_weight * still_observed
+                loss_mask_flat = loss_mask.view(-1)
+
+                log_probs = F.log_softmax(outputs_flat, dim=-1)
+                loss_per_position = kl_criterion(log_probs.unsqueeze(0), targets_flat.unsqueeze(0))
+
+                weighted_loss = loss_per_position * loss_mask_flat
+
+                if batch_weights.numel() > 0:
+                    batch_weights_expanded = batch_weights.unsqueeze(1).expand(-1, seq_len).contiguous().view(-1)
+                    weighted_loss = weighted_loss * batch_weights_expanded
+
+                total_valid = loss_mask_flat.sum()
+                if total_valid > 0:
+                    main_loss = weighted_loss.sum() / total_valid
+                else:
+                    main_loss = weighted_loss.sum()
+
+                # ADD BACK THE ORIGINALLY MISSING PARTS (EXPECTED LOSS)
+                originally_missing = 1 - batch_observed_mask  # 1 where originally missing, 0 where originally observed
+                originally_missing_flat = originally_missing.view(-1)
+                
+                if originally_missing_flat.sum() > 0:
+                    missing_indices = originally_missing_flat.bool()
+                    outputs_missing = outputs_flat[missing_indices]
+                    current_pred_dist = F.softmax(outputs_missing, dim=-1)
+                    log_probs_missing = F.log_softmax(outputs_missing, dim=-1)
+                    
+                    # Expected KL = sum over classes: p(class) * KL(pred || onehot_class)
+                    expected_kl_per_position = -(current_pred_dist * log_probs_missing).sum(dim=-1)
+                    
+                    # Apply position-based downweighting using alignment scores
+                    if position_weights:
+                        # Get position indices for missing positions
+                        batch_size_actual, seq_len = batch_inputs.shape[:2]
+                        position_indices = torch.arange(batch_size_actual * seq_len, device=self.device)[missing_indices]
+                        
+                        # Convert flat indices back to (batch, position) coordinates
+                        batch_indices = position_indices // seq_len
+                        pos_indices = position_indices % seq_len
+                        
+                        # Get weights for each missing position
+                        position_weight_tensor = torch.ones(expected_kl_per_position.shape[0], device=self.device)
+                        for i, (batch_idx, pos_idx) in enumerate(zip(batch_indices, pos_indices)):
+                            example_idx = batch_examples[batch_idx]['example_idx']
+                            # Use original position from the example (before any augmentation)
+                            original_pos = pos_idx.item()
+                            if original_pos in position_weights:
+                                position_weight_tensor[i] = position_weights[original_pos]
+                        
+                        # Apply weights to expected KL loss
+                        weighted_expected_kl_per_position = expected_kl_per_position * position_weight_tensor
+                        expected_kl_loss = weighted_expected_kl_per_position.mean()
+                    else:
+                        # No position weights available, use original computation
+                        expected_kl_loss = expected_kl_per_position.mean()
+                    
+                    # Add this to the main loss
+                    main_loss = main_loss + expected_kl_loss
+                
+                query_loss = torch.tensor(0.0, device=self.device)
+                if len(batch_examples) > 0:
+                    for i, example in enumerate(batch_examples):
+                        if i < batch_inputs.shape[0]:
+                            example_idx = example['example_idx']
+                            example_query_loss = self.compute_query_stream_loss(query_predictions[i:i+1], example_idx)
+                            query_loss += example_query_loss
+                
+                total_loss = main_loss + masking_lambda * query_loss
+                
+                if total_loss > 0:
+                    total_loss.backward()
+                    optimizer.step()
+                    epoch_loss += main_loss.item()
+                    epoch_query_loss += query_loss.item()
+                    batch_count += 1
+                    
+                    if WANDB_AVAILABLE and wandb.run is not None:
+                        wandb.log({
+                            "batch_loss": main_loss.item(), 
+                            "batch_query_loss": query_loss.item(),
+                            "epoch": epoch
+                        })
+            
+            for example_idx in unique_examples.keys():
+                if example_idx in example_masking_patterns:
+                    patterns_as_lists = [pattern.tolist() if isinstance(pattern, torch.Tensor) else pattern 
+                                    for pattern in example_masking_patterns[example_idx]]
+                    pattern_losses = [epoch_loss / max(1, batch_count)] * len(patterns_as_lists)
+                    self.collect_pattern_effectiveness(example_idx, patterns_as_lists, pattern_losses)
+            
+            avg_epoch_loss = epoch_loss / max(1, batch_count)
+            avg_query_loss = epoch_query_loss / max(1, batch_count)
+            epoch_losses.append(avg_epoch_loss)
+            self.training_losses.append(avg_epoch_loss)
+            
+            logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}, Query Loss: {avg_query_loss:.4f}")
+            
+            if WANDB_AVAILABLE and wandb.run is not None:
+                wandb.log({
+                    "epoch_loss_dynamic": avg_epoch_loss, 
+                    "epoch_query_loss": avg_query_loss,
+                    "epoch": epoch
+                })
+
+        end_time = time.time()
+        logger.info(f'Time taken for all Epoch: {end_time - start_time}')
+
+        for queue_idx in examples_indices:
+            if queue_idx < len(self.training_queue):
+                self.training_queue[queue_idx]['needs_revisit'] = False
+        for i in range(len(self.recent_indicators)):
+            self.recent_indicators[i] = False
+        logger.info(f"Current examples in the training buffer: {self.unique_examples}")
+        logger.debug(f"Indicators for recent examples: {self.recent_indicators}")
+        self.examples_to_revisit.clear()
+
+        return epoch_losses
+
+    def train_on_examples_dynamic_masking_new(self, examples_indices=None, epochs=5, batch_size=32, lr=1e-4, num_patterns_per_example=5, visible_ratio=0.5, masking_lambda=0.1, alignment_scores=None):
+        """
+        Train model using intelligent masking patterns based on query stream predictions.
+        
+        Args:
+            examples_indices: Indices of queue entries to train on (default: all)
+            epochs: Number of training epochs
+            batch_size: Batch size
+            lr: Learning rate
+            num_patterns_per_example: Number of different masking patterns to generate per example
+            visible_ratio: Ratio of observed positions to keep visible (vs masked)
+            masking_lambda: Weight for query stream loss component
+            
+        Returns:
+            List of training losses
+        """
+        if examples_indices is None:
+            examples_indices = list(range(len(self.training_queue)))
+
+        if not examples_indices:
+            return []
+
+        unique_examples = {}
+        for queue_idx in examples_indices:
+            if queue_idx < len(self.training_queue):
+                queue_entry = self.training_queue[queue_idx]
+                example_idx = queue_entry['example_idx']
+                if example_idx not in unique_examples:
+                    unique_examples[example_idx] = queue_entry
+
+        if not unique_examples:
+            return []
+        
+        logger.info(f'Unique Examples Training On : {len(unique_examples)}')
+
+        self.train()
+        optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
+        kl_criterion = torch.nn.KLDivLoss(reduction='batchmean')
+
+        epoch_losses = []
+
+
+        start_time = time.time()
+        for epoch in range(epochs):
+            epoch_loss = 0.0
+            epoch_query_loss = 0.0
+            batch_count = 0
+            
+            augmented_examples = []
+            example_masking_patterns = {}
+            
+            for example_idx, queue_entry in unique_examples.items():
+                current_data = self.dataset[example_idx]
+                
+                known_questions, inputs, answers, annotators, questions, embeddings = current_data
+                
+                observed_positions = [pos for pos in range(inputs.shape[0]) if inputs[pos, 0] == 0]
+                
+                if len(observed_positions) == 0:
+                    continue
+                
+                example_patterns = []
+                
+                for pattern_idx in range(num_patterns_per_example):
+                    augmented_example = {
+                        'inputs': inputs.clone(),
+                        'annotators': annotators.clone(),
+                        'questions': questions.clone(),
+                        'embeddings': embeddings.clone() if embeddings is not None else None,
+                        'weight': queue_entry.get('weight', 1.0),
+                        'original_observed_mask': (inputs[:, 0] == 0).float(),
+                        'original_targets': inputs[:, 1:].clone(),
+                        'example_idx': example_idx
+                    }
+                    
+                    if epoch == 0:
+                        num_visible = max(1, int(len(observed_positions) * visible_ratio))
+                        if num_visible >= len(observed_positions):
+                            visible_positions = observed_positions.copy()
+                        else:
+                            visible_positions = np.random.choice(
+                                observed_positions, size=num_visible, replace=False
+                            ).tolist()
+                        
+                        positions_to_mask = [pos for pos in observed_positions if pos not in visible_positions]
+                    else:
+                        positions_to_mask = self.generate_masking_pattern_from_query_stream(
+                            inputs, annotators, questions, embeddings, visible_ratio
+                        )
+                    
+                    masking_pattern = torch.zeros(inputs.shape[0])
+                    for pos in positions_to_mask:
+                        augmented_example['inputs'][pos, 0] = 1
+                        augmented_example['inputs'][pos, 1:] = 0
+                        masking_pattern[pos] = 1.0
+                    
+                    example_patterns.append(masking_pattern)
+                    augmented_examples.append(augmented_example)
+                
+                example_masking_patterns[example_idx] = example_patterns
+            
+            np.random.shuffle(augmented_examples)
+            
+            for batch_start in range(0, len(augmented_examples), batch_size):
+                batch_examples = augmented_examples[batch_start:batch_start + batch_size]
+                
+                if not batch_examples:
+                    continue
+                
+                batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
+                batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
+                batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
+                batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device) if batch_examples[0]['embeddings'] is not None else None
+                batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
+                
+                batch_targets = torch.stack([e['original_targets'] for e in batch_examples]).to(self.device)
+                batch_observed_mask = torch.stack([e['original_observed_mask'] for e in batch_examples]).to(self.device)
+                
+                optimizer.zero_grad()
+                outputs, query_predictions = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
+                
+                batch_size_actual, seq_len, num_classes = outputs.shape
+                outputs_flat = outputs.view(-1, num_classes)
+                targets_flat = batch_targets.view(-1, num_classes)
+
+                current_mask = batch_inputs[:, :, 0]
+                currently_visible = (current_mask == 0).float()
+
+                # Two-component loss: reconstruction (masked) + consistency (observed)
+                artificially_masked = batch_observed_mask * (1 - currently_visible)
+                still_observed = batch_observed_mask * currently_visible 
+
+                # Combined loss with different weights
+                reconstruction_weight = 0.5
+                consistency_weight = 0.5
+                loss_mask = reconstruction_weight * artificially_masked + consistency_weight * still_observed
+                loss_mask_flat = loss_mask.view(-1)
+
+                log_probs = F.log_softmax(outputs_flat, dim=-1)
+                loss_per_position = kl_criterion(log_probs.unsqueeze(0), targets_flat.unsqueeze(0))
+
+                weighted_loss = loss_per_position * loss_mask_flat
+
+                predicted_weights = F.softmax(query_predictions[:, :, 1], dim=-1) * batch_inputs.shape[1] #unify the scale of the loss
+                predicted_weights_flat = predicted_weights.contiguous().view(-1)
+                weighted_loss = weighted_loss * predicted_weights_flat
+
+                total_valid = loss_mask_flat.sum()
+                if total_valid > 0:
+                    main_loss = weighted_loss.sum() / total_valid
+                else:
+                    main_loss = weighted_loss.sum()
+                
+                query_loss = torch.tensor(0.0, device=self.device)
+                weight_loss = torch.tensor(0.0, device=self.device)
+                if alignment_scores is not None:
+                    weight_target = self.compute_weights(alignment_scores, batch_inputs).to(self.device)
+                if len(batch_examples) > 0:
+                    for i, example in enumerate(batch_examples):
+                        if i < batch_inputs.shape[0]:
+                            example_idx = example['example_idx']
+                            example_query_loss = self.compute_query_stream_loss(query_predictions[i:i+1], example_idx)
+                            query_loss += example_query_loss
+                            if alignment_scores is not None:
+                                example_weight_loss = self.compute_weight_stream_loss(query_predictions[i:i+1], weight_target)
+                                weight_loss += example_weight_loss
+                
+                total_loss = main_loss + masking_lambda * query_loss + masking_lambda * weight_loss
+                
+                if total_loss > 0:
+                    total_loss.backward()
+                    optimizer.step()
+                    epoch_loss += main_loss.item()
+                    epoch_query_loss += query_loss.item()
+                    batch_count += 1
+                    
+                    if WANDB_AVAILABLE and wandb.run is not None:
+                        wandb.log({
+                            "batch_loss": main_loss.item(), 
+                            "batch_query_loss": query_loss.item(),
+                            "epoch": epoch
+                        })
+            
+            for example_idx in unique_examples.keys():
+                if example_idx in example_masking_patterns:
+                    patterns_as_lists = [pattern.tolist() if isinstance(pattern, torch.Tensor) else pattern 
+                                       for pattern in example_masking_patterns[example_idx]]
+                    pattern_losses = [epoch_loss / max(1, batch_count)] * len(patterns_as_lists)
+                    self.collect_pattern_effectiveness(example_idx, patterns_as_lists, pattern_losses)
+            
+            avg_epoch_loss = epoch_loss / max(1, batch_count)
+            avg_query_loss = epoch_query_loss / max(1, batch_count)
+            epoch_losses.append(avg_epoch_loss)
+            self.training_losses.append(avg_epoch_loss)
+            
+            logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}, Query Loss: {avg_query_loss:.4f}")
+            
+            if WANDB_AVAILABLE and wandb.run is not None:
+                wandb.log({
+                    "epoch_loss_dynamic": avg_epoch_loss, 
+                    "epoch_query_loss": avg_query_loss,
+                    "epoch": epoch
+                })
+
+        end_time = time.time()
+        logger.info(f'Time taken for all Epoch: {end_time - start_time}')
+
+        for queue_idx in examples_indices:
+            if queue_idx < len(self.training_queue):
+                self.training_queue[queue_idx]['needs_revisit'] = False
+        for i in range(len(self.recent_indicators)):
+            self.recent_indicators[i] = False
+        logger.info(f"Current examples in the training buffer: {self.unique_examples}")
+        logger.debug(f"Indicators for recent examples: {self.recent_indicators}")
+        self.examples_to_revisit.clear()
+
+        return epoch_losses
+    
+    def compute_weights(self, alignment_scores, inputs, smoothing_method="softmax", alpha=1.0, temperature=1.0):
+        """
+        Compute smoothed weights from alignment scores.
+        
+        Args:
+            alignment_scores: Dict with structure {key: [(pos, score), ...]}
+            inputs: Input tensor with shape [batch_size, total_vars, ...]
+            smoothing_method: "laplace", "exponential", "softmax", or "uniform_mix"
+            alpha: Smoothing parameter (higher = more smoothing)
+            temperature: Temperature for softmax smoothing
+        """
+        total_vars = inputs.shape[1]
+        score_aggregation = {}
+        for i in range(total_vars):
+            score_aggregation[i] = {"total_score": 0, "count": 0}
+        for key, value_list in alignment_scores.items():
+            for data in value_list:
+                pos = data[0]
+                score = data[1]
+                if pos < total_vars:  # Safety check
+                    score_aggregation[pos]["total_score"] += score
+                    score_aggregation[pos]["count"] += 1
+        raw_weights = []
+        for i in range(total_vars):
+            if score_aggregation[i]["count"] > 0:
+                avg_score = score_aggregation[i]["total_score"] / score_aggregation[i]["count"]
+            else:
+                avg_score = 0.0
+            raw_weights.append(avg_score)
+        if smoothing_method == "laplace":
+            smoothed_weights = [w + alpha for w in raw_weights]
+            
+        elif smoothing_method == "exponential":
+            smoothed_weights = [np.exp(w / temperature) for w in raw_weights]
+            
+        elif smoothing_method == "softmax":
+            weights_tensor = torch.tensor(raw_weights, dtype=torch.float32)
+            smoothed_weights = F.softmax(weights_tensor / temperature, dim=0).tolist()
+            
+        elif smoothing_method == "uniform_mix":
+            uniform_weight = 1.0 / total_vars
+            smoothed_weights = [(1 - alpha) * w + alpha * uniform_weight for w in raw_weights]
+            
+        else:
+            smoothed_weights = raw_weights
+        
+        if smoothing_method != "softmax":
+            total = sum(smoothed_weights)
+            if total > 0:
+                smoothed_weights = [x / total for x in smoothed_weights]
+            else:
+                smoothed_weights = [1.0 / total_vars] * total_vars
+        
+        return torch.tensor(smoothed_weights)
+
     
     def compute_total_loss(self, outputs, labels, inputs, questions, embeddings, full_supervision=False):
         """

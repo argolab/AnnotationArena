@@ -277,7 +277,7 @@ class VOICalculator:#
 
         with torch.no_grad():
             # Get initial outputs and compute initial loss
-            outputs = model(inputs, annotators, questions, embeddings)
+            outputs, _ = model(inputs, annotators, questions, embeddings)
             
             # Extract predictions for target indices
             if isinstance(target_indices, list) and len(target_indices) == 1:
@@ -321,7 +321,7 @@ class VOICalculator:#
             expanded_embeddings = torch.cat(expanded_embeddings, dim=0)
             
             # Get predictions for all possible answers
-            expanded_outputs = model(expanded_inputs, expanded_annotators, expanded_questions, expanded_embeddings)
+            expanded_outputs, _ = model(expanded_inputs, expanded_annotators, expanded_questions, expanded_embeddings)
             
             # Extract target predictions for each possible answer
             all_losses = []
@@ -2983,7 +2983,7 @@ class NewVariableGradientSelectionStrategy(ExampleSelectionStrategy):
                     final_variable_positions.append((example_idx, pos))
                     final_scores.append(score)
             
-            return final_variable_positions, final_scores
+            return final_variable_positions, final_scores, example_variable_positions, validation_grad_samples
         
         else:
             # Fallback: original behavior - select top variables globally
@@ -3123,7 +3123,7 @@ class NewVariableGradientTopOnlySelector:
                 
                 # Step 1: Generate fake label for target position
                 with torch.no_grad():
-                    temp_outputs = model(inputs, annotators, questions, embeddings)
+                    temp_outputs, _ = model(inputs, annotators, questions, embeddings)
                     target_probs = F.softmax(temp_outputs[0, target_pos], dim=0)
                     sampled_class = torch.multinomial(target_probs, 1).item()
                     
@@ -3177,7 +3177,7 @@ class NewVariableGradientTopOnlySelector:
                     
                     # Compute outputs with subset of features
                     model.zero_grad()
-                    outputs = model(output_inputs, annotators, questions, embeddings)
+                    outputs, _ = model(output_inputs, annotators, questions, embeddings)
                     
                     # Compute loss using loss_inputs to indicate which positions use actual loss
                     loss = model.compute_total_loss(
@@ -3263,7 +3263,7 @@ class NewVariableGradientTopOnlySelector:
                     # Step 2: Generate fake labels for all masked positions
                     fake_labels = {}
                     with torch.no_grad():
-                        temp_outputs = model(inputs, annotators, questions, embeddings)
+                        temp_outputs, _ = model(inputs, annotators, questions, embeddings)
                         for pos in masked_positions:
                             pos_probs = F.softmax(temp_outputs[i, pos], dim=0)
                             sampled_class = torch.multinomial(pos_probs, 1).item()
@@ -3309,7 +3309,7 @@ class NewVariableGradientTopOnlySelector:
                         
                         model.zero_grad()
                         # Compute outputs using output_inputs (with proper masking)
-                        outputs = model(output_inputs, annotators, questions, embeddings)
+                        outputs, _ = model(output_inputs, annotators, questions, embeddings)
                         
                         # Compute loss for single example to maintain gradient flow
                         single_outputs = outputs[i:i+1]
