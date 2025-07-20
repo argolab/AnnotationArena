@@ -305,7 +305,7 @@ class AnnotationArena:
         logger.debug(f"Observed position {position} in example {example_idx}: {true_value}")
         return success
     
-    def train(self, training_type='basic', epochs=1, batch_size=8, lr=1e-4, revisit_examples=False, alignment_scores=None, validation_gradients=None):
+    def train(self, training_type='basic', epochs=1, batch_size=8, lr=1e-4, revisit_examples=False, alignment_scores=None, validation_gradient=None):
         """
         Train the model using the current prediction history.
         
@@ -403,7 +403,7 @@ class AnnotationArena:
                 lr=lr,
                 num_patterns_per_example=self.num_patterns_per_example,
                 visible_ratio=self.visible_ratio,
-                validation_gradients=validation_gradients
+                validation_gradient=validation_gradient
             )
         else:
             raise ValueError(f"Unknown training type: {training_type}")

@@ -555,7 +555,6 @@ class ImputerEmbedding(nn.Module):
             float: Dot product
         """
         dot_product = 0.0
-
         for name in grad_dict1:
             if name in grad_dict2:
                 dot_product += torch.sum(-grad_dict1[name] * grad_dict2[name]).item()
@@ -563,7 +562,10 @@ class ImputerEmbedding(nn.Module):
         return dot_product
     
     def _is_top_layer_param(self, param_name):
-        top_layer_identifiers = ['encoder.layers.5.out']
+
+        # TODO: @Haojun - Changed This
+        # top_layer_identifiers = ['encoder.layers.5.out']
+        top_layer_identifiers = ['encoder.layers.5.smoothing']
         return any(identifier in param_name.lower() for identifier in top_layer_identifiers)
     
     def predict(self, inputs, annotators, questions, embeddings, positions=None, train=True, weight=1.0, example_idx=None):
@@ -1232,8 +1234,9 @@ class ImputerEmbedding(nn.Module):
             for val_grad in validation_gradient:
                 # Compute alignment with validation gradient
                 alignment = self.compute_grad_dot_product(
-                    aggregated_position_gradients[pos], validation_gradient
+                    aggregated_position_gradients[pos], val_grad
                 )
+                print(alignment)
             
                 weight = 1 - (alignment + 1) / 2
                 total_weights += weight
