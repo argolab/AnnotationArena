@@ -857,7 +857,7 @@ def main():
         data_manager = DataManager(config)
 
         if args.dataset == "hanna":
-            data_manager.prepare_data(num_partition=50, initial_train_ratio=0.0, dataset=args.dataset, 
+            data_manager.prepare_data(num_partition=1200, initial_train_ratio=0.0, dataset=args.dataset, 
                         cold_start=args.cold_start, use_embedding=args.use_embedding, calibration_holdout_ratio=args.calibration_holdout_ratio)
         elif args.dataset == "llm_rubric":
             data_manager.prepare_data(num_partition=1000, initial_train_ratio=0.0, dataset=args.dataset, 

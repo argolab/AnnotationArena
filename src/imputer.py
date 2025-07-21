@@ -1236,7 +1236,6 @@ class ImputerEmbedding(nn.Module):
                 alignment = self.compute_grad_dot_product(
                     aggregated_position_gradients[pos], val_grad
                 )
-                print(alignment)
             
                 weight = 1 - (alignment + 1) / 2
                 total_weights += weight
