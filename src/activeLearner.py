@@ -25,7 +25,6 @@ os.environ.update({"TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "HF_
 from config import Config, ModelConfig, DefaultHyperparams
 from utils import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset, get_experiment_config
 from annotationArena import AnnotationArena
-# from imputer import ImputerEmbedding
 from imputer import ImputerEmbedding
 from selection import (
     SelectionFactory, 
@@ -103,12 +102,12 @@ def extract_model_embeddings(dataset, example_indices, model, device):
         text_embeddings = torch.tensor(entry['text_embedding'], dtype=torch.float32).unsqueeze(0).to(device)
         
         with torch.no_grad():
-            feature_x, param_x = model.encoder.position_encoder(inputs, annotators, questions, text_embeddings)
+            feature_x, param_x, query_x = model.encoder.position_encoder(inputs, annotators, questions, text_embeddings)
             
             mask = inputs[:, :, 0]
             
             for layer in model.encoder.layers:
-                feature_x, param_x = layer(feature_x, param_x, questions, mask)
+                feature_x, param_x, query_x = layer(feature_x, param_x, query_x, questions, mask)
                 
             embedding = feature_x.mean(dim=1).squeeze().cpu().numpy()
             embeddings.append(embedding)

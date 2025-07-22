@@ -19,7 +19,7 @@ conda activate llm_rubric_env
 
 wandb login
 
-python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
+python /export/fs06/psingh54/AnnotationArena/src/activeLearner.py \
     --examples_per_cycle 50 \
     --experiment variable_gradient_comparison \
     --loss_type cross_entropy \
@@ -28,7 +28,7 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --runner prabhav \
     --use_embedding True \
     --cold_start True \
-    --cycles 8 \
+    --cycles 5 \
     --validation_set_size 50 \
     --active_set_size 100 \
     --epochs_per_cycle 10 \
@@ -37,7 +37,7 @@ python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
     --num_patterns_per_example 3 \
     --visible_ratio 0.5 \
     --features_per_example 5 \
-    --experiment_name NewHistoricalQuery_VarGrad_3Patterns_0.5_Ratio \
+    --experiment_name WeightDecision_ExpectedLoss_VarGrad_3Patterns_0.5_Ratio \
     --log_level INFO \
     --use_wandb \
     --wandb_project active-learning-hanna \

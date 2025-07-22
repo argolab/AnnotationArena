@@ -277,7 +277,7 @@ class VOICalculator:#
 
         with torch.no_grad():
             # Get initial outputs and compute initial loss
-            outputs = model(inputs, annotators, questions, embeddings)
+            outputs, _ = model(inputs, annotators, questions, embeddings)
             
             # Extract predictions for target indices
             if isinstance(target_indices, list) and len(target_indices) == 1:
@@ -1314,7 +1314,7 @@ class EntropyExampleSelectionStrategy(ExampleSelectionStrategy):
             
             # Make predictions
             with torch.no_grad():
-                outputs = self.model(inputs, annotators, questions, embeddings)
+                outputs, _ = self.model(inputs, annotators, questions, embeddings)
                 
                 # Calculate entropy for all masked positions
                 total_entropy = 0.0
@@ -1404,7 +1404,7 @@ class EntropyFeatureSelectionStrategy(FeatureSelectionStrategy):
         
         # Make predictions
         with torch.no_grad():
-            outputs = self.model(inputs, annotators, questions, embeddings)
+            outputs, _ = self.model(inputs, annotators, questions, embeddings)
             
             # Calculate entropy for each masked position
             position_entropies = []
@@ -1772,7 +1772,7 @@ class ArgmaxVOICalculator(VOICalculator):
 
         with torch.no_grad():
             # Get initial outputs and compute initial loss
-            outputs = model(inputs, annotators, questions, embeddings)
+            outputs, _ = model(inputs, annotators, questions, embeddings)
             
             # Extract predictions for target indices
             if isinstance(target_indices, list) and len(target_indices) == 1:
@@ -3123,7 +3123,7 @@ class NewVariableGradientTopOnlySelector:
                 
                 # Step 1: Generate fake label for target position
                 with torch.no_grad():
-                    temp_outputs = model(inputs, annotators, questions, embeddings)
+                    temp_outputs, _ = model(inputs, annotators, questions, embeddings)
                     target_probs = F.softmax(temp_outputs[0, target_pos], dim=0)
                     sampled_class = torch.multinomial(target_probs, 1).item()
                     
@@ -3263,7 +3263,7 @@ class NewVariableGradientTopOnlySelector:
                     # Step 2: Generate fake labels for all masked positions
                     fake_labels = {}
                     with torch.no_grad():
-                        temp_outputs = model(inputs, annotators, questions, embeddings)
+                        temp_outputs, _ = model(inputs, annotators, questions, embeddings)
                         for pos in masked_positions:
                             pos_probs = F.softmax(temp_outputs[i, pos], dim=0)
                             sampled_class = torch.multinomial(pos_probs, 1).item()
@@ -3453,7 +3453,7 @@ class NewGradientTopOnlySelector(GradientSelector):
             # Step 1: Generate fake labels for all masked positions
             fake_labels = {}
             with torch.no_grad():
-                temp_outputs = model(inputs, annotators, questions, embeddings)
+                temp_outputs, _ = model(inputs, annotators, questions, embeddings)
                 for pos in masked_positions:
                     pos_probs = F.softmax(temp_outputs[0, pos], dim=0)
                     sampled_class = torch.multinomial(pos_probs, 1).item()
@@ -3580,7 +3580,7 @@ class NewGradientTopOnlySelector(GradientSelector):
                     # Step 2: Generate fake labels for all masked positions
                     fake_labels = {}
                     with torch.no_grad():
-                        temp_outputs = model(inputs, annotators, questions, embeddings)
+                        temp_outputs, _ = model(inputs, annotators, questions, embeddings)
                         for pos in masked_positions:
                             pos_probs = F.softmax(temp_outputs[i, pos], dim=0)
                             sampled_class = torch.multinomial(pos_probs, 1).item()

@@ -368,7 +368,7 @@ class ImputerEmbedding(nn.Module):
             'cycle': cycle,
             'timestamp': time.time()
         })
-    
+
     def compute_query_stream_loss(self, query_predictions, example_idx):
         """
         Train query stream to predict historical query patterns (professor's approach)
@@ -390,17 +390,26 @@ class ImputerEmbedding(nn.Module):
         if not relevant_patterns:
             return torch.tensor(0.0, device=self.device)
         
-        total_loss = 0
+        total_decision_loss = 0
         for pattern in relevant_patterns:
             target_query_pattern = torch.tensor(pattern['query_pattern'], device=self.device).float()
             
-            # Use query stream predictions - binary decisions
             predicted_query_probs = torch.sigmoid(query_predictions[0, :, 0])
             
             loss = F.binary_cross_entropy(predicted_query_probs, target_query_pattern)
-            total_loss += loss
+            total_decision_loss += loss
         
-        return total_loss / len(relevant_patterns)
+        decision_loss = total_decision_loss / len(relevant_patterns)
+        
+        query_frequencies = torch.zeros(query_predictions.shape[1], device=self.device)
+        for pos in range(query_predictions.shape[1]):
+            times_queried = sum(1 for pattern in relevant_patterns if pattern['query_pattern'][pos] > 0)
+            query_frequencies[pos] = times_queried / len(relevant_patterns)
+        
+        predicted_weights = F.softmax(query_predictions[0, :, 1], dim=0)
+        weight_loss = F.mse_loss(predicted_weights, query_frequencies)
+        
+        return decision_loss + weight_loss
 
     def generate_masking_pattern_from_query_stream(self, inputs, annotators, questions, embeddings, visible_ratio):
         """
@@ -615,7 +624,7 @@ class ImputerEmbedding(nn.Module):
         
         logger.debug(f"Updated {updated_count} training queue entries with new observations")
         return updated_count
-
+    
     def train_on_examples_dynamic_masking(self, examples_indices=None, epochs=5, batch_size=32, lr=1e-4, num_patterns_per_example=5, visible_ratio=0.5, masking_lambda=0.1):
         """
         Train model using intelligent masking patterns based on query stream predictions.
@@ -743,11 +752,9 @@ class ImputerEmbedding(nn.Module):
                 current_mask = batch_inputs[:, :, 0]
                 currently_visible = (current_mask == 0).float()
 
-                # Two-component loss: reconstruction (masked) + consistency (observed)
                 artificially_masked = batch_observed_mask * (1 - currently_visible)
                 still_observed = batch_observed_mask * currently_visible 
 
-                # Combined loss with different weights
                 reconstruction_weight = 0.5
                 consistency_weight = 0.5
                 loss_mask = reconstruction_weight * artificially_masked + consistency_weight * still_observed
@@ -764,9 +771,23 @@ class ImputerEmbedding(nn.Module):
 
                 total_valid = loss_mask_flat.sum()
                 if total_valid > 0:
-                    main_loss = weighted_loss.sum() / total_valid
+                    supervised_loss = weighted_loss.sum() / total_valid
                 else:
-                    main_loss = weighted_loss.sum()
+                    supervised_loss = weighted_loss.sum()
+                
+                originally_missing = 1 - batch_observed_mask
+                originally_missing_flat = originally_missing.view(-1)
+                
+                expected_loss = torch.tensor(0.0, device=self.device)
+                if originally_missing_flat.sum() > 0:
+                    missing_indices = originally_missing_flat.bool()
+                    outputs_missing = outputs_flat[missing_indices]
+                    current_pred_dist = F.softmax(outputs_missing, dim=-1)
+                    log_probs_missing = F.log_softmax(outputs_missing, dim=-1)
+                    expected_kl_per_position = -(current_pred_dist * log_probs_missing).sum(dim=-1)
+                    expected_loss = expected_kl_per_position.mean()
+                
+                main_loss = supervised_loss + 0.1 * expected_loss
                 
                 query_loss = torch.tensor(0.0, device=self.device)
                 if len(batch_examples) > 0:
@@ -795,7 +816,7 @@ class ImputerEmbedding(nn.Module):
             for example_idx in unique_examples.keys():
                 if example_idx in example_masking_patterns:
                     patterns_as_lists = [pattern.tolist() if isinstance(pattern, torch.Tensor) else pattern 
-                                       for pattern in example_masking_patterns[example_idx]]
+                                    for pattern in example_masking_patterns[example_idx]]
                     pattern_losses = [epoch_loss / max(1, batch_count)] * len(patterns_as_lists)
                     self.collect_pattern_effectiveness(example_idx, patterns_as_lists, pattern_losses)
             
