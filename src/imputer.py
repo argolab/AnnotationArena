@@ -787,7 +787,7 @@ class ImputerEmbedding(nn.Module):
                     expected_kl_per_position = -(current_pred_dist * log_probs_missing).sum(dim=-1)
                     expected_loss = expected_kl_per_position.mean()
                 
-                main_loss = supervised_loss + 0.1 * expected_loss
+                main_loss = supervised_loss
                 
                 query_loss = torch.tensor(0.0, device=self.device)
                 if len(batch_examples) > 0:

@@ -321,7 +321,7 @@ class VOICalculator:#
             expanded_embeddings = torch.cat(expanded_embeddings, dim=0)
             
             # Get predictions for all possible answers
-            expanded_outputs = model(expanded_inputs, expanded_annotators, expanded_questions, expanded_embeddings)
+            expanded_outputs, _ = model(expanded_inputs, expanded_annotators, expanded_questions, expanded_embeddings)
             
             # Extract target predictions for each possible answer
             all_losses = []
@@ -400,7 +400,7 @@ class FastVOICalculator(VOICalculator):
             inputs_grad = inputs.clone().requires_grad_(True)
             
             # Forward pass
-            outputs = model(inputs_grad, annotators, questions, embeddings)
+            outputs, _ = model(inputs_grad, annotators, questions, embeddings)
             
             # Extract predictions for target indices
             if isinstance(target_indices, list) and len(target_indices) == 1:
@@ -1640,7 +1640,7 @@ class BADGESelectionStrategy(ExampleSelectionStrategy):
         
         # 2. For each masked position, compute hypothetical label and gradient embedding
         with torch.no_grad():
-            outputs = model(inputs, annotators, questions, question_embeddings)
+            outputs, _ = model(inputs, annotators, questions, question_embeddings)
         
         all_position_embeddings = []
         total_uncertainty = 0.0
@@ -1802,7 +1802,7 @@ class ArgmaxVOICalculator(VOICalculator):
             input_with_answer[:, candidate_idx, 0] = 0  # Mark as observed
             
             # Get predictions with argmax value
-            new_outputs = model(input_with_answer, annotators, questions, embeddings)
+            new_outputs, _ = model(input_with_answer, annotators, questions, embeddings)
             
             # Extract target predictions
             if isinstance(target_indices, list) and len(target_indices) == 1:
@@ -3177,7 +3177,7 @@ class NewVariableGradientTopOnlySelector:
                     
                     # Compute outputs with subset of features
                     model.zero_grad()
-                    outputs = model(output_inputs, annotators, questions, embeddings)
+                    outputs, _ = model(output_inputs, annotators, questions, embeddings)
                     
                     # Compute loss using loss_inputs to indicate which positions use actual loss
                     loss = model.compute_total_loss(
@@ -3309,7 +3309,7 @@ class NewVariableGradientTopOnlySelector:
                         
                         model.zero_grad()
                         # Compute outputs using output_inputs (with proper masking)
-                        outputs = model(output_inputs, annotators, questions, embeddings)
+                        outputs, _ = model(output_inputs, annotators, questions, embeddings)
                         
                         # Compute loss for single example to maintain gradient flow
                         single_outputs = outputs[i:i+1]
@@ -3499,7 +3499,7 @@ class NewGradientTopOnlySelector(GradientSelector):
                 
                 model.zero_grad()
                 # Compute outputs using output_inputs (with proper masking)
-                outputs = model(output_inputs, annotators, questions, embeddings)
+                outputs, _ = model(output_inputs, annotators, questions, embeddings)
                 
                 # Compute loss using loss_inputs (all positions use actual loss)
                 loss = model.compute_total_loss(
@@ -3626,7 +3626,7 @@ class NewGradientTopOnlySelector(GradientSelector):
                         
                         model.zero_grad()
                         # Compute outputs using output_inputs (with proper masking)
-                        outputs = model(output_inputs, annotators, questions, embeddings)
+                        outputs, _ = model(output_inputs, annotators, questions, embeddings)
                         
                         # Compute loss using loss_inputs (all positions use actual loss)
                         example_loss = model.compute_total_loss(

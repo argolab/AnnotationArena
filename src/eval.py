@@ -139,7 +139,7 @@ class ModelEvaluator:
                         embeddings = torch.zeros(1, seq_len, 384).to(self.device)
                     
                     # Get model predictions
-                    outputs = model(inputs, annotators_tensor, questions_tensor, embeddings)
+                    outputs, _ = model(inputs, annotators_tensor, questions_tensor, embeddings)
                     
                     # Process each position
                     for pos in range(len(data_entry['questions'])):
