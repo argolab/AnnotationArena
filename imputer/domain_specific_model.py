@@ -32,22 +32,36 @@ def convert_training_data_for_pgmpy(train_data: List[Tuple], n_nodes: int) -> pd
     Returns:
         pandas DataFrame with columns for each node, NaN for unobserved values
     """
+    print(f"DEBUG: Converting {len(train_data)} samples for pgmpy...")
     samples = []
     
-    for inputs, embeddings, dimensions, mask, targets in train_data:
+    for i, (inputs, embeddings, dimensions, mask, targets) in enumerate(train_data):
         sample = {}
+        observed_count = 0
         
         for node in range(n_nodes):
             if mask[node] == 0:  # Observed node
                 # Extract state from one-hot encoding in inputs
                 state = torch.argmax(inputs[node, 1:]).item()
                 sample[f'node_{node}'] = state
+                observed_count += 1
+                
+                # Debug first few samples
+                if i < 3:
+                    print(f"  Sample {i}, Node {node}: observed state = {state}")
             else:  # Unobserved node
                 sample[f'node_{node}'] = np.nan
                 
         samples.append(sample)
+        
+        # Debug observation ratio
+        if i < 3:
+            print(f"  Sample {i}: {observed_count}/{n_nodes} nodes observed ({observed_count/n_nodes:.1%})")
     
     df = pd.DataFrame(samples)
+    print(f"DEBUG: Created DataFrame with columns: {list(df.columns)}")
+    print(f"DEBUG: Sample data shape: {df.shape}")
+    print(f"DEBUG: Missing values per column: {df.isnull().sum().to_dict()}")
     
     # Convert to categorical dtype for pgmpy
     for col in df.columns:
@@ -67,16 +81,25 @@ def create_bn_structure_from_adjacency(adj_matrix: np.ndarray) -> BayesianNetwor
         BayesianNetwork with structure but no CPDs
     """
     n_nodes = adj_matrix.shape[0]
+    print(f"DEBUG: Creating BN structure from {n_nodes}x{n_nodes} adjacency matrix")
+    print(f"DEBUG: Adjacency matrix:\n{adj_matrix}")
     
     # Create edges from adjacency matrix
     edges = []
     for i in range(n_nodes):
         for j in range(n_nodes):
             if adj_matrix[i, j] == 1:
-                edges.append((f'node_{i}', f'node_{j}'))
+                edge = (f'node_{i}', f'node_{j}')
+                edges.append(edge)
+                print(f"DEBUG: Adding edge: {edge}")
+    
+    print(f"DEBUG: Total edges created: {len(edges)}")
+    print(f"DEBUG: Edges: {edges}")
     
     # Create BayesianNetwork
     bn = BayesianNetwork(edges)
+    print(f"DEBUG: BN nodes: {sorted(list(bn.nodes()))}")
+    print(f"DEBUG: BN edges: {list(bn.edges())}")
     
     return bn
 
@@ -84,7 +107,7 @@ def create_bn_structure_from_adjacency(adj_matrix: np.ndarray) -> BayesianNetwor
 def learn_domain_specific_model(bn_structure: BayesianNetwork, 
                               training_data: pd.DataFrame,
                               n_states: int = 2,
-                              max_iter: int = 100,
+                              max_iter: int = 15,  # Reduced from 100 to 15
                               tol: float = 1e-4) -> BayesianNetwork:
     """
     Learn BN parameters using EM + Bayesian estimation for missing data.
@@ -266,13 +289,21 @@ def evaluate_domain_specific_model(learned_bn: BayesianNetwork,
                 # Query posterior with more robust error handling
                 node_name = f'node_{node}'
                 
+                # Debug evidence and query for first few samples
+                if len(kl_divergences) < 3:
+                    print(f"DEBUG: Querying node '{node_name}' with evidence: {evidence}")
+                
                 # Check if evidence creates impossible state
                 if not evidence:
                     # If no evidence, create uniform posterior
                     pred_probs = np.ones(n_states) / n_states
+                    if len(kl_divergences) < 3:
+                        print(f"DEBUG: No evidence, using uniform probs: {pred_probs}")
                 else:
                     posterior = infer.query(variables=[node_name], evidence=evidence)
                     pred_probs = posterior.values
+                    if len(kl_divergences) < 3:
+                        print(f"DEBUG: VE query result for {node_name}: {pred_probs}")
                 
                 # Ensure probabilities are valid
                 if np.any(np.isnan(pred_probs)) or np.sum(pred_probs) == 0:
@@ -351,4 +382,11 @@ def extract_adjacency_from_embeddings(param_embeddings: np.ndarray, n_nodes: int
     Returns:
         Adjacency matrix
     """
-    return param_embeddings[:, :n_nodes]
+    print(f"DEBUG: Extracting adjacency from embeddings shape: {param_embeddings.shape}")
+    print(f"DEBUG: Expecting adjacency matrix in first {n_nodes} columns")
+    
+    adj_matrix = param_embeddings[:, :n_nodes]
+    print(f"DEBUG: Extracted adjacency matrix shape: {adj_matrix.shape}")
+    print(f"DEBUG: Extracted adjacency matrix:\n{adj_matrix}")
+    
+    return adj_matrix

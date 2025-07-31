@@ -481,8 +481,13 @@ def generate_bayesian_network(n_nodes, edge_prob):
     """Generate random Bayesian Network with CPDs."""
     bn = BayesianNetwork.get_random(n_nodes=n_nodes, edge_prob=edge_prob, n_states=None, latents=False)
     
+    print(f"DEBUG: Generated original BN with nodes: {sorted(list(bn.nodes()))}")
+    print(f"DEBUG: Original BN edges: {list(bn.edges())}")
+    print(f"DEBUG: Original BN node types: {[type(node) for node in bn.nodes()]}")
+    
     node_list = sorted(list(bn.nodes()))
     node_to_idx = {node: idx for idx, node in enumerate(node_list)}
+    print(f"DEBUG: Node mapping: {node_to_idx}")
     
     # Generate CPDs with Dirichlet priors
     cardinalities = {i: N_STATES for i in range(n_nodes)}
@@ -512,10 +517,14 @@ def generate_bayesian_network(n_nodes, edge_prob):
     
     # Create adjacency matrix and CPD parameters
     adj_matrix = np.zeros((n_nodes, n_nodes), dtype=np.float32)
+    print(f"DEBUG: Creating adjacency matrix from edges:")
     for edge in bn.edges():
         from_idx = node_to_idx[edge[0]]
         to_idx = node_to_idx[edge[1]]
         adj_matrix[from_idx, to_idx] = 1.0
+        print(f"  Edge {edge} -> adj_matrix[{from_idx}, {to_idx}] = 1")
+    
+    print(f"DEBUG: Final adjacency matrix:\n{adj_matrix}")
     
     max_cpd_size = max([len(bn.get_cpds(node).get_values().flatten()) for node in node_list])
     cpd_data = np.zeros((n_nodes, max_cpd_size), dtype=np.float32)
