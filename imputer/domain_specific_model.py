@@ -215,26 +215,38 @@ def impute_missing_with_gibbs(model: BayesianNetwork,
     # For each row with missing values, use Gibbs sampling
     for idx, row in data.iterrows():
         if row.isnull().any():
-            # Create evidence from observed values
-            evidence = {}
+            # Create initial state with observed values and random missing values
+            start_state = {}
+            missing_vars = []
+            
             for col in data.columns:
                 if not pd.isna(row[col]):
-                    evidence[col] = int(row[col])
+                    # Observed value - fix in start state
+                    start_state[col] = int(row[col])
+                else:
+                    # Missing value - initialize randomly and track
+                    start_state[col] = np.random.randint(0, 2)
+                    missing_vars.append(col)
             
-            if evidence:  # If we have some evidence
-                # Generate samples for missing variables
-                missing_vars = [col for col in data.columns if pd.isna(row[col])]
-                
+            if missing_vars:  # If we have missing variables to impute
                 try:
-                    # Generate samples
-                    samples = gibbs.sample(size=n_samples, evidence=evidence)
+                    # Generate Gibbs samples starting from observed state
+                    samples = gibbs.sample(start_state=start_state, size=n_samples)
                     
-                    # Take mean of samples for each missing variable
+                    # For missing variables, use mode (most frequent value) from samples
                     for var in missing_vars:
-                        if var in samples.columns:
-                            # Use mode (most frequent value) for discrete variables
-                            imputed_value = samples[var].mode().iloc[0]
-                            completed_data.loc[idx, var] = imputed_value
+                        if var in samples.columns and len(samples) > 0:
+                            # Skip burn-in samples (first 10%) and use mode
+                            burn_in = max(1, n_samples // 10)
+                            var_samples = samples[var].iloc[burn_in:]
+                            if not var_samples.empty:
+                                imputed_value = var_samples.mode().iloc[0]
+                                completed_data.loc[idx, var] = imputed_value
+                            else:
+                                completed_data.loc[idx, var] = np.random.randint(0, 2)
+                        else:
+                            # Fallback: random binary
+                            completed_data.loc[idx, var] = np.random.randint(0, 2)
                         
                 except Exception as e:
                     print(f"Gibbs sampling failed for row {idx}: {e}")
