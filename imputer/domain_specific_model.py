@@ -161,11 +161,21 @@ def learn_domain_specific_model(bn_structure: BayesianNetwork,
             # Older API without tol parameter
             try:
                 print(f"DEBUG: Attempting EM with max_iter={max_iter}")
+                print(f"DEBUG: EM object created successfully")
+                print(f"DEBUG: BN structure nodes: {sorted(list(bn_structure.nodes()))}")
+                print(f"DEBUG: BN structure edges: {list(bn_structure.edges())}")
+                print(f"DEBUG: Training data info:")
+                print(f"  - Shape: {training_data.shape}")
+                print(f"  - Columns: {list(training_data.columns)}")
+                print(f"  - Non-null counts: {training_data.count().to_dict()}")
+                print(f"  - Data types: {training_data.dtypes.to_dict()}")
+                
                 em_cpds = em.get_parameters(n_jobs=1, max_iter=max_iter)
             except TypeError as e:
                 print(f"DEBUG: EM with max_iter failed: {e}")
                 # Even older API with minimal parameters
                 print(f"DEBUG: Attempting EM with minimal parameters")
+                print(f"DEBUG: Trying just get_parameters() with no arguments...")
                 em_cpds = em.get_parameters()
         
         # Create model with EM parameters
@@ -212,8 +222,99 @@ def learn_domain_specific_model(bn_structure: BayesianNetwork,
         
     except Exception as e:
         print(f"EM learning failed: {e}")
-        # Fallback: Use simple maximum likelihood on observed data
-        return learn_fallback_model(bn_structure, training_data, n_states)
+        # Fallback: Use structure-aware learning that actually uses training data
+        return learn_structure_aware_fallback(bn_structure, training_data, n_states)
+
+
+def learn_structure_aware_fallback(bn_structure: BayesianNetwork, 
+                                  training_data: pd.DataFrame,
+                                  n_states: int = 2) -> BayesianNetwork:
+    """
+    Structure-aware fallback that learns from available data per node.
+    Better than random priors - uses actual training data.
+    """
+    print("Using structure-aware fallback that learns from training data...")
+    
+    nodes = sorted(bn_structure.nodes())
+    print(f"DEBUG: Learning parameters for nodes: {nodes}")
+    
+    cpds = []
+    for node in nodes:
+        parents = list(bn_structure.get_parents(node))
+        print(f"DEBUG: Learning CPD for node {node} with parents {parents}")
+        
+        if not parents:
+            # Root node - learn marginal distribution from available data
+            node_data = training_data[node].dropna()
+            if len(node_data) > 0:
+                # Count observed states
+                counts = np.zeros(n_states)
+                for state in node_data:
+                    counts[int(state)] += 1
+                # Add small pseudo-count to avoid zeros
+                counts += 1.0
+                probs = counts / counts.sum()
+                values = probs.reshape(n_states, 1)
+                print(f"  Root node {node}: learned from {len(node_data)} samples, probs={probs}")
+            else:
+                # No data available, use uniform
+                values = np.ones((n_states, 1)) / n_states
+                print(f"  Root node {node}: no data, using uniform")
+        else:
+            # Child node - learn conditional distribution from available data
+            # Find samples where both node and all parents are observed
+            relevant_cols = [node] + parents
+            complete_cases = training_data[relevant_cols].dropna()
+            
+            if len(complete_cases) > 5:  # Need reasonable sample size
+                print(f"  Child node {node}: learning from {len(complete_cases)} complete cases")
+                
+                # Count conditional frequencies
+                n_parent_configs = n_states ** len(parents)
+                values = np.ones((n_states, n_parent_configs)) / n_states  # Start with uniform
+                
+                for _, row in complete_cases.iterrows():
+                    # Get parent configuration
+                    parent_config = 0
+                    for i, parent in enumerate(parents):
+                        parent_config += int(row[parent]) * (n_states ** (len(parents) - 1 - i))
+                    
+                    # Count this observation
+                    child_state = int(row[node])
+                    values[child_state, parent_config] += 1.0
+                
+                # Normalize each parent configuration
+                for config in range(n_parent_configs):
+                    values[:, config] = values[:, config] / values[:, config].sum()
+                    
+            else:
+                # Not enough data, use structure-informed priors
+                print(f"  Child node {node}: insufficient data ({len(complete_cases)} cases), using informed priors")
+                n_parent_configs = n_states ** len(parents)
+                values = np.random.dirichlet(np.ones(n_states) * 2, size=n_parent_configs).T
+        
+        cpd = TabularCPD(
+            variable=node,
+            variable_card=n_states,
+            values=values,
+            evidence=parents,
+            evidence_card=[n_states] * len(parents) if parents else []
+        )
+        cpds.append(cpd)
+    
+    # Create model
+    model = BayesianNetwork(bn_structure.edges())
+    for node in nodes:
+        if node not in model.nodes():
+            model.add_node(node)
+    
+    model.add_cpds(*cpds)
+    print(f"DEBUG: Structure-aware fallback model created with {len(cpds)} CPDs")
+    
+    if not model.check_model():
+        print("Warning: Structure-aware fallback model failed validation")
+    
+    return model
 
 
 def learn_fallback_model(bn_structure: BayesianNetwork, 
