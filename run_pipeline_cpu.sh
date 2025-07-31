@@ -6,7 +6,7 @@
 
 #SBATCH --job-name=ActiveLearner
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=32GB
+#SBATCH --mem-per-cpu=12GB
 #SBATCH --gpus=1
 #SBATCH --partition=gpu-a100
 #SBATCH --account=a100acct
@@ -17,4 +17,4 @@ module load cuda/12.1
 
 conda activate llm_rubric_env
 
-python /export/fs06/psingh54/AnnotationArena/imputer/ve_graph_imputation.py
+python /export/fs06/psingh54/AnnotationArena/imputer/test_small.py

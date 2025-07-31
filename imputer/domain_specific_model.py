@@ -104,7 +104,18 @@ def learn_domain_specific_model(bn_structure: BayesianNetwork,
     try:
         # Step 1: Use EM to handle missing data
         em = ExpectationMaximization(bn_structure, training_data)
-        em_cpds = em.get_parameters(n_jobs=1, max_iter=max_iter, tol=tol)
+        
+        # Try different API signatures for different pgmpy versions
+        try:
+            # Newer API with tol parameter
+            em_cpds = em.get_parameters(n_jobs=1, max_iter=max_iter, tol=tol)
+        except TypeError:
+            # Older API without tol parameter
+            try:
+                em_cpds = em.get_parameters(n_jobs=1, max_iter=max_iter)
+            except TypeError:
+                # Even older API with minimal parameters
+                em_cpds = em.get_parameters()
         
         # Create model with EM parameters
         em_model = BayesianNetwork(bn_structure.edges())
@@ -167,18 +178,20 @@ def learn_fallback_model(bn_structure: BayesianNetwork,
     complete_data = training_data.dropna()
     
     if len(complete_data) == 0:
-        print("No complete samples, using uniform priors")
-        # Create uniform CPDs
+        print("No complete samples, creating informed uniform priors from structure")
+        # Create uniform CPDs with proper structure awareness
         cpds = []
-        for node in bn_structure.nodes():
+        nodes = sorted(bn_structure.nodes())
+        
+        for node in nodes:
             parents = list(bn_structure.get_parents(node))
             if not parents:
-                # Root node - uniform distribution
-                values = np.ones((n_states, 1)) / n_states
+                # Root node - slightly non-uniform to break symmetry
+                values = np.random.dirichlet(np.ones(n_states) * 2).reshape(n_states, 1)
             else:
-                # Child node - uniform conditional distribution
+                # Child node - slightly non-uniform conditional distribution
                 n_parent_configs = n_states ** len(parents)
-                values = np.ones((n_states, n_parent_configs)) / n_states
+                values = np.random.dirichlet(np.ones(n_states) * 2, size=n_parent_configs).T
             
             cpd = TabularCPD(
                 variable=node,
@@ -191,6 +204,10 @@ def learn_fallback_model(bn_structure: BayesianNetwork,
         
         model = BayesianNetwork(bn_structure.edges())
         model.add_cpds(*cpds)
+        
+        if not model.check_model():
+            print("Warning: Fallback model failed validation")
+        
         return model
     
     # Use MLE on complete data
@@ -246,20 +263,44 @@ def evaluate_domain_specific_model(learned_bn: BayesianNetwork,
         # Get predictions for unobserved nodes
         for node in unobserved_nodes:
             try:
-                # Query posterior
-                posterior = infer.query(variables=[f'node_{node}'], evidence=evidence)
-                pred_probs = posterior.values
+                # Query posterior with more robust error handling
+                node_name = f'node_{node}'
+                
+                # Check if evidence creates impossible state
+                if not evidence:
+                    # If no evidence, create uniform posterior
+                    pred_probs = np.ones(n_states) / n_states
+                else:
+                    posterior = infer.query(variables=[node_name], evidence=evidence)
+                    pred_probs = posterior.values
+                
+                # Ensure probabilities are valid
+                if np.any(np.isnan(pred_probs)) or np.sum(pred_probs) == 0:
+                    pred_probs = np.ones(n_states) / n_states
+                else:
+                    # Normalize to ensure sum to 1
+                    pred_probs = pred_probs / np.sum(pred_probs)
                 
                 # Get ground truth
                 true_probs = targets[node].numpy()
                 
+                # Ensure ground truth is valid
+                if np.any(np.isnan(true_probs)) or np.sum(true_probs) == 0:
+                    failed_inferences += 1
+                    continue
+                
                 # Compute KL divergence: KL(true || pred)
                 kl = 0.0
                 for state in range(n_states):
-                    if true_probs[state] > 0:
+                    if true_probs[state] > 1e-10:  # Avoid log(0)
                         kl += true_probs[state] * np.log(
                             (true_probs[state] + 1e-10) / (pred_probs[state] + 1e-10)
                         )
+                
+                # Sanity check on KL
+                if np.isnan(kl) or np.isinf(kl) or kl < 0:
+                    failed_inferences += 1
+                    continue
                 
                 kl_divergences.append(kl)
                 
@@ -268,6 +309,9 @@ def evaluate_domain_specific_model(learned_bn: BayesianNetwork,
                 prediction_errors.append(error)
                 
             except Exception as e:
+                # More detailed error logging for debugging
+                if len(kl_divergences) < 5:  # Only log first few errors
+                    print(f"Inference failed for node {node}: {str(e)[:100]}")
                 failed_inferences += 1
                 continue
     
