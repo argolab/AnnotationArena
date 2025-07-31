@@ -1,0 +1,758 @@
+{
+  "5_100": {
+    "config": {
+      "n_nodes": 5,
+      "train_size": 100
+    },
+    "evaluation": {
+      "rmse_all": 0.10657916963100433,
+      "accuracy_all": 0.8999999761581421,
+      "pearson_all": 0.9481914043426514,
+      "spearman_all": 0.9457572499846798,
+      "rmse_query": 0.11156601458787918,
+      "accuracy_query": 0.9150000214576721,
+      "pearson_query": 0.9420305490493774,
+      "spearman_query": 0.941749858735949,
+      "rmse_latent": 0.10399610549211502,
+      "accuracy_latent": 0.8924999833106995,
+      "pearson_latent": 0.9511857032775879,
+      "spearman_latent": 0.9481290041142041
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.026568242481776645,
+      "std_kl_divergence": 0.007845626436348249,
+      "mean_entropy_ratio": 1.0625494377953666,
+      "kl_distribution": [
+        0.024545997381210327,
+        0.04042592644691467,
+        0.032373517751693726,
+        0.024627715349197388,
+        0.025654137134552002,
+        0.025775790214538574,
+        0.012574613094329834
+      ]
+    },
+    "timing": {
+      "model_time_mean": 8.131936192512512e-05,
+      "model_time_std": 1.7099082469940186e-06,
+      "ve_time_mean": 0.0005976438522338867,
+      "ve_time_std": 0.000126049783276495,
+      "speedup": 7.349342617618763
+    },
+    "model_params": 193051
+  },
+  "5_500": {
+    "config": {
+      "n_nodes": 5,
+      "train_size": 500
+    },
+    "evaluation": {
+      "rmse_all": 0.02378394454717636,
+      "accuracy_all": 1.0,
+      "pearson_all": 0.9964399337768555,
+      "spearman_all": 0.9828342532663434,
+      "rmse_query": 0.02613256126642227,
+      "accuracy_query": 1.0,
+      "pearson_query": 0.9953641295433044,
+      "spearman_query": 0.9776240261204754,
+      "rmse_latent": 0.022517964243888855,
+      "accuracy_latent": 1.0,
+      "pearson_latent": 0.9969213008880615,
+      "spearman_latent": 0.9848160274798688
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.0014451231275285994,
+      "std_kl_divergence": 0.0006646446633952744,
+      "mean_entropy_ratio": 1.0027731827327184,
+      "kl_distribution": [
+        0.0025869011878967285,
+        0.0014185309410095215,
+        0.0013742446899414062,
+        0.0016903281211853027,
+        0.0009818077087402344,
+        0.0017958283424377441,
+        0.0002682209014892578
+      ]
+    },
+    "timing": {
+      "model_time_mean": 8.066371083259583e-05,
+      "model_time_std": 1.9744038581848145e-07,
+      "ve_time_mean": 0.000576481819152832,
+      "ve_time_std": 0.00013057231485149283,
+      "speedup": 7.146730707061377
+    },
+    "model_params": 213431
+  },
+  "5_750": {
+    "config": {
+      "n_nodes": 5,
+      "train_size": 750
+    },
+    "evaluation": {
+      "rmse_all": 0.00939077977091074,
+      "accuracy_all": 1.0,
+      "pearson_all": 0.9994822144508362,
+      "spearman_all": 0.9938930311790742,
+      "rmse_query": 0.009429567493498325,
+      "accuracy_query": 1.0,
+      "pearson_query": 0.9994276762008667,
+      "spearman_query": 0.9930744532838574,
+      "rmse_latent": 0.009371324442327023,
+      "accuracy_latent": 1.0,
+      "pearson_latent": 0.9995064735412598,
+      "spearman_latent": 0.994160156932124
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.0002462949071611677,
+      "std_kl_divergence": 5.359080691300979e-05,
+      "mean_entropy_ratio": 1.00047424861363,
+      "kl_distribution": [
+        0.000347137451171875,
+        0.00018924474716186523,
+        0.0002402663230895996,
+        0.0002517104148864746,
+        0.00025665760040283203,
+        0.00026988983154296875,
+        0.0001691579818725586
+      ]
+    },
+    "timing": {
+      "model_time_mean": 8.91759991645813e-05,
+      "model_time_std": 7.078051567077637e-07,
+      "ve_time_mean": 0.000587921142578125,
+      "ve_time_std": 0.00012784205936318684,
+      "speedup": 6.592818113459772
+    },
+    "model_params": 213431
+  },
+  "5_1000": {
+    "config": {
+      "n_nodes": 5,
+      "train_size": 1000
+    },
+    "evaluation": {
+      "rmse_all": 0.0049628764390945435,
+      "accuracy_all": 1.0,
+      "pearson_all": 0.9998457431793213,
+      "spearman_all": 0.9942106776099726,
+      "rmse_query": 0.0047879815101623535,
+      "accuracy_query": 1.0,
+      "pearson_query": 0.9998459815979004,
+      "spearman_query": 0.9930703682543354,
+      "rmse_latent": 0.005048052407801151,
+      "accuracy_latent": 1.0,
+      "pearson_latent": 0.9998457431793213,
+      "spearman_latent": 0.9946972587548342
+    },
+    "consistency": {
+      "mean_kl_divergence": 6.889445441109794e-05,
+      "std_kl_divergence": 1.0149176582718634e-05,
+      "mean_entropy_ratio": 1.00013267993927,
+      "kl_distribution": [
+        8.612871170043945e-05,
+        6.669759750366211e-05,
+        6.121397018432617e-05,
+        7.581710815429688e-05,
+        7.295608520507812e-05,
+        6.771087646484375e-05,
+        5.173683166503906e-05
+      ]
+    },
+    "timing": {
+      "model_time_mean": 8.02166759967804e-05,
+      "model_time_std": 1.0021030902862549e-06,
+      "ve_time_mean": 0.0005756473541259766,
+      "ve_time_std": 0.0001276914635958394,
+      "speedup": 7.176155668044397
+    },
+    "model_params": 213431
+  },
+  "5_1500": {
+    "config": {
+      "n_nodes": 5,
+      "train_size": 1500
+    },
+    "evaluation": {
+      "rmse_all": 0.004505333956331015,
+      "accuracy_all": 1.0,
+      "pearson_all": 0.9998751282691956,
+      "spearman_all": 0.9941768258569407,
+      "rmse_query": 0.0043466114439070225,
+      "accuracy_query": 1.0,
+      "pearson_query": 0.9998727440834045,
+      "spearman_query": 0.993374966294541,
+      "rmse_latent": 0.004582634195685387,
+      "accuracy_latent": 1.0,
+      "pearson_latent": 0.9998763799667358,
+      "spearman_latent": 0.994313863092207
+    },
+    "consistency": {
+      "mean_kl_divergence": 5.7756900787353516e-05,
+      "std_kl_divergence": 1.0154254601311232e-05,
+      "mean_entropy_ratio": 1.000111494745527,
+      "kl_distribution": [
+        6.777048110961914e-05,
+        5.46574592590332e-05,
+        4.464387893676758e-05,
+        6.508827209472656e-05,
+        7.176399230957031e-05,
+        4.404783248901367e-05,
+        5.632638931274414e-05
+      ]
+    },
+    "timing": {
+      "model_time_mean": 8.21240246295929e-05,
+      "model_time_std": 2.0675361156463623e-06,
+      "ve_time_mean": 0.0005825519561767578,
+      "ve_time_std": 0.0001293783115143648,
+      "speedup": 7.093563166250851
+    },
+    "model_params": 213431
+  },
+  "5_2000": {
+    "config": {
+      "n_nodes": 5,
+      "train_size": 2000
+    },
+    "evaluation": {
+      "rmse_all": 0.004390672314912081,
+      "accuracy_all": 1.0,
+      "pearson_all": 0.999884843826294,
+      "spearman_all": 0.9963780172929602,
+      "rmse_query": 0.004514303524047136,
+      "accuracy_query": 1.0,
+      "pearson_query": 0.9998711347579956,
+      "spearman_query": 0.9954992662740281,
+      "rmse_latent": 0.00432753236964345,
+      "accuracy_latent": 1.0,
+      "pearson_latent": 0.9998911619186401,
+      "spearman_latent": 0.9967323336444264
+    },
+    "consistency": {
+      "mean_kl_divergence": 5.552598408290318e-05,
+      "std_kl_divergence": 8.095070495510165e-06,
+      "mean_entropy_ratio": 1.0001070840018136,
+      "kl_distribution": [
+        4.750490188598633e-05,
+        5.0961971282958984e-05,
+        4.315376281738281e-05,
+        6.479024887084961e-05,
+        6.586313247680664e-05,
+        5.561113357543945e-05,
+        6.079673767089844e-05
+      ]
+    },
+    "timing": {
+      "model_time_mean": 8.103623986244202e-05,
+      "model_time_std": 9.94652509689331e-07,
+      "ve_time_mean": 0.0005946826934814454,
+      "ve_time_std": 0.00013060311269273776,
+      "speedup": 7.3384783707994306
+    },
+    "model_params": 213431
+  },
+  "10_100": {
+    "config": {
+      "n_nodes": 10,
+      "train_size": 100
+    },
+    "evaluation": {
+      "rmse_all": 0.21558766067028046,
+      "accuracy_all": 0.8349999785423279,
+      "pearson_all": 0.7286036014556885,
+      "spearman_all": 0.7288931349056841,
+      "rmse_query": 0.19823645055294037,
+      "accuracy_query": 0.8550000190734863,
+      "pearson_query": 0.7573843598365784,
+      "spearman_query": 0.7561141560053156,
+      "rmse_latent": 0.21971145272254944,
+      "accuracy_latent": 0.8299999833106995,
+      "pearson_latent": 0.721949577331543,
+      "spearman_latent": 0.7214435104968823
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.12393133555139814,
+      "std_kl_divergence": 0.013660222144021478,
+      "mean_entropy_ratio": 1.2718582153320312,
+      "kl_distribution": [
+        0.10199940204620361,
+        0.13222810626029968,
+        0.11022356152534485,
+        0.12314870953559875,
+        0.1439870297908783,
+        0.11980974674224854,
+        0.13612279295921326
+      ]
+    },
+    "timing": {
+      "model_time_mean": 9.340792894363403e-05,
+      "model_time_std": 7.450580596923828e-08,
+      "ve_time_mean": 0.0011515522003173828,
+      "ve_time_std": 0.0002327574487983819,
+      "speedup": 12.328206109914653
+    },
+    "model_params": 450868
+  },
+  "10_500": {
+    "config": {
+      "n_nodes": 10,
+      "train_size": 500
+    },
+    "evaluation": {
+      "rmse_all": 0.192690908908844,
+      "accuracy_all": 0.7459999918937683,
+      "pearson_all": 0.5798819661140442,
+      "spearman_all": 0.5747604292066442,
+      "rmse_query": 0.19048643112182617,
+      "accuracy_query": 0.7450000047683716,
+      "pearson_query": 0.5759826302528381,
+      "spearman_query": 0.5858803214236203,
+      "rmse_latent": 0.19323810935020447,
+      "accuracy_latent": 0.7462499737739563,
+      "pearson_latent": 0.5809409618377686,
+      "spearman_latent": 0.5728109905506928
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.08572199514933995,
+      "std_kl_divergence": 0.00931921114155659,
+      "mean_entropy_ratio": 1.1513138328279768,
+      "kl_distribution": [
+        0.07052260637283325,
+        0.09067285060882568,
+        0.09590226411819458,
+        0.08106833696365356,
+        0.08430933952331543,
+        0.09894543886184692,
+        0.0786331295967102
+      ]
+    },
+    "timing": {
+      "model_time_mean": 9.283050894737244e-05,
+      "model_time_std": 3.5390257835388184e-07,
+      "ve_time_mean": 0.0011172819137573243,
+      "ve_time_std": 0.00027130238053709306,
+      "speedup": 12.035718929331033
+    },
+    "model_params": 337364
+  },
+  "10_750": {
+    "config": {
+      "n_nodes": 10,
+      "train_size": 750
+    },
+    "evaluation": {
+      "rmse_all": 0.041168518364429474,
+      "accuracy_all": 0.9539999961853027,
+      "pearson_all": 0.9848227500915527,
+      "spearman_all": 0.9837958052527487,
+      "rmse_query": 0.0426345132291317,
+      "accuracy_query": 0.9549999833106995,
+      "pearson_query": 0.9831140041351318,
+      "spearman_query": 0.9815718020475505,
+      "rmse_latent": 0.04079379141330719,
+      "accuracy_latent": 0.9537500143051147,
+      "pearson_latent": 0.9852406978607178,
+      "spearman_latent": 0.9842911390174823
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.004501470497676304,
+      "std_kl_divergence": 0.0009103823850040939,
+      "mean_entropy_ratio": 1.0079408543450492,
+      "kl_distribution": [
+        0.003036975860595703,
+        0.0049741268157958984,
+        0.006276965141296387,
+        0.004324734210968018,
+        0.004571080207824707,
+        0.004252970218658447,
+        0.004073441028594971
+      ]
+    },
+    "timing": {
+      "model_time_mean": 9.404122829437256e-05,
+      "model_time_std": 1.862645149230957e-07,
+      "ve_time_mean": 0.0010729265213012696,
+      "ve_time_std": 0.00025307557373059966,
+      "speedup": 11.409107906829346
+    },
+    "model_params": 337364
+  },
+  "10_1000": {
+    "config": {
+      "n_nodes": 10,
+      "train_size": 1000
+    },
+    "evaluation": {
+      "rmse_all": 0.03293181210756302,
+      "accuracy_all": 0.9660000205039978,
+      "pearson_all": 0.9905272722244263,
+      "spearman_all": 0.9897782707386762,
+      "rmse_query": 0.036225154995918274,
+      "accuracy_query": 0.9549999833106995,
+      "pearson_query": 0.9880653619766235,
+      "spearman_query": 0.9863293779506077,
+      "rmse_latent": 0.032055653631687164,
+      "accuracy_latent": 0.96875,
+      "pearson_latent": 0.9911185503005981,
+      "spearman_latent": 0.9907014539865361
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.002967263971056257,
+      "std_kl_divergence": 0.0007606674714456409,
+      "mean_entropy_ratio": 1.0052265269415719,
+      "kl_distribution": [
+        0.0019600987434387207,
+        0.003230571746826172,
+        0.0034648776054382324,
+        0.0028631091117858887,
+        0.004369139671325684,
+        0.0021332502365112305,
+        0.002749800682067871
+      ]
+    },
+    "timing": {
+      "model_time_mean": 9.33818519115448e-05,
+      "model_time_std": 6.146728992462158e-07,
+      "ve_time_mean": 0.0010644960403442382,
+      "ve_time_std": 0.0002485624029148211,
+      "speedup": 11.399388837914389
+    },
+    "model_params": 337364
+  },
+  "10_1500": {
+    "config": {
+      "n_nodes": 10,
+      "train_size": 1500
+    },
+    "evaluation": {
+      "rmse_all": 0.02563907578587532,
+      "accuracy_all": 0.9760000109672546,
+      "pearson_all": 0.9941709637641907,
+      "spearman_all": 0.9937431701823664,
+      "rmse_query": 0.025313634425401688,
+      "accuracy_query": 0.9850000143051147,
+      "pearson_query": 0.9940760135650635,
+      "spearman_query": 0.9938964588101329,
+      "rmse_latent": 0.025719793513417244,
+      "accuracy_latent": 0.9737499952316284,
+      "pearson_latent": 0.9942052364349365,
+      "spearman_latent": 0.9938524279021461
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.001718555177961077,
+      "std_kl_divergence": 0.00048399356391645596,
+      "mean_entropy_ratio": 1.0030275923865182,
+      "kl_distribution": [
+        0.0012268424034118652,
+        0.00274503231048584,
+        0.0017224550247192383,
+        0.001872420310974121,
+        0.0017568469047546387,
+        0.0015145540237426758,
+        0.0011917352676391602
+      ]
+    },
+    "timing": {
+      "model_time_mean": 9.628757834434509e-05,
+      "model_time_std": 8.23289155960083e-07,
+      "ve_time_mean": 0.0010825872421264648,
+      "ve_time_std": 0.0002666793445979692,
+      "speedup": 11.243270011993655
+    },
+    "model_params": 337364
+  },
+  "10_2000": {
+    "config": {
+      "n_nodes": 10,
+      "train_size": 2000
+    },
+    "evaluation": {
+      "rmse_all": 0.022649606689810753,
+      "accuracy_all": 0.9819999933242798,
+      "pearson_all": 0.9956189393997192,
+      "spearman_all": 0.9955352054842392,
+      "rmse_query": 0.02141682244837284,
+      "accuracy_query": 0.9850000143051147,
+      "pearson_query": 0.9958881735801697,
+      "spearman_query": 0.994380804488739,
+      "rmse_latent": 0.022947456687688828,
+      "accuracy_latent": 0.981249988079071,
+      "pearson_latent": 0.9955573678016663,
+      "spearman_latent": 0.9956211480051206
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.001406661101749965,
+      "std_kl_divergence": 0.0002018354833280703,
+      "mean_entropy_ratio": 1.0024803365979875,
+      "kl_distribution": [
+        0.0011123418807983398,
+        0.001507580280303955,
+        0.0013394355773925781,
+        0.001469433307647705,
+        0.001735389232635498,
+        0.0015190839767456055,
+        0.0011633634567260742
+      ]
+    },
+    "timing": {
+      "model_time_mean": 0.00010218098759651184,
+      "model_time_std": 9.723007678985596e-07,
+      "ve_time_mean": 0.001078653335571289,
+      "ve_time_std": 0.0002554850063545774,
+      "speedup": 10.556301724452222
+    },
+    "model_params": 337364
+  },
+  "15_100": {
+    "config": {
+      "n_nodes": 15,
+      "train_size": 100
+    },
+    "evaluation": {
+      "rmse_all": 0.2228545844554901,
+      "accuracy_all": 0.699999988079071,
+      "pearson_all": 0.6427161693572998,
+      "spearman_all": 0.620445840395446,
+      "rmse_query": 0.22450250387191772,
+      "accuracy_query": 0.7200000286102295,
+      "pearson_query": 0.6512517333030701,
+      "spearman_query": 0.6321030850226683,
+      "rmse_latent": 0.22230254113674164,
+      "accuracy_latent": 0.6933333277702332,
+      "pearson_latent": 0.640148401260376,
+      "spearman_latent": 0.6165160344407273
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.1244409510067531,
+      "std_kl_divergence": 0.01452743405260157,
+      "mean_entropy_ratio": 1.251008323260716,
+      "kl_distribution": [
+        0.13313961029052734,
+        0.1057577133178711,
+        0.11939817667007446,
+        0.12430429458618164,
+        0.12219798564910889,
+        0.11228042840957642,
+        0.15400844812393188
+      ]
+    },
+    "timing": {
+      "model_time_mean": 0.00010813027620315552,
+      "model_time_std": 7.674098014831543e-07,
+      "ve_time_mean": 0.0017391395568847655,
+      "ve_time_std": 0.0003750682367492053,
+      "speedup": 16.08374285123682
+    },
+    "model_params": 11810153
+  },
+  "15_500": {
+    "config": {
+      "n_nodes": 15,
+      "train_size": 500
+    },
+    "evaluation": {
+      "rmse_all": 0.05636133998632431,
+      "accuracy_all": 0.9474999904632568,
+      "pearson_all": 0.9780905246734619,
+      "spearman_all": 0.9779479914304564,
+      "rmse_query": 0.05444672331213951,
+      "accuracy_query": 0.9524999856948853,
+      "pearson_query": 0.9802549481391907,
+      "spearman_query": 0.9803218225767004,
+      "rmse_latent": 0.05698525160551071,
+      "accuracy_latent": 0.9458333253860474,
+      "pearson_latent": 0.9773643612861633,
+      "spearman_latent": 0.9771581964762749
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.009035187108176095,
+      "std_kl_divergence": 0.00047066657088093796,
+      "mean_entropy_ratio": 1.0171807663781303,
+      "kl_distribution": [
+        0.00970005989074707,
+        0.009002208709716797,
+        0.009107410907745361,
+        0.008924305438995361,
+        0.0088309645652771,
+        0.009538054466247559,
+        0.008143305778503418
+      ]
+    },
+    "timing": {
+      "model_time_mean": 0.00011512264609336853,
+      "model_time_std": 1.3597309589385986e-06,
+      "ve_time_mean": 0.0018706274032592772,
+      "ve_time_std": 0.00044877089680822856,
+      "speedup": 16.24899589036663
+    },
+    "model_params": 11810153
+  },
+  "15_750": {
+    "config": {
+      "n_nodes": 15,
+      "train_size": 750
+    },
+    "evaluation": {
+      "rmse_all": 0.044452130794525146,
+      "accuracy_all": 0.9568750262260437,
+      "pearson_all": 0.9865877032279968,
+      "spearman_all": 0.9864377104284685,
+      "rmse_query": 0.04337392747402191,
+      "accuracy_query": 0.9599999785423279,
+      "pearson_query": 0.9875468611717224,
+      "spearman_query": 0.9871425751226155,
+      "rmse_latent": 0.04480576887726784,
+      "accuracy_latent": 0.9558333158493042,
+      "pearson_latent": 0.9862577319145203,
+      "spearman_latent": 0.986175825289246
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.005689518792288644,
+      "std_kl_divergence": 0.0004445903252948154,
+      "mean_entropy_ratio": 1.010817629950387,
+      "kl_distribution": [
+        0.005474686622619629,
+        0.006313323974609375,
+        0.006222844123840332,
+        0.005603611469268799,
+        0.004961550235748291,
+        0.005382061004638672,
+        0.00586855411529541
+      ]
+    },
+    "timing": {
+      "model_time_mean": 0.00011025741696357727,
+      "model_time_std": 4.880130290985107e-07,
+      "ve_time_mean": 0.0018743324279785157,
+      "ve_time_std": 0.0004368010673299933,
+      "speedup": 16.99960401392033
+    },
+    "model_params": 11810153
+  },
+  "15_1000": {
+    "config": {
+      "n_nodes": 15,
+      "train_size": 1000
+    },
+    "evaluation": {
+      "rmse_all": 0.046106304973363876,
+      "accuracy_all": 0.9624999761581421,
+      "pearson_all": 0.9860302209854126,
+      "spearman_all": 0.9858303460129916,
+      "rmse_query": 0.04539865627884865,
+      "accuracy_query": 0.9599999785423279,
+      "pearson_query": 0.9868340492248535,
+      "spearman_query": 0.9864176981914977,
+      "rmse_latent": 0.04633978754281998,
+      "accuracy_latent": 0.9633333086967468,
+      "pearson_latent": 0.9857522249221802,
+      "spearman_latent": 0.9856549899494372
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.0057604823793683734,
+      "std_kl_divergence": 0.0006972143037238802,
+      "mean_entropy_ratio": 1.0109525748661585,
+      "kl_distribution": [
+        0.006137967109680176,
+        0.004927694797515869,
+        0.00640869140625,
+        0.006100714206695557,
+        0.006103932857513428,
+        0.006196439266204834,
+        0.00444793701171875
+      ]
+    },
+    "timing": {
+      "model_time_mean": 0.00011808425188064575,
+      "model_time_std": 5.21540641784668e-08,
+      "ve_time_mean": 0.0018914461135864258,
+      "ve_time_std": 0.0004288457038645799,
+      "speedup": 16.017767682503628
+    },
+    "model_params": 11810153
+  },
+  "15_1500": {
+    "config": {
+      "n_nodes": 15,
+      "train_size": 1500
+    },
+    "evaluation": {
+      "rmse_all": 0.037069372832775116,
+      "accuracy_all": 0.9693750143051147,
+      "pearson_all": 0.9907386302947998,
+      "spearman_all": 0.9904947241378329,
+      "rmse_query": 0.03893396258354187,
+      "accuracy_query": 0.9700000286102295,
+      "pearson_query": 0.9902013540267944,
+      "spearman_query": 0.9900820907661707,
+      "rmse_latent": 0.036426641047000885,
+      "accuracy_latent": 0.9691666960716248,
+      "pearson_latent": 0.9909355640411377,
+      "spearman_latent": 0.990693179196692
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.003668291228158133,
+      "std_kl_divergence": 0.000724171623707005,
+      "mean_entropy_ratio": 1.0069696392331804,
+      "kl_distribution": [
+        0.002866029739379883,
+        0.0035866498947143555,
+        0.005085110664367676,
+        0.003172457218170166,
+        0.003503859043121338,
+        0.0043370723724365234,
+        0.003126859664916992
+      ]
+    },
+    "timing": {
+      "model_time_mean": 0.00010687485337257385,
+      "model_time_std": 9.57399606704712e-07,
+      "ve_time_mean": 0.0018842792510986328,
+      "ve_time_std": 0.00044178138865217607,
+      "speedup": 17.6307072397086
+    },
+    "model_params": 11810153
+  },
+  "15_2000": {
+    "config": {
+      "n_nodes": 15,
+      "train_size": 2000
+    },
+    "evaluation": {
+      "rmse_all": 0.04048909246921539,
+      "accuracy_all": 0.9668750166893005,
+      "pearson_all": 0.9888426661491394,
+      "spearman_all": 0.98855942624942,
+      "rmse_query": 0.04113266244530678,
+      "accuracy_query": 0.9750000238418579,
+      "pearson_query": 0.9889376163482666,
+      "spearman_query": 0.9881573043884184,
+      "rmse_latent": 0.04027228057384491,
+      "accuracy_latent": 0.9641666412353516,
+      "pearson_latent": 0.9888230562210083,
+      "spearman_latent": 0.9886661633875291
+    },
+    "consistency": {
+      "mean_kl_divergence": 0.004403344222477504,
+      "std_kl_divergence": 0.000597812533080967,
+      "mean_entropy_ratio": 1.0083725111825126,
+      "kl_distribution": [
+        0.004385888576507568,
+        0.005610048770904541,
+        0.0045127272605896,
+        0.004353702068328857,
+        0.004546105861663818,
+        0.003852248191833496,
+        0.0035626888275146484
+      ]
+    },
+    "timing": {
+      "model_time_mean": 0.00010791793465614319,
+      "model_time_std": 7.7858567237854e-07,
+      "ve_time_mean": 0.001854543685913086,
+      "ve_time_std": 0.0004351211579646169,
+      "speedup": 17.184758880182265
+    },
+    "model_params": 11810153
+  }
+}

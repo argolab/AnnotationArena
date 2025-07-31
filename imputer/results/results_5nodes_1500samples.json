@@ -1,0 +1,42 @@
+{
+  "config": {
+    "n_nodes": 5,
+    "train_size": 1500
+  },
+  "evaluation": {
+    "rmse_all": 0.004505333956331015,
+    "accuracy_all": 1.0,
+    "pearson_all": 0.9998751282691956,
+    "spearman_all": 0.9941768258569407,
+    "rmse_query": 0.0043466114439070225,
+    "accuracy_query": 1.0,
+    "pearson_query": 0.9998727440834045,
+    "spearman_query": 0.993374966294541,
+    "rmse_latent": 0.004582634195685387,
+    "accuracy_latent": 1.0,
+    "pearson_latent": 0.9998763799667358,
+    "spearman_latent": 0.994313863092207
+  },
+  "consistency": {
+    "mean_kl_divergence": 5.7756900787353516e-05,
+    "std_kl_divergence": 1.0154254601311232e-05,
+    "mean_entropy_ratio": 1.000111494745527,
+    "kl_distribution": [
+      6.777048110961914e-05,
+      5.46574592590332e-05,
+      4.464387893676758e-05,
+      6.508827209472656e-05,
+      7.176399230957031e-05,
+      4.404783248901367e-05,
+      5.632638931274414e-05
+    ]
+  },
+  "timing": {
+    "model_time_mean": 8.21240246295929e-05,
+    "model_time_std": 2.0675361156463623e-06,
+    "ve_time_mean": 0.0005825519561767578,
+    "ve_time_std": 0.0001293783115143648,
+    "speedup": 7.093563166250851
+  },
+  "model_params": 213431
+}

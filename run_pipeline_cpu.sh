@@ -6,9 +6,9 @@
 
 #SBATCH --job-name=ActiveLearner
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=12GB
+#SBATCH --mem-per-cpu=32GB
 #SBATCH --gpus=1
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu-a100
 #SBATCH --account=a100acct
 #SBATCH --mail-user="psingh54@jhu.edu"
 
@@ -17,4 +17,4 @@ module load cuda/12.1
 
 conda activate llm_rubric_env
 
-python src/conformal.py
+python /export/fs06/psingh54/AnnotationArena/imputer/ve_graph_imputation.py

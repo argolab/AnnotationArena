@@ -174,17 +174,22 @@ class EncoderLayer(nn.Module):
         self.out = nn.Linear(feature_dim, feature_dim)
         
         # Query stream processing
-        self.query_Q = nn.Linear(2, 2)
-        self.query_K = nn.Linear(2, 2)
-        self.query_V = nn.Linear(2, 2)
-        self.query_out = nn.Linear(2, 2)
+        # self.query_Q = nn.Linear(2, 2)
+        # self.query_K = nn.Linear(2, 2)
+        # self.query_V = nn.Linear(2, 2)
+        # self.query_out = nn.Linear(2, 2)
         
         self.norm_1 = NormLayer(feature_dim)
         self.norm_2 = NormLayer(feature_dim)
-        self.norm_query = NormLayer(2)
+
+        self.query_update = nn.Linear(feature_dim + 2, 2)
+
+        # self.norm_query = NormLayer(2)
+
         self.dropout_1 = nn.Dropout(dropout)
         self.dropout_2 = nn.Dropout(dropout)
-        self.dropout_query = nn.Dropout(dropout)
+
+        # self.dropout_query = nn.Dropout(dropout)
         
         self.ff = FeedForward(feature_dim, dropout=dropout)
         self.param_update = nn.Linear(feature_dim + param_dim, param_dim)
@@ -234,13 +239,17 @@ class EncoderLayer(nn.Module):
         feature_x = feature_x + self.dropout_2(self.ff(feature_x_ff))
         
         # Query stream self-attention
-        query_x_norm = self.norm_query(query_x)
-        query_attention_output = self.query_attention(query_x_norm)
-        query_x = query_x + self.dropout_query(query_attention_output)
+        # query_x_norm = self.norm_query(query_x)
+        # query_attention_output = self.query_attention(query_x_norm)
+        # query_x = query_x + self.dropout_query(query_attention_output)
         
-        query_x_norm = self.norm_query(query_x)
-        query_attention_output = self.query_attention(query_x_norm)
-        query_x = query_x + self.dropout_query(query_attention_output)
+        # query_x_norm = self.norm_query(query_x)
+        # query_attention_output = self.query_attention(query_x_norm)
+        # query_x = query_x + self.dropout_query(query_attention_output)
+
+        # Query update using feature context
+        query_combined = torch.cat([feature_x, query_x], dim=-1)
+        query_x = self.query_update(query_combined)
 
         # Param update and smoothing
         combined = torch.cat([feature_x, param_x], dim=-1)
@@ -787,7 +796,7 @@ class ImputerEmbedding(nn.Module):
                     expected_kl_per_position = -(current_pred_dist * log_probs_missing).sum(dim=-1)
                     expected_loss = expected_kl_per_position.mean()
                 
-                main_loss = supervised_loss
+                main_loss = supervised_loss + (0*expected_loss)
                 
                 query_loss = torch.tensor(0.0, device=self.device)
                 if len(batch_examples) > 0:
