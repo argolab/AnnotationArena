@@ -65,15 +65,16 @@ def convert_training_data_for_pgmpy(train_data: List[Tuple], n_nodes: int) -> pd
     print(f"DEBUG: Sample of raw data:")
     print(df.head(3))
     
-    # CRITICAL FIX: Use nullable integer format instead of categorical for EM compatibility
-    print(f"DEBUG: Converting to nullable integer format for EM compatibility...")
+    # CRITICAL FIX: Use float with np.nan for EM compatibility (per pgmpy docs)
+    print(f"DEBUG: Converting to float with np.nan for EM compatibility...")
     for col in df.columns:
-        # Convert to nullable integer type that EM can handle
-        df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+        # Convert to float type with np.nan (as required by pgmpy EM)
+        df[col] = pd.to_numeric(df[col], errors='coerce').astype(float)
     
     print(f"DEBUG: Final DataFrame dtypes: {df.dtypes.to_dict()}")
-    print(f"DEBUG: Sample of converted data:")
+    print(f"DEBUG: Sample of converted data (should show np.nan):")
     print(df.head(3))
+    print(f"DEBUG: Checking for np.nan presence: {df.isnull().sum().to_dict()}")
     
     return df
 
@@ -143,18 +144,29 @@ def learn_domain_specific_model(bn_structure: BayesianNetwork,
     
     try:
         # Step 1: Use EM to handle missing data
+        print(f"DEBUG: Initializing EM with BN structure: {sorted(list(bn_structure.nodes()))}")
+        print(f"DEBUG: Training data columns: {list(training_data.columns)}")
+        print(f"DEBUG: Training data dtypes: {training_data.dtypes.to_dict()}")
+        print(f"DEBUG: Sample training data for EM:")
+        print(training_data.head(5))
+        
         em = ExpectationMaximization(bn_structure, training_data)
         
         # Try different API signatures for different pgmpy versions
         try:
             # Newer API with tol parameter
+            print(f"DEBUG: Attempting EM with max_iter={max_iter}, tol={tol}")
             em_cpds = em.get_parameters(n_jobs=1, max_iter=max_iter, tol=tol)
-        except TypeError:
+        except TypeError as e:
+            print(f"DEBUG: EM with tol failed: {e}")
             # Older API without tol parameter
             try:
+                print(f"DEBUG: Attempting EM with max_iter={max_iter}")
                 em_cpds = em.get_parameters(n_jobs=1, max_iter=max_iter)
-            except TypeError:
+            except TypeError as e:
+                print(f"DEBUG: EM with max_iter failed: {e}")
                 # Even older API with minimal parameters
+                print(f"DEBUG: Attempting EM with minimal parameters")
                 em_cpds = em.get_parameters()
         
         # Create model with EM parameters
