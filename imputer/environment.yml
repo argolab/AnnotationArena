@@ -1,0 +1,22 @@
+name: imputer-env
+channels:
+  - pytorch
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - pytorch
+  - torchvision
+  - torchaudio
+  - numpy
+  - scipy
+  - matplotlib
+  - seaborn
+  - pandas
+  - tqdm
+  - jupyter
+  - networkx
+  - pip
+  - pip:
+    - pgmpy
+    - scikit-learn

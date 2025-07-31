@@ -24,6 +24,15 @@ from pgmpy.models import BayesianNetwork
 from pgmpy.factors.discrete import TabularCPD
 from pgmpy.inference import VariableElimination
 
+# Domain-specific model imports
+from domain_specific_model import (
+    convert_training_data_for_pgmpy,
+    create_bn_structure_from_adjacency,
+    learn_domain_specific_model,
+    evaluate_domain_specific_model,
+    extract_adjacency_from_embeddings
+)
+
 # CONFIGURATION
 GRAPH_SIZES = [5, 10, 15]
 TRAINING_SIZES = [100, 500, 750, 1000, 1500, 2000]
@@ -42,12 +51,14 @@ if torch.cuda.is_available():
     torch.cuda.manual_seed(42)
     torch.cuda.manual_seed_all(42)
 
-# Create directories
-os.makedirs('/export/fs06/psingh54/AnnotationArena/imputer/outputs/GRAPH_EXP', exist_ok=True)
-os.makedirs('/export/fs06/psingh54/AnnotationArena/imputer/models', exist_ok=True)
-os.makedirs('/export/fs06/psingh54/AnnotationArena/imputer/results', exist_ok=True)
+# Create directories - use relative paths for local development
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+os.makedirs(os.path.join(BASE_DIR, 'outputs', 'GRAPH_EXP'), exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, 'models'), exist_ok=True)
+os.makedirs(os.path.join(BASE_DIR, 'results'), exist_ok=True)
 
 print(f"Using device: {DEVICE}")
+print(f"Base directory: {BASE_DIR}")
 
 # ================================= ARCHITECTURE =================================
 
@@ -407,11 +418,11 @@ def create_model(n_nodes, input_dim, embedding_dim):
     """Create model with architecture scaled based on graph size."""
     
     # Scale architecture based on graph complexity
-    if n_nodes < 30:
+    if n_nodes <= 10:
         hidden_dim_base = 64
         attention_heads = 4
         encoder_layers = 4
-    elif n_nodes >= 30:
+    else:  # 15+ nodes
         hidden_dim_base = 128
         attention_heads = 8
         encoder_layers = 6
@@ -453,7 +464,7 @@ def train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=1
         if val_loss < best_val_loss:
             best_val_loss = val_loss
             patience_counter = 0
-            torch.save(model.state_dict(), f'/export/fs06/psingh54/AnnotationArena/imputer/models/temp_best_model.pth')
+            torch.save(model.state_dict(), os.path.join(BASE_DIR, 'models', 'temp_best_model.pth'))
         else:
             patience_counter += 1
             
@@ -461,7 +472,7 @@ def train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=1
             break
     
     # Load best model
-    model.load_state_dict(torch.load('/export/fs06/psingh54/AnnotationArena/imputer/models/temp_best_model.pth'))
+    model.load_state_dict(torch.load(os.path.join(BASE_DIR, 'models', 'temp_best_model.pth')))
     return model
 
 # ================================= DATA GENERATION =================================
@@ -870,34 +881,70 @@ def run_single_experiment(n_nodes, train_size):
     model = train_model(model, train_loader, test_loader, epochs=100, lr=1e-4, patience=15)
     
     # Comprehensive evaluation
-    print("Evaluating model...")
+    print("Evaluating neural imputer...")
     eval_results = comprehensive_evaluation(model, test_loader, bn)
     consistency_results = consistency_check(model, test_loader)
     timing_results = time_inference(model, test_loader, bn, n_samples=50)
     
+    # Domain-specific model evaluation
+    print("Training and evaluating domain-specific model...")
+    try:
+        # Convert training data for pgmpy
+        pgmpy_train_data = convert_training_data_for_pgmpy(train_data, n_nodes)
+        
+        # Extract adjacency matrix and create BN structure
+        adj_matrix = extract_adjacency_from_embeddings(param_embeddings, n_nodes)
+        bn_structure = create_bn_structure_from_adjacency(adj_matrix)
+        
+        # Learn domain-specific model
+        domain_model = learn_domain_specific_model(bn_structure, pgmpy_train_data, N_STATES)
+        
+        # Evaluate domain-specific model
+        domain_results = evaluate_domain_specific_model(domain_model, test_data, n_nodes, N_STATES)
+        
+    except Exception as e:
+        print(f"Domain-specific model failed: {e}")
+        domain_results = {
+            'mean_kl': float('inf'),
+            'std_kl': 0.0,
+            'mean_error': float('inf'),
+            'failed_rate': 1.0,
+            'n_evaluations': 0,
+            'kl_distribution': []
+        }
+    
     # Combine results
     results = {
         'config': {'n_nodes': n_nodes, 'train_size': train_size},
-        'evaluation': eval_results,
-        'consistency': consistency_results,
-        'timing': timing_results,
-        'model_params': sum(p.numel() for p in model.parameters())
+        'neural_imputer': {
+            'evaluation': eval_results,
+            'consistency': consistency_results,
+            'timing': timing_results,
+            'model_params': sum(p.numel() for p in model.parameters())
+        },
+        'domain_specific': domain_results,
+        'comparison': {
+            'neural_kl': consistency_results.get('mean_kl_divergence', float('inf')),
+            'domain_kl': domain_results.get('mean_kl', float('inf')),
+            'kl_ratio': (consistency_results.get('mean_kl_divergence', float('inf')) / 
+                        (domain_results.get('mean_kl', float('inf')) + 1e-10))
+        }
     }
     
     # Convert to JSON serializable format
     results = convert_to_json_serializable(results)
     
     # Save model and results
-    model_path = f'/export/fs06/psingh54/AnnotationArena/imputer/models/model_{n_nodes}nodes_{train_size}samples.pth'
+    model_path = os.path.join(BASE_DIR, 'models', f'model_{n_nodes}nodes_{train_size}samples.pth')
     torch.save(model.state_dict(), model_path)
     
-    results_path = f'/export/fs06/psingh54/AnnotationArena/imputer/results/results_{n_nodes}nodes_{train_size}samples.json'
+    results_path = os.path.join(BASE_DIR, 'results', f'results_{n_nodes}nodes_{train_size}samples.json')
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2)
     
-    print(f"Results: RMSE={eval_results.get('rmse_all', 0):.4f}, "
-          f"Accuracy={eval_results.get('accuracy_all', 0):.4f}, "
-          f"Speedup={timing_results.get('speedup', 1):.1f}x")
+    print(f"Results: Neural KL={consistency_results.get('mean_kl_divergence', 0):.4f}, "
+          f"Domain KL={domain_results.get('mean_kl', 0):.4f}, "
+          f"KL Ratio={results['comparison']['kl_ratio']:.2f}")
     
     del model, train_loader, test_loader, train_dataset, test_dataset
     del train_data, test_data, bn, param_embeddings
@@ -927,87 +974,86 @@ def generate_plots(all_results):
         size_results = results_by_size[n_nodes]
         train_sizes = sorted(size_results.keys())
         
-        # Extract metrics
-        rmse_all = [size_results[ts]['evaluation'].get('rmse_all', 0) for ts in train_sizes]
-        rmse_query = [size_results[ts]['evaluation'].get('rmse_query', 0) for ts in train_sizes]
-        rmse_latent = [size_results[ts]['evaluation'].get('rmse_latent', 0) for ts in train_sizes]
+        # Extract neural imputer metrics
+        rmse_all = [size_results[ts]['neural_imputer']['evaluation'].get('rmse_all', 0) for ts in train_sizes]
+        rmse_query = [size_results[ts]['neural_imputer']['evaluation'].get('rmse_query', 0) for ts in train_sizes]
+        rmse_latent = [size_results[ts]['neural_imputer']['evaluation'].get('rmse_latent', 0) for ts in train_sizes]
         
-        acc_all = [size_results[ts]['evaluation'].get('accuracy_all', 0) for ts in train_sizes]
-        acc_query = [size_results[ts]['evaluation'].get('accuracy_query', 0) for ts in train_sizes]
-        acc_latent = [size_results[ts]['evaluation'].get('accuracy_latent', 0) for ts in train_sizes]
+        # Extract KL metrics for comparison
+        neural_kl = [size_results[ts]['neural_imputer']['consistency'].get('mean_kl_divergence', 0) for ts in train_sizes]
+        domain_kl = [size_results[ts]['domain_specific'].get('mean_kl', float('inf')) for ts in train_sizes]
         
-        speedup = [size_results[ts]['timing'].get('speedup', 1) for ts in train_sizes]
+        # Pearson correlation
+        pearson_all = [size_results[ts]['neural_imputer']['evaluation'].get('pearson_all', 0) for ts in train_sizes]
+        pearson_query = [size_results[ts]['neural_imputer']['evaluation'].get('pearson_query', 0) for ts in train_sizes]
+        pearson_latent = [size_results[ts]['neural_imputer']['evaluation'].get('pearson_latent', 0) for ts in train_sizes]
         
-        # Create plots
-        fig, axes = plt.subplots(2, 3, figsize=(18, 12))
+        # Create plots (2x2 layout)
+        fig, axes = plt.subplots(2, 2, figsize=(15, 12))
         fig.suptitle(f'Graph Imputation Results - {n_nodes} Nodes', fontsize=16)
         
-        # RMSE plots
-        axes[0, 0].plot(train_sizes, rmse_all, 'o-', label='All Unobserved', linewidth=2)
-        axes[0, 0].plot(train_sizes, rmse_query, 's-', label='Query Nodes', linewidth=2)
-        axes[0, 0].plot(train_sizes, rmse_latent, '^-', label='Latent Nodes', linewidth=2)
+        # RMSE plot (Neural Imputer only)
+        axes[0, 0].plot(train_sizes, rmse_all, 'o-', label='All Unobserved', linewidth=2, color='blue')
+        axes[0, 0].plot(train_sizes, rmse_query, 's-', label='Query Nodes', linewidth=2, color='orange')
+        axes[0, 0].plot(train_sizes, rmse_latent, '^-', label='Latent Nodes', linewidth=2, color='green')
         axes[0, 0].set_xlabel('Training Samples')
         axes[0, 0].set_ylabel('RMSE')
-        axes[0, 0].set_title('RMSE vs Training Size')
+        axes[0, 0].set_title('Neural Imputer: RMSE vs Training Size')
         axes[0, 0].legend()
         axes[0, 0].grid(True, alpha=0.3)
         
-        # Accuracy plots
-        axes[0, 1].plot(train_sizes, acc_all, 'o-', label='All Unobserved', linewidth=2)
-        axes[0, 1].plot(train_sizes, acc_query, 's-', label='Query Nodes', linewidth=2)
-        axes[0, 1].plot(train_sizes, acc_latent, '^-', label='Latent Nodes', linewidth=2)
+        # KL Divergence Comparison (Neural vs Domain-specific)
+        # Filter out infinite values for plotting
+        neural_kl_clean = [kl if kl != float('inf') else np.nan for kl in neural_kl]
+        domain_kl_clean = [kl if kl != float('inf') else np.nan for kl in domain_kl]
+        
+        axes[0, 1].plot(train_sizes, neural_kl_clean, 'o-', label='Neural Imputer', linewidth=2, color='red')
+        axes[0, 1].plot(train_sizes, domain_kl_clean, 's-', label='Domain-specific BN', linewidth=2, color='blue')
         axes[0, 1].set_xlabel('Training Samples')
-        axes[0, 1].set_ylabel('Accuracy')
-        axes[0, 1].set_title('Accuracy vs Training Size')
+        axes[0, 1].set_ylabel('KL Divergence')
+        axes[0, 1].set_title('KL Divergence vs Training Size')
         axes[0, 1].legend()
         axes[0, 1].grid(True, alpha=0.3)
+        axes[0, 1].set_yscale('log')  # Log scale for better visualization
         
-        # Speedup plot
-        axes[0, 2].plot(train_sizes, speedup, 'o-', color='green', linewidth=2)
-        axes[0, 2].set_xlabel('Training Samples')
-        axes[0, 2].set_ylabel('Speedup vs Variable Elimination')
-        axes[0, 2].set_title('Computational Efficiency')
-        axes[0, 2].grid(True, alpha=0.3)
-        
-        # KL Distribution
-        kl_dists = []
+        # KL Distribution Histogram (both models)
+        neural_kl_dists = []
+        domain_kl_dists = []
         for ts in train_sizes:
-            kl_dist = size_results[ts]['consistency'].get('kl_distribution', [])
-            kl_dists.extend(kl_dist)
+            # Neural imputer KL distribution
+            neural_dist = size_results[ts]['neural_imputer']['consistency'].get('kl_distribution', [])
+            neural_kl_dists.extend(neural_dist)
+            
+            # Domain-specific KL distribution
+            domain_dist = size_results[ts]['domain_specific'].get('kl_distribution', [])
+            if domain_dist:  # Only if we have valid results
+                domain_kl_dists.extend(domain_dist)
         
-        if kl_dists:
-            axes[1, 0].hist(kl_dists, bins=30, alpha=0.7, color='skyblue', edgecolor='black')
-            axes[1, 0].axvline(np.mean(kl_dists), color='red', linestyle='--', label=f'Mean: {np.mean(kl_dists):.4f}')
-            axes[1, 0].set_xlabel('KL Divergence')
-            axes[1, 0].set_ylabel('Frequency')
-            axes[1, 0].set_title('KL Divergence Distribution')
-            axes[1, 0].legend()
-            axes[1, 0].grid(True, alpha=0.3)
+        if neural_kl_dists:
+            axes[1, 0].hist(neural_kl_dists, bins=30, alpha=0.6, color='red', 
+                           label=f'Neural (μ={np.mean(neural_kl_dists):.3f})', edgecolor='black')
+        if domain_kl_dists:
+            axes[1, 0].hist(domain_kl_dists, bins=30, alpha=0.6, color='blue',
+                           label=f'Domain-specific (μ={np.mean(domain_kl_dists):.3f})', edgecolor='black')
         
-        # Pearson correlation
-        pearson_all = [size_results[ts]['evaluation'].get('pearson_all', 0) for ts in train_sizes]
-        pearson_query = [size_results[ts]['evaluation'].get('pearson_query', 0) for ts in train_sizes]
-        pearson_latent = [size_results[ts]['evaluation'].get('pearson_latent', 0) for ts in train_sizes]
+        axes[1, 0].set_xlabel('KL Divergence')
+        axes[1, 0].set_ylabel('Frequency')
+        axes[1, 0].set_title('KL Divergence Distribution')
+        axes[1, 0].legend()
+        axes[1, 0].grid(True, alpha=0.3)
         
-        axes[1, 1].plot(train_sizes, pearson_all, 'o-', label='All Unobserved', linewidth=2)
-        axes[1, 1].plot(train_sizes, pearson_query, 's-', label='Query Nodes', linewidth=2)
-        axes[1, 1].plot(train_sizes, pearson_latent, '^-', label='Latent Nodes', linewidth=2)
+        # Pearson correlation (Neural Imputer)
+        axes[1, 1].plot(train_sizes, pearson_all, 'o-', label='All Unobserved', linewidth=2, color='blue')
+        axes[1, 1].plot(train_sizes, pearson_query, 's-', label='Query Nodes', linewidth=2, color='orange')
+        axes[1, 1].plot(train_sizes, pearson_latent, '^-', label='Latent Nodes', linewidth=2, color='green')
         axes[1, 1].set_xlabel('Training Samples')
         axes[1, 1].set_ylabel('Pearson Correlation')
-        axes[1, 1].set_title('Pearson Correlation vs Training Size')
+        axes[1, 1].set_title('Neural Imputer: Pearson Correlation vs Training Size')
         axes[1, 1].legend()
         axes[1, 1].grid(True, alpha=0.3)
         
-        # Model parameters vs performance
-        model_params = [size_results[ts]['model_params'] for ts in train_sizes]
-        axes[1, 2].scatter(model_params, rmse_all, alpha=0.7, s=60)
-        axes[1, 2].set_xlabel('Model Parameters')
-        axes[1, 2].set_ylabel('RMSE')
-        axes[1, 2].set_title('Model Size vs Performance')
-        axes[1, 2].grid(True, alpha=0.3)
-        
         plt.tight_layout()
-        plt.savefig(f'/export/fs06/psingh54/AnnotationArena/imputer/results/results_{n_nodes}_nodes.png', dpi=300, bbox_inches='tight')
+        plt.savefig(os.path.join(BASE_DIR, 'results', f'results_{n_nodes}_nodes.png'), dpi=300, bbox_inches='tight')
         plt.show()
 
 def main():
@@ -1025,7 +1071,7 @@ def main():
                 if results:
                     all_results[(n_nodes, train_size)] = results
                     
-                    with open('/export/fs06/psingh54/AnnotationArena/imputer/results/all_results_intermediate.json', 'w') as f:
+                    with open(os.path.join(BASE_DIR, 'results', 'all_results_intermediate.json'), 'w') as f:
                         json_results = {f"{k[0]}_{k[1]}": convert_to_json_serializable(v) for k, v in all_results.items()}
                         json.dump(json_results, f, indent=2)
                         
@@ -1039,7 +1085,7 @@ def main():
     generate_plots(all_results)
     
     # Save final results
-    with open('/export/fs06/psingh54/AnnotationArena/imputer/results/all_results_final.json', 'w') as f:
+    with open(os.path.join(BASE_DIR, 'results', 'all_results_final.json'), 'w') as f:
         json_results = {f"{k[0]}_{k[1]}": convert_to_json_serializable(v) for k, v in all_results.items()}
         json.dump(json_results, f, indent=2)
     
