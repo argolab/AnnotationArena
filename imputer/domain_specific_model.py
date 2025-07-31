@@ -62,10 +62,18 @@ def convert_training_data_for_pgmpy(train_data: List[Tuple], n_nodes: int) -> pd
     print(f"DEBUG: Created DataFrame with columns: {list(df.columns)}")
     print(f"DEBUG: Sample data shape: {df.shape}")
     print(f"DEBUG: Missing values per column: {df.isnull().sum().to_dict()}")
+    print(f"DEBUG: Sample of raw data:")
+    print(df.head(3))
     
-    # Convert to categorical dtype for pgmpy
+    # CRITICAL FIX: Use nullable integer format instead of categorical for EM compatibility
+    print(f"DEBUG: Converting to nullable integer format for EM compatibility...")
     for col in df.columns:
-        df[col] = df[col].astype('category')
+        # Convert to nullable integer type that EM can handle
+        df[col] = pd.to_numeric(df[col], errors='coerce').astype('Int64')
+    
+    print(f"DEBUG: Final DataFrame dtypes: {df.dtypes.to_dict()}")
+    print(f"DEBUG: Sample of converted data:")
+    print(df.head(3))
     
     return df
 
@@ -98,7 +106,16 @@ def create_bn_structure_from_adjacency(adj_matrix: np.ndarray) -> BayesianNetwor
     
     # Create BayesianNetwork
     bn = BayesianNetwork(edges)
-    print(f"DEBUG: BN nodes: {sorted(list(bn.nodes()))}")
+    
+    # CRITICAL FIX: Add all nodes explicitly, even isolated ones
+    print(f"DEBUG: BN nodes before adding isolated nodes: {sorted(list(bn.nodes()))}")
+    for i in range(n_nodes):
+        node_name = f'node_{i}'
+        if node_name not in bn.nodes():
+            bn.add_node(node_name)
+            print(f"DEBUG: Added isolated node: {node_name}")
+    
+    print(f"DEBUG: BN nodes after adding isolated nodes: {sorted(list(bn.nodes()))}")
     print(f"DEBUG: BN edges: {list(bn.edges())}")
     
     return bn
@@ -205,16 +222,21 @@ def learn_fallback_model(bn_structure: BayesianNetwork,
         # Create uniform CPDs with proper structure awareness
         cpds = []
         nodes = sorted(bn_structure.nodes())
+        print(f"DEBUG: Creating CPDs for nodes: {nodes}")
         
         for node in nodes:
             parents = list(bn_structure.get_parents(node))
+            print(f"DEBUG: Node {node} has parents: {parents}")
+            
             if not parents:
                 # Root node - slightly non-uniform to break symmetry
                 values = np.random.dirichlet(np.ones(n_states) * 2).reshape(n_states, 1)
+                print(f"DEBUG: Root node {node} CPD shape: {values.shape}")
             else:
                 # Child node - slightly non-uniform conditional distribution
                 n_parent_configs = n_states ** len(parents)
                 values = np.random.dirichlet(np.ones(n_states) * 2, size=n_parent_configs).T
+                print(f"DEBUG: Child node {node} CPD shape: {values.shape}")
             
             cpd = TabularCPD(
                 variable=node,
@@ -225,8 +247,16 @@ def learn_fallback_model(bn_structure: BayesianNetwork,
             )
             cpds.append(cpd)
         
+        # CRITICAL FIX: Ensure model includes all nodes
         model = BayesianNetwork(bn_structure.edges())
+        
+        # Add all nodes explicitly
+        for node in nodes:
+            if node not in model.nodes():
+                model.add_node(node)
+                
         model.add_cpds(*cpds)
+        print(f"DEBUG: Fallback model nodes: {sorted(list(model.nodes()))}")
         
         if not model.check_model():
             print("Warning: Fallback model failed validation")
