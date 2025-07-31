@@ -43,14 +43,14 @@ def convert_training_data_for_pgmpy(train_data: List[Tuple], n_nodes: int) -> pd
             if mask[node] == 0:  # Observed node
                 # Extract state from one-hot encoding in inputs
                 state = torch.argmax(inputs[node, 1:]).item()
-                sample[node] = state  # Use integer node names directly
+                sample[str(node)] = state  # Use STRING node names for EM compatibility
                 observed_count += 1
                 
                 # Debug first few samples
                 if i < 3:
                     print(f"  Sample {i}, Node {node}: observed state = {state}")
             else:  # Unobserved node
-                sample[node] = np.nan  # Use integer node names directly
+                sample[str(node)] = np.nan  # Use STRING node names for EM compatibility
                 
         samples.append(sample)
         
@@ -93,12 +93,12 @@ def create_bn_structure_from_adjacency(adj_matrix: np.ndarray) -> BayesianNetwor
     print(f"DEBUG: Creating BN structure from {n_nodes}x{n_nodes} adjacency matrix")
     print(f"DEBUG: Adjacency matrix:\n{adj_matrix}")
     
-    # Create edges from adjacency matrix using integer node names
+    # Create edges from adjacency matrix using STRING node names for EM compatibility
     edges = []
     for i in range(n_nodes):
         for j in range(n_nodes):
             if adj_matrix[i, j] == 1:
-                edge = (i, j)  # Use integer node names directly
+                edge = (str(i), str(j))  # Use STRING node names for EM compatibility
                 edges.append(edge)
                 print(f"DEBUG: Adding edge: {edge}")
     
@@ -111,9 +111,10 @@ def create_bn_structure_from_adjacency(adj_matrix: np.ndarray) -> BayesianNetwor
     # CRITICAL FIX: Add all nodes explicitly, even isolated ones
     print(f"DEBUG: BN nodes before adding isolated nodes: {sorted(list(bn.nodes()))}")
     for i in range(n_nodes):
-        if i not in bn.nodes():
-            bn.add_node(i)  # Use integer node names directly
-            print(f"DEBUG: Added isolated node: {i}")
+        node_str = str(i)
+        if node_str not in bn.nodes():
+            bn.add_node(node_str)  # Use STRING node names for EM compatibility
+            print(f"DEBUG: Added isolated node: {node_str}")
     
     print(f"DEBUG: BN nodes after adding isolated nodes: {sorted(list(bn.nodes()))}")
     print(f"DEBUG: BN edges: {list(bn.edges())}")
@@ -425,7 +426,7 @@ def evaluate_domain_specific_model(learned_bn: BayesianNetwork,
         for node in range(n_nodes):
             if mask[node] == 0:  # Observed
                 state = torch.argmax(inputs[node, 1:]).item()
-                evidence[node] = state  # Use integer node names directly
+                evidence[str(node)] = state  # Use STRING node names for consistency
             else:  # Unobserved
                 unobserved_nodes.append(node)
         
@@ -435,12 +436,12 @@ def evaluate_domain_specific_model(learned_bn: BayesianNetwork,
         # Get predictions for unobserved nodes
         for node in unobserved_nodes:
             try:
-                # Query posterior with more robust error handling
-                # Use integer node names directly
+                # Query posterior with string node names for consistency
+                node_str = str(node)  # Convert node to string for query
                 
                 # Debug evidence and query for first few samples
                 if len(kl_divergences) < 3:
-                    print(f"DEBUG: Querying node {node} with evidence: {evidence}")
+                    print(f"DEBUG: Querying node {node_str} with evidence: {evidence}")
                 
                 # Check if evidence creates impossible state
                 if not evidence:
@@ -449,10 +450,10 @@ def evaluate_domain_specific_model(learned_bn: BayesianNetwork,
                     if len(kl_divergences) < 3:
                         print(f"DEBUG: No evidence, using uniform probs: {pred_probs}")
                 else:
-                    posterior = infer.query(variables=[node], evidence=evidence)
+                    posterior = infer.query(variables=[node_str], evidence=evidence)
                     pred_probs = posterior.values
                     if len(kl_divergences) < 3:
-                        print(f"DEBUG: VE query result for node {node}: {pred_probs}")
+                        print(f"DEBUG: VE query result for node {node_str}: {pred_probs}")
                 
                 # Ensure probabilities are valid
                 if np.any(np.isnan(pred_probs)) or np.sum(pred_probs) == 0:
