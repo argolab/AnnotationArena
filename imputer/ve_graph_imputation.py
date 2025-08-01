@@ -961,6 +961,79 @@ def evaluate_model_fair(model, test_data, n_nodes, n_states=2):
     
     return results
 
+def test_domain_model_perfect_data(bn_ground_truth, param_embeddings, n_nodes, n_samples=1000):
+    """
+    Test domain model with perfect training data (no missing values).
+    This validates if the fundamental approach works.
+    """
+    print(f"\n=== TESTING DOMAIN MODEL WITH PERFECT DATA ===")
+    
+    # Generate perfect training data (no missing values)
+    from pgmpy.sampling import BayesianModelSampling
+    sampler = BayesianModelSampling(bn_ground_truth)
+    
+    try:
+        perfect_samples = sampler.forward_sample(size=n_samples)
+        print(f"Generated {len(perfect_samples)} perfect samples")
+        print(f"Sample columns: {list(perfect_samples.columns)}")
+        print(f"Sample shape: {perfect_samples.shape}")
+        print(f"Sample data types: {perfect_samples.dtypes.to_dict()}")
+        
+        # Convert to pgmpy format (should have no missing values)
+        perfect_data = perfect_samples.astype(float)
+        
+        # Extract adjacency and create structure  
+        adj_matrix = extract_adjacency_from_embeddings(param_embeddings, n_nodes)
+        bn_structure = create_bn_structure_from_adjacency(adj_matrix)
+        
+        # Learn with MLE (no missing data, so no Gibbs needed)
+        from pgmpy.estimators import MaximumLikelihoodEstimator
+        mle = MaximumLikelihoodEstimator(bn_structure, perfect_data)
+        learned_cpds = mle.get_parameters()
+        
+        # Create learned model
+        learned_model = BayesianNetwork(bn_structure.edges())
+        for node in sorted(bn_structure.nodes()):
+            if node not in learned_model.nodes():
+                learned_model.add_node(node)
+        learned_model.add_cpds(*learned_cpds)
+        
+        print(f"Learned model with {len(learned_cpds)} CPDs from perfect data")
+        
+        # Compare learned CPDs to ground truth CPDs
+        print("\n=== CPD COMPARISON ===")
+        for node in sorted(bn_structure.nodes()):
+            node_int = int(node)
+            
+            # Get ground truth CPD
+            gt_cpd = bn_ground_truth.get_cpds(node_int)
+            gt_values = gt_cpd.get_values()
+            
+            # Get learned CPD
+            learned_cpd = learned_model.get_cpds(node)  
+            learned_values = learned_cpd.get_values()
+            
+            # Compare shapes and values
+            print(f"Node {node}:")
+            print(f"  Ground truth shape: {gt_values.shape}, Learned shape: {learned_values.shape}")
+            print(f"  Ground truth CPD: {gt_values.flatten()[:4]}...")  # First few values
+            print(f"  Learned CPD: {learned_values.flatten()[:4]}...")
+            
+            # Compute difference
+            if gt_values.shape == learned_values.shape:
+                diff = np.mean(np.abs(gt_values - learned_values))
+                print(f"  Mean absolute difference: {diff:.4f}")
+            else:
+                print(f"  ERROR: Shape mismatch!")
+        
+        return learned_model, perfect_data
+        
+    except Exception as e:
+        print(f"Perfect data test failed: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None
+
 def convert_to_json_serializable(obj):
     """Convert numpy/torch types to JSON serializable types."""
     if isinstance(obj, dict):
@@ -1043,6 +1116,16 @@ def run_single_experiment(n_nodes, train_size):
         
         # Learn domain-specific model
         domain_model = learn_domain_specific_model(bn_structure, pgmpy_train_data, N_STATES)
+        
+        # VALIDATION: Test domain model with perfect data
+        perfect_model, perfect_data = test_domain_model_perfect_data(bn, param_embeddings, n_nodes)
+        
+        # Test perfect model performance
+        if perfect_model is not None:
+            print("Evaluating PERFECT model with fair evaluation...")
+            perfect_fair_results = evaluate_model_fair(perfect_model, test_data, n_nodes, N_STATES)
+        else:
+            perfect_fair_results = {'mean_kl': float('inf')}
         
         # Fair evaluation for domain model  
         print("Evaluating domain-specific model with fair evaluation...")
@@ -1128,6 +1211,13 @@ def run_single_experiment(n_nodes, train_size):
     print(f"Domain KL: {domain_fair_results.get('mean_kl', 0):.4f}")
     print(f"KL Ratio: {results['fair_comparison']['kl_ratio']:.2f}")
     print(f"Evaluations: Neural={neural_fair_results.get('n_evaluations', 0)}, Domain={domain_fair_results.get('n_evaluations', 0)}")
+    
+    # Add perfect model comparison if available
+    if 'perfect_fair_results' in locals():
+        print(f"\n=== PERFECT MODEL (VALIDATION) ===")
+        print(f"Perfect KL: {perfect_fair_results.get('mean_kl', float('inf')):.4f}")
+        print(f"Perfect vs Neural ratio: {perfect_fair_results.get('mean_kl', float('inf')) / (neural_fair_results.get('mean_kl', 1e-10) + 1e-10):.2f}")
+        print(f"Perfect vs Domain ratio: {perfect_fair_results.get('mean_kl', float('inf')) / (domain_fair_results.get('mean_kl', 1e-10) + 1e-10):.2f}")
     
     del model, train_loader, test_loader, train_dataset, test_dataset
     del train_data, test_data, bn, param_embeddings
