@@ -180,8 +180,11 @@ def learn_domain_specific_model_simple(bn_structure: BayesianNetwork,
         print("E-step: Generating multiple imputations...")
         completed_datasets = _multiple_imputation_gibbs(
             training_data, current_model, 
-            n_imputations=5, n_samples=100, burn_in=20
+            n_imputations=10, n_samples=500, burn_in=100
         )
+        
+        # DEBUG: Validate imputation quality
+        _debug_imputation_quality(training_data, completed_datasets)
         
         # M-STEP: Parameter learning on completed datasets
         print("M-step: Learning parameters via MLE...")
@@ -193,7 +196,8 @@ def learn_domain_specific_model_simple(bn_structure: BayesianNetwork,
         
         print(f"Log-likelihood: {current_ll:.4f} (improvement: {ll_improvement:.4f})")
         
-        if ll_improvement < 0.01:
+        # Better convergence criterion
+        if ll_improvement < 0.001 and iteration >= 2:
             print(f"Converged after {iteration + 1} iterations!")
             break
             
@@ -257,24 +261,33 @@ def _initialize_uniform_model(bn_structure: BayesianNetwork, n_states: int) -> B
 
 def _multiple_imputation_gibbs(training_data: pd.DataFrame, 
                               current_model: BayesianNetwork,
-                              n_imputations: int = 5,
-                              n_samples: int = 100,
-                              burn_in: int = 20) -> List[pd.DataFrame]:
+                              n_imputations: int = 10,
+                              n_samples: int = 500,
+                              burn_in: int = 100) -> List[pd.DataFrame]:
     """Generate multiple completed datasets using Gibbs sampling."""
     completed_datasets = []
+    gibbs_success_count = 0
     
     for m in range(n_imputations):
-        completed_data = _gibbs_imputation(training_data, current_model, n_samples, burn_in)
+        completed_data, success = _gibbs_imputation(training_data, current_model, n_samples, burn_in)
         completed_datasets.append(completed_data)
+        if success:
+            gibbs_success_count += 1
     
+    success_rate = gibbs_success_count / n_imputations
     print(f"Generated {len(completed_datasets)} completed datasets")
+    print(f"Gibbs sampling success rate: {success_rate:.2%}")
+    
+    if success_rate < 0.5:
+        print("⚠️  WARNING: Low Gibbs success rate - may impact EM quality")
+    
     return completed_datasets
 
 
 def _gibbs_imputation(data: pd.DataFrame, 
                      model: BayesianNetwork,
                      n_samples: int,
-                     burn_in: int) -> pd.DataFrame:
+                     burn_in: int) -> tuple[pd.DataFrame, bool]:
     """Complete missing values using Gibbs sampling."""
     from pgmpy.sampling import GibbsSampling
     
@@ -283,6 +296,9 @@ def _gibbs_imputation(data: pd.DataFrame,
     
     # Find rows with missing values
     incomplete_rows = data.isnull().any(axis=1)
+    total_missing_cells = 0
+    gibbs_success_cells = 0
+    random_fallback_cells = 0
     
     for idx in data.index[incomplete_rows]:
         row = data.loc[idx]
@@ -294,25 +310,43 @@ def _gibbs_imputation(data: pd.DataFrame,
             
             try:
                 # Generate samples for missing variables
-                samples = gibbs.sample(size=n_samples + burn_in)
+                if evidence:  # Only try Gibbs if we have some evidence
+                    samples = gibbs.sample(size=n_samples + burn_in)
+                    gibbs_worked = True
+                else:
+                    gibbs_worked = False
                 
                 # Use samples after burn-in to fill missing values
                 for col in row.index[missing_vars]:
-                    if col in samples.columns:
+                    total_missing_cells += 1
+                    
+                    if gibbs_worked and col in samples.columns:
                         post_burnin = samples[col].iloc[burn_in:]
                         # Use mode (most frequent value)
-                        imputed_value = post_burnin.mode().iloc[0] if len(post_burnin) > 0 else 0
-                        completed_data.loc[idx, col] = int(imputed_value)
+                        if len(post_burnin) > 0:
+                            imputed_value = post_burnin.mode().iloc[0]
+                            completed_data.loc[idx, col] = int(imputed_value)
+                            gibbs_success_cells += 1
+                        else:
+                            completed_data.loc[idx, col] = np.random.randint(0, 2)
+                            random_fallback_cells += 1
                     else:
                         # Fallback: random binary
                         completed_data.loc[idx, col] = np.random.randint(0, 2)
+                        random_fallback_cells += 1
                         
             except Exception as e:
-                # Fallback: random imputation
+                # Fallback: random imputation for this row
                 for col in row.index[missing_vars]:
+                    total_missing_cells += 1
                     completed_data.loc[idx, col] = np.random.randint(0, 2)
+                    random_fallback_cells += 1
     
-    return completed_data
+    # Success rate based on cells successfully imputed by Gibbs
+    success_rate = gibbs_success_cells / total_missing_cells if total_missing_cells > 0 else 1.0
+    overall_success = success_rate > 0.5
+    
+    return completed_data, overall_success
 
 
 def _parameter_learning_mle(bn_structure: BayesianNetwork, 
@@ -418,6 +452,50 @@ def _compute_log_likelihood(data: pd.DataFrame, model: BayesianNetwork) -> float
     except Exception as e:
         print(f"  Log-likelihood computation failed: {e}")
         return float('-inf')
+
+
+def _debug_imputation_quality(original_data: pd.DataFrame, completed_datasets: List[pd.DataFrame]):
+    """Debug function to validate imputation quality."""
+    print("=== IMPUTATION QUALITY DEBUG ===")
+    
+    # Check if datasets are actually different
+    dataset_means = [df.mean().mean() for df in completed_datasets]
+    imputation_variance = np.var(dataset_means)
+    print(f"Imputation variance across datasets: {imputation_variance:.6f}")
+    
+    if imputation_variance < 1e-6:
+        print("⚠️  WARNING: Imputations are nearly identical - may indicate poor sampling")
+    
+    # Check imputation distribution for each variable
+    print("Imputation distributions by variable:")
+    for col in original_data.columns:
+        missing_mask = original_data[col].isnull()
+        if missing_mask.any():
+            # Get imputed values for this variable across all datasets
+            imputed_values = []
+            for df in completed_datasets:
+                imputed_values.extend(df.loc[missing_mask, col].values)
+            
+            mean_imputed = np.mean(imputed_values)
+            var_imputed = np.var(imputed_values)
+            print(f"  {col}: mean={mean_imputed:.3f}, var={var_imputed:.3f}")
+            
+            # Check if imputations are too uniform (suggesting random fallback)
+            unique_vals = len(np.unique(imputed_values))
+            if unique_vals <= 2 and var_imputed < 0.1:
+                print(f"    ⚠️  Variable {col} may be using random fallback")
+    
+    # Compare original vs completed data statistics
+    print("Original vs Completed data comparison:")
+    orig_observed_mean = original_data.mean(skipna=True).mean()
+    completed_means = [df.mean().mean() for df in completed_datasets]
+    avg_completed_mean = np.mean(completed_means)
+    
+    print(f"  Original observed mean: {orig_observed_mean:.3f}")
+    print(f"  Average completed mean: {avg_completed_mean:.3f}")
+    print(f"  Difference: {abs(orig_observed_mean - avg_completed_mean):.3f}")
+    
+    print("=== END IMPUTATION DEBUG ===\n")
 
 
 def learn_domain_specific_model(bn_structure: BayesianNetwork, 
