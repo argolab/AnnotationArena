@@ -29,6 +29,7 @@ from domain_specific_model import (
     convert_training_data_for_pgmpy,
     create_bn_structure_from_adjacency,
     learn_domain_specific_model,
+    learn_domain_specific_model_proper,
     evaluate_domain_specific_model,
     extract_adjacency_from_embeddings
 )
