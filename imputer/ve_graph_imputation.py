@@ -828,6 +828,139 @@ def time_inference(model, test_loader, bn, n_samples=50):
         'speedup': np.mean(ve_times) / np.mean(model_times) if ve_times and model_times else 1.0
     }
 
+def evaluate_model_fair(model, test_data, n_nodes, n_states=2):
+    """
+    Fair evaluation function that both neural and domain models can use.
+    Uses the same KL calculation method and data processing.
+    
+    Args:
+        model: Either neural model or domain BayesianNetwork
+        test_data: Raw test data list of tuples
+        n_nodes: Number of nodes
+        n_states: Number of states per node
+        
+    Returns:
+        Dictionary with evaluation metrics
+    """
+    print(f"Fair evaluation on {len(test_data)} test samples...")
+    
+    kl_divergences = []
+    prediction_errors = []
+    failed_inferences = 0
+    
+    # Determine model type
+    is_neural_model = hasattr(model, 'forward')  # Neural model has forward method
+    
+    if is_neural_model:
+        model.eval()
+        
+    for sample_idx, (inputs, embeddings, dimensions, mask, targets) in enumerate(test_data):
+        # Get unobserved nodes for this sample
+        unobserved_nodes = []
+        evidence = {}
+        
+        for node in range(n_nodes):
+            if mask[node] == 0:  # Observed
+                state = torch.argmax(inputs[node, 1:]).item()
+                evidence[node] = state
+            else:  # Unobserved
+                unobserved_nodes.append(node)
+        
+        if not unobserved_nodes:
+            continue
+            
+        # Get predictions for unobserved nodes
+        for node in unobserved_nodes:
+            try:
+                if is_neural_model:
+                    # Neural model prediction
+                    with torch.no_grad():
+                        # Add batch dimension
+                        inputs_batch = inputs.unsqueeze(0).to(DEVICE)
+                        embeddings_batch = embeddings.unsqueeze(0).to(DEVICE) 
+                        dimensions_batch = dimensions.unsqueeze(0).to(DEVICE)
+                        
+                        predictions = model(inputs_batch, embeddings_batch, dimensions_batch)
+                        pred_probs = predictions[0, node, :].cpu().numpy()  # Remove batch dim
+                else:
+                    # Domain model prediction (Bayesian Network)
+                    from pgmpy.inference import VariableElimination
+                    infer = VariableElimination(model)
+                    
+                    # Convert evidence to string keys for pgmpy
+                    evidence_str = {str(k): v for k, v in evidence.items()}
+                    
+                    if evidence_str:
+                        posterior = infer.query(variables=[str(node)], evidence=evidence_str)
+                        pred_probs = posterior.values
+                    else:
+                        # No evidence, use uniform
+                        pred_probs = np.ones(n_states) / n_states
+                
+                # Get ground truth (same for both models)
+                true_probs = targets[node].numpy()
+                
+                # Ensure probabilities are valid
+                if np.any(np.isnan(pred_probs)) or np.sum(pred_probs) == 0:
+                    pred_probs = np.ones(n_states) / n_states
+                else:
+                    pred_probs = pred_probs / np.sum(pred_probs)
+                
+                if np.any(np.isnan(true_probs)) or np.sum(true_probs) == 0:
+                    failed_inferences += 1
+                    continue
+                
+                # Compute KL divergence using standard formula: KL(true || pred)
+                kl = 0.0
+                for state in range(n_states):
+                    if true_probs[state] > 1e-10:  # Avoid log(0)
+                        kl += true_probs[state] * np.log(
+                            (true_probs[state] + 1e-10) / (pred_probs[state] + 1e-10)
+                        )
+                
+                # Sanity check on KL
+                if np.isnan(kl) or np.isinf(kl) or kl < 0:
+                    failed_inferences += 1
+                    continue
+                
+                kl_divergences.append(kl)
+                
+                # Prediction error (L2 norm)
+                error = np.linalg.norm(pred_probs - true_probs)
+                prediction_errors.append(error)
+                
+            except Exception as e:
+                if len(kl_divergences) < 5:  # Only log first few errors
+                    print(f"Fair evaluation failed for sample {sample_idx}, node {node}: {str(e)[:100]}")
+                failed_inferences += 1
+                continue
+    
+    if not kl_divergences:
+        print("No successful inferences in fair evaluation!")
+        return {
+            'mean_kl': float('inf'),
+            'std_kl': 0.0,
+            'mean_error': float('inf'), 
+            'failed_rate': 1.0,
+            'n_evaluations': 0,
+            'kl_distribution': []
+        }
+    
+    results = {
+        'mean_kl': np.mean(kl_divergences),
+        'std_kl': np.std(kl_divergences),
+        'mean_error': np.mean(prediction_errors),
+        'failed_rate': failed_inferences / (len(kl_divergences) + failed_inferences),
+        'n_evaluations': len(kl_divergences),
+        'kl_distribution': kl_divergences
+    }
+    
+    print(f"Fair evaluation: Mean KL = {results['mean_kl']:.4f}, "
+          f"Failed rate = {results['failed_rate']:.2%}, "
+          f"N evaluations = {results['n_evaluations']}")
+    
+    return results
+
 def convert_to_json_serializable(obj):
     """Convert numpy/torch types to JSON serializable types."""
     if isinstance(obj, dict):
@@ -889,8 +1022,11 @@ def run_single_experiment(n_nodes, train_size):
     print("Training model...")
     model = train_model(model, train_loader, test_loader, epochs=100, lr=1e-4, patience=15)
     
-    # Comprehensive evaluation
-    print("Evaluating neural imputer...")
+    # Fair evaluation for neural model
+    print("Evaluating neural imputer with fair evaluation...")
+    neural_fair_results = evaluate_model_fair(model, test_data, n_nodes, N_STATES)
+    
+    # Keep original evaluations for compatibility
     eval_results = comprehensive_evaluation(model, test_loader, bn)
     consistency_results = consistency_check(model, test_loader)
     timing_results = time_inference(model, test_loader, bn, n_samples=50)
@@ -908,12 +1044,33 @@ def run_single_experiment(n_nodes, train_size):
         # Learn domain-specific model
         domain_model = learn_domain_specific_model(bn_structure, pgmpy_train_data, N_STATES)
         
-        # Evaluate domain-specific model
+        # Fair evaluation for domain model  
+        print("Evaluating domain-specific model with fair evaluation...")
+        domain_fair_results = evaluate_model_fair(domain_model, test_data, n_nodes, N_STATES)
+        
+        # Keep original evaluation for compatibility
         domain_results = evaluate_domain_specific_model(domain_model, test_data, n_nodes, N_STATES)
         
     except Exception as e:
         print(f"Domain-specific model failed: {e}")
         domain_results = {
+            'mean_kl': float('inf'),
+            'std_kl': 0.0,
+            'mean_error': float('inf'),
+            'failed_rate': 1.0,
+            'n_evaluations': 0,
+            'kl_distribution': []
+        }
+        # Also set fair results to failed state
+        neural_fair_results = {
+            'mean_kl': float('inf'),
+            'std_kl': 0.0,
+            'mean_error': float('inf'),
+            'failed_rate': 1.0,
+            'n_evaluations': 0,
+            'kl_distribution': []
+        }
+        domain_fair_results = {
             'mean_kl': float('inf'),
             'std_kl': 0.0,
             'mean_error': float('inf'),
@@ -929,14 +1086,24 @@ def run_single_experiment(n_nodes, train_size):
             'evaluation': eval_results,
             'consistency': consistency_results,
             'timing': timing_results,
-            'model_params': sum(p.numel() for p in model.parameters())
+            'model_params': sum(p.numel() for p in model.parameters()),
+            'fair_evaluation': neural_fair_results
         },
         'domain_specific': domain_results,
+        'domain_specific_fair': domain_fair_results,
         'comparison': {
-            'neural_kl': consistency_results.get('mean_kl_divergence', float('inf')),
+            # Original comparison (unfair)
+            'neural_kl': consistency_results.get('mean_kl_divergence', float('inf')),  
             'domain_kl': domain_results.get('mean_kl', float('inf')),
             'kl_ratio': (consistency_results.get('mean_kl_divergence', float('inf')) / 
                         (domain_results.get('mean_kl', float('inf')) + 1e-10))
+        },
+        'fair_comparison': {
+            # Fair comparison (same evaluation method)
+            'neural_kl': neural_fair_results.get('mean_kl', float('inf')),
+            'domain_kl': domain_fair_results.get('mean_kl', float('inf')), 
+            'kl_ratio': (neural_fair_results.get('mean_kl', float('inf')) /
+                        (domain_fair_results.get('mean_kl', float('inf')) + 1e-10))
         }
     }
     
@@ -951,9 +1118,16 @@ def run_single_experiment(n_nodes, train_size):
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2)
     
-    print(f"Results: Neural KL={consistency_results.get('mean_kl_divergence', 0):.4f}, "
-          f"Domain KL={domain_results.get('mean_kl', 0):.4f}, "
-          f"KL Ratio={results['comparison']['kl_ratio']:.2f}")
+    print(f"\n=== ORIGINAL COMPARISON (UNFAIR) ===")
+    print(f"Neural KL: {consistency_results.get('mean_kl_divergence', 0):.4f}")
+    print(f"Domain KL: {domain_results.get('mean_kl', 0):.4f}")
+    print(f"KL Ratio: {results['comparison']['kl_ratio']:.2f}")
+    
+    print(f"\n=== FAIR COMPARISON (SAME METHOD) ===")
+    print(f"Neural KL: {neural_fair_results.get('mean_kl', 0):.4f}")
+    print(f"Domain KL: {domain_fair_results.get('mean_kl', 0):.4f}")
+    print(f"KL Ratio: {results['fair_comparison']['kl_ratio']:.2f}")
+    print(f"Evaluations: Neural={neural_fair_results.get('n_evaluations', 0)}, Domain={domain_fair_results.get('n_evaluations', 0)}")
     
     del model, train_loader, test_loader, train_dataset, test_dataset
     del train_data, test_data, bn, param_embeddings
