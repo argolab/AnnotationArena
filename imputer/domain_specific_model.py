@@ -503,34 +503,35 @@ def _pool_cpd_estimates(all_cpd_estimates: List[List]) -> List[TabularCPD]:
 
 
 def _compute_log_likelihood(data: pd.DataFrame, model: BayesianNetwork) -> float:
-    """Compute log-likelihood using pgmpy's VariableElimination inference."""
+    from pgmpy.inference import VariableElimination
     try:
-        from pgmpy.inference import VariableElimination
         infer = VariableElimination(model)
-        
         log_likelihood = 0.0
         total_observations = 0
         
         for _, row in data.iterrows():
-            # Create evidence from observed values
             evidence = {col: int(val) for col, val in row.items() if not pd.isna(val)}
             
             if evidence:
                 try:
                     # Query joint probability of evidence
                     prob = infer.query(variables=list(evidence.keys()), evidence=evidence).joint_probability()
-                    log_likelihood += np.log(max(prob, 1e-10))
+                    prob = max(prob, 1e-10)  # Smoothing to avoid log(0)
+                    log_likelihood += np.log(prob)
                     total_observations += 1
-                except:
-                    # Fallback: skip this observation if inference fails
+                except Exception as e:
+                    print(f"  Inference failed for evidence {evidence}: {e}")
                     continue
         
-        return log_likelihood / total_observations if total_observations > 0 else float('-inf')
+        if total_observations == 0:
+            print("  No valid observations for log-likelihood")
+            return float('-inf')
+        
+        return log_likelihood / total_observations
         
     except Exception as e:
         print(f"  Log-likelihood computation failed: {e}")
         return float('-inf')
-
 
 def _debug_imputation_quality(original_data: pd.DataFrame, completed_datasets: List[pd.DataFrame]):
     """Debug function to validate imputation quality."""
