@@ -980,7 +980,10 @@ def test_domain_model_perfect_data(bn_ground_truth, param_embeddings, n_nodes, n
         print(f"Sample data types: {perfect_samples.dtypes.to_dict()}")
         
         # Convert to pgmpy format (should have no missing values)
+        # CRITICAL: Convert column names to strings to match BN structure
         perfect_data = perfect_samples.astype(float)
+        perfect_data.columns = [str(col) for col in perfect_data.columns]
+        print(f"Converted column names to strings: {list(perfect_data.columns)}")
         
         # Extract adjacency and create structure  
         adj_matrix = extract_adjacency_from_embeddings(param_embeddings, n_nodes)
