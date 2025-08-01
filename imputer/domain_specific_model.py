@@ -495,46 +495,48 @@ def learn_domain_specific_model_simple(bn_structure: BayesianNetwork,
     print(f"Max EM iterations: {max_iter}")
     
     try:
-        # Create model structure (DiscreteBayesianNetwork for EM)
-        from pgmpy.models import DiscreteBayesianNetwork
+        # Use regular BayesianNetwork with ExpectationMaximization
         from pgmpy.estimators import ExpectationMaximization
         
-        # Convert BayesianNetwork to DiscreteBayesianNetwork for EM
-        edges = list(bn_structure.edges())
-        discrete_model = DiscreteBayesianNetwork(edges)
-        
-        # Add all nodes (including isolated ones)
+        # Use the existing BN structure directly
         all_nodes = sorted(bn_structure.nodes())
-        for node in all_nodes:
-            if node not in discrete_model.nodes():
-                discrete_model.add_node(node)
+        print(f"Using BayesianNetwork with nodes: {all_nodes}")
+        print(f"Edges: {list(bn_structure.edges())}")
         
-        print(f"Created DiscreteBayesianNetwork with nodes: {sorted(discrete_model.nodes())}")
-        print(f"Edges: {list(discrete_model.edges())}")
-        
-        # Initialize EM estimator
-        em_estimator = ExpectationMaximization(discrete_model, training_data)
-        
-        # Estimate CPDs using EM
-        print("Running EM parameter estimation...")
-        em_estimator.estimate_cpds(max_iter=max_iter)
-        
-        # Get the learned model
-        learned_model = em_estimator.model
-        
-        print(f"EM completed successfully!")
-        print(f"Learned model has {len(learned_model.get_cpds())} CPDs")
-        
-        # Convert back to regular BayesianNetwork for compatibility
-        final_model = BayesianNetwork(learned_model.edges()) 
-        for node in all_nodes:
-            if node not in final_model.nodes():
-                final_model.add_node(node)
-        
-        # Copy CPDs
-        final_model.add_cpds(*learned_model.get_cpds())
-        
-        return final_model
+        # Method 1: Try direct EM
+        try:
+            print("Trying direct ExpectationMaximization...")
+            em_estimator = ExpectationMaximization(bn_structure, training_data)
+            learned_cpds = em_estimator.get_parameters(max_iter=max_iter)
+            
+            # Create final model with learned CPDs
+            final_model = BayesianNetwork(bn_structure.edges())
+            for node in all_nodes:
+                if node not in final_model.nodes():
+                    final_model.add_node(node)
+            
+            final_model.add_cpds(*learned_cpds)
+            
+            print(f"Direct EM completed successfully!")
+            print(f"Learned model has {len(learned_cpds)} CPDs")
+            return final_model
+            
+        except Exception as e1:
+            print(f"Direct EM failed: {e1}")
+            
+            # Method 2: Try using fit method
+            print("Trying BayesianNetwork.fit() with EM...")
+            temp_model = BayesianNetwork(bn_structure.edges())
+            for node in all_nodes:
+                if node not in temp_model.nodes():
+                    temp_model.add_node(node)
+            
+            # Use fit method with EM estimator
+            temp_model.fit(training_data, estimator=ExpectationMaximization, complete_samples_only=False)
+            
+            print(f"Fit method completed successfully!")
+            print(f"Learned model has {len(temp_model.get_cpds())} CPDs")
+            return temp_model
         
     except Exception as e:
         print(f"Built-in EM failed: {e}")
