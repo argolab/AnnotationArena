@@ -480,15 +480,35 @@ def train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=1
 
 def generate_bayesian_network(n_nodes, edge_prob):
     """Generate random Bayesian Network with CPDs."""
-    bn = DiscreteBayesianNetwork.get_random(n_nodes=n_nodes, edge_prob=edge_prob, n_states=None, latents=False)
+    bn_random = DiscreteBayesianNetwork.get_random(n_nodes=n_nodes, edge_prob=edge_prob, n_states=None, latents=False)
     
-    print(f"DEBUG: Generated original BN with nodes: {sorted(list(bn.nodes()))}")
-    print(f"DEBUG: Original BN edges: {list(bn.edges())}")
-    print(f"DEBUG: Original BN node types: {[type(node) for node in bn.nodes()]}")
+    print(f"DEBUG: Generated original BN with nodes: {sorted(list(bn_random.nodes()))}")
+    print(f"DEBUG: Original BN edges: {list(bn_random.edges())}")
+    print(f"DEBUG: Original BN node types: {[type(node) for node in bn_random.nodes()]}")
     
-    node_list = sorted(list(bn.nodes()))
+    # Convert string nodes to integer nodes for consistency with our pipeline
+    node_list = sorted(list(bn_random.nodes()))
     node_to_idx = {node: idx for idx, node in enumerate(node_list)}
     print(f"DEBUG: Node mapping: {node_to_idx}")
+    
+    # Create new BN with integer nodes
+    integer_edges = []
+    for edge in bn_random.edges():
+        src_str, dst_str = edge
+        src_int = node_to_idx[src_str]
+        dst_int = node_to_idx[dst_str] 
+        integer_edges.append((src_int, dst_int))
+    
+    print(f"DEBUG: Converting to integer edges: {integer_edges}")
+    bn = DiscreteBayesianNetwork(integer_edges)
+    
+    # Add any isolated nodes
+    for i in range(n_nodes):
+        if i not in bn.nodes():
+            bn.add_node(i)
+    
+    print(f"DEBUG: Final BN nodes: {sorted(list(bn.nodes()))}")
+    print(f"DEBUG: Final BN edges: {list(bn.edges())}")
     
     # Generate CPDs with Dirichlet priors
     cardinalities = {i: N_STATES for i in range(n_nodes)}
