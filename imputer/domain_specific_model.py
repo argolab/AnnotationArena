@@ -482,16 +482,84 @@ def create_uniform_model(bn_structure: BayesianNetwork, n_states: int) -> Bayesi
     return model
 
 
+def learn_domain_specific_model_simple(bn_structure: BayesianNetwork,
+                                      training_data: pd.DataFrame,
+                                      n_states: int = 2,
+                                      max_iter: int = 50) -> BayesianNetwork:
+    """
+    Simple EM using pgmpy's built-in ExpectationMaximization.
+    Much more robust than custom Gibbs implementation.
+    """
+    print(f"=== USING PGMPY'S BUILT-IN EM ===")
+    print(f"Training data: {len(training_data)} samples, {training_data.isnull().sum().sum()} missing values")
+    print(f"Max EM iterations: {max_iter}")
+    
+    try:
+        # Create model structure (DiscreteBayesianNetwork for EM)
+        from pgmpy.models import DiscreteBayesianNetwork
+        from pgmpy.estimators import ExpectationMaximization
+        
+        # Convert BayesianNetwork to DiscreteBayesianNetwork for EM
+        edges = list(bn_structure.edges())
+        discrete_model = DiscreteBayesianNetwork(edges)
+        
+        # Add all nodes (including isolated ones)
+        all_nodes = sorted(bn_structure.nodes())
+        for node in all_nodes:
+            if node not in discrete_model.nodes():
+                discrete_model.add_node(node)
+        
+        print(f"Created DiscreteBayesianNetwork with nodes: {sorted(discrete_model.nodes())}")
+        print(f"Edges: {list(discrete_model.edges())}")
+        
+        # Initialize EM estimator
+        em_estimator = ExpectationMaximization(discrete_model, training_data)
+        
+        # Estimate CPDs using EM
+        print("Running EM parameter estimation...")
+        em_estimator.estimate_cpds(max_iter=max_iter)
+        
+        # Get the learned model
+        learned_model = em_estimator.model
+        
+        print(f"EM completed successfully!")
+        print(f"Learned model has {len(learned_model.get_cpds())} CPDs")
+        
+        # Convert back to regular BayesianNetwork for compatibility
+        final_model = BayesianNetwork(learned_model.edges()) 
+        for node in all_nodes:
+            if node not in final_model.nodes():
+                final_model.add_node(node)
+        
+        # Copy CPDs
+        final_model.add_cpds(*learned_model.get_cpds())
+        
+        return final_model
+        
+    except Exception as e:
+        print(f"Built-in EM failed: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Fallback to informed uniform model
+        print("Falling back to informed uniform model...")
+        return initialize_with_informed_priors(bn_structure, training_data, n_states)
+
+
 def learn_domain_specific_model(bn_structure: BayesianNetwork, 
                               training_data: pd.DataFrame,
                               n_states: int = 2,
                               n_samples: int = 500) -> BayesianNetwork:
     """
-    DEPRECATED: Use learn_domain_specific_model_proper() instead.
-    Kept for backward compatibility.
+    Main interface - tries simple EM first, falls back to complex if needed.
     """
-    print("WARNING: Using deprecated method. Switch to learn_domain_specific_model_proper()")
-    return learn_domain_specific_model_proper(bn_structure, training_data, n_states)
+    print("Trying pgmpy's built-in EM first...")
+    try:
+        return learn_domain_specific_model_simple(bn_structure, training_data, n_states, max_iter=20)
+    except Exception as e:
+        print(f"Built-in EM failed: {e}")
+        print("Falling back to complex implementation...")
+        return learn_domain_specific_model_proper(bn_structure, training_data, n_states)
 
 
 def impute_missing_with_gibbs(model: BayesianNetwork, 
