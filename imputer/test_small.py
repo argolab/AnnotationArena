@@ -9,6 +9,8 @@ Author: Prabhav Singh
 
 import os
 import sys
+import warnings
+warnings.filterwarnings('ignore')
 import json
 import numpy as np
 import matplotlib.pyplot as plt
@@ -21,10 +23,20 @@ from ve_graph_imputation import (
     clear_memory
 )
 
+# Your pgmpy code that generates the warning
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message="Probability values don't exactly sum to 1")
+    # Your pgmpy operations here, e.g., model learning, inference, etc.
+
+
 # Test configuration
 TEST_GRAPH_SIZE = [10]  # Single graph size for quick testing
 TEST_TRAINING_SIZES = [50]  # Reduced training sizes
 TEST_SIZE = 250  # Smaller test set for speed
+
+import logging
+
+logging.getLogger('pgmpy').setLevel(logging.ERROR)
 
 def run_quick_test():
     """Run quick test with small configuration."""
@@ -74,6 +86,8 @@ def run_quick_test():
                             
                 except Exception as e:
                     print(f"❌ FAILED: {e}")
+                    import traceback
+                    traceback.print_exc()
                     clear_memory()
                     continue
     

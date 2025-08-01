@@ -11,6 +11,8 @@ import seaborn as sns
 from tqdm import tqdm
 import pickle
 import os
+import warnings
+warnings.filterwarnings('ignore')
 import time
 import json
 from typing import List, Tuple, Dict, Optional
@@ -18,9 +20,14 @@ import warnings
 import math
 warnings.filterwarnings('ignore')
 
+# Your pgmpy code that generates the warning
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message="Probability values don't exactly sum to 1")
+    # Your pgmpy operations here, e.g., model learning, inference, etc.
+
 # Graph imports
 import networkx as nx
-from pgmpy.models import DiscreteBayesianNetwork
+from pgmpy.models import BayesianNetwork
 from pgmpy.factors.discrete import TabularCPD
 from pgmpy.inference import VariableElimination
 
@@ -29,10 +36,19 @@ from domain_specific_model import (
     convert_training_data_for_pgmpy,
     create_bn_structure_from_adjacency,
     learn_domain_specific_model,
-    learn_domain_specific_model_proper,
     evaluate_domain_specific_model,
     extract_adjacency_from_embeddings
 )
+
+# Your pgmpy code that generates the warning
+with warnings.catch_warnings():
+    warnings.filterwarnings("ignore", message="Probability values don't exactly sum to 1")
+    # Your pgmpy operations here, e.g., model learning, inference, etc.
+
+    
+import logging
+
+logging.getLogger('pgmpy').setLevel(logging.ERROR)
 
 # CONFIGURATION
 GRAPH_SIZES = [5, 10, 15]
@@ -480,7 +496,7 @@ def train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=1
 
 def generate_bayesian_network(n_nodes, edge_prob):
     """Generate random Bayesian Network with CPDs."""
-    bn_random = DiscreteBayesianNetwork.get_random(n_nodes=n_nodes, edge_prob=edge_prob, n_states=None, latents=False)
+    bn_random = BayesianNetwork.get_random(n_nodes=n_nodes, edge_prob=edge_prob, n_states=None, latents=False)
     
     print(f"DEBUG: Generated original BN with nodes: {sorted(list(bn_random.nodes()))}")
     print(f"DEBUG: Original BN edges: {list(bn_random.edges())}")
@@ -500,7 +516,7 @@ def generate_bayesian_network(n_nodes, edge_prob):
         integer_edges.append((src_int, dst_int))
     
     print(f"DEBUG: Converting to integer edges: {integer_edges}")
-    bn = DiscreteBayesianNetwork(integer_edges)
+    bn = BayesianNetwork(integer_edges)
     
     # Add any isolated nodes
     for i in range(n_nodes):
@@ -536,28 +552,33 @@ def generate_bayesian_network(n_nodes, edge_prob):
     if not bn.check_model():
         raise ValueError("Invalid Bayesian Network")
     
-    # Create adjacency matrix and CPD parameters
+    # Create adjacency matrix and CPD parameters (nodes are now integers)
     adj_matrix = np.zeros((n_nodes, n_nodes), dtype=np.float32)
     print(f"DEBUG: Creating adjacency matrix from edges:")
     for edge in bn.edges():
-        from_idx = node_to_idx[edge[0]]
-        to_idx = node_to_idx[edge[1]]
+        from_idx = edge[0]  # Now directly integer
+        to_idx = edge[1]    # Now directly integer
         adj_matrix[from_idx, to_idx] = 1.0
         print(f"  Edge {edge} -> adj_matrix[{from_idx}, {to_idx}] = 1")
     
     print(f"DEBUG: Final adjacency matrix:\n{adj_matrix}")
     
-    max_cpd_size = max([len(bn.get_cpds(node).get_values().flatten()) for node in node_list])
+    # Get integer node list for CPD processing
+    integer_node_list = sorted(list(bn.nodes()))
+    max_cpd_size = max([len(bn.get_cpds(node).get_values().flatten()) for node in integer_node_list])
     cpd_data = np.zeros((n_nodes, max_cpd_size), dtype=np.float32)
-    for node in node_list:
-        idx = node_to_idx[node]
+    for node in integer_node_list:
+        idx = node  # Node is already integer
         cpd = bn.get_cpds(node)
         cpd_values = cpd.get_values().flatten()
         cpd_data[idx, :len(cpd_values)] = cpd_values
     
     param_embeddings = np.concatenate([adj_matrix, cpd_data], axis=1)
     
-    return bn, param_embeddings, node_to_idx
+    # Create identity mapping for integer nodes
+    integer_node_to_idx = {i: i for i in range(n_nodes)}
+    
+    return bn, param_embeddings, integer_node_to_idx
 
 def generate_sample(bn, param_embeddings, node_to_idx, n_nodes, obs_ratio, seed):
     """Generate single training sample."""
@@ -855,7 +876,7 @@ def evaluate_model_fair(model, test_data, n_nodes, n_states=2):
     Uses the same KL calculation method and data processing.
     
     Args:
-        model: Either neural model or domain DiscreteBayesianNetwork
+        model: Either neural model or domain BayesianNetwork
         test_data: Raw test data list of tuples
         n_nodes: Number of nodes
         n_states: Number of states per node
@@ -1016,7 +1037,7 @@ def test_domain_model_perfect_data(bn_ground_truth, param_embeddings, n_nodes, n
         learned_cpds = mle.get_parameters()
         
         # Create learned model
-        learned_model = DiscreteBayesianNetwork(bn_structure.edges())
+        learned_model = BayesianNetwork(bn_structure.edges())
         for node in sorted(bn_structure.nodes()):
             if node not in learned_model.nodes():
                 learned_model.add_node(node)
