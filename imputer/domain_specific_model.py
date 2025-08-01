@@ -13,6 +13,7 @@ import pandas as pd
 import torch
 from typing import List, Tuple, Dict, Optional
 import warnings
+import traceback
 warnings.filterwarnings('ignore')
 
 from pgmpy.models import BayesianNetwork
@@ -250,6 +251,7 @@ def impute_missing_with_gibbs(model: BayesianNetwork,
                         
                 except Exception as e:
                     print(f"Gibbs sampling failed for row {idx}: {e}")
+                    traceback.print_exc()
                     # Fallback: use prior probabilities
                     for var in missing_vars:
                         completed_data.loc[idx, var] = np.random.randint(0, 2)  # Random binary
