@@ -232,7 +232,11 @@ def impute_missing_with_gibbs(model: BayesianNetwork,
             if missing_vars:  # If we have missing variables to impute
                 try:
                     # Generate Gibbs samples starting from observed state
-                    samples = gibbs.sample(start_state=start_state, size=n_samples)
+                    # samples = gibbs.sample(start_state=start_state, size=n_samples)
+
+                    start_state_tuples = list(start_state.items())
+                    samples = gibbs.sample(start_state=start_state_tuples, size=n_samples)
+
                     
                     # For missing variables, use mode (most frequent value) from samples
                     for var in missing_vars:
