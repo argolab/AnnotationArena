@@ -20,7 +20,7 @@ warnings.filterwarnings('ignore')
 
 # Graph imports
 import networkx as nx
-from pgmpy.models import BayesianNetwork
+from pgmpy.models import DiscreteBayesianNetwork
 from pgmpy.factors.discrete import TabularCPD
 from pgmpy.inference import VariableElimination
 
@@ -480,7 +480,7 @@ def train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=1
 
 def generate_bayesian_network(n_nodes, edge_prob):
     """Generate random Bayesian Network with CPDs."""
-    bn = BayesianNetwork.get_random(n_nodes=n_nodes, edge_prob=edge_prob, n_states=None, latents=False)
+    bn = DiscreteBayesianNetwork.get_random(n_nodes=n_nodes, edge_prob=edge_prob, n_states=None, latents=False)
     
     print(f"DEBUG: Generated original BN with nodes: {sorted(list(bn.nodes()))}")
     print(f"DEBUG: Original BN edges: {list(bn.edges())}")
@@ -835,7 +835,7 @@ def evaluate_model_fair(model, test_data, n_nodes, n_states=2):
     Uses the same KL calculation method and data processing.
     
     Args:
-        model: Either neural model or domain BayesianNetwork
+        model: Either neural model or domain DiscreteBayesianNetwork
         test_data: Raw test data list of tuples
         n_nodes: Number of nodes
         n_states: Number of states per node
@@ -996,7 +996,7 @@ def test_domain_model_perfect_data(bn_ground_truth, param_embeddings, n_nodes, n
         learned_cpds = mle.get_parameters()
         
         # Create learned model
-        learned_model = BayesianNetwork(bn_structure.edges())
+        learned_model = DiscreteBayesianNetwork(bn_structure.edges())
         for node in sorted(bn_structure.nodes()):
             if node not in learned_model.nodes():
                 learned_model.add_node(node)

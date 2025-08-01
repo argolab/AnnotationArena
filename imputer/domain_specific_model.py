@@ -16,7 +16,7 @@ import warnings
 import traceback
 warnings.filterwarnings('ignore')
 
-from pgmpy.models import BayesianNetwork
+from pgmpy.models import DiscreteBayesianNetwork
 from pgmpy.estimators import MaximumLikelihoodEstimator
 from pgmpy.inference import VariableElimination
 from pgmpy.sampling import GibbsSampling
@@ -81,15 +81,15 @@ def convert_training_data_for_pgmpy(train_data: List[Tuple], n_nodes: int) -> pd
     return df
 
 
-def create_bn_structure_from_adjacency(adj_matrix: np.ndarray) -> BayesianNetwork:
+def create_bn_structure_from_adjacency(adj_matrix: np.ndarray) -> DiscreteBayesianNetwork:
     """
-    Create BayesianNetwork structure from adjacency matrix.
+    Create DiscreteBayesianNetwork structure from adjacency matrix.
     
     Args:
         adj_matrix: Adjacency matrix where adj_matrix[i,j] = 1 means edge i -> j
         
     Returns:
-        BayesianNetwork with structure but no CPDs
+        DiscreteBayesianNetwork with structure but no CPDs
     """
     n_nodes = adj_matrix.shape[0]
     print(f"DEBUG: Creating BN structure from {n_nodes}x{n_nodes} adjacency matrix")
@@ -107,8 +107,8 @@ def create_bn_structure_from_adjacency(adj_matrix: np.ndarray) -> BayesianNetwor
     print(f"DEBUG: Total edges created: {len(edges)}")
     print(f"DEBUG: Edges: {edges}")
     
-    # Create BayesianNetwork
-    bn = BayesianNetwork(edges)
+    # Create DiscreteBayesianNetwork
+    bn = DiscreteBayesianNetwork(edges)
     
     # CRITICAL FIX: Add all nodes explicitly, even isolated ones
     print(f"DEBUG: BN nodes before adding isolated nodes: {sorted(list(bn.nodes()))}")
@@ -124,19 +124,19 @@ def create_bn_structure_from_adjacency(adj_matrix: np.ndarray) -> BayesianNetwor
     return bn
 
 
-def learn_domain_specific_model_proper(bn_structure: BayesianNetwork,
+def learn_domain_specific_model_proper(bn_structure: DiscreteBayesianNetwork,
                                       training_data: pd.DataFrame,
                                       n_states: int = 2,
                                       max_em_iters: int = 7,
                                       n_imputations: int = 5,
                                       chain_length: int = 1500,
                                       burn_in: int = 300,
-                                      thin: int = 3) -> BayesianNetwork:
+                                      thin: int = 3) -> DiscreteBayesianNetwork:
     """
     Principled EM with Multiple Imputation using Gibbs Sampling.
     
     Args:
-        bn_structure: BayesianNetwork structure (no CPDs)
+        bn_structure: DiscreteBayesianNetwork structure (no CPDs)
         training_data: DataFrame with NaN for missing values  
         n_states: Number of states per variable
         max_em_iters: Maximum EM iterations
@@ -146,7 +146,7 @@ def learn_domain_specific_model_proper(bn_structure: BayesianNetwork,
         thin: Thinning interval
         
     Returns:
-        BayesianNetwork with learned CPDs
+        DiscreteBayesianNetwork with learned CPDs
     """
     print(f"=== PRINCIPLED EM + MULTIPLE IMPUTATION ===")
     print(f"Training data: {len(training_data)} samples, {training_data.isnull().sum().sum()} missing values")
@@ -188,9 +188,9 @@ def learn_domain_specific_model_proper(bn_structure: BayesianNetwork,
     return current_model
 
 
-def initialize_with_informed_priors(bn_structure: BayesianNetwork, 
+def initialize_with_informed_priors(bn_structure: DiscreteBayesianNetwork, 
                                    training_data: pd.DataFrame,
-                                   n_states: int) -> BayesianNetwork:
+                                   n_states: int) -> DiscreteBayesianNetwork:
     """Initialize model with priors learned from complete cases."""
     print("Initializing with informed priors from complete cases...")
     
@@ -257,7 +257,7 @@ def initialize_with_informed_priors(bn_structure: BayesianNetwork,
         cpds.append(cpd)
     
     # Create model
-    model = BayesianNetwork(bn_structure.edges())
+    model = DiscreteBayesianNetwork(bn_structure.edges())
     for node in nodes:
         if node not in model.nodes():
             model.add_node(node)
@@ -268,7 +268,7 @@ def initialize_with_informed_priors(bn_structure: BayesianNetwork,
 
 
 def multiple_imputation_step(training_data: pd.DataFrame,
-                           current_model: BayesianNetwork,
+                           current_model: DiscreteBayesianNetwork,
                            n_imputations: int,
                            chain_length: int,
                            burn_in: int,
@@ -290,7 +290,7 @@ def multiple_imputation_step(training_data: pd.DataFrame,
 
 
 def gibbs_complete_dataset(data: pd.DataFrame,
-                          model: BayesianNetwork,
+                          model: DiscreteBayesianNetwork,
                           chain_length: int,
                           burn_in: int,
                           thin: int) -> pd.DataFrame:
@@ -349,8 +349,8 @@ def gibbs_complete_dataset(data: pd.DataFrame,
         return current_data
 
 
-def parameter_learning_step(bn_structure: BayesianNetwork,
-                           completed_datasets: List[pd.DataFrame]) -> BayesianNetwork:
+def parameter_learning_step(bn_structure: DiscreteBayesianNetwork,
+                           completed_datasets: List[pd.DataFrame]) -> DiscreteBayesianNetwork:
     """Learn parameters from multiple completed datasets (Rubin's rules)."""
     
     # Learn parameters from each completion
@@ -372,7 +372,7 @@ def parameter_learning_step(bn_structure: BayesianNetwork,
     pooled_cpds = pool_cpd_estimates(all_cpd_estimates)
     
     # Create final model
-    model = BayesianNetwork(bn_structure.edges())
+    model = DiscreteBayesianNetwork(bn_structure.edges())
     nodes = sorted(bn_structure.nodes())
     for node in nodes:
         if node not in model.nodes():
@@ -415,7 +415,7 @@ def pool_cpd_estimates(all_cpd_estimates: List[List]) -> List[TabularCPD]:
     return pooled_cpds
 
 
-def compute_log_likelihood_approx(data: pd.DataFrame, model: BayesianNetwork) -> float:
+def compute_log_likelihood_approx(data: pd.DataFrame, model: DiscreteBayesianNetwork) -> float:
     """Approximate log-likelihood for convergence checking."""
     try:
         # Use complete cases only for quick approximation
@@ -448,7 +448,7 @@ def compute_log_likelihood_approx(data: pd.DataFrame, model: BayesianNetwork) ->
         return float('-inf')
 
 
-def create_uniform_model(bn_structure: BayesianNetwork, n_states: int) -> BayesianNetwork:
+def create_uniform_model(bn_structure: DiscreteBayesianNetwork, n_states: int) -> DiscreteBayesianNetwork:
     """Create initial model with uniform CPDs for Gibbs sampling."""
     cpds = []
     nodes = sorted(bn_structure.nodes())
@@ -473,7 +473,7 @@ def create_uniform_model(bn_structure: BayesianNetwork, n_states: int) -> Bayesi
         )
         cpds.append(cpd)
     
-    model = BayesianNetwork(bn_structure.edges())
+    model = DiscreteBayesianNetwork(bn_structure.edges())
     for node in nodes:
         if node not in model.nodes():
             model.add_node(node)
@@ -482,10 +482,10 @@ def create_uniform_model(bn_structure: BayesianNetwork, n_states: int) -> Bayesi
     return model
 
 
-def learn_domain_specific_model_simple(bn_structure: BayesianNetwork,
+def learn_domain_specific_model_simple(bn_structure: DiscreteBayesianNetwork,
                                       training_data: pd.DataFrame,
                                       n_states: int = 2,
-                                      max_iter: int = 50) -> BayesianNetwork:
+                                      max_iter: int = 50) -> DiscreteBayesianNetwork:
     """
     Simple EM using pgmpy's built-in ExpectationMaximization.
     Much more robust than custom Gibbs implementation.
@@ -495,76 +495,50 @@ def learn_domain_specific_model_simple(bn_structure: BayesianNetwork,
     print(f"Max EM iterations: {max_iter}")
     
     try:
-        # Use regular BayesianNetwork with ExpectationMaximization
+        # Use DiscreteBayesianNetwork with ExpectationMaximization
         from pgmpy.estimators import ExpectationMaximization
         
         # Use the existing BN structure directly
         all_nodes = sorted(bn_structure.nodes())
-        print(f"Using BayesianNetwork with nodes: {all_nodes}")
+        print(f"Using DiscreteBayesianNetwork with nodes: {all_nodes}")
         print(f"Edges: {list(bn_structure.edges())}")
         
-        # Method 1: Try direct EM
-        try:
-            print("Trying direct ExpectationMaximization...")
-            em_estimator = ExpectationMaximization(bn_structure, training_data)
-            learned_cpds = em_estimator.get_parameters(max_iter=max_iter)
-            
-            # Create final model with learned CPDs
-            final_model = BayesianNetwork(bn_structure.edges())
-            for node in all_nodes:
-                if node not in final_model.nodes():
-                    final_model.add_node(node)
-            
-            final_model.add_cpds(*learned_cpds)
-            
-            print(f"Direct EM completed successfully!")
-            print(f"Learned model has {len(learned_cpds)} CPDs")
-            return final_model
-            
-        except Exception as e1:
-            print(f"Direct EM failed: {e1}")
-            
-            # Method 2: Try using fit method
-            print("Trying BayesianNetwork.fit() with EM...")
-            temp_model = BayesianNetwork(bn_structure.edges())
-            for node in all_nodes:
-                if node not in temp_model.nodes():
-                    temp_model.add_node(node)
-            
-            # Use fit method with EM estimator
-            temp_model.fit(training_data, estimator=ExpectationMaximization, complete_samples_only=False)
-            
-            print(f"Fit method completed successfully!")
-            print(f"Learned model has {len(temp_model.get_cpds())} CPDs")
-            return temp_model
+        # Use direct EM method (no fallback - get full error for debugging)
+        print("Using ExpectationMaximization with get_parameters()...")
+        em_estimator = ExpectationMaximization(bn_structure, training_data)
+        learned_cpds = em_estimator.get_parameters(max_iter=max_iter)
+        
+        # Create final model with learned CPDs
+        final_model = DiscreteBayesianNetwork(bn_structure.edges())
+        for node in all_nodes:
+            if node not in final_model.nodes():
+                final_model.add_node(node)
+        
+        final_model.add_cpds(*learned_cpds)
+        
+        print(f"ExpectationMaximization completed successfully!")
+        print(f"Learned model has {len(learned_cpds)} CPDs")
+        return final_model
         
     except Exception as e:
-        print(f"Built-in EM failed: {e}")
+        print(f"ExpectationMaximization failed: {e}")
         import traceback
         traceback.print_exc()
-        
-        # Fallback to informed uniform model
-        print("Falling back to informed uniform model...")
-        return initialize_with_informed_priors(bn_structure, training_data, n_states)
+        raise e  # Re-raise for debugging
 
 
-def learn_domain_specific_model(bn_structure: BayesianNetwork, 
+def learn_domain_specific_model(bn_structure: DiscreteBayesianNetwork, 
                               training_data: pd.DataFrame,
                               n_states: int = 2,
-                              n_samples: int = 500) -> BayesianNetwork:
+                              n_samples: int = 500) -> DiscreteBayesianNetwork:
     """
-    Main interface - tries simple EM first, falls back to complex if needed.
+    Main interface - uses pgmpy's built-in EM directly (no fallbacks).
     """
-    print("Trying pgmpy's built-in EM first...")
-    try:
-        return learn_domain_specific_model_simple(bn_structure, training_data, n_states, max_iter=20)
-    except Exception as e:
-        print(f"Built-in EM failed: {e}")
-        print("Falling back to complex implementation...")
-        return learn_domain_specific_model_proper(bn_structure, training_data, n_states)
+    print("Using pgmpy's built-in ExpectationMaximization...")
+    return learn_domain_specific_model_simple(bn_structure, training_data, n_states, max_iter=50)
 
 
-def impute_missing_with_gibbs(model: BayesianNetwork, 
+def impute_missing_with_gibbs(model: DiscreteBayesianNetwork, 
                              data: pd.DataFrame, 
                              n_samples: int) -> pd.DataFrame:
     """Use Gibbs sampling to impute missing values."""
@@ -632,7 +606,7 @@ def impute_missing_with_gibbs(model: BayesianNetwork,
 
 
 
-def evaluate_domain_specific_model(learned_bn: BayesianNetwork, 
+def evaluate_domain_specific_model(learned_bn: DiscreteBayesianNetwork, 
                                  test_data: List[Tuple],
                                  n_nodes: int,
                                  n_states: int = 2) -> Dict:
@@ -640,7 +614,7 @@ def evaluate_domain_specific_model(learned_bn: BayesianNetwork,
     Evaluate learned BN on test set and compute KL divergence vs ground truth.
     
     Args:
-        learned_bn: Trained BayesianNetwork
+        learned_bn: Trained DiscreteBayesianNetwork
         test_data: List of (inputs, embeddings, dimensions, mask, targets)
         n_nodes: Number of nodes
         n_states: Number of states per node
