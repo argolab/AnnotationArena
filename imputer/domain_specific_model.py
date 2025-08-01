@@ -167,8 +167,8 @@ def learn_domain_specific_model_simple(bn_structure: BayesianNetwork,
         print("No missing data - using direct MLE")
         return _learn_with_mle(bn_structure, training_data)
     
-    # Initialize with uniform priors for Gibbs sampling
-    current_model = _initialize_uniform_model(bn_structure, n_states)
+    # Initialize with informed priors from observed data
+    current_model = _initialize_with_informed_priors(bn_structure, training_data, n_states)
     prev_log_likelihood = float('-inf')
     
     print(f"Starting EM iterations...")
@@ -225,8 +225,96 @@ def _learn_with_mle(bn_structure: BayesianNetwork, complete_data: pd.DataFrame) 
     return model
 
 
+def _initialize_with_informed_priors(bn_structure: BayesianNetwork, 
+                                    training_data: pd.DataFrame,
+                                    n_states: int) -> BayesianNetwork:
+    """Initialize model with priors learned from observed data."""
+    print("Initializing with informed priors from observed data...")
+    
+    cpds = []
+    nodes = sorted(bn_structure.nodes())
+    
+    for node in nodes:
+        parents = list(bn_structure.get_parents(node))
+        
+        if not parents:
+            # Root node - use marginal from observed data
+            observed_data = training_data[node].dropna()
+            if len(observed_data) > 0:
+                # Empirical distribution with smoothing
+                counts = np.zeros(n_states)
+                for val in observed_data:
+                    counts[int(val)] += 1
+                counts += 1.0  # Laplace smoothing to avoid zeros
+                probs = counts / counts.sum()
+                values = probs.reshape(n_states, 1)
+                print(f"  Root {node}: learned from {len(observed_data)} observations, probs={probs}")
+            else:
+                # Fallback to uniform with smoothing
+                values = np.ones((n_states, 1)) / n_states
+                print(f"  Root {node}: no data, using uniform")
+        else:
+            # Child node - learn from complete cases where possible
+            relevant_cols = [node] + parents
+            complete_cases = training_data[relevant_cols].dropna()
+            
+            n_parent_configs = n_states ** len(parents)
+            
+            if len(complete_cases) >= 3:  # Need reasonable amount of data
+                # Learn from complete cases with smoothing
+                values = np.ones((n_states, n_parent_configs)) * 1.0  # Smoothing
+                
+                for _, row in complete_cases.iterrows():
+                    # Calculate parent configuration index
+                    parent_config = 0
+                    for i, parent in enumerate(parents):
+                        parent_config += int(row[parent]) * (n_states ** (len(parents) - 1 - i))
+                    
+                    child_state = int(row[node])
+                    values[child_state, parent_config] += 1.0
+                
+                # Normalize each parent configuration
+                for config in range(n_parent_configs):
+                    values[:, config] = values[:, config] / values[:, config].sum()
+                    
+                print(f"  Child {node}: learned from {len(complete_cases)} complete cases")
+            else:
+                # Not enough data - use informed uniform with slight bias toward observed marginals
+                observed_data = training_data[node].dropna()
+                if len(observed_data) > 0:
+                    empirical_prob = np.mean(observed_data)
+                    # Create slightly biased uniform (60-40 split based on data)
+                    p0 = 1 - empirical_prob
+                    p1 = empirical_prob
+                    base_probs = np.array([p0, p1]) * 0.8 + 0.1  # Smooth toward uniform
+                    values = np.tile(base_probs.reshape(-1, 1), (1, n_parent_configs))
+                else:
+                    # True uniform as last resort
+                    values = np.ones((n_states, n_parent_configs)) / n_states
+                print(f"  Child {node}: insufficient complete cases, using informed uniform")
+        
+        cpd = TabularCPD(
+            variable=node,
+            variable_card=n_states,
+            values=values,
+            evidence=parents,
+            evidence_card=[n_states] * len(parents) if parents else []
+        )
+        cpds.append(cpd)
+    
+    # Create model
+    model = BayesianNetwork(bn_structure.edges())
+    for node in nodes:
+        if node not in model.nodes():
+            model.add_node(node)
+    model.add_cpds(*cpds)
+    
+    print(f"Initialized model with {len(cpds)} informed CPDs")
+    return model
+
+
 def _initialize_uniform_model(bn_structure: BayesianNetwork, n_states: int) -> BayesianNetwork:
-    """Create initial model with uniform CPDs."""
+    """Create initial model with uniform CPDs (fallback method)."""
     cpds = []
     nodes = sorted(bn_structure.nodes())
     
@@ -415,39 +503,29 @@ def _pool_cpd_estimates(all_cpd_estimates: List[List]) -> List[TabularCPD]:
 
 
 def _compute_log_likelihood(data: pd.DataFrame, model: BayesianNetwork) -> float:
-    """Compute approximate log-likelihood using available data."""
+    """Compute log-likelihood using pgmpy's VariableElimination inference."""
     try:
-        # Use all data, compute likelihood for observed values only
+        from pgmpy.inference import VariableElimination
+        infer = VariableElimination(model)
+        
         log_likelihood = 0.0
         total_observations = 0
         
         for _, row in data.iterrows():
-            for node in model.nodes():
-                # Skip missing values
-                if pd.isna(row[node]):
-                    continue
-                    
-                # Check if all parents are observed
-                parents = list(model.get_parents(node))
-                if any(pd.isna(row[p]) for p in parents):
-                    continue  # Skip if any parent is missing
-                
-                # Compute probability for this observed value
-                cpd = model.get_cpds(node)
-                
-                if parents:
-                    parent_values = [int(row[p]) for p in parents]
-                    prob = cpd.get_value(**{node: int(row[node])}, **{p: v for p, v in zip(parents, parent_values)})
-                else:
-                    prob = cpd.get_value(**{node: int(row[node])})
-                
-                log_likelihood += np.log(max(prob, 1e-10))
-                total_observations += 1
-        
-        if total_observations == 0:
-            return float('-inf')
+            # Create evidence from observed values
+            evidence = {col: int(val) for col, val in row.items() if not pd.isna(val)}
             
-        return log_likelihood / total_observations
+            if evidence:
+                try:
+                    # Query joint probability of evidence
+                    prob = infer.query(variables=list(evidence.keys()), evidence=evidence).joint_probability()
+                    log_likelihood += np.log(max(prob, 1e-10))
+                    total_observations += 1
+                except:
+                    # Fallback: skip this observation if inference fails
+                    continue
+        
+        return log_likelihood / total_observations if total_observations > 0 else float('-inf')
         
     except Exception as e:
         print(f"  Log-likelihood computation failed: {e}")
