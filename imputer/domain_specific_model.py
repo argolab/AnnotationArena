@@ -239,6 +239,7 @@ def impute_missing_with_gibbs(model: BayesianNetwork,
 
                     
                     # For missing variables, use mode (most frequent value) from samples
+                    c = 0
                     for var in missing_vars:
                         if var in samples.columns and len(samples) > 0:
                             # Skip burn-in samples (first 10%) and use mode
@@ -251,7 +252,10 @@ def impute_missing_with_gibbs(model: BayesianNetwork,
                                 completed_data.loc[idx, var] = np.random.randint(0, 2)
                         else:
                             # Fallback: random binary
+                            c = c + 1
                             completed_data.loc[idx, var] = np.random.randint(0, 2)
+
+                    print(f"Total length is {len(missing_vars)}. Random Binary for {c}")
                         
                 except Exception as e:
                     print(f"Gibbs sampling failed for row {idx}: {e}")

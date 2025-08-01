@@ -22,9 +22,9 @@ from ve_graph_imputation import (
 )
 
 # Test configuration
-TEST_GRAPH_SIZE = [5]  # Single graph size for quick testing
-TEST_TRAINING_SIZES = [50]  # Reduced training sizes
-TEST_SIZE = 100  # Smaller test set for speed
+TEST_GRAPH_SIZE = [10]  # Single graph size for quick testing
+TEST_TRAINING_SIZES = [10, 50, 100, 500, 1000]  # Reduced training sizes
+TEST_SIZE = 250  # Smaller test set for speed
 
 def run_quick_test():
     """Run quick test with small configuration."""
