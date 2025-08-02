@@ -169,6 +169,63 @@ def learn_domain_specific_model(adj_matrix: np.ndarray,
     return learned_bn
 
 
+def learn_domain_specific_model_complete(adj_matrix: np.ndarray, 
+                                        complete_train_data: List[Tuple],
+                                        n_nodes: int,
+                                        n_states: int = 2) -> gum.BayesNet:
+    """
+    Learn domain-specific BN from complete training data (no EM needed).
+    
+    Args:
+        adj_matrix: Adjacency matrix defining BN structure
+        complete_train_data: Training data with NO missing values
+        n_nodes: Number of nodes
+        n_states: Number of states per variable (must be 2)
+        
+    Returns:
+        Learned pyAgrum BayesNet
+    """
+    print("LEARNING DOMAIN MODEL FROM COMPLETE DATA")
+    
+    # Create BN structure
+    bn = create_pyagrum_bn_from_adjacency(adj_matrix)
+    
+    # Convert complete training data to pyAgrum format
+    print("Converting complete training data for pyAgrum...")
+    samples = []
+    
+    for i, (inputs, embeddings, dimensions, mask, targets) in enumerate(complete_train_data):
+        sample = {}
+        
+        for node in range(n_nodes):
+            # All nodes should be observed in complete data (mask[node] == 0)
+            if mask[node] == 0:  # Observed node
+                state = torch.argmax(inputs[node, 1:]).item()
+                sample[str(node)] = str(state)
+            else:
+                print(f"WARNING: Found missing value in complete data at sample {i}, node {node}")
+                sample[str(node)] = "0"  # Fallback
+                
+        samples.append(sample)
+    
+    complete_df = pd.DataFrame(samples)
+    
+    # Convert to categorical for pyAgrum
+    for col in complete_df.columns:
+        complete_df[col] = complete_df[col].astype('category')
+    
+    print(f"Complete training data: {len(complete_df)} samples, {complete_df.shape[1]} variables")
+    print(f"Missing values: {complete_df.isnull().sum().sum()} (should be 0)")
+    
+    # Learn parameters directly from complete data (no EM needed)
+    learner = gum.BNLearner(complete_df, bn)
+    learned_bn = learner.learnParameters(bn)
+    
+    print("Direct parameter learning completed (no EM required)")
+    
+    return learned_bn
+
+
 def evaluate_domain_specific_model(learned_bn: gum.BayesNet, 
                                  test_data: List[Tuple],
                                  n_nodes: int,

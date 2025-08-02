@@ -24,9 +24,9 @@ except ImportError:
     raise ImportError("pyAgrum is required for this implementation")
 
 
-def generate_random_bn_structure(n_nodes: int, edge_prob: float = 0.35) -> gum.BayesNet:
+def generate_random_bn_structure(n_nodes: int, edge_prob: float = 0.35, seed: int = 42) -> gum.BayesNet:
     """Generate random BN structure using pyAgrum."""
-    print(f"Generating random BN with {n_nodes} nodes, edge_prob={edge_prob}")
+    print(f"Generating random BN with {n_nodes} nodes, edge_prob={edge_prob}, seed={seed}")
     
     # Create BN
     bn = gum.BayesNet("RandomBN")
@@ -36,7 +36,7 @@ def generate_random_bn_structure(n_nodes: int, edge_prob: float = 0.35) -> gum.B
         bn.add(gum.LabelizedVariable(str(i), str(i), ["0", "1"]))
     
     # Add random edges (ensuring DAG)
-    np.random.seed(42)  # For reproducibility
+    np.random.seed(seed)  # Use provided seed
     edges_added = 0
     
     for i in range(n_nodes):
@@ -340,12 +340,13 @@ def create_experiment_data(n_nodes: int,
                           train_size: int, 
                           test_size: int,
                           edge_prob: float = 0.35,
-                          obs_ratio: float = 0.5) -> Tuple:
+                          obs_ratio: float = 0.5,
+                          seed: int = 42) -> Tuple:
     """Create complete experiment data using pyAgrum."""
-    print(f"Creating data: {n_nodes} nodes, {train_size} train, {test_size} test")
+    print(f"Creating data: {n_nodes} nodes, {train_size} train, {test_size} test, seed={seed}")
     
     # Generate BN structure and parameters
-    bn = generate_random_bn_structure(n_nodes, edge_prob)
+    bn = generate_random_bn_structure(n_nodes, edge_prob, seed)
     adj_matrix = create_adjacency_matrix(bn, n_nodes)
     
     # Generate training and test data (without parameter embeddings)
@@ -353,3 +354,16 @@ def create_experiment_data(n_nodes: int,
     test_data = generate_dataset_fair(bn, adj_matrix, n_nodes, test_size, obs_ratio)
     
     return bn, adj_matrix, train_data, test_data
+
+
+def create_complete_training_data(bn: gum.BayesNet, 
+                                 adj_matrix: np.ndarray,
+                                 n_nodes: int, 
+                                 train_size: int) -> List[Tuple]:
+    """Create complete training data (no missing values) for domain baseline."""
+    print(f"Creating complete training data: {train_size} samples, no missing values")
+    
+    # Generate training data with obs_ratio=1.0 (no missing values)
+    complete_train_data = generate_dataset_fair(bn, adj_matrix, n_nodes, train_size, obs_ratio=1.0)
+    
+    return complete_train_data
