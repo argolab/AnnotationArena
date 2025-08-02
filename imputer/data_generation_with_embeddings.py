@@ -97,12 +97,12 @@ def create_parameter_embeddings(bn: gum.BayesNet, adj_matrix: np.ndarray) -> np.
     return param_embeddings
 
 
-def generate_sample_from_bn_with_embeddings(bn: gum.BayesNet, 
-                                           param_embeddings: np.ndarray,
-                                           n_nodes: int, 
-                                           obs_ratio: float, 
-                                           seed: int) -> Tuple:
-    """Generate single training sample from pyAgrum BN with parameter embeddings."""
+def generate_sample_from_bn(bn: gum.BayesNet, 
+                           param_embeddings: np.ndarray,
+                           n_nodes: int, 
+                           obs_ratio: float, 
+                           seed: int) -> Tuple:
+    """Generate single training sample from pyAgrum BN."""
     np.random.seed(seed)
     random.seed(seed)
     
@@ -195,127 +195,6 @@ def generate_sample_from_bn_with_embeddings(bn: gum.BayesNet,
     )
 
 
-def generate_sample_from_bn_fair(bn: gum.BayesNet, 
-                                adj_matrix: np.ndarray,
-                                n_nodes: int, 
-                                obs_ratio: float, 
-                                seed: int) -> Tuple:
-    """Generate single training sample from pyAgrum BN."""
-    np.random.seed(seed)
-    random.seed(seed)
-    
-    # Generate a complete sample from the BN
-    samples_df, _ = gum.generateSample(bn, n=1, with_labels=False)
-    complete_sample = samples_df.iloc[0].to_dict()
-    
-    # Debug: print the sample structure
-    if seed == 0:  # Only print for first sample
-        print(f"Sample columns: {list(samples_df.columns)}")
-        print(f"Sample values: {complete_sample}")
-    
-    # Convert to our format
-    node_states = {}
-    for node_id in bn.nodes():
-        node_name = bn.variable(node_id).name()
-        # Try different key formats
-        if node_name in complete_sample:
-            state = complete_sample[node_name]
-        elif node_id in complete_sample:
-            state = complete_sample[node_id]
-        elif str(node_id) in complete_sample:
-            state = complete_sample[str(node_id)]
-        else:
-            # Fallback: use column index
-            state = samples_df.iloc[0, node_id]
-        
-        node_states[int(node_name)] = int(state)
-    
-    # Select observed nodes
-    n_observed = max(1, int(obs_ratio * n_nodes))
-    node_list = list(range(n_nodes))
-    observed_nodes = random.sample(node_list, k=n_observed)
-    unobserved_nodes = [node for node in node_list if node not in observed_nodes]
-    
-    # Create inputs: [mask_bit, state_0_bit, state_1_bit]
-    inputs = np.zeros((n_nodes, 3), dtype=np.float32)
-    
-    for node in node_list:
-        if node in observed_nodes:
-            inputs[node, 0] = 0.0  # Not masked
-            state = node_states[node]
-            inputs[node, 1 + state] = 1.0  # One-hot encoding
-        else:
-            inputs[node, 0] = 1.0  # Masked
-    
-    # Create evidence and compute ground truth using pyAgrum inference
-    evidence = {str(node): str(node_states[node]) for node in observed_nodes}
-    
-    targets = np.zeros((n_nodes, 2), dtype=np.float32)
-    
-    if unobserved_nodes:
-        infer = gum.LazyPropagation(bn)
-        
-        for node in unobserved_nodes:
-            try:
-                if evidence:
-                    infer.setEvidence(evidence)
-                    infer.makeInference()
-                    posterior = infer.posterior(str(node))
-                else:
-                    # No evidence - use marginal
-                    posterior = infer.posterior(str(node))
-                
-                # Get probabilities for states "0" and "1"
-                # posterior is a Potential object, use indexing with variable values
-                node_name = str(node)
-                targets[node, 0] = posterior[{node_name: "0"}]  # P(node="0"|evidence)
-                targets[node, 1] = posterior[{node_name: "1"}]  # P(node="1"|evidence)
-                
-                infer.eraseAllEvidence()
-                
-            except Exception as e:
-                print(f"Inference failed for node {node}: {e}")
-                return None
-    
-    # Create mask: 0 for observed, 1 for unobserved
-    mask = np.zeros(n_nodes, dtype=np.float32)
-    for node in unobserved_nodes:
-        mask[node] = 1.0
-    
-    dimensions = np.arange(n_nodes, dtype=np.int64)
-    
-    # Create structural embeddings (just adjacency matrix)
-    structural_embeddings = np.tile(adj_matrix, (1, 1)).astype(np.float32)
-    
-    return (
-        torch.FloatTensor(inputs),
-        torch.FloatTensor(structural_embeddings),
-        torch.LongTensor(dimensions),
-        torch.FloatTensor(mask),
-        torch.FloatTensor(targets)
-    )
-
-
-def generate_dataset_fair(bn: gum.BayesNet, 
-                         adj_matrix: np.ndarray,
-                         n_nodes: int, 
-                         n_samples: int, 
-                         obs_ratio: float) -> List[Tuple]:
-    """Generate full dataset from pyAgrum BN without parameter embeddings."""
-    samples = []
-    failed_count = 0
-    
-    for i in tqdm(range(n_samples), desc=f"Generating {n_samples} samples"):
-        sample = generate_sample_from_bn_fair(bn, adj_matrix, n_nodes, obs_ratio, i)
-        if sample is not None:
-            samples.append(sample)
-        else:
-            failed_count += 1
-    
-    print(f"Generated {len(samples)} samples, {failed_count} failed")
-    return samples
-
-
 def generate_dataset(bn: gum.BayesNet, 
                     param_embeddings: np.ndarray,
                     n_nodes: int, 
@@ -326,7 +205,7 @@ def generate_dataset(bn: gum.BayesNet,
     failed_count = 0
     
     for i in tqdm(range(n_samples), desc=f"Generating {n_samples} samples"):
-        sample = generate_sample_from_bn_with_embeddings(bn, param_embeddings, n_nodes, obs_ratio, i)
+        sample = generate_sample_from_bn(bn, param_embeddings, n_nodes, obs_ratio, i)
         if sample is not None:
             samples.append(sample)
         else:
@@ -347,9 +226,10 @@ def create_experiment_data(n_nodes: int,
     # Generate BN structure and parameters
     bn = generate_random_bn_structure(n_nodes, edge_prob)
     adj_matrix = create_adjacency_matrix(bn, n_nodes)
+    param_embeddings = create_parameter_embeddings(bn, adj_matrix)
     
-    # Generate training and test data (without parameter embeddings)
-    train_data = generate_dataset_fair(bn, adj_matrix, n_nodes, train_size, obs_ratio)
-    test_data = generate_dataset_fair(bn, adj_matrix, n_nodes, test_size, obs_ratio)
+    # Generate training and test data
+    train_data = generate_dataset(bn, param_embeddings, n_nodes, train_size, obs_ratio)
+    test_data = generate_dataset(bn, param_embeddings, n_nodes, test_size, obs_ratio)
     
-    return bn, adj_matrix, train_data, test_data
+    return bn, param_embeddings, train_data, test_data

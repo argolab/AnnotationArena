@@ -74,7 +74,7 @@ def run_experiment(n_nodes, train_size):
     try:
         # Generate data using pyAgrum
         print("Generating data with pyAgrum...")
-        bn, adj_matrix, train_data, test_data = create_experiment_data(
+        bn, param_embeddings, train_data, test_data = create_experiment_data(
             n_nodes, train_size, TEST_SIZE, edge_prob=0.35, obs_ratio=0.5
         )
         
@@ -92,8 +92,8 @@ def run_experiment(n_nodes, train_size):
         test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
         
         input_dim = train_data[0][0].shape[1]
-        structure_dim = train_data[0][1].shape[1]
-        model = create_model(n_nodes, input_dim, structure_dim)
+        embedding_dim = train_data[0][1].shape[1]
+        model = create_model(n_nodes, input_dim, embedding_dim)
         
         print(f"Model created with {sum(p.numel() for p in model.parameters())} parameters")
         model = train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=15)
@@ -108,8 +108,8 @@ def run_experiment(n_nodes, train_size):
         # Convert training data to pyAgrum format
         pyagrum_train_data = convert_training_data_for_pyagrum(train_data, n_nodes)
         
-        # Use adjacency matrix directly (no need to extract from embeddings)
-        # adj_matrix is already available from create_experiment_data
+        # Extract adjacency matrix
+        adj_matrix = extract_adjacency_from_embeddings(param_embeddings, n_nodes)
         
         # Learn with pyAgrum EM
         learned_bn = learn_domain_specific_model(

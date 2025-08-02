@@ -49,11 +49,11 @@ class FeedForward(nn.Module):
 class Positional_Encoder(nn.Module):
     """Positional encoder for graph imputation."""
     
-    def __init__(self, n_nodes, input_dim, structure_dim, hidden_dim):
+    def __init__(self, n_nodes, input_dim, embedding_dim, hidden_dim):
         super().__init__()
         self.n_nodes = n_nodes
         self.input_dim = input_dim
-        self.structure_dim = structure_dim
+        self.embedding_dim = embedding_dim
         self.hidden_dim = hidden_dim
         
         # Node embeddings
@@ -64,7 +64,7 @@ class Positional_Encoder(nn.Module):
         torch.nn.init.kaiming_normal_(self.node_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.question_embedding, mode='fan_out', nonlinearity='relu')
 
-    def forward(self, inputs, structure_info, dimensions):
+    def forward(self, inputs, embeddings, dimensions):
         batch_size = inputs.shape[0]
         
         # Get node embeddings for all positions
@@ -75,8 +75,8 @@ class Positional_Encoder(nn.Module):
         # Combine embeddings
         combined_embeds = question_embeds + node_embeds
         
-        # Feature stream: combined embeddings + structural info + input features
-        feature_x = torch.cat([combined_embeds, structure_info, inputs[:,:,1:]], dim=-1)
+        # Feature stream: combined embeddings + graph structure + input features
+        feature_x = torch.cat([combined_embeds, embeddings, inputs[:,:,1:]], dim=-1)
         
         # Parameter stream: just the input states (excluding mask bit)
         param_x = inputs[:,:,1:].clone()
@@ -143,19 +143,19 @@ class EncoderLayer(nn.Module):
 class Encoder(nn.Module):
     """Full encoder consisting of multiple encoder layers."""
 
-    def __init__(self, n_nodes, input_dim, structure_dim, encoder_num, attention_heads, 
+    def __init__(self, n_nodes, input_dim, embedding_dim, encoder_num, attention_heads, 
                  hidden_dim=64, dropout=0.1):
         super().__init__()
         
         # Calculate dimensions
-        self.feature_dim = hidden_dim + structure_dim + (input_dim - 1)
+        self.feature_dim = hidden_dim + embedding_dim + (input_dim - 1)
         self.param_dim = input_dim - 1
         self.hidden_dim = hidden_dim
         
         print(f"Encoder dimensions: feature_dim={self.feature_dim}, param_dim={self.param_dim}")
         
         # Positional encoder
-        self.position_encoder = Positional_Encoder(n_nodes, input_dim, structure_dim, hidden_dim)
+        self.position_encoder = Positional_Encoder(n_nodes, input_dim, embedding_dim, hidden_dim)
 
         # Stack of encoder layers
         self.layers = nn.ModuleList([
@@ -166,10 +166,10 @@ class Encoder(nn.Module):
         # Final normalization
         self.norm = NormLayer(self.feature_dim)
 
-    def forward(self, inputs, structure_info, dimensions):
+    def forward(self, inputs, embeddings, dimensions):
         """Process input through all encoder layers."""
         # Get initial representations
-        feature_x, param_x = self.position_encoder(inputs, structure_info, dimensions)
+        feature_x, param_x = self.position_encoder(inputs, embeddings, dimensions)
         
         # Extract mask for attention
         mask = inputs[:, :, 0]  # First bit is mask
@@ -189,7 +189,7 @@ class GraphImputer(nn.Module):
     def __init__(self, 
                  n_nodes=5, 
                  input_dim=3,
-                 structure_dim=None,
+                 embedding_dim=9,
                  encoder_layers_num=4, 
                  attention_heads=4, 
                  hidden_dim=64,
@@ -201,15 +201,11 @@ class GraphImputer(nn.Module):
         self.n_states = n_states
         self.hidden_dim = hidden_dim
         
-        # Structure dimension is n_nodes x n_nodes for adjacency matrix
-        if structure_dim is None:
-            structure_dim = n_nodes
-        
         # Main encoder
         self.encoder = Encoder(
             n_nodes=n_nodes,
             input_dim=input_dim, 
-            structure_dim=structure_dim,
+            embedding_dim=embedding_dim,
             encoder_num=encoder_layers_num, 
             attention_heads=attention_heads,
             hidden_dim=hidden_dim,
@@ -229,9 +225,9 @@ class GraphImputer(nn.Module):
         
         print(f"GraphImputer initialized: {n_nodes} nodes, {n_states} states per node")
     
-    def forward(self, inputs, structure_info, dimensions):
+    def forward(self, inputs, embeddings, dimensions):
         # Process through encoder
-        feature_x, param_x = self.encoder(inputs, structure_info, dimensions)
+        feature_x, param_x = self.encoder(inputs, embeddings, dimensions)
         
         # Apply output heads for each node
         predictions = []
@@ -260,10 +256,10 @@ class GraphDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx):
-        inputs, structure_info, dimensions, mask, targets = self.data[idx]
+        inputs, embeddings, dimensions, mask, targets = self.data[idx]
         return {
             'inputs': inputs,
-            'structure_info': structure_info,
+            'embeddings': embeddings,
             'dimensions': dimensions,
             'mask': mask,
             'targets': targets
@@ -272,7 +268,7 @@ class GraphDataset(Dataset):
 def collate_fn(batch):
     return {
         'inputs': torch.stack([sample['inputs'] for sample in batch]),
-        'structure_info': torch.stack([sample['structure_info'] for sample in batch]),
+        'embeddings': torch.stack([sample['embeddings'] for sample in batch]),
         'dimensions': torch.stack([sample['dimensions'] for sample in batch]),
         'mask': torch.stack([sample['mask'] for sample in batch]),
         'targets': torch.stack([sample['targets'] for sample in batch])
@@ -303,13 +299,13 @@ def train_epoch(model, train_loader, optimizer):
     
     for batch in train_loader:
         inputs = batch['inputs'].to(DEVICE)
-        structure_info = batch['structure_info'].to(DEVICE)
+        embeddings = batch['embeddings'].to(DEVICE)
         dimensions = batch['dimensions'].to(DEVICE)
         mask = batch['mask'].to(DEVICE)
         targets = batch['targets'].to(DEVICE)
         
         optimizer.zero_grad()
-        predictions = model(inputs, structure_info, dimensions)
+        predictions = model(inputs, embeddings, dimensions)
         loss = compute_kl_loss(predictions, targets, mask)
         
         loss.backward()
@@ -326,19 +322,19 @@ def validate_epoch(model, test_loader):
     with torch.no_grad():
         for batch in test_loader:
             inputs = batch['inputs'].to(DEVICE)
-            structure_info = batch['structure_info'].to(DEVICE)
+            embeddings = batch['embeddings'].to(DEVICE)
             dimensions = batch['dimensions'].to(DEVICE)
             mask = batch['mask'].to(DEVICE)
             targets = batch['targets'].to(DEVICE)
             
-            predictions = model(inputs, structure_info, dimensions)
+            predictions = model(inputs, embeddings, dimensions)
             loss = compute_kl_loss(predictions, targets, mask)
             
             total_loss += loss.item()
     
     return total_loss / len(test_loader)
 
-def create_model(n_nodes, input_dim, structure_dim):
+def create_model(n_nodes, input_dim, embedding_dim):
     """Create model with architecture scaled based on graph size."""
     
     if n_nodes <= 10:
@@ -351,7 +347,7 @@ def create_model(n_nodes, input_dim, structure_dim):
         encoder_layers = 6
     
     # Ensure divisibility by attention heads
-    base_dim = structure_dim + (input_dim - 1)
+    base_dim = embedding_dim + (input_dim - 1)
     remainder = (hidden_dim_base + base_dim) % attention_heads
     hidden_dim = hidden_dim_base - remainder
     
@@ -360,7 +356,7 @@ def create_model(n_nodes, input_dim, structure_dim):
     model = GraphImputer(
         n_nodes=n_nodes,
         input_dim=input_dim,
-        structure_dim=structure_dim,
+        embedding_dim=embedding_dim,
         encoder_layers_num=encoder_layers,
         attention_heads=attention_heads,
         hidden_dim=hidden_dim,
@@ -403,7 +399,7 @@ def evaluate_neural_model(model, test_data, n_nodes, n_states=2):
     prediction_errors = []
     failed_inferences = 0
     
-    for inputs, structure_info, dimensions, mask, targets in test_data:
+    for inputs, embeddings, dimensions, mask, targets in test_data:
         # Get unobserved nodes for this sample
         unobserved_nodes = []
         
@@ -420,10 +416,10 @@ def evaluate_neural_model(model, test_data, n_nodes, n_states=2):
                 with torch.no_grad():
                     # Add batch dimension
                     inputs_batch = inputs.unsqueeze(0).to(DEVICE)
-                    structure_info_batch = structure_info.unsqueeze(0).to(DEVICE) 
+                    embeddings_batch = embeddings.unsqueeze(0).to(DEVICE) 
                     dimensions_batch = dimensions.unsqueeze(0).to(DEVICE)
                     
-                    predictions = model(inputs_batch, structure_info_batch, dimensions_batch)
+                    predictions = model(inputs_batch, embeddings_batch, dimensions_batch)
                     pred_probs = predictions[0, node, :].cpu().numpy()
                 
                 # Get ground truth
