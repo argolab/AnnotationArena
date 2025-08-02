@@ -35,8 +35,10 @@ from neural_imputer import (
 )
 
 # Test configuration
-TEST_GRAPH_SIZE = [5]
-TEST_TRAINING_SIZES = [50, 100, 250, 500, 750, 1000, 1250, 1500, 1750]
+# TEST_GRAPH_SIZE = [5, 7, 10]
+# TEST_TRAINING_SIZES = [10, 50, 100, 250, 500, 750, 1000, 1500, 1750, 2000]
+TEST_GRAPH_SIZE = [5, 7]
+TEST_TRAINING_SIZES = [10, 50, 100]
 TEST_SIZE = 250
 
 def convert_to_json_serializable(obj):
@@ -193,35 +195,44 @@ def run_test():
     
     # Print final summary
     if all_results:
-        print("\n" + "="*60)
+        print("\n" + "="*80)
         print("FINAL EXPERIMENT SUMMARY")
-        print("="*60)
+        print("="*80)
         
-        print(f"{'Train Size':<12} {'Neural KL':<12} {'Domain KL':<12} {'KL Ratio':<12} {'Status'}")
-        print("-" * 60)
+        # Group results by graph size
+        graph_sizes = sorted(set(k[0] for k in all_results.keys()))
         
-        for (n_nodes, train_size), result in all_results.items():
-            comparison = result.get('comparison', {})
-            neural_kl = comparison.get('neural_kl', float('inf'))
-            domain_kl = comparison.get('domain_kl', float('inf'))
-            kl_ratio = comparison.get('kl_ratio', float('inf'))
+        for n_nodes in graph_sizes:
+            print(f"\n--- {n_nodes} NODES ---")
+            print(f"{'Train Size':<12} {'Imputer KL':<12} {'Domain KL':<12} {'KL Ratio':<12} {'Status'}")
+            print("-" * 65)
             
-            # Determine status
-            if neural_kl == float('inf') or domain_kl == float('inf'):
-                status = "FAILED"
-            elif kl_ratio < 2.0:
-                status = "EXCELLENT"
-            elif kl_ratio < 5.0:
-                status = "GOOD"
-            else:
-                status = "POOR"
+            # Get results for this graph size
+            node_results = [(k, v) for k, v in all_results.items() if k[0] == n_nodes]
+            node_results.sort(key=lambda x: x[0][1])  # Sort by training size
             
-            print(f"{train_size:<12} {neural_kl:<12.4f} {domain_kl:<12.4f} {kl_ratio:<12.2f} {status}")
+            for (_, train_size), result in node_results:
+                comparison = result.get('comparison', {})
+                neural_kl = comparison.get('neural_kl', float('inf'))
+                domain_kl = comparison.get('domain_kl', float('inf'))
+                kl_ratio = comparison.get('kl_ratio', float('inf'))
+                
+                # Determine status
+                if neural_kl == float('inf') or domain_kl == float('inf'):
+                    status = "FAILED"
+                elif kl_ratio < 2.0:
+                    status = "EXCELLENT"
+                elif kl_ratio < 5.0:
+                    status = "GOOD"
+                else:
+                    status = "POOR"
+                
+                print(f"{train_size:<12} {neural_kl:<12.4f} {domain_kl:<12.4f} {kl_ratio:<12.2f} {status}")
         
         print("\nInterpretation:")
-        print("- KL Ratio < 2.0: Neural imputer is competitive")
-        print("- KL Ratio 2.0-5.0: Neural imputer is reasonable") 
-        print("- KL Ratio > 5.0: Neural imputer needs improvement")
+        print("- KL Ratio < 2.0: Imputer is competitive")
+        print("- KL Ratio 2.0-5.0: Imputer is reasonable") 
+        print("- KL Ratio > 5.0: Imputer needs improvement")
         
         # Create plot
         create_comparison_plot(all_results)
@@ -238,43 +249,57 @@ def create_comparison_plot(all_results):
     if not all_results:
         return
     
-    train_sizes = sorted(set(k[1] for k in all_results.keys()))
-    neural_kls = []
-    domain_kls = []
+    # Get all tested graph sizes
+    graph_sizes = sorted(set(k[0] for k in all_results.keys()))
     
-    for train_size in train_sizes:
-        key = (5, train_size)  # Assuming 5-node graph
-        if key in all_results:
-            result = all_results[key]
-            comparison = result.get('comparison', {})
-            neural_kl = comparison.get('neural_kl', float('inf'))
-            domain_kl = comparison.get('domain_kl', float('inf'))
-            
-            neural_kls.append(neural_kl if neural_kl != float('inf') else np.nan)
-            domain_kls.append(domain_kl if domain_kl != float('inf') else np.nan)
-    
-    plt.figure(figsize=(12, 8))
-    plt.plot(train_sizes, neural_kls, 'o-', label='Neural Imputer', linewidth=3, markersize=10)
-    plt.plot(train_sizes, domain_kls, 's-', label='Domain-specific BN (pyAgrum)', linewidth=3, markersize=10)
-    plt.xlabel('Training Samples', fontsize=14)
-    plt.ylabel('KL Divergence', fontsize=14)
-    plt.title('Graph Imputation: Neural vs Domain-Specific BN (5 nodes)', fontsize=16)
-    plt.legend(fontsize=12)
-    plt.grid(True, alpha=0.3)
-    plt.yscale('log')
-    
-    # Add text box with summary
-    if len(neural_kls) > 0 and len(domain_kls) > 0:
-        neural_mean = np.nanmean(neural_kls)
-        domain_mean = np.nanmean(domain_kls)
-        ratio_mean = domain_mean / neural_mean if neural_mean > 0 else float('inf')
-        
-        textstr = f'Average KL Ratio: {ratio_mean:.2f}\nNeural Mean: {neural_mean:.4f}\nDomain Mean: {domain_mean:.4f}'
-        props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
-        plt.text(0.02, 0.98, textstr, transform=plt.gca().transAxes, fontsize=10,
-                verticalalignment='top', bbox=props)
+    # Create subplots for each graph size
+    fig, axes = plt.subplots(1, len(graph_sizes), figsize=(6*len(graph_sizes), 6))
+    if len(graph_sizes) == 1:
+        axes = [axes]
     
     base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    for idx, n_nodes in enumerate(graph_sizes):
+        ax = axes[idx]
+        
+        # Get training sizes for this graph size
+        train_sizes = sorted(set(k[1] for k in all_results.keys() if k[0] == n_nodes))
+        neural_kls = []
+        domain_kls = []
+        
+        for train_size in train_sizes:
+            key = (n_nodes, train_size)
+            if key in all_results:
+                result = all_results[key]
+                comparison = result.get('comparison', {})
+                neural_kl = comparison.get('neural_kl', float('inf'))
+                domain_kl = comparison.get('domain_kl', float('inf'))
+                
+                neural_kls.append(neural_kl if neural_kl != float('inf') else np.nan)
+                domain_kls.append(domain_kl if domain_kl != float('inf') else np.nan)
+        
+        # Plot for this graph size
+        ax.plot(train_sizes, neural_kls, 'o-', label='Imputer', linewidth=3, markersize=8)
+        ax.plot(train_sizes, domain_kls, 's-', label='Domain Specific (EM)', linewidth=3, markersize=8)
+        ax.set_xlabel('Training Samples', fontsize=12)
+        ax.set_ylabel('KL Divergence', fontsize=12)
+        ax.set_title(f'KL Divergence Comparison ({n_nodes} nodes)', fontsize=14)
+        ax.legend(fontsize=10)
+        ax.grid(True, alpha=0.3)
+        ax.set_yscale('log')
+        
+        # Add text box with summary for this graph size
+        if len(neural_kls) > 0 and len(domain_kls) > 0:
+            neural_mean = np.nanmean(neural_kls)
+            domain_mean = np.nanmean(domain_kls)
+            ratio_mean = domain_mean / neural_mean if neural_mean > 0 else float('inf')
+            
+            textstr = f'Avg KL Ratio: {ratio_mean:.2f}\nImputer: {neural_mean:.4f}\nDomain: {domain_mean:.4f}'
+            props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+            ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=9,
+                    verticalalignment='top', bbox=props)
+    
+    plt.tight_layout()
     plt.savefig(os.path.join(base_dir, 'results', 'experiment_plot.png'), dpi=300, bbox_inches='tight')
     plt.show()
     

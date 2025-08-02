@@ -52,7 +52,7 @@ def convert_training_data_for_pyagrum(train_data: List[Tuple], n_nodes: int) -> 
                 if i < 3:
                     print(f"  Sample {i}, Node {node}: observed state = {state}")
             else:  # Unobserved node
-                sample[str(node)] = np.nan
+                sample[str(node)] = "?"
                 
         samples.append(sample)
         
@@ -62,13 +62,13 @@ def convert_training_data_for_pyagrum(train_data: List[Tuple], n_nodes: int) -> 
     
     df = pd.DataFrame(samples)
     
-    # Convert to categorical for pyAgrum
+    # Convert to categorical for pyAgrum (but keep "?" as string)
     for col in df.columns:
         df[col] = df[col].astype('category')
     
     print(f"Created DataFrame with columns: {list(df.columns)}")
     print(f"Sample data shape: {df.shape}")
-    print(f"Missing values per variable: {df.isnull().sum().to_dict()}")
+    print(f"Missing values per variable: {(df == '?').sum().to_dict()}")
     print(f"Data types: {df.dtypes.to_dict()}")
     
     return df
@@ -118,11 +118,11 @@ def learn_with_pyagrum_em(bn: gum.BayesNet,
                          epsilon: float = 1e-3) -> gum.BayesNet:
     """Learn BN parameters using pyAgrum EM."""
     print(f"=== LEARNING WITH PYAGRUM EM ===")
-    print(f"Training data: {len(training_data)} samples, {training_data.isnull().sum().sum()} missing values")
+    print(f"Training data: {len(training_data)} samples, {(training_data == '?').sum().sum()} missing values")
     print(f"EM config: max_iter={max_iter}, epsilon={epsilon}")
     
-    # Create learner and configure EM
-    learner = gum.BNLearner(training_data)
+    # Create learner and configure EM with missing data markers
+    learner = gum.BNLearner(training_data, bn, ["?"])
     learner.useEM(epsilon)
     learner.setMaxIter(max_iter)
     
