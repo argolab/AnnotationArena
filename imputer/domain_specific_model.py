@@ -1,9 +1,8 @@
 """
-Domain-specific Bayesian Network model with Gibbs Sampling + MLE.
+Domain-specific Bayesian Network model using pyAgrum.
 
 This module provides functionality to learn BN parameters from incomplete data
-using Gibbs sampling for missing value imputation followed by MLE.
-Used as baseline comparison for the neural imputer.
+using pyAgrum's built-in EM algorithm for graph imputation tasks.
 
 Author: Prabhav Singh
 """
@@ -11,32 +10,22 @@ Author: Prabhav Singh
 import numpy as np
 import pandas as pd
 import warnings
-warnings.filterwarnings('ignore')
 import torch
 from typing import List, Tuple, Dict, Optional
-import warnings
-import traceback
 warnings.filterwarnings('ignore')
 
-from pgmpy.models import BayesianNetwork
-from pgmpy.estimators import MaximumLikelihoodEstimator
-from pgmpy.inference import VariableElimination
-from pgmpy.sampling import GibbsSampling
-from pgmpy.factors.discrete import TabularCPD
-
-# Your pgmpy code that generates the warning
-with warnings.catch_warnings():
-    warnings.filterwarnings("ignore", message="Probability values don't exactly sum to 1")
-    # Your pgmpy operations here, e.g., model learning, inference, etc.
-
-import logging
-
-logging.getLogger('pgmpy').setLevel(logging.ERROR)
+try:
+    import pyagrum as gum
+    PYAGRUM_AVAILABLE = True
+    print("pyAgrum available - using for all BN operations")
+except ImportError:
+    PYAGRUM_AVAILABLE = False
+    raise ImportError("pyAgrum is required for this implementation")
 
 
-def convert_training_data_for_pgmpy(train_data: List[Tuple], n_nodes: int) -> pd.DataFrame:
+def convert_training_data_for_pyagrum(train_data: List[Tuple], n_nodes: int) -> pd.DataFrame:
     """
-    Convert masked training data to pgmpy format with NaN for missing values.
+    Convert masked training data to pyAgrum format with NaN for missing values.
     
     Args:
         train_data: List of (inputs, embeddings, dimensions, mask, targets)
@@ -45,7 +34,7 @@ def convert_training_data_for_pgmpy(train_data: List[Tuple], n_nodes: int) -> pd
     Returns:
         pandas DataFrame with columns for each node, NaN for unobserved values
     """
-    print(f"DEBUG: Converting {len(train_data)} samples for pgmpy...")
+    print(f"Converting {len(train_data)} samples for pyAgrum...")
     samples = []
     
     for i, (inputs, embeddings, dimensions, mask, targets) in enumerate(train_data):
@@ -56,14 +45,14 @@ def convert_training_data_for_pgmpy(train_data: List[Tuple], n_nodes: int) -> pd
             if mask[node] == 0:  # Observed node
                 # Extract state from one-hot encoding in inputs
                 state = torch.argmax(inputs[node, 1:]).item()
-                sample[str(node)] = state  # Use STRING node names for EM compatibility
+                sample[str(node)] = str(state)  # String values for pyAgrum
                 observed_count += 1
                 
                 # Debug first few samples
                 if i < 3:
                     print(f"  Sample {i}, Node {node}: observed state = {state}")
             else:  # Unobserved node
-                sample[str(node)] = np.nan  # Use STRING node names for EM compatibility
+                sample[str(node)] = np.nan
                 
         samples.append(sample)
         
@@ -72,533 +61,123 @@ def convert_training_data_for_pgmpy(train_data: List[Tuple], n_nodes: int) -> pd
             print(f"  Sample {i}: {observed_count}/{n_nodes} nodes observed ({observed_count/n_nodes:.1%})")
     
     df = pd.DataFrame(samples)
-    print(f"DEBUG: Created DataFrame with columns: {list(df.columns)}")
-    print(f"DEBUG: Sample data shape: {df.shape}")
-    print(f"DEBUG: Missing values per column: {df.isnull().sum().to_dict()}")
-    print(f"DEBUG: Sample of raw data:")
-    print(df.head(3))
     
-    # CRITICAL FIX: Force pure integer data (no floats) for pgmpy 1.0.0 EM
-    print(f"DEBUG: Converting to pure integer data for pgmpy 1.0.0 EM...")
+    # Convert to categorical for pyAgrum
     for col in df.columns:
-        # First convert to object type to allow mixed int/NaN
-        df[col] = df[col].astype('object')
-        # Then convert only non-NaN values to pure integers
-        observed_mask = df[col].notna()
-        if observed_mask.any():
-            # Force conversion to Python int (not numpy float or int64)
-            df.loc[observed_mask, col] = [int(x) for x in df.loc[observed_mask, col]]
+        df[col] = df[col].astype('category')
     
-    print(f"DEBUG: Final DataFrame dtypes: {df.dtypes.to_dict()}")
-    print(f"DEBUG: Sample of converted data (should show np.nan):")
-    print(df.head(3))
-    print(f"DEBUG: Checking for np.nan presence: {df.isnull().sum().to_dict()}")
+    print(f"Created DataFrame with columns: {list(df.columns)}")
+    print(f"Sample data shape: {df.shape}")
+    print(f"Missing values per variable: {df.isnull().sum().to_dict()}")
+    print(f"Data types: {df.dtypes.to_dict()}")
     
     return df
 
 
-def create_bn_structure_from_adjacency(adj_matrix: np.ndarray) -> BayesianNetwork:
+def create_pyagrum_bn_from_adjacency(adj_matrix: np.ndarray) -> gum.BayesNet:
     """
-    Create BayesianNetwork structure from adjacency matrix.
+    Create pyAgrum BayesNet structure from adjacency matrix.
     
     Args:
         adj_matrix: Adjacency matrix where adj_matrix[i,j] = 1 means edge i -> j
         
     Returns:
-        BayesianNetwork with structure but no CPDs
+        pyAgrum BayesNet with structure
     """
     n_nodes = adj_matrix.shape[0]
-    print(f"DEBUG: Creating BN structure from {n_nodes}x{n_nodes} adjacency matrix")
-    print(f"DEBUG: Adjacency matrix:\n{adj_matrix}")
+    print(f"Creating pyAgrum BN from {n_nodes}x{n_nodes} adjacency matrix")
     
-    # Create edges from adjacency matrix using STRING node names for EM compatibility
-    edges = []
+    # Create pyAgrum BN
+    bn = gum.BayesNet("DomainSpecificBN")
+    
+    # Add binary variables with string states "0", "1"
+    for i in range(n_nodes):
+        bn.add(gum.LabelizedVariable(str(i), str(i), ["0", "1"]))
+        print(f"  Added variable {i}")
+    
+    # Add arcs from adjacency matrix
+    edges_added = 0
     for i in range(n_nodes):
         for j in range(n_nodes):
             if adj_matrix[i, j] == 1:
-                edge = (str(i), str(j))  # Use STRING node names for EM compatibility
-                edges.append(edge)
-                print(f"DEBUG: Adding edge: {edge}")
+                bn.addArc(str(i), str(j))
+                edges_added += 1
+                print(f"  Added arc {i} -> {j}")
     
-    print(f"DEBUG: Total edges created: {len(edges)}")
-    print(f"DEBUG: Edges: {edges}")
+    # Generate initial CPTs
+    for node_id in bn.nodes():
+        bn.generateCPT(node_id)
     
-    # Create BayesianNetwork
-    bn = BayesianNetwork(edges)
-    
-    # CRITICAL FIX: Add all nodes explicitly, even isolated ones
-    print(f"DEBUG: BN nodes before adding isolated nodes: {sorted(list(bn.nodes()))}")
-    for i in range(n_nodes):
-        node_str = str(i)
-        if node_str not in bn.nodes():
-            bn.add_node(node_str)  # Use STRING node names for EM compatibility
-            print(f"DEBUG: Added isolated node: {node_str}")
-    
-    print(f"DEBUG: BN nodes after adding isolated nodes: {sorted(list(bn.nodes()))}")
-    print(f"DEBUG: BN edges: {list(bn.edges())}")
-    
+    print(f"Created pyAgrum BN: {bn.size()} nodes, {edges_added} arcs")
     return bn
 
 
-
-
-
-def learn_domain_specific_model_simple(bn_structure: BayesianNetwork,
-                                      training_data: pd.DataFrame,
-                                      n_states: int = 2,
-                                      max_iter: int = 50) -> BayesianNetwork:
-    """
-    Custom EM implementation with multiple imputation for missing data.
-    
-    Uses principled approach:
-    1. E-step: Multiple imputation via Gibbs sampling
-    2. M-step: Parameter learning via MLE on completed datasets
-    3. Parameter pooling: Rubin's rules for combining estimates
-    4. Convergence: Log-likelihood based stopping criterion
-    """
-    print(f"=== CUSTOM EM WITH MULTIPLE IMPUTATION ===")
+def learn_with_pyagrum_em(bn: gum.BayesNet, 
+                         training_data: pd.DataFrame,
+                         max_iter: int = 100,
+                         epsilon: float = 1e-3) -> gum.BayesNet:
+    """Learn BN parameters using pyAgrum EM."""
+    print(f"=== LEARNING WITH PYAGRUM EM ===")
     print(f"Training data: {len(training_data)} samples, {training_data.isnull().sum().sum()} missing values")
-    print(f"EM config: {max_iter} iterations, {n_states} states per variable")
+    print(f"EM config: max_iter={max_iter}, epsilon={epsilon}")
     
-    all_nodes = sorted(bn_structure.nodes())
-    n_missing = training_data.isnull().sum().sum()
+    # Create learner and configure EM
+    learner = gum.BNLearner(training_data)
+    learner.useEM(epsilon)
+    learner.setMaxIter(max_iter)
     
-    if n_missing == 0:
-        print("No missing data - using direct MLE")
-        return _learn_with_mle(bn_structure, training_data)
+    print(f"EM enabled: {learner.isUsingEM()}")
+    print(f"Max iterations: {learner.EMMaxIter()}")
+    print(f"Epsilon: {learner.EMEpsilon()}")
     
-    # Initialize with informed priors from observed data
-    current_model = _initialize_with_informed_priors(bn_structure, training_data, n_states)
-    prev_log_likelihood = float('-inf')
+    # Learn parameters
+    print("Running pyAgrum EM...")
+    learned_bn = learner.learnParameters(bn)
     
-    print(f"Starting EM iterations...")
+    print(f"EM completed in {learner.EMnbrIterations()} iterations")
+    print(f"Final EM state: {learner.EMStateMessage()}")
     
-    for iteration in range(max_iter):
-        print(f"\n--- EM Iteration {iteration + 1}/{max_iter} ---")
-        
-        # E-STEP: Multiple imputation via Gibbs sampling
-        print("E-step: Generating multiple imputations...")
-        completed_datasets = _multiple_imputation_gibbs(
-            training_data, current_model, 
-            n_imputations=10, n_samples=500, burn_in=100
-        )
-        
-        # DEBUG: Validate imputation quality
-        _debug_imputation_quality(training_data, completed_datasets)
-        
-        # M-STEP: Parameter learning on completed datasets
-        print("M-step: Learning parameters via MLE...")
-        new_model = _parameter_learning_mle(bn_structure, completed_datasets)
-        
-        # CONVERGENCE CHECK: Log-likelihood improvement
-        current_ll = _compute_log_likelihood(training_data, new_model)
-        ll_improvement = current_ll - prev_log_likelihood
-        
-        print(f"Log-likelihood: {current_ll:.4f} (improvement: {ll_improvement:.4f})")
-        
-        # Better convergence criterion
-        if ll_improvement < 0.001 and iteration >= 2:
-            print(f"Converged after {iteration + 1} iterations!")
-            break
-            
-        current_model = new_model
-        prev_log_likelihood = current_ll
-    
-    print(f"EM completed. Final model has {len(current_model.get_cpds())} CPDs")
-    return current_model
+    return learned_bn
 
 
-def _learn_with_mle(bn_structure: BayesianNetwork, complete_data: pd.DataFrame) -> BayesianNetwork:
-    """Learn parameters using MLE on complete data."""
-    from pgmpy.estimators import MaximumLikelihoodEstimator
-    
-    mle = MaximumLikelihoodEstimator(bn_structure, complete_data)
-    learned_cpds = mle.get_parameters()
-    
-    # Create final model
-    model = BayesianNetwork(bn_structure.edges())
-    for node in sorted(bn_structure.nodes()):
-        if node not in model.nodes():
-            model.add_node(node)
-    model.add_cpds(*learned_cpds)
-    
-    return model
-
-
-def _initialize_with_informed_priors(bn_structure: BayesianNetwork, 
-                                    training_data: pd.DataFrame,
-                                    n_states: int) -> BayesianNetwork:
-    """Initialize model with priors learned from observed data."""
-    print("Initializing with informed priors from observed data...")
-    
-    cpds = []
-    nodes = sorted(bn_structure.nodes())
-    
-    for node in nodes:
-        parents = list(bn_structure.get_parents(node))
-        
-        if not parents:
-            # Root node - use marginal from observed data
-            observed_data = training_data[node].dropna()
-            if len(observed_data) > 0:
-                # Empirical distribution with smoothing
-                counts = np.zeros(n_states)
-                for val in observed_data:
-                    counts[int(val)] += 1
-                counts += 1.0  # Laplace smoothing to avoid zeros
-                probs = counts / counts.sum()
-                values = probs.reshape(n_states, 1)
-                print(f"  Root {node}: learned from {len(observed_data)} observations, probs={probs}")
-            else:
-                # Fallback to uniform with smoothing
-                values = np.ones((n_states, 1)) / n_states
-                print(f"  Root {node}: no data, using uniform")
-        else:
-            # Child node - learn from complete cases where possible
-            relevant_cols = [node] + parents
-            complete_cases = training_data[relevant_cols].dropna()
-            
-            n_parent_configs = n_states ** len(parents)
-            
-            if len(complete_cases) >= 3:  # Need reasonable amount of data
-                # Learn from complete cases with smoothing
-                values = np.ones((n_states, n_parent_configs)) * 1.0  # Smoothing
-                
-                for _, row in complete_cases.iterrows():
-                    # Calculate parent configuration index
-                    parent_config = 0
-                    for i, parent in enumerate(parents):
-                        parent_config += int(row[parent]) * (n_states ** (len(parents) - 1 - i))
-                    
-                    child_state = int(row[node])
-                    values[child_state, parent_config] += 1.0
-                
-                # Normalize each parent configuration
-                for config in range(n_parent_configs):
-                    values[:, config] = values[:, config] / values[:, config].sum()
-                    
-                print(f"  Child {node}: learned from {len(complete_cases)} complete cases")
-            else:
-                # Not enough data - use informed uniform with slight bias toward observed marginals
-                observed_data = training_data[node].dropna()
-                if len(observed_data) > 0:
-                    empirical_prob = np.mean(observed_data)
-                    # Create slightly biased uniform (60-40 split based on data)
-                    p0 = 1 - empirical_prob
-                    p1 = empirical_prob
-                    base_probs = np.array([p0, p1]) * 0.8 + 0.1  # Smooth toward uniform
-                    values = np.tile(base_probs.reshape(-1, 1), (1, n_parent_configs))
-                else:
-                    # True uniform as last resort
-                    values = np.ones((n_states, n_parent_configs)) / n_states
-                print(f"  Child {node}: insufficient complete cases, using informed uniform")
-        
-        cpd = TabularCPD(
-            variable=node,
-            variable_card=n_states,
-            values=values,
-            evidence=parents,
-            evidence_card=[n_states] * len(parents) if parents else []
-        )
-        cpds.append(cpd)
-    
-    # Create model
-    model = BayesianNetwork(bn_structure.edges())
-    for node in nodes:
-        if node not in model.nodes():
-            model.add_node(node)
-    model.add_cpds(*cpds)
-    
-    print(f"Initialized model with {len(cpds)} informed CPDs")
-    return model
-
-
-def _initialize_uniform_model(bn_structure: BayesianNetwork, n_states: int) -> BayesianNetwork:
-    """Create initial model with uniform CPDs (fallback method)."""
-    cpds = []
-    nodes = sorted(bn_structure.nodes())
-    
-    for node in nodes:
-        parents = list(bn_structure.get_parents(node))
-        
-        if not parents:
-            # Root node - uniform distribution
-            values = np.ones((n_states, 1)) / n_states
-        else:
-            # Child node - uniform conditional distribution
-            n_parent_configs = n_states ** len(parents)
-            values = np.ones((n_states, n_parent_configs)) / n_states
-        
-        cpd = TabularCPD(
-            variable=node,
-            variable_card=n_states,
-            values=values,
-            evidence=parents,
-            evidence_card=[n_states] * len(parents) if parents else []
-        )
-        cpds.append(cpd)
-    
-    model = BayesianNetwork(bn_structure.edges())
-    for node in nodes:
-        if node not in model.nodes():
-            model.add_node(node)
-    model.add_cpds(*cpds)
-    
-    return model
-
-
-def _multiple_imputation_gibbs(training_data: pd.DataFrame, 
-                              current_model: BayesianNetwork,
-                              n_imputations: int = 10,
-                              n_samples: int = 500,
-                              burn_in: int = 100) -> List[pd.DataFrame]:
-    """Generate multiple completed datasets using Gibbs sampling."""
-    completed_datasets = []
-    gibbs_success_count = 0
-    
-    for m in range(n_imputations):
-        completed_data, success = _gibbs_imputation(training_data, current_model, n_samples, burn_in)
-        completed_datasets.append(completed_data)
-        if success:
-            gibbs_success_count += 1
-    
-    success_rate = gibbs_success_count / n_imputations
-    print(f"Generated {len(completed_datasets)} completed datasets")
-    print(f"Gibbs sampling success rate: {success_rate:.2%}")
-    
-    if success_rate < 0.5:
-        print("⚠️  WARNING: Low Gibbs success rate - may impact EM quality")
-    
-    return completed_datasets
-
-
-def _gibbs_imputation(data: pd.DataFrame, 
-                     model: BayesianNetwork,
-                     n_samples: int,
-                     burn_in: int) -> tuple[pd.DataFrame, bool]:
-    """Complete missing values using Gibbs sampling."""
-    from pgmpy.sampling import GibbsSampling
-    
-    completed_data = data.copy()
-    gibbs = GibbsSampling(model)
-    
-    # Find rows with missing values
-    incomplete_rows = data.isnull().any(axis=1)
-    total_missing_cells = 0
-    gibbs_success_cells = 0
-    random_fallback_cells = 0
-    
-    for idx in data.index[incomplete_rows]:
-        row = data.loc[idx]
-        missing_vars = row.isnull()
-        
-        if missing_vars.any():
-            # Create evidence from observed values
-            evidence = {col: int(val) for col, val in row.items() if not pd.isna(val)}
-            
-            try:
-                # Generate samples for missing variables
-                if evidence:  # Only try Gibbs if we have some evidence
-                    samples = gibbs.sample(size=n_samples + burn_in)
-                    gibbs_worked = True
-                else:
-                    gibbs_worked = False
-                
-                # Use samples after burn-in to fill missing values
-                for col in row.index[missing_vars]:
-                    total_missing_cells += 1
-                    
-                    if gibbs_worked and col in samples.columns:
-                        post_burnin = samples[col].iloc[burn_in:]
-                        # Use mode (most frequent value)
-                        if len(post_burnin) > 0:
-                            imputed_value = post_burnin.mode().iloc[0]
-                            completed_data.loc[idx, col] = int(imputed_value)
-                            gibbs_success_cells += 1
-                        else:
-                            completed_data.loc[idx, col] = np.random.randint(0, 2)
-                            random_fallback_cells += 1
-                    else:
-                        # Fallback: random binary
-                        completed_data.loc[idx, col] = np.random.randint(0, 2)
-                        random_fallback_cells += 1
-                        
-            except Exception as e:
-                # Fallback: random imputation for this row
-                for col in row.index[missing_vars]:
-                    total_missing_cells += 1
-                    completed_data.loc[idx, col] = np.random.randint(0, 2)
-                    random_fallback_cells += 1
-    
-    # Success rate based on cells successfully imputed by Gibbs
-    success_rate = gibbs_success_cells / total_missing_cells if total_missing_cells > 0 else 1.0
-    overall_success = success_rate > 0.5
-    
-    return completed_data, overall_success
-
-
-def _parameter_learning_mle(bn_structure: BayesianNetwork, 
-                           completed_datasets: List[pd.DataFrame]) -> BayesianNetwork:
-    """Learn parameters from multiple completed datasets using MLE + pooling."""
-    from pgmpy.estimators import MaximumLikelihoodEstimator
-    
-    # Learn parameters from each completed dataset
-    all_cpd_estimates = []
-    for i, completed_data in enumerate(completed_datasets):
-        try:
-            mle = MaximumLikelihoodEstimator(bn_structure, completed_data)
-            cpds = mle.get_parameters()
-            all_cpd_estimates.append(cpds)
-        except Exception as e:
-            print(f"  Warning: Failed to learn from completion {i + 1}: {e}")
-    
-    if not all_cpd_estimates:
-        print("  No successful parameter learning, using uniform")
-        return _initialize_uniform_model(bn_structure, 2)
-    
-    # Pool estimates using simple averaging (Rubin's rules approximation)
-    pooled_cpds = _pool_cpd_estimates(all_cpd_estimates)
-    
-    # Create final model
-    model = BayesianNetwork(bn_structure.edges())
-    nodes = sorted(bn_structure.nodes())
-    for node in nodes:
-        if node not in model.nodes():
-            model.add_node(node)
-    model.add_cpds(*pooled_cpds)
-    
-    return model
-
-
-def _pool_cpd_estimates(all_cpd_estimates: List[List]) -> List[TabularCPD]:
-    """Pool CPD estimates using simple averaging."""
-    n_completions = len(all_cpd_estimates)
-    n_cpds = len(all_cpd_estimates[0])
-    
-    pooled_cpds = []
-    
-    for cpd_idx in range(n_cpds):
-        # Get all estimates for this CPD
-        cpd_values_list = []
-        reference_cpd = all_cpd_estimates[0][cpd_idx]
-        
-        for completion_idx in range(n_completions):
-            cpd = all_cpd_estimates[completion_idx][cpd_idx]
-            cpd_values_list.append(cpd.get_values())
-        
-        # Average the values
-        averaged_values = np.mean(cpd_values_list, axis=0)
-        
-        # Create pooled CPD
-        pooled_cpd = TabularCPD(
-            variable=reference_cpd.variable,
-            variable_card=reference_cpd.variable_card,
-            values=averaged_values,
-            evidence=reference_cpd.variables[1:] if len(reference_cpd.variables) > 1 else [],
-            evidence_card=reference_cpd.cardinality[1:] if len(reference_cpd.cardinality) > 1 else []
-        )
-        pooled_cpds.append(pooled_cpd)
-    
-    return pooled_cpds
-
-
-def _compute_log_likelihood(data: pd.DataFrame, model: BayesianNetwork) -> float:
-    from pgmpy.inference import VariableElimination
-    try:
-        infer = VariableElimination(model)
-        log_likelihood = 0.0
-        total_observations = 0
-        
-        for _, row in data.iterrows():
-            evidence = {col: int(val) for col, val in row.items() if not pd.isna(val)}
-            
-            if evidence:
-                try:
-                    # Query joint probability of evidence
-                    prob = infer.query(variables=list(evidence.keys()), evidence=evidence).joint_probability()
-                    prob = max(prob, 1e-10)  # Smoothing to avoid log(0)
-                    log_likelihood += np.log(prob)
-                    total_observations += 1
-                except Exception as e:
-                    print(f"  Inference failed for evidence {evidence}: {e}")
-                    continue
-        
-        if total_observations == 0:
-            print("  No valid observations for log-likelihood")
-            return float('-inf')
-        
-        return log_likelihood / total_observations
-        
-    except Exception as e:
-        print(f"  Log-likelihood computation failed: {e}")
-        return float('-inf')
-
-def _debug_imputation_quality(original_data: pd.DataFrame, completed_datasets: List[pd.DataFrame]):
-    """Debug function to validate imputation quality."""
-    print("=== IMPUTATION QUALITY DEBUG ===")
-    
-    # Check if datasets are actually different
-    dataset_means = [df.mean().mean() for df in completed_datasets]
-    imputation_variance = np.var(dataset_means)
-    print(f"Imputation variance across datasets: {imputation_variance:.6f}")
-    
-    if imputation_variance < 1e-6:
-        print("⚠️  WARNING: Imputations are nearly identical - may indicate poor sampling")
-    
-    # Check imputation distribution for each variable
-    print("Imputation distributions by variable:")
-    for col in original_data.columns:
-        missing_mask = original_data[col].isnull()
-        if missing_mask.any():
-            # Get imputed values for this variable across all datasets
-            imputed_values = []
-            for df in completed_datasets:
-                imputed_values.extend(df.loc[missing_mask, col].values)
-            
-            mean_imputed = np.mean(imputed_values)
-            var_imputed = np.var(imputed_values)
-            print(f"  {col}: mean={mean_imputed:.3f}, var={var_imputed:.3f}")
-            
-            # Check if imputations are too uniform (suggesting random fallback)
-            unique_vals = len(np.unique(imputed_values))
-            if unique_vals <= 2 and var_imputed < 0.1:
-                print(f"    ⚠️  Variable {col} may be using random fallback")
-    
-    # Compare original vs completed data statistics
-    print("Original vs Completed data comparison:")
-    orig_observed_mean = original_data.mean(skipna=True).mean()
-    completed_means = [df.mean().mean() for df in completed_datasets]
-    avg_completed_mean = np.mean(completed_means)
-    
-    print(f"  Original observed mean: {orig_observed_mean:.3f}")
-    print(f"  Average completed mean: {avg_completed_mean:.3f}")
-    print(f"  Difference: {abs(orig_observed_mean - avg_completed_mean):.3f}")
-    
-    print("=== END IMPUTATION DEBUG ===\n")
-
-
-def learn_domain_specific_model(bn_structure: BayesianNetwork, 
+def learn_domain_specific_model(adj_matrix: np.ndarray, 
                               training_data: pd.DataFrame,
                               n_states: int = 2,
-                              n_samples: int = 500) -> BayesianNetwork:
-    """Main interface - uses custom EM implementation."""
-    return learn_domain_specific_model_simple(bn_structure, training_data, n_states, max_iter=10)
+                              max_iter: int = 100,
+                              epsilon: float = 1e-3) -> gum.BayesNet:
+    """
+    Main interface - learn BN using pyAgrum EM.
+    
+    Args:
+        adj_matrix: Adjacency matrix defining BN structure
+        training_data: DataFrame with missing values (pyAgrum format)
+        n_states: Number of states per variable (must be 2)
+        max_iter: Maximum EM iterations
+        epsilon: Convergence threshold
+        
+    Returns:
+        Learned pyAgrum BayesNet
+    """
+    print("🔥 USING CLEAN PYAGRUM IMPLEMENTATION! 🔥")
+    
+    # Create BN structure
+    bn = create_pyagrum_bn_from_adjacency(adj_matrix)
+    
+    # Learn with EM
+    learned_bn = learn_with_pyagrum_em(bn, training_data, max_iter, epsilon)
+    
+    return learned_bn
 
 
-# Legacy function - replaced by clean custom EM implementation above
-
-
-
-
-def evaluate_domain_specific_model(learned_bn: BayesianNetwork, 
+def evaluate_domain_specific_model(learned_bn: gum.BayesNet, 
                                  test_data: List[Tuple],
                                  n_nodes: int,
                                  n_states: int = 2) -> Dict:
     """
-    Evaluate learned BN on test set and compute KL divergence vs ground truth.
+    Evaluate learned pyAgrum BN on test set and compute KL divergence.
     
     Args:
-        learned_bn: Trained BayesianNetwork
+        learned_bn: Trained pyAgrum BayesNet
         test_data: List of (inputs, embeddings, dimensions, mask, targets)
         n_nodes: Number of nodes
         n_states: Number of states per node
@@ -606,9 +185,10 @@ def evaluate_domain_specific_model(learned_bn: BayesianNetwork,
     Returns:
         Dictionary with evaluation metrics
     """
-    print("Evaluating domain-specific model...")
+    print("Evaluating pyAgrum domain-specific model...")
     
-    infer = VariableElimination(learned_bn)
+    # Create inference engine
+    infer = gum.LazyPropagation(learned_bn)
     
     kl_divergences = []
     prediction_errors = []
@@ -622,7 +202,7 @@ def evaluate_domain_specific_model(learned_bn: BayesianNetwork,
         for node in range(n_nodes):
             if mask[node] == 0:  # Observed
                 state = torch.argmax(inputs[node, 1:]).item()
-                evidence[str(node)] = state  # Use STRING node names for consistency
+                evidence[str(node)] = str(state)  # String format for pyAgrum
             else:  # Unobserved
                 unobserved_nodes.append(node)
         
@@ -632,30 +212,28 @@ def evaluate_domain_specific_model(learned_bn: BayesianNetwork,
         # Get predictions for unobserved nodes
         for node in unobserved_nodes:
             try:
-                # Query posterior with string node names for consistency
-                node_str = str(node)  # Convert node to string for query
+                node_str = str(node)
                 
-                # Debug evidence and query for first few samples
-                if len(kl_divergences) < 3:
-                    print(f"DEBUG: Querying node {node_str} with evidence: {evidence}")
-                
-                # Check if evidence creates impossible state
-                if not evidence:
-                    # If no evidence, create uniform posterior
-                    pred_probs = np.ones(n_states) / n_states
-                    if len(kl_divergences) < 3:
-                        print(f"DEBUG: No evidence, using uniform probs: {pred_probs}")
+                # Set evidence and run inference
+                if evidence:
+                    infer.setEvidence(evidence)
+                    infer.makeInference()
+                    posterior = infer.posterior(node_str)
+                    # Extract probabilities in order ["0", "1"]
+                    pred_probs = np.array([posterior[{node_str: "0"}], posterior[{node_str: "1"}]])
                 else:
-                    posterior = infer.query(variables=[node_str], evidence=evidence)
-                    pred_probs = posterior.values
-                    if len(kl_divergences) < 3:
-                        print(f"DEBUG: VE query result for node {node_str}: {pred_probs}")
+                    # No evidence, use uniform
+                    pred_probs = np.ones(n_states) / n_states
+                
+                # Debug first few samples
+                if len(kl_divergences) < 3:
+                    print(f"DEBUG: Node {node_str}, evidence: {evidence}")
+                    print(f"DEBUG: Predicted probs: {pred_probs}")
                 
                 # Ensure probabilities are valid
                 if np.any(np.isnan(pred_probs)) or np.sum(pred_probs) == 0:
                     pred_probs = np.ones(n_states) / n_states
                 else:
-                    # Normalize to ensure sum to 1
                     pred_probs = pred_probs / np.sum(pred_probs)
                 
                 # Get ground truth
@@ -685,9 +263,11 @@ def evaluate_domain_specific_model(learned_bn: BayesianNetwork,
                 error = np.linalg.norm(pred_probs - true_probs)
                 prediction_errors.append(error)
                 
+                # Clear evidence for next inference
+                infer.eraseAllEvidence()
+                
             except Exception as e:
-                # More detailed error logging for debugging
-                if len(kl_divergences) < 5:  # Only log first few errors
+                if len(kl_divergences) < 5:
                     print(f"Inference failed for node {node}: {str(e)[:100]}")
                 failed_inferences += 1
                 continue
@@ -711,28 +291,19 @@ def evaluate_domain_specific_model(learned_bn: BayesianNetwork,
         'kl_distribution': kl_divergences
     }
     
-    print(f"Domain-specific evaluation: Mean KL = {results['mean_kl']:.4f}, "
+    print(f"pyAgrum evaluation: Mean KL = {results['mean_kl']:.4f}, "
           f"Failed rate = {results['failed_rate']:.2%}")
     
     return results
 
 
 def extract_adjacency_from_embeddings(param_embeddings: np.ndarray, n_nodes: int) -> np.ndarray:
-    """
-    Extract adjacency matrix from parameter embeddings.
-    
-    Args:
-        param_embeddings: Array with adjacency matrix in first n_nodes columns
-        n_nodes: Number of nodes
-        
-    Returns:
-        Adjacency matrix
-    """
-    print(f"DEBUG: Extracting adjacency from embeddings shape: {param_embeddings.shape}")
-    print(f"DEBUG: Expecting adjacency matrix in first {n_nodes} columns")
+    """Extract adjacency matrix from parameter embeddings."""
+    print(f"Extracting adjacency from embeddings shape: {param_embeddings.shape}")
+    print(f"Expecting adjacency matrix in first {n_nodes} columns")
     
     adj_matrix = param_embeddings[:, :n_nodes]
-    print(f"DEBUG: Extracted adjacency matrix shape: {adj_matrix.shape}")
-    print(f"DEBUG: Extracted adjacency matrix:\n{adj_matrix}")
+    print(f"Extracted adjacency matrix shape: {adj_matrix.shape}")
+    print(f"Extracted adjacency matrix:\n{adj_matrix}")
     
     return adj_matrix

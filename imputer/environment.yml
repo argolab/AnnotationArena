@@ -18,5 +18,5 @@ dependencies:
   - networkx
   - pip
   - pip:
-    - pgmpy==0.1.25
+    - pyagrum
     - scikit-learn
