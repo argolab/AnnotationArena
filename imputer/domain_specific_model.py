@@ -123,6 +123,7 @@ def learn_with_pyagrum_em(bn: gum.BayesNet,
     
     # Create learner and configure EM with missing data markers
     learner = gum.BNLearner(training_data, bn, ["?"])
+    learner.useSmoothingPrior(1.0)  # Add Laplace smoothing for EM as well
     learner.useEM(epsilon)
     learner.setMaxIter(max_iter)
     
