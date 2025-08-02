@@ -39,9 +39,12 @@ from neural_imputer import (
 TEST_GRAPH_SIZE = [5, 7, 10]
 TEST_TRAINING_SIZES = [10, 50, 100, 250, 500, 750, 1000, 1500, 1750, 2000]
 TEST_SIZE = 250
-NUM_GRAPHS = 10  # Number of random graphs per experiment
-EDGE_PROBS = [0.3, 0.5, 0.7, 0.9]  # Different edge probabilities to sample from
-MISSING_RATES = [0.4, 0.6, 0.3]  # Different missing rates to sample from
+
+# Experimental design parameters
+NUM_GRAPHS = 12  # Number of different graph structures per experiment
+NUM_TRAINING_SETS = 5  # Number of different training sets per graph structure
+FIXED_EDGE_PROB = 0.5  # Fixed edge probability for all graphs
+FIXED_MISSING_RATE = 0.4  # Fixed missing rate for all experiments
 BASE_SEED = 42  # Base seed for reproducible experiments
 
 def convert_to_json_serializable(obj):
@@ -69,195 +72,234 @@ def clear_memory():
         torch.cuda.synchronize()
 
 def run_experiment(n_nodes, train_size):
-    """Run graph imputation experiment across multiple random graphs."""
-    print(f"\n{'='*60}")
-    print(f"EXPERIMENT: {n_nodes} nodes, {train_size} training samples, {NUM_GRAPHS} graphs")
-    print(f"{'='*60}")
+    """Run graph imputation experiment with proper nested experimental design."""
+    print(f"\n{'='*80}")
+    print(f"EXPERIMENT: {n_nodes} nodes, {train_size} training samples")
+    print(f"Design: {NUM_GRAPHS} graphs × {NUM_TRAINING_SETS} training sets per graph")
+    print(f"Fixed: edge_prob={FIXED_EDGE_PROB}, missing_rate={FIXED_MISSING_RATE}")
+    print(f"{'='*80}")
     
-    all_neural_results = []
-    all_domain_em_results = []
-    all_domain_complete_results = []
+    # Storage for nested results
+    graph_results = []  # List of results for each graph
     all_kl_values = []  # For histogram analysis
-    failed_graphs = 0
+    failed_experiments = 0
     
     clear_memory()
     
+    # Loop over different graph structures
     for graph_idx in range(NUM_GRAPHS):
-        print(f"\n--- Graph {graph_idx + 1}/{NUM_GRAPHS} ---")
+        print(f"\n{'='*40}")
+        print(f"GRAPH {graph_idx + 1}/{NUM_GRAPHS}")
+        print(f"{'='*40}")
+        
+        # Generate graph structure with fixed parameters
+        graph_seed = BASE_SEED + graph_idx * 1000  # Large separation for graph seeds
+        obs_ratio = 1.0 - FIXED_MISSING_RATE
+        
+        print(f"Graph seed: {graph_seed}, edge_prob: {FIXED_EDGE_PROB}, missing_rate: {FIXED_MISSING_RATE}")
         
         try:
-            # Fair seeding strategy
-            graph_seed = BASE_SEED + graph_idx
-            
-            # Sample random experimental parameters
-            np.random.seed(graph_seed)  # Ensure reproducible parameter sampling
-            edge_prob = np.random.choice(EDGE_PROBS)
-            obs_ratio = 1.0 - np.random.choice(MISSING_RATES)  # Convert missing rate to obs ratio
-            
-            print(f"Graph {graph_idx + 1}: seed={graph_seed}, edge_prob={edge_prob}, obs_ratio={obs_ratio:.1f}")
-            
-            # Generate incomplete data using graph structure seed
-            bn, adj_matrix, incomplete_train_data, test_data = create_experiment_data(
-                n_nodes, train_size, TEST_SIZE, edge_prob=edge_prob, obs_ratio=obs_ratio, seed=graph_seed
+            # Generate base graph structure
+            bn, adj_matrix, _, test_data = create_experiment_data(
+                n_nodes, train_size, TEST_SIZE, 
+                edge_prob=FIXED_EDGE_PROB, obs_ratio=obs_ratio, seed=graph_seed
             )
             
-            # Generate complete training data for domain baseline
-            complete_train_data = create_complete_training_data(bn, adj_matrix, n_nodes, train_size)
-        
-            if len(incomplete_train_data) == 0 or len(test_data) == 0 or len(complete_train_data) == 0:
-                print(f"Failed to generate data for graph {graph_idx + 1}")
-                failed_graphs += 1
+            if len(test_data) == 0:
+                print(f"Failed to generate test data for graph {graph_idx + 1}")
+                failed_experiments += 1
                 continue
             
-            # METHOD 1: Train neural imputer on incomplete data
-            print(f"\n=== TRAINING NEURAL IMPUTER (Graph {graph_idx + 1}) ===")
-            train_dataset = GraphDataset(incomplete_train_data)
-            test_dataset = GraphDataset(test_data)
+            # Storage for this graph's training set results
+            graph_neural_results = []
+            graph_domain_em_results = []
+            graph_domain_complete_results = []
             
-            batch_size = min(32, len(incomplete_train_data))
-            train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-            test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-            
-            input_dim = incomplete_train_data[0][0].shape[1]
-            structure_dim = incomplete_train_data[0][1].shape[1]
-            model = create_model(n_nodes, input_dim, structure_dim)
-            
-            print(f"Model created with {sum(p.numel() for p in model.parameters())} parameters")
-            model = train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=15)
-            
-            # Evaluate neural imputer
-            print(f"\n=== EVALUATING NEURAL IMPUTER (Graph {graph_idx + 1}) ===")
-            neural_results = evaluate_neural_model(model, test_data, n_nodes, 2)
-            
-            # METHOD 2: Train domain-specific model with EM on incomplete data
-            print(f"\n=== TRAINING DOMAIN-SPECIFIC MODEL EM (Graph {graph_idx + 1}) ===")
-            
-            # Convert incomplete training data to pyAgrum format
-            pyagrum_incomplete_data = convert_training_data_for_pyagrum(incomplete_train_data, n_nodes)
-            
-            # Learn with pyAgrum EM
-            learned_bn_em = learn_domain_specific_model(
-                adj_matrix, pyagrum_incomplete_data, n_states=2, max_iter=100, epsilon=1e-3
-            )
-            
-            # Evaluate domain-specific EM model
-            print(f"\n=== EVALUATING DOMAIN-SPECIFIC MODEL EM (Graph {graph_idx + 1}) ===")
-            domain_em_results = evaluate_domain_specific_model(learned_bn_em, test_data, n_nodes, 2)
-            
-            # METHOD 3: Train domain-specific model on complete data
-            print(f"\n=== TRAINING DOMAIN-SPECIFIC MODEL COMPLETE (Graph {graph_idx + 1}) ===")
-            
-            # Learn from complete data (no EM needed)
-            learned_bn_complete = learn_domain_specific_model_complete(
-                adj_matrix, complete_train_data, n_nodes, n_states=2
-            )
-            
-            # Evaluate domain-specific complete model
-            print(f"\n=== EVALUATING DOMAIN-SPECIFIC MODEL COMPLETE (Graph {graph_idx + 1}) ===")
-            domain_complete_results = evaluate_domain_specific_model(learned_bn_complete, test_data, n_nodes, 2)
-        
-            # Store results for this graph
-            neural_kl = neural_results.get('mean_kl', float('inf'))
-            domain_em_kl = domain_em_results.get('mean_kl', float('inf'))
-            domain_complete_kl = domain_complete_results.get('mean_kl', float('inf'))
-            
-            if neural_kl != float('inf') and domain_em_kl != float('inf') and domain_complete_kl != float('inf'):
-                all_neural_results.append(neural_kl)
-                all_domain_em_results.append(domain_em_kl)
-                all_domain_complete_results.append(domain_complete_kl)
+            # Loop over different training sets for this graph structure
+            for train_set_idx in range(NUM_TRAINING_SETS):
+                print(f"\n--- Training Set {train_set_idx + 1}/{NUM_TRAINING_SETS} (Graph {graph_idx + 1}) ---")
                 
-                # Store individual KL values for histogram
-                if 'kl_distribution' in neural_results:
-                    all_kl_values.extend([(kl, 'neural') for kl in neural_results['kl_distribution']])
-                if 'kl_distribution' in domain_em_results:
-                    all_kl_values.extend([(kl, 'domain_em') for kl in domain_em_results['kl_distribution']])
-                if 'kl_distribution' in domain_complete_results:
-                    all_kl_values.extend([(kl, 'domain_complete') for kl in domain_complete_results['kl_distribution']])
+                # Generate training data with different seed but same graph structure
+                train_seed = graph_seed + train_set_idx + 1  # Different training data
                 
-                em_ratio = neural_kl / domain_em_kl if domain_em_kl > 0 else float('inf')
-                complete_ratio = neural_kl / domain_complete_kl if domain_complete_kl > 0 else float('inf')
-                print(f"\nGraph {graph_idx + 1} Results:")
-                print(f"  Neural KL = {neural_kl:.4f}")
-                print(f"  Domain EM KL = {domain_em_kl:.4f} (ratio = {em_ratio:.2f})")
-                print(f"  Domain Complete KL = {domain_complete_kl:.4f} (ratio = {complete_ratio:.2f})")
+                try:
+                    # Generate training data for this specific training set
+                    _, _, incomplete_train_data, _ = create_experiment_data(
+                        n_nodes, train_size, TEST_SIZE,
+                        edge_prob=FIXED_EDGE_PROB, obs_ratio=obs_ratio, seed=train_seed
+                    )
+                    
+                    # Generate complete training data
+                    complete_train_data = create_complete_training_data(bn, adj_matrix, n_nodes, train_size)
+                    
+                    if len(incomplete_train_data) == 0 or len(complete_train_data) == 0:
+                        print(f"Failed to generate training data for training set {train_set_idx + 1}")
+                        continue
+                    
+                    # METHOD 1: Train neural imputer
+                    print(f"Training Neural Imputer...")
+                    train_dataset = GraphDataset(incomplete_train_data)
+                    test_dataset = GraphDataset(test_data)
+                    
+                    batch_size = min(32, len(incomplete_train_data))
+                    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+                    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+                    
+                    input_dim = incomplete_train_data[0][0].shape[1]
+                    structure_dim = incomplete_train_data[0][1].shape[1]
+                    model = create_model(n_nodes, input_dim, structure_dim)
+                    model = train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=15)
+                    neural_results = evaluate_neural_model(model, test_data, n_nodes, 2)
+                    
+                    # METHOD 2: Train domain EM
+                    print(f"Training Domain EM...")
+                    pyagrum_incomplete_data = convert_training_data_for_pyagrum(incomplete_train_data, n_nodes)
+                    learned_bn_em = learn_domain_specific_model(
+                        adj_matrix, pyagrum_incomplete_data, n_states=2, max_iter=100, epsilon=1e-3
+                    )
+                    domain_em_results = evaluate_domain_specific_model(learned_bn_em, test_data, n_nodes, 2)
+                    
+                    # METHOD 3: Train domain complete
+                    print(f"Training Domain Complete...")
+                    learned_bn_complete = learn_domain_specific_model_complete(
+                        adj_matrix, complete_train_data, n_nodes, n_states=2
+                    )
+                    domain_complete_results = evaluate_domain_specific_model(learned_bn_complete, test_data, n_nodes, 2)
+                    
+                    # Store results for this training set
+                    neural_kl = neural_results.get('mean_kl', float('inf'))
+                    domain_em_kl = domain_em_results.get('mean_kl', float('inf'))
+                    domain_complete_kl = domain_complete_results.get('mean_kl', float('inf'))
+                    
+                    if neural_kl != float('inf') and domain_em_kl != float('inf') and domain_complete_kl != float('inf'):
+                        graph_neural_results.append(neural_kl)
+                        graph_domain_em_results.append(domain_em_kl)
+                        graph_domain_complete_results.append(domain_complete_kl)
+                        
+                        # Store individual KL values for histograms
+                        if 'kl_distribution' in neural_results:
+                            all_kl_values.extend([(kl, 'neural', graph_idx, train_set_idx) for kl in neural_results['kl_distribution']])
+                        if 'kl_distribution' in domain_em_results:
+                            all_kl_values.extend([(kl, 'domain_em', graph_idx, train_set_idx) for kl in domain_em_results['kl_distribution']])
+                        if 'kl_distribution' in domain_complete_results:
+                            all_kl_values.extend([(kl, 'domain_complete', graph_idx, train_set_idx) for kl in domain_complete_results['kl_distribution']])
+                        
+                        print(f"Set {train_set_idx + 1}: Neural={neural_kl:.4f}, EM={domain_em_kl:.4f}, Complete={domain_complete_kl:.4f}")
+                    else:
+                        print(f"Training set {train_set_idx + 1} failed evaluation")
+                    
+                    clear_memory()
+                    
+                except Exception as e:
+                    print(f"Training set {train_set_idx + 1} FAILED: {e}")
+                    clear_memory()
+                    continue
+            
+            # Aggregate results for this graph
+            if len(graph_neural_results) > 0:
+                graph_result = {
+                    'graph_idx': graph_idx,
+                    'neural_mean': np.mean(graph_neural_results),
+                    'neural_std': np.std(graph_neural_results),
+                    'neural_all': graph_neural_results,
+                    'domain_em_mean': np.mean(graph_domain_em_results),
+                    'domain_em_std': np.std(graph_domain_em_results),
+                    'domain_em_all': graph_domain_em_results,
+                    'domain_complete_mean': np.mean(graph_domain_complete_results),
+                    'domain_complete_std': np.std(graph_domain_complete_results),
+                    'domain_complete_all': graph_domain_complete_results,
+                    'n_training_sets': len(graph_neural_results)
+                }
+                graph_results.append(graph_result)
+                
+                print(f"\nGraph {graph_idx + 1} Summary ({len(graph_neural_results)}/{NUM_TRAINING_SETS} successful):")
+                print(f"  Neural: {graph_result['neural_mean']:.4f} ± {graph_result['neural_std']:.4f}")
+                print(f"  Domain EM: {graph_result['domain_em_mean']:.4f} ± {graph_result['domain_em_std']:.4f}")
+                print(f"  Domain Complete: {graph_result['domain_complete_mean']:.4f} ± {graph_result['domain_complete_std']:.4f}")
             else:
-                failed_graphs += 1
-                print(f"Graph {graph_idx + 1} failed evaluation")
-            
-            clear_memory()
-            
+                print(f"Graph {graph_idx + 1} completely failed")
+                failed_experiments += 1
+        
         except Exception as e:
-            print(f"Graph {graph_idx + 1} FAILED: {e}")
-            failed_graphs += 1
-            clear_memory()
+            print(f"Graph {graph_idx + 1} structure generation FAILED: {e}")
+            failed_experiments += 1
             continue
     
-    # Aggregate results across all graphs
-    if len(all_neural_results) == 0:
+    # Final aggregation across all graphs
+    if len(graph_results) == 0:
         print("All graphs failed!")
         return None
     
-    neural_mean = np.mean(all_neural_results)
-    neural_std = np.std(all_neural_results)
-    domain_em_mean = np.mean(all_domain_em_results)
-    domain_em_std = np.std(all_domain_em_results)
-    domain_complete_mean = np.mean(all_domain_complete_results)
-    domain_complete_std = np.std(all_domain_complete_results)
+    # Compute overall means and between-graph variation
+    all_graph_neural_means = [g['neural_mean'] for g in graph_results]
+    all_graph_em_means = [g['domain_em_mean'] for g in graph_results]
+    all_graph_complete_means = [g['domain_complete_mean'] for g in graph_results]
     
-    em_ratio = neural_mean / domain_em_mean if domain_em_mean > 0 else float('inf')
-    complete_ratio = neural_mean / domain_complete_mean if domain_complete_mean > 0 else float('inf')
+    # Overall statistics
+    overall_neural_mean = np.mean(all_graph_neural_means)
+    overall_neural_std = np.std(all_graph_neural_means)  # Between-graph variation
+    overall_em_mean = np.mean(all_graph_em_means)
+    overall_em_std = np.std(all_graph_em_means)
+    overall_complete_mean = np.mean(all_graph_complete_means)
+    overall_complete_std = np.std(all_graph_complete_means)
+    
+    # Average within-graph variation
+    avg_within_neural_std = np.mean([g['neural_std'] for g in graph_results])
+    avg_within_em_std = np.mean([g['domain_em_std'] for g in graph_results])
+    avg_within_complete_std = np.mean([g['domain_complete_std'] for g in graph_results])
     
     results = {
-        'config': {'n_nodes': n_nodes, 'train_size': train_size, 'num_graphs': NUM_GRAPHS},
-        'neural': {
-            'mean_kl': neural_mean,
-            'std_kl': neural_std,
-            'all_kl': all_neural_results
+        'config': {
+            'n_nodes': n_nodes, 
+            'train_size': train_size, 
+            'num_graphs': NUM_GRAPHS,
+            'num_training_sets': NUM_TRAINING_SETS,
+            'edge_prob': FIXED_EDGE_PROB,
+            'missing_rate': FIXED_MISSING_RATE
         },
-        'domain_em': {
-            'mean_kl': domain_em_mean,
-            'std_kl': domain_em_std,
-            'all_kl': all_domain_em_results
+        'overall': {
+            'neural_mean': overall_neural_mean,
+            'neural_between_std': overall_neural_std,
+            'neural_within_std': avg_within_neural_std,
+            'domain_em_mean': overall_em_mean,
+            'domain_em_between_std': overall_em_std,
+            'domain_em_within_std': avg_within_em_std,
+            'domain_complete_mean': overall_complete_mean,
+            'domain_complete_between_std': overall_complete_std,
+            'domain_complete_within_std': avg_within_complete_std
         },
-        'domain_complete': {
-            'mean_kl': domain_complete_mean,
-            'std_kl': domain_complete_std,
-            'all_kl': all_domain_complete_results
-        },
-        'comparison': {
-            'neural_kl': neural_mean,
-            'domain_em_kl': domain_em_mean,
-            'domain_complete_kl': domain_complete_mean,
-            'em_ratio': em_ratio,
-            'complete_ratio': complete_ratio,
-            'neural_std': neural_std,
-            'domain_em_std': domain_em_std,
-            'domain_complete_std': domain_complete_std
-        },
+        'graph_results': graph_results,
         'kl_distribution': all_kl_values,
-        'failed_graphs': failed_graphs
+        'successful_graphs': len(graph_results),
+        'failed_experiments': failed_experiments
     }
     
-    print(f"\n=== AGGREGATED RESULTS ({NUM_GRAPHS - failed_graphs}/{NUM_GRAPHS} successful graphs) ===")
-    print(f"Neural KL: {neural_mean:.4f} ± {neural_std:.4f}")
-    print(f"Domain EM KL: {domain_em_mean:.4f} ± {domain_em_std:.4f} (ratio = {em_ratio:.2f})")
-    print(f"Domain Complete KL: {domain_complete_mean:.4f} ± {domain_complete_std:.4f} (ratio = {complete_ratio:.2f})")
+    # Print comprehensive results
+    print(f"\n{'='*60}")
+    print(f"FINAL RESULTS ({len(graph_results)}/{NUM_GRAPHS} successful graphs)")
+    print(f"{'='*60}")
+    print(f"Neural Imputer:")
+    print(f"  Overall: {overall_neural_mean:.4f} ± {overall_neural_std:.4f} (between-graph)")
+    print(f"  Avg within-graph variation: ± {avg_within_neural_std:.4f}")
+    print(f"Domain EM:")
+    print(f"  Overall: {overall_em_mean:.4f} ± {overall_em_std:.4f} (between-graph)")  
+    print(f"  Avg within-graph variation: ± {avg_within_em_std:.4f}")
+    print(f"Domain Complete:")
+    print(f"  Overall: {overall_complete_mean:.4f} ± {overall_complete_std:.4f} (between-graph)")
+    print(f"  Avg within-graph variation: ± {avg_within_complete_std:.4f}")
     
-    # Status based on EM comparison (primary comparison)
-    if em_ratio < 0.5:
-        status = "EXCELLENT: Neural imputer much better than Domain EM"
-    elif em_ratio < 1.0:
-        status = "GOOD: Neural imputer better than Domain EM"
-    else:
-        status = "NEEDS WORK: Domain EM better than Neural"
+    # Ratios and diagnostics
+    em_ratio = overall_neural_mean / overall_em_mean if overall_em_mean > 0 else float('inf')
+    complete_ratio = overall_neural_mean / overall_complete_mean if overall_complete_mean > 0 else float('inf')
     
-    print(f"\nPrimary Status: {status}")
+    print(f"\nPerformance Ratios:")
+    print(f"  Neural/EM ratio: {em_ratio:.2f}")
+    print(f"  Neural/Complete ratio: {complete_ratio:.2f}")
     
-    # Additional diagnostic info
     if complete_ratio < em_ratio:
-        print("DIAGNOSTIC: Complete data model performs better than EM - EM may be getting stuck")
+        print("\nDIAGNOSTIC: Complete data model performs better than EM - EM may be getting stuck")
     else:
-        print("DIAGNOSTIC: EM performs similarly to complete data model - missing data is the main challenge")
+        print("\nDIAGNOSTIC: EM performs similarly to complete data model - missing data is the main challenge")
     
     return results
 
@@ -420,19 +462,6 @@ def create_comparison_plot(all_results):
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.set_yscale('log')
-        
-        # Add text box with summary for this graph size
-        if len(neural_kls) > 0 and len(domain_em_kls) > 0 and len(domain_complete_kls) > 0:
-            neural_mean = np.nanmean(neural_kls)
-            domain_em_mean = np.nanmean(domain_em_kls)
-            domain_complete_mean = np.nanmean(domain_complete_kls)
-            em_ratio = neural_mean / domain_em_mean if domain_em_mean > 0 else float('inf')
-            complete_ratio = neural_mean / domain_complete_mean if domain_complete_mean > 0 else float('inf')
-            
-            textstr = f'Neural: {neural_mean:.4f}\nDomain EM: {domain_em_mean:.4f} (ratio: {em_ratio:.2f})\nDomain Complete: {domain_complete_mean:.4f} (ratio: {complete_ratio:.2f})'
-            props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
-            ax.text(0.02, 0.98, textstr, transform=ax.transAxes, fontsize=8,
-                    verticalalignment='top', bbox=props)
     
     plt.tight_layout()
     plt.savefig(os.path.join(base_dir, 'results', 'experiment_plot.png'), dpi=300, bbox_inches='tight')
@@ -473,11 +502,10 @@ def create_kl_histograms(all_results):
     
     # Neural model histogram
     if len(all_neural_kls) > 0:
-        ax1.hist(all_neural_kls, bins=50, alpha=0.7, color='blue', density=True)
+        ax1.hist(all_neural_kls, bins=50, alpha=0.7, color='blue', density=False)
         ax1.set_xlabel('KL Divergence', fontsize=12)
-        ax1.set_ylabel('Density', fontsize=12)
+        ax1.set_ylabel('Frequency', fontsize=12)
         ax1.set_title('Neural Imputer KL Distribution', fontsize=14)
-        ax1.set_yscale('log')
         ax1.grid(True, alpha=0.3)
         
         # Add statistics
@@ -489,11 +517,10 @@ def create_kl_histograms(all_results):
     
     # Domain EM model histogram
     if len(all_domain_em_kls) > 0:
-        ax2.hist(all_domain_em_kls, bins=50, alpha=0.7, color='orange', density=True)
+        ax2.hist(all_domain_em_kls, bins=50, alpha=0.7, color='orange', density=False)
         ax2.set_xlabel('KL Divergence', fontsize=12)
-        ax2.set_ylabel('Density', fontsize=12)
+        ax2.set_ylabel('Frequency', fontsize=12)
         ax2.set_title('Domain EM KL Distribution', fontsize=14)
-        ax2.set_yscale('log')
         ax2.grid(True, alpha=0.3)
         
         # Add statistics
@@ -505,11 +532,10 @@ def create_kl_histograms(all_results):
     
     # Domain Complete model histogram
     if len(all_domain_complete_kls) > 0:
-        ax3.hist(all_domain_complete_kls, bins=50, alpha=0.7, color='green', density=True)
+        ax3.hist(all_domain_complete_kls, bins=50, alpha=0.7, color='green', density=False)
         ax3.set_xlabel('KL Divergence', fontsize=12)
-        ax3.set_ylabel('Density', fontsize=12)
+        ax3.set_ylabel('Frequency', fontsize=12)
         ax3.set_title('Domain Complete KL Distribution', fontsize=14)
-        ax3.set_yscale('log')
         ax3.grid(True, alpha=0.3)
         
         # Add statistics
