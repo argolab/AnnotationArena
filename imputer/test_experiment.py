@@ -35,16 +35,18 @@ from neural_imputer import (
     DEVICE
 )
 
-# Test configuration
-TEST_GRAPH_SIZE = [5, 7, 10]
-TEST_TRAINING_SIZES = [10, 50, 100, 250, 500, 750, 1000, 1500, 1750, 2000]
-TEST_SIZE = 250
+# Test configuration - Parameter sweep design
+TEST_GRAPH_SIZES = [5, 10]  # Number of nodes
+TEST_TRAINING_SIZES = [10, 50, 250, 500, 1000, 1500, 2000]  # Training set sizes
+TEST_SIZE = 250  # Test set size
+
+# Parameter sweep ranges
+EDGE_PROBS = [0.3, 0.5, 0.7]  # Graph density parameters
+MISSING_RATES = [0.3, 0.5]  # Missing data rates
 
 # Experimental design parameters
-NUM_GRAPHS = 12  # Number of different graph structures per experiment
-NUM_TRAINING_SETS = 5  # Number of different training sets per graph structure
-FIXED_EDGE_PROB = 0.5  # Fixed edge probability for all graphs
-FIXED_MISSING_RATE = 0.4  # Fixed missing rate for all experiments
+NUM_GRAPHS_PER_CONDITION = 3  # Number of different graph structures per parameter combination
+NUM_TRAINING_SETS_PER_GRAPH = 3  # Number of different training sets per graph structure
 BASE_SEED = 42  # Base seed for reproducible experiments
 
 def convert_to_json_serializable(obj):
@@ -71,38 +73,46 @@ def clear_memory():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-def run_experiment(n_nodes, train_size):
-    """Run graph imputation experiment with proper nested experimental design."""
+def run_single_condition_experiment(edge_prob, missing_rate, n_nodes, train_size):
+    """Run experiment for a single parameter condition with proper nested design."""
     print(f"\n{'='*80}")
-    print(f"EXPERIMENT: {n_nodes} nodes, {train_size} training samples")
-    print(f"Design: {NUM_GRAPHS} graphs × {NUM_TRAINING_SETS} training sets per graph")
-    print(f"Fixed: edge_prob={FIXED_EDGE_PROB}, missing_rate={FIXED_MISSING_RATE}")
+    print(f"CONDITION: edge_prob={edge_prob}, missing_rate={missing_rate}, n_nodes={n_nodes}, train_size={train_size}")
+    print(f"Design: {NUM_GRAPHS_PER_CONDITION} graphs × {NUM_TRAINING_SETS_PER_GRAPH} training sets per graph")
     print(f"{'='*80}")
     
     # Storage for nested results
-    graph_results = []  # List of results for each graph
-    all_kl_values = []  # For histogram analysis
+    graph_results = []
+    all_kl_values = []
     failed_experiments = 0
+    obs_ratio = 1.0 - missing_rate
+    
+    # Create condition hash for reproducible seeding
+    condition_hash = hash((edge_prob, missing_rate, n_nodes, train_size)) % 10000
     
     clear_memory()
     
-    # Loop over different graph structures
-    for graph_idx in range(NUM_GRAPHS):
+    # Loop over different graph structures for this condition
+    for graph_idx in range(NUM_GRAPHS_PER_CONDITION):
         print(f"\n{'='*40}")
-        print(f"GRAPH {graph_idx + 1}/{NUM_GRAPHS}")
+        print(f"GRAPH {graph_idx + 1}/{NUM_GRAPHS_PER_CONDITION}")
         print(f"{'='*40}")
         
-        # Generate graph structure with fixed parameters
-        graph_seed = BASE_SEED + graph_idx * 1000  # Large separation for graph seeds
-        obs_ratio = 1.0 - FIXED_MISSING_RATE
-        
-        print(f"Graph seed: {graph_seed}, edge_prob: {FIXED_EDGE_PROB}, missing_rate: {FIXED_MISSING_RATE}")
+        # Generate unique graph structure for this condition and graph index
+        graph_seed = BASE_SEED + condition_hash * 1000 + graph_idx * 100
+        print(f"Graph seed: {graph_seed}")
         
         try:
-            # Generate base graph structure
-            bn, adj_matrix, _, test_data = create_experiment_data(
-                n_nodes, train_size, TEST_SIZE, 
-                edge_prob=FIXED_EDGE_PROB, obs_ratio=obs_ratio, seed=graph_seed
+            # Generate base graph structure - this BN will be used for all training/test sets
+            bn, adj_matrix, _, _ = create_experiment_data(
+                n_nodes, train_size, TEST_SIZE,
+                edge_prob=edge_prob, obs_ratio=obs_ratio, seed=graph_seed
+            )
+            
+            # Generate test set from this BN (large seed offset to avoid train/test overlap)
+            test_seed = graph_seed + 9999
+            _, _, _, test_data = create_experiment_data(
+                n_nodes, train_size, TEST_SIZE,
+                edge_prob=edge_prob, obs_ratio=obs_ratio, seed=test_seed
             )
             
             if len(test_data) == 0:
@@ -116,20 +126,21 @@ def run_experiment(n_nodes, train_size):
             graph_domain_complete_results = []
             
             # Loop over different training sets for this graph structure
-            for train_set_idx in range(NUM_TRAINING_SETS):
-                print(f"\n--- Training Set {train_set_idx + 1}/{NUM_TRAINING_SETS} (Graph {graph_idx + 1}) ---")
+            for train_set_idx in range(NUM_TRAINING_SETS_PER_GRAPH):
+                print(f"\n--- Training Set {train_set_idx + 1}/{NUM_TRAINING_SETS_PER_GRAPH} (Graph {graph_idx + 1}) ---")
                 
-                # Generate training data with different seed but same graph structure
-                train_seed = graph_seed + train_set_idx + 1  # Different training data
+                # Generate training data from SAME BN but different sampling seed
+                train_seed = graph_seed + train_set_idx + 1  # Small offsets: +1, +2, +3
                 
                 try:
-                    # Generate training data for this specific training set
+                    # Generate training data from the same BN structure
                     _, _, incomplete_train_data, _ = create_experiment_data(
                         n_nodes, train_size, TEST_SIZE,
-                        edge_prob=FIXED_EDGE_PROB, obs_ratio=obs_ratio, seed=train_seed
+                        edge_prob=edge_prob, obs_ratio=obs_ratio, seed=train_seed
                     )
                     
-                    # Generate complete training data
+                    # Generate complete training data from same BN with same seed
+                    # We'll generate it with the same train_seed to keep it consistent
                     complete_train_data = create_complete_training_data(bn, adj_matrix, n_nodes, train_size)
                     
                     if len(incomplete_train_data) == 0 or len(complete_train_data) == 0:
@@ -177,12 +188,13 @@ def run_experiment(n_nodes, train_size):
                         graph_domain_complete_results.append(domain_complete_kl)
                         
                         # Store individual KL values for histograms
+                        condition_id = f"{edge_prob}_{missing_rate}_{n_nodes}_{train_size}"
                         if 'kl_distribution' in neural_results:
-                            all_kl_values.extend([(kl, 'neural', graph_idx, train_set_idx) for kl in neural_results['kl_distribution']])
+                            all_kl_values.extend([(kl, 'neural', condition_id, graph_idx, train_set_idx) for kl in neural_results['kl_distribution']])
                         if 'kl_distribution' in domain_em_results:
-                            all_kl_values.extend([(kl, 'domain_em', graph_idx, train_set_idx) for kl in domain_em_results['kl_distribution']])
+                            all_kl_values.extend([(kl, 'domain_em', condition_id, graph_idx, train_set_idx) for kl in domain_em_results['kl_distribution']])
                         if 'kl_distribution' in domain_complete_results:
-                            all_kl_values.extend([(kl, 'domain_complete', graph_idx, train_set_idx) for kl in domain_complete_results['kl_distribution']])
+                            all_kl_values.extend([(kl, 'domain_complete', condition_id, graph_idx, train_set_idx) for kl in domain_complete_results['kl_distribution']])
                         
                         print(f"Set {train_set_idx + 1}: Neural={neural_kl:.4f}, EM={domain_em_kl:.4f}, Complete={domain_complete_kl:.4f}")
                     else:
@@ -212,7 +224,7 @@ def run_experiment(n_nodes, train_size):
                 }
                 graph_results.append(graph_result)
                 
-                print(f"\nGraph {graph_idx + 1} Summary ({len(graph_neural_results)}/{NUM_TRAINING_SETS} successful):")
+                print(f"\nGraph {graph_idx + 1} Summary ({len(graph_neural_results)}/{NUM_TRAINING_SETS_PER_GRAPH} successful):")
                 print(f"  Neural: {graph_result['neural_mean']:.4f} ± {graph_result['neural_std']:.4f}")
                 print(f"  Domain EM: {graph_result['domain_em_mean']:.4f} ± {graph_result['domain_em_std']:.4f}")
                 print(f"  Domain Complete: {graph_result['domain_complete_mean']:.4f} ± {graph_result['domain_complete_std']:.4f}")
@@ -225,9 +237,9 @@ def run_experiment(n_nodes, train_size):
             failed_experiments += 1
             continue
     
-    # Final aggregation across all graphs
+    # Final aggregation across all graphs for this condition
     if len(graph_results) == 0:
-        print("All graphs failed!")
+        print("All graphs failed for this condition!")
         return None
     
     # Compute overall means and between-graph variation
@@ -250,12 +262,12 @@ def run_experiment(n_nodes, train_size):
     
     results = {
         'config': {
+            'edge_prob': edge_prob,
+            'missing_rate': missing_rate,
             'n_nodes': n_nodes, 
             'train_size': train_size, 
-            'num_graphs': NUM_GRAPHS,
-            'num_training_sets': NUM_TRAINING_SETS,
-            'edge_prob': FIXED_EDGE_PROB,
-            'missing_rate': FIXED_MISSING_RATE
+            'num_graphs': NUM_GRAPHS_PER_CONDITION,
+            'num_training_sets': NUM_TRAINING_SETS_PER_GRAPH
         },
         'overall': {
             'neural_mean': overall_neural_mean,
@@ -276,7 +288,7 @@ def run_experiment(n_nodes, train_size):
     
     # Print comprehensive results
     print(f"\n{'='*60}")
-    print(f"FINAL RESULTS ({len(graph_results)}/{NUM_GRAPHS} successful graphs)")
+    print(f"CONDITION RESULTS ({len(graph_results)}/{NUM_GRAPHS_PER_CONDITION} successful graphs)")
     print(f"{'='*60}")
     print(f"Neural Imputer:")
     print(f"  Overall: {overall_neural_mean:.4f} ± {overall_neural_std:.4f} (between-graph)")
@@ -296,11 +308,6 @@ def run_experiment(n_nodes, train_size):
     print(f"  Neural/EM ratio: {em_ratio:.2f}")
     print(f"  Neural/Complete ratio: {complete_ratio:.2f}")
     
-    if complete_ratio < em_ratio:
-        print("\nDIAGNOSTIC: Complete data model performs better than EM - EM may be getting stuck")
-    else:
-        print("\nDIAGNOSTIC: EM performs similarly to complete data model - missing data is the main challenge")
-    
     return results
 
 def run_test():
@@ -308,86 +315,115 @@ def run_test():
     print("="*60)
     print("GRAPH IMPUTATION COMPARISON TEST")
     print("="*60)
-    print(f"Graph sizes: {TEST_GRAPH_SIZE}")
+    print(f"Graph sizes: {TEST_GRAPH_SIZES}")
     print(f"Training sizes: {TEST_TRAINING_SIZES}")
+    print(f"Edge probabilities: {EDGE_PROBS}")
+    print(f"Missing rates: {MISSING_RATES}")
     print(f"Test size: {TEST_SIZE}")
     print(f"Using device: {DEVICE}")
+    print(f"Design: {NUM_GRAPHS_PER_CONDITION} graphs × {NUM_TRAINING_SETS_PER_GRAPH} training sets per condition")
+    
+    # Calculate total experiments
+    total_conditions = len(EDGE_PROBS) * len(MISSING_RATES) * len(TEST_GRAPH_SIZES) * len(TEST_TRAINING_SIZES)
+    total_model_trainings = total_conditions * NUM_GRAPHS_PER_CONDITION * NUM_TRAINING_SETS_PER_GRAPH * 3
+    print(f"Total conditions: {total_conditions}")
+    print(f"Total model trainings: {total_model_trainings}")
     print()
     
     all_results = {}
+    completed_conditions = 0
     
     try:
-        for n_nodes in TEST_GRAPH_SIZE:
-            for train_size in TEST_TRAINING_SIZES:
-                result = run_experiment(n_nodes, train_size)
+        # Main parameter sweep loops
+        for edge_prob in EDGE_PROBS:
+            for missing_rate in MISSING_RATES:
+                for n_nodes in TEST_GRAPH_SIZES:
+                    for train_size in TEST_TRAINING_SIZES:
+                        print(f"\n{'='*100}")
+                        print(f"CONDITION {completed_conditions + 1}/{total_conditions}")
+                        print(f"edge_prob={edge_prob}, missing_rate={missing_rate}, n_nodes={n_nodes}, train_size={train_size}")
+                        print(f"{'='*100}")
+                        
+                        # Run experiment for this condition
+                        result = run_single_condition_experiment(edge_prob, missing_rate, n_nodes, train_size)
                 
-                if result:
-                    all_results[(n_nodes, train_size)] = result
-                    
-                    # Save intermediate results
-                    base_dir = os.path.dirname(os.path.abspath(__file__))
-                    os.makedirs(os.path.join(base_dir, 'results'), exist_ok=True)
-                    with open(os.path.join(base_dir, 'results', 'experiment_results.json'), 'w') as f:
-                        json_results = {f"{k[0]}_{k[1]}": convert_to_json_serializable(v) 
-                                      for k, v in all_results.items()}
-                        json.dump(json_results, f, indent=2)
+                        if result:
+                            condition_key = (edge_prob, missing_rate, n_nodes, train_size)
+                            all_results[condition_key] = result
+                            completed_conditions += 1
+                            
+                            # Save intermediate results
+                            base_dir = os.path.dirname(os.path.abspath(__file__))
+                            os.makedirs(os.path.join(base_dir, 'results'), exist_ok=True)
+                            with open(os.path.join(base_dir, 'results', 'parameter_sweep_results.json'), 'w') as f:
+                                json_results = {f"{k[0]}_{k[1]}_{k[2]}_{k[3]}": convert_to_json_serializable(v) 
+                                              for k, v in all_results.items()}
+                                json.dump(json_results, f, indent=2)
+                            
+                            print(f"\n✅ Condition {completed_conditions}/{total_conditions} completed successfully")
+                        else:
+                            print(f"\n❌ Condition failed")
     
     except KeyboardInterrupt:
-        print("\n⏹️  Test interrupted by user")
+        print(f"\n⏹️  Parameter sweep interrupted by user after {completed_conditions} conditions")
     
-    # Print final summary
+    # Print comprehensive summary
     if all_results:
-        print("\n" + "="*80)
-        print("FINAL EXPERIMENT SUMMARY")
-        print("="*80)
+        print("\n" + "="*100)
+        print("PARAMETER SWEEP SUMMARY")
+        print("="*100)
+        print(f"Completed {len(all_results)} out of {total_conditions} conditions")
         
-        # Group results by graph size
-        graph_sizes = sorted(set(k[0] for k in all_results.keys()))
-        
-        for n_nodes in graph_sizes:
-            print(f"\n--- {n_nodes} NODES ---")
-            print(f"{'Train Size':<12} {'Neural KL':<16} {'Domain EM KL':<16} {'Domain Complete KL':<18} {'EM Ratio':<10} {'Status'}")
-            print("-" * 88)
-            
-            # Get results for this graph size
-            node_results = [(k, v) for k, v in all_results.items() if k[0] == n_nodes]
-            node_results.sort(key=lambda x: x[0][1])  # Sort by training size
-            
-            for (_, train_size), result in node_results:
-                comparison = result.get('comparison', {})
-                neural_kl = comparison.get('neural_kl', float('inf'))
-                domain_em_kl = comparison.get('domain_em_kl', float('inf'))
-                domain_complete_kl = comparison.get('domain_complete_kl', float('inf'))
-                em_ratio = comparison.get('em_ratio', float('inf'))
-                neural_std = comparison.get('neural_std', 0.0)
-                domain_em_std = comparison.get('domain_em_std', 0.0)
-                domain_complete_std = comparison.get('domain_complete_std', 0.0)
-                
-                # Determine status
-                if neural_kl == float('inf') or domain_em_kl == float('inf') or domain_complete_kl == float('inf'):
-                    status = "FAILED"
-                elif em_ratio < 0.5:
-                    status = "EXCELLENT"
-                elif em_ratio < 1.0:
-                    status = "GOOD"
-                else:
-                    status = "POOR"
-                
-                neural_str = f"{neural_kl:.4f}±{neural_std:.3f}"
-                domain_em_str = f"{domain_em_kl:.4f}±{domain_em_std:.3f}"
-                domain_complete_str = f"{domain_complete_kl:.4f}±{domain_complete_std:.3f}"
-                print(f"{train_size:<12} {neural_str:<16} {domain_em_str:<16} {domain_complete_str:<18} {em_ratio:<10.2f} {status}")
+        # Create summary table for each parameter combination
+        for edge_prob in EDGE_PROBS:
+            for missing_rate in MISSING_RATES:
+                for n_nodes in TEST_GRAPH_SIZES:
+                    print(f"\n--- EDGE_PROB={edge_prob}, MISSING_RATE={missing_rate}, N_NODES={n_nodes} ---")
+                    print(f"{'Train Size':<12} {'Neural KL':<16} {'Domain EM KL':<16} {'Domain Complete KL':<18} {'EM Ratio':<10} {'Status'}")
+                    print("-" * 88)
+                    
+                    # Get results for this parameter combination
+                    param_results = [(k, v) for k, v in all_results.items() 
+                                   if k[0] == edge_prob and k[1] == missing_rate and k[2] == n_nodes]
+                    param_results.sort(key=lambda x: x[0][3])  # Sort by training size
+                    
+                    for (_, _, _, train_size), result in param_results:
+                        overall = result.get('overall', {})
+                        neural_mean = overall.get('neural_mean', float('inf'))
+                        domain_em_mean = overall.get('domain_em_mean', float('inf'))
+                        domain_complete_mean = overall.get('domain_complete_mean', float('inf'))
+                        neural_std = overall.get('neural_between_std', 0.0)
+                        domain_em_std = overall.get('domain_em_between_std', 0.0)
+                        domain_complete_std = overall.get('domain_complete_between_std', 0.0)
+                        
+                        em_ratio = neural_mean / domain_em_mean if domain_em_mean > 0 else float('inf')
+                        
+                        # Determine status
+                        if neural_mean == float('inf') or domain_em_mean == float('inf') or domain_complete_mean == float('inf'):
+                            status = "FAILED"
+                        elif em_ratio < 0.5:
+                            status = "EXCELLENT"
+                        elif em_ratio < 1.0:
+                            status = "GOOD"
+                        else:
+                            status = "POOR"
+                        
+                        neural_str = f"{neural_mean:.4f}±{neural_std:.3f}"
+                        domain_em_str = f"{domain_em_mean:.4f}±{domain_em_std:.3f}"
+                        domain_complete_str = f"{domain_complete_mean:.4f}±{domain_complete_std:.3f}"
+                        print(f"{train_size:<12} {neural_str:<16} {domain_em_str:<16} {domain_complete_str:<18} {em_ratio:<10.2f} {status}")
         
         print("\nInterpretation:")
-        print("- KL Ratio < 0.5: Neural imputer is much better")
-        print("- KL Ratio 0.5-1.0: Neural imputer is better") 
-        print("- KL Ratio > 1.0: Domain model is better")
+        print("- EM Ratio < 0.5: Neural imputer is much better than Domain EM")
+        print("- EM Ratio 0.5-1.0: Neural imputer is better than Domain EM") 
+        print("- EM Ratio > 1.0: Domain EM is better than Neural imputer")
         
-        # Create plots
+        # Create plots for the parameter sweep
+        print("\nGenerating plots...")
         create_comparison_plot(all_results)
         create_kl_histograms(all_results)
         
-        print("\nExperiment completed successfully!")
+        print("\nParameter sweep completed successfully!")
         
     else:
         print("\nNo successful experiments!")
@@ -399,69 +435,74 @@ def create_comparison_plot(all_results):
     if not all_results:
         return
     
-    # Get all tested graph sizes
-    graph_sizes = sorted(set(k[0] for k in all_results.keys()))
+    # Get all parameter combinations
+    param_combinations = sorted(set((k[0], k[1], k[2]) for k in all_results.keys()))  # (edge_prob, missing_rate, n_nodes)
     
-    # Create subplots for each graph size
-    fig, axes = plt.subplots(1, len(graph_sizes), figsize=(6*len(graph_sizes), 6))
-    if len(graph_sizes) == 1:
-        axes = [axes]
+    # Create subplots for each parameter combination
+    fig, axes = plt.subplots(len(EDGE_PROBS)*len(MISSING_RATES), len(TEST_GRAPH_SIZES), 
+                           figsize=(8*len(TEST_GRAPH_SIZES), 6*len(EDGE_PROBS)*len(MISSING_RATES)))
+    if len(param_combinations) == 1:
+        axes = np.array([[axes]])
+    elif len(TEST_GRAPH_SIZES) == 1:
+        axes = axes.reshape(-1, 1)
+    elif len(EDGE_PROBS)*len(MISSING_RATES) == 1:
+        axes = axes.reshape(1, -1)
     
     base_dir = os.path.dirname(os.path.abspath(__file__))
     
-    for idx, n_nodes in enumerate(graph_sizes):
-        ax = axes[idx]
-        
-        # Get training sizes for this graph size
-        train_sizes = sorted(set(k[1] for k in all_results.keys() if k[0] == n_nodes))
-        neural_kls = []
-        domain_em_kls = []
-        domain_complete_kls = []
-        
-        for train_size in train_sizes:
-            key = (n_nodes, train_size)
-            if key in all_results:
-                result = all_results[key]
-                comparison = result.get('comparison', {})
-                neural_kl = comparison.get('neural_kl', float('inf'))
-                domain_em_kl = comparison.get('domain_em_kl', float('inf'))
-                domain_complete_kl = comparison.get('domain_complete_kl', float('inf'))
+    plot_idx = 0
+    for edge_prob in EDGE_PROBS:
+        for missing_rate in MISSING_RATES:
+            for node_idx, n_nodes in enumerate(TEST_GRAPH_SIZES):
+                ax = axes[plot_idx, node_idx]
                 
-                neural_kls.append(neural_kl if neural_kl != float('inf') else np.nan)
-                domain_em_kls.append(domain_em_kl if domain_em_kl != float('inf') else np.nan)
-                domain_complete_kls.append(domain_complete_kl if domain_complete_kl != float('inf') else np.nan)
-        
-        # Get error bars
-        neural_stds = []
-        domain_em_stds = []
-        domain_complete_stds = []
-        
-        for train_size in train_sizes:
-            key = (n_nodes, train_size)
-            if key in all_results:
-                result = all_results[key]
-                comparison = result.get('comparison', {})
-                neural_std = comparison.get('neural_std', 0.0)
-                domain_em_std = comparison.get('domain_em_std', 0.0)
-                domain_complete_std = comparison.get('domain_complete_std', 0.0)
+                # Get training sizes for this parameter combination
+                train_sizes = sorted(set(k[3] for k in all_results.keys() 
+                                       if k[0] == edge_prob and k[1] == missing_rate and k[2] == n_nodes))
+                neural_kls = []
+                domain_em_kls = []
+                domain_complete_kls = []
+                neural_stds = []
+                domain_em_stds = []
+                domain_complete_stds = []
                 
-                neural_stds.append(neural_std if neural_std != 0.0 else 0.0)
-                domain_em_stds.append(domain_em_std if domain_em_std != 0.0 else 0.0)
-                domain_complete_stds.append(domain_complete_std if domain_complete_std != 0.0 else 0.0)
-        
-        # Plot with error bars
-        ax.errorbar(train_sizes, neural_kls, yerr=neural_stds, fmt='o-', label='Neural Imputer', 
-                   linewidth=3, markersize=8, capsize=5, color='blue')
-        ax.errorbar(train_sizes, domain_em_kls, yerr=domain_em_stds, fmt='s-', label='Domain EM', 
-                   linewidth=3, markersize=8, capsize=5, color='orange')
-        ax.errorbar(train_sizes, domain_complete_kls, yerr=domain_complete_stds, fmt='^-', label='Domain Complete', 
-                   linewidth=3, markersize=8, capsize=5, color='green')
-        ax.set_xlabel('Training Samples', fontsize=12)
-        ax.set_ylabel('KL Divergence', fontsize=12)
-        ax.set_title(f'KL Divergence Comparison ({n_nodes} nodes)', fontsize=14)
-        ax.legend(fontsize=10)
-        ax.grid(True, alpha=0.3)
-        ax.set_yscale('log')
+                for train_size in train_sizes:
+                    key = (edge_prob, missing_rate, n_nodes, train_size)
+                    if key in all_results:
+                        result = all_results[key]
+                        overall = result.get('overall', {})
+                        
+                        neural_mean = overall.get('neural_mean', float('inf'))
+                        domain_em_mean = overall.get('domain_em_mean', float('inf'))
+                        domain_complete_mean = overall.get('domain_complete_mean', float('inf'))
+                        neural_std = overall.get('neural_between_std', 0.0)
+                        domain_em_std = overall.get('domain_em_between_std', 0.0)
+                        domain_complete_std = overall.get('domain_complete_between_std', 0.0)
+                        
+                        neural_kls.append(neural_mean if neural_mean != float('inf') else np.nan)
+                        domain_em_kls.append(domain_em_mean if domain_em_mean != float('inf') else np.nan)
+                        domain_complete_kls.append(domain_complete_mean if domain_complete_mean != float('inf') else np.nan)
+                        neural_stds.append(neural_std)
+                        domain_em_stds.append(domain_em_std)
+                        domain_complete_stds.append(domain_complete_std)
+                
+                # Plot with error bars
+                if len(train_sizes) > 0:
+                    ax.errorbar(train_sizes, neural_kls, yerr=neural_stds, fmt='o-', label='Neural Imputer', 
+                               linewidth=2, markersize=6, capsize=4, color='blue')
+                    ax.errorbar(train_sizes, domain_em_kls, yerr=domain_em_stds, fmt='s-', label='Domain EM', 
+                               linewidth=2, markersize=6, capsize=4, color='orange')
+                    ax.errorbar(train_sizes, domain_complete_kls, yerr=domain_complete_stds, fmt='^-', label='Domain Complete', 
+                               linewidth=2, markersize=6, capsize=4, color='green')
+                
+                ax.set_xlabel('Training Samples', fontsize=10)
+                ax.set_ylabel('KL Divergence', fontsize=10)
+                ax.set_title(f'edge={edge_prob}, miss={missing_rate}, nodes={n_nodes}', fontsize=10)
+                ax.legend(fontsize=8)
+                ax.grid(True, alpha=0.3)
+                ax.set_yscale('log')
+            
+            plot_idx += 1
     
     plt.tight_layout()
     plt.savefig(os.path.join(base_dir, 'results', 'experiment_plot.png'), dpi=300, bbox_inches='tight')
@@ -484,14 +525,16 @@ def create_kl_histograms(all_results):
     
     for result in all_results.values():
         if 'kl_distribution' in result:
-            for kl_val, model_type in result['kl_distribution']:
-                if not np.isnan(kl_val) and not np.isinf(kl_val):
-                    if model_type == 'neural':
-                        all_neural_kls.append(kl_val)
-                    elif model_type == 'domain_em':
-                        all_domain_em_kls.append(kl_val)
-                    elif model_type == 'domain_complete':
-                        all_domain_complete_kls.append(kl_val)
+            for kl_data in result['kl_distribution']:
+                if len(kl_data) >= 2:  # Handle both old and new format
+                    kl_val, model_type = kl_data[0], kl_data[1]
+                    if not np.isnan(kl_val) and not np.isinf(kl_val):
+                        if model_type == 'neural':
+                            all_neural_kls.append(kl_val)
+                        elif model_type == 'domain_em':
+                            all_domain_em_kls.append(kl_val)
+                        elif model_type == 'domain_complete':
+                            all_domain_complete_kls.append(kl_val)
     
     if len(all_neural_kls) == 0 and len(all_domain_em_kls) == 0 and len(all_domain_complete_kls) == 0:
         print("No KL distribution data available for histograms")
