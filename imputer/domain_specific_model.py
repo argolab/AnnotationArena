@@ -158,7 +158,7 @@ def learn_domain_specific_model(adj_matrix: np.ndarray,
     Returns:
         Learned pyAgrum BayesNet
     """
-    print("🔥 USING CLEAN PYAGRUM IMPLEMENTATION! 🔥")
+    print("USING PYAGRUM IMPLEMENTATION")
     
     # Create BN structure
     bn = create_pyagrum_bn_from_adjacency(adj_matrix)

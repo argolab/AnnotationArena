@@ -38,6 +38,9 @@ from neural_imputer import (
 TEST_GRAPH_SIZE = [5, 7, 10]
 TEST_TRAINING_SIZES = [10, 50, 100, 250, 500, 750, 1000, 1500, 1750, 2000]
 TEST_SIZE = 250
+NUM_GRAPHS = 10  # Number of random graphs per experiment
+EDGE_PROBS = [0.3, 0.5, 0.7, 0.9]  # Different edge probabilities to sample from
+MISSING_RATES = [0.4, 0.6, 0.3]  # Different missing rates to sample from
 
 def convert_to_json_serializable(obj):
     """Convert numpy/torch types to JSON serializable types."""
@@ -64,100 +67,149 @@ def clear_memory():
         torch.cuda.synchronize()
 
 def run_experiment(n_nodes, train_size):
-    """Run single graph imputation experiment."""
-    print(f"\n{'='*50}")
-    print(f"EXPERIMENT: {n_nodes} nodes, {train_size} training samples")
-    print(f"{'='*50}")
+    """Run graph imputation experiment across multiple random graphs."""
+    print(f"\n{'='*60}")
+    print(f"EXPERIMENT: {n_nodes} nodes, {train_size} training samples, {NUM_GRAPHS} graphs")
+    print(f"{'='*60}")
+    
+    all_neural_results = []
+    all_domain_results = []
+    all_kl_values = []  # For histogram analysis
+    failed_graphs = 0
     
     clear_memory()
     
-    try:
-        # Generate data using pyAgrum
-        print("Generating data with pyAgrum...")
-        bn, adj_matrix, train_data, test_data = create_experiment_data(
-            n_nodes, train_size, TEST_SIZE, edge_prob=0.35, obs_ratio=0.5
-        )
+    for graph_idx in range(NUM_GRAPHS):
+        print(f"\n--- Graph {graph_idx + 1}/{NUM_GRAPHS} ---")
         
-        if len(train_data) == 0 or len(test_data) == 0:
-            print("Failed to generate data")
-            return None
+        try:
+            # Sample random experimental parameters
+            edge_prob = np.random.choice(EDGE_PROBS)
+            obs_ratio = 1.0 - np.random.choice(MISSING_RATES)  # Convert missing rate to obs ratio
+            
+            print(f"Graph {graph_idx + 1}: edge_prob={edge_prob}, obs_ratio={obs_ratio:.1f}")
+            
+            # Generate data using pyAgrum
+            bn, adj_matrix, train_data, test_data = create_experiment_data(
+                n_nodes, train_size, TEST_SIZE, edge_prob=edge_prob, obs_ratio=obs_ratio
+            )
         
-        # Train neural imputer
-        print("\n=== TRAINING NEURAL IMPUTER ===")
-        train_dataset = GraphDataset(train_data)
-        test_dataset = GraphDataset(test_data)
+            if len(train_data) == 0 or len(test_data) == 0:
+                print(f"Failed to generate data for graph {graph_idx + 1}")
+                failed_graphs += 1
+                continue
+            
+            # Train neural imputer
+            print(f"\n=== TRAINING NEURAL IMPUTER (Graph {graph_idx + 1}) ===")
+            train_dataset = GraphDataset(train_data)
+            test_dataset = GraphDataset(test_data)
+            
+            batch_size = min(32, len(train_data))
+            train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+            test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+            
+            input_dim = train_data[0][0].shape[1]
+            structure_dim = train_data[0][1].shape[1]
+            model = create_model(n_nodes, input_dim, structure_dim)
+            
+            print(f"Model created with {sum(p.numel() for p in model.parameters())} parameters")
+            model = train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=15)
+            
+            # Evaluate neural imputer
+            print(f"\n=== EVALUATING NEURAL IMPUTER (Graph {graph_idx + 1}) ===")
+            neural_results = evaluate_neural_model(model, test_data, n_nodes, 2)
+            
+            # Train domain-specific model using pyAgrum
+            print(f"\n=== TRAINING DOMAIN-SPECIFIC MODEL (Graph {graph_idx + 1}) ===")
+            
+            # Convert training data to pyAgrum format
+            pyagrum_train_data = convert_training_data_for_pyagrum(train_data, n_nodes)
+            
+            # Learn with pyAgrum EM
+            learned_bn = learn_domain_specific_model(
+                adj_matrix, pyagrum_train_data, n_states=2, max_iter=100, epsilon=1e-3
+            )
+            
+            # Evaluate domain-specific model
+            print(f"\n=== EVALUATING DOMAIN-SPECIFIC MODEL (Graph {graph_idx + 1}) ===")
+            domain_results = evaluate_domain_specific_model(learned_bn, test_data, n_nodes, 2)
         
-        batch_size = min(32, len(train_data))
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-        test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-        
-        input_dim = train_data[0][0].shape[1]
-        structure_dim = train_data[0][1].shape[1]
-        model = create_model(n_nodes, input_dim, structure_dim)
-        
-        print(f"Model created with {sum(p.numel() for p in model.parameters())} parameters")
-        model = train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=15)
-        
-        # Evaluate neural imputer
-        print("\n=== EVALUATING NEURAL IMPUTER ===")
-        neural_results = evaluate_neural_model(model, test_data, n_nodes, 2)
-        
-        # Train domain-specific model using pyAgrum
-        print("\n=== TRAINING DOMAIN-SPECIFIC MODEL (PYAGRUM) ===")
-        
-        # Convert training data to pyAgrum format
-        pyagrum_train_data = convert_training_data_for_pyagrum(train_data, n_nodes)
-        
-        # Use adjacency matrix directly (no need to extract from embeddings)
-        # adj_matrix is already available from create_experiment_data
-        
-        # Learn with pyAgrum EM
-        learned_bn = learn_domain_specific_model(
-            adj_matrix, pyagrum_train_data, n_states=2, max_iter=100, epsilon=1e-3
-        )
-        
-        # Evaluate domain-specific model
-        print("\n=== EVALUATING DOMAIN-SPECIFIC MODEL ===")
-        domain_results = evaluate_domain_specific_model(learned_bn, test_data, n_nodes, 2)
-        
-        # Compare results
-        neural_kl = neural_results.get('mean_kl', float('inf'))
-        domain_kl = domain_results.get('mean_kl', float('inf'))
-        kl_ratio = domain_kl / neural_kl if neural_kl > 0 else float('inf')
-        
-        results = {
-            'config': {'n_nodes': n_nodes, 'train_size': train_size},
-            'neural': neural_results,
-            'domain': domain_results,
-            'comparison': {
-                'neural_kl': neural_kl,
-                'domain_kl': domain_kl,
-                'kl_ratio': kl_ratio
-            }
-        }
-        
-        print(f"\n=== RESULTS ===")
-        print(f"Neural KL: {neural_kl:.4f}")
-        print(f"Domain KL (pyAgrum): {domain_kl:.4f}")
-        print(f"KL Ratio: {kl_ratio:.2f}")
-        
-        if kl_ratio < 2.0:
-            status = "🎉 EXCELLENT: Neural imputer is competitive!"
-        elif kl_ratio < 5.0:
-            status = "👍 GOOD: Neural imputer is reasonable"
-        else:
-            status = "⚠️  NEEDS WORK: Neural imputer needs improvement"
-        
-        print(status)
-        
-        return results
-        
-    except Exception as e:
-        print(f"❌ FAILED: {e}")
-        import traceback
-        traceback.print_exc()
-        clear_memory()
+            # Store results for this graph
+            neural_kl = neural_results.get('mean_kl', float('inf'))
+            domain_kl = domain_results.get('mean_kl', float('inf'))
+            
+            if neural_kl != float('inf') and domain_kl != float('inf'):
+                all_neural_results.append(neural_kl)
+                all_domain_results.append(domain_kl)
+                # Store individual KL values for histogram
+                if 'kl_distribution' in neural_results:
+                    all_kl_values.extend([(kl, 'neural') for kl in neural_results['kl_distribution']])
+                if 'kl_distribution' in domain_results:
+                    all_kl_values.extend([(kl, 'domain') for kl in domain_results['kl_distribution']])
+                
+                kl_ratio = neural_kl / domain_kl if domain_kl > 0 else float('inf')
+                print(f"\nGraph {graph_idx + 1} Results: Neural KL = {neural_kl:.4f}, Domain KL = {domain_kl:.4f}, Ratio = {kl_ratio:.2f}")
+            else:
+                failed_graphs += 1
+                print(f"Graph {graph_idx + 1} failed evaluation")
+            
+            clear_memory()
+            
+        except Exception as e:
+            print(f"Graph {graph_idx + 1} FAILED: {e}")
+            failed_graphs += 1
+            clear_memory()
+            continue
+    
+    # Aggregate results across all graphs
+    if len(all_neural_results) == 0:
+        print("All graphs failed!")
         return None
+    
+    neural_mean = np.mean(all_neural_results)
+    neural_std = np.std(all_neural_results)
+    domain_mean = np.mean(all_domain_results)
+    domain_std = np.std(all_domain_results)
+    mean_ratio = neural_mean / domain_mean if domain_mean > 0 else float('inf')
+    
+    results = {
+        'config': {'n_nodes': n_nodes, 'train_size': train_size, 'num_graphs': NUM_GRAPHS},
+        'neural': {
+            'mean_kl': neural_mean,
+            'std_kl': neural_std,
+            'all_kl': all_neural_results
+        },
+        'domain': {
+            'mean_kl': domain_mean,
+            'std_kl': domain_std,
+            'all_kl': all_domain_results
+        },
+        'comparison': {
+            'neural_kl': neural_mean,
+            'domain_kl': domain_mean,
+            'kl_ratio': mean_ratio,
+            'neural_std': neural_std,
+            'domain_std': domain_std
+        },
+        'kl_distribution': all_kl_values,
+        'failed_graphs': failed_graphs
+    }
+    
+    print(f"\n=== AGGREGATED RESULTS ({NUM_GRAPHS - failed_graphs}/{NUM_GRAPHS} successful graphs) ===")
+    print(f"Neural KL: {neural_mean:.4f} ± {neural_std:.4f}")
+    print(f"Domain KL: {domain_mean:.4f} ± {domain_std:.4f}")
+    print(f"KL Ratio: {mean_ratio:.2f}")
+    
+    if mean_ratio < 0.5:
+        status = "EXCELLENT: Neural imputer is much better"
+    elif mean_ratio < 1.0:
+        status = "GOOD: Neural imputer is better"
+    else:
+        status = "NEEDS WORK: Domain model is better"
+    
+    print(status)
+    
+    return results
 
 def run_test():
     """Run graph imputation comparison test."""
@@ -202,8 +254,8 @@ def run_test():
         
         for n_nodes in graph_sizes:
             print(f"\n--- {n_nodes} NODES ---")
-            print(f"{'Train Size':<12} {'Imputer KL':<12} {'Domain KL':<12} {'KL Ratio':<12} {'Status'}")
-            print("-" * 65)
+            print(f"{'Train Size':<12} {'Imputer KL':<16} {'Domain KL':<16} {'KL Ratio':<12} {'Status'}")
+            print("-" * 75)
             
             # Get results for this graph size
             node_results = [(k, v) for k, v in all_results.items() if k[0] == n_nodes]
@@ -214,31 +266,36 @@ def run_test():
                 neural_kl = comparison.get('neural_kl', float('inf'))
                 domain_kl = comparison.get('domain_kl', float('inf'))
                 kl_ratio = comparison.get('kl_ratio', float('inf'))
+                neural_std = comparison.get('neural_std', 0.0)
+                domain_std = comparison.get('domain_std', 0.0)
                 
                 # Determine status
                 if neural_kl == float('inf') or domain_kl == float('inf'):
                     status = "FAILED"
-                elif kl_ratio < 2.0:
+                elif kl_ratio < 0.5:
                     status = "EXCELLENT"
-                elif kl_ratio < 5.0:
+                elif kl_ratio < 1.0:
                     status = "GOOD"
                 else:
                     status = "POOR"
                 
-                print(f"{train_size:<12} {neural_kl:<12.4f} {domain_kl:<12.4f} {kl_ratio:<12.2f} {status}")
+                neural_str = f"{neural_kl:.4f}±{neural_std:.3f}"
+                domain_str = f"{domain_kl:.4f}±{domain_std:.3f}"
+                print(f"{train_size:<12} {neural_str:<16} {domain_str:<16} {kl_ratio:<12.2f} {status}")
         
         print("\nInterpretation:")
-        print("- KL Ratio < 2.0: Imputer is competitive")
-        print("- KL Ratio 2.0-5.0: Imputer is reasonable") 
-        print("- KL Ratio > 5.0: Imputer needs improvement")
+        print("- KL Ratio < 0.5: Neural imputer is much better")
+        print("- KL Ratio 0.5-1.0: Neural imputer is better") 
+        print("- KL Ratio > 1.0: Domain model is better")
         
-        # Create plot
+        # Create plots
         create_comparison_plot(all_results)
+        create_kl_histograms(all_results)
         
-        print("\n✅ Experiment completed successfully!")
+        print("\nExperiment completed successfully!")
         
     else:
-        print("\n❌ No successful experiments!")
+        print("\nNo successful experiments!")
     
     return all_results
 
@@ -276,9 +333,26 @@ def create_comparison_plot(all_results):
                 neural_kls.append(neural_kl if neural_kl != float('inf') else np.nan)
                 domain_kls.append(domain_kl if domain_kl != float('inf') else np.nan)
         
-        # Plot for this graph size
-        ax.plot(train_sizes, neural_kls, 'o-', label='Imputer', linewidth=3, markersize=8)
-        ax.plot(train_sizes, domain_kls, 's-', label='Domain Specific (EM)', linewidth=3, markersize=8)
+        # Get error bars
+        neural_stds = []
+        domain_stds = []
+        
+        for train_size in train_sizes:
+            key = (n_nodes, train_size)
+            if key in all_results:
+                result = all_results[key]
+                comparison = result.get('comparison', {})
+                neural_std = comparison.get('neural_std', 0.0)
+                domain_std = comparison.get('domain_std', 0.0)
+                
+                neural_stds.append(neural_std if neural_std != 0.0 else 0.0)
+                domain_stds.append(domain_std if domain_std != 0.0 else 0.0)
+        
+        # Plot with error bars
+        ax.errorbar(train_sizes, neural_kls, yerr=neural_stds, fmt='o-', label='Imputer', 
+                   linewidth=3, markersize=8, capsize=5)
+        ax.errorbar(train_sizes, domain_kls, yerr=domain_stds, fmt='s-', label='Domain Specific (EM)', 
+                   linewidth=3, markersize=8, capsize=5)
         ax.set_xlabel('Training Samples', fontsize=12)
         ax.set_ylabel('KL Divergence', fontsize=12)
         ax.set_title(f'KL Divergence Comparison ({n_nodes} nodes)', fontsize=14)
@@ -290,7 +364,7 @@ def create_comparison_plot(all_results):
         if len(neural_kls) > 0 and len(domain_kls) > 0:
             neural_mean = np.nanmean(neural_kls)
             domain_mean = np.nanmean(domain_kls)
-            ratio_mean = domain_mean / neural_mean if neural_mean > 0 else float('inf')
+            ratio_mean = neural_mean / domain_mean if domain_mean > 0 else float('inf')
             
             textstr = f'Avg KL Ratio: {ratio_mean:.2f}\nImputer: {neural_mean:.4f}\nDomain: {domain_mean:.4f}'
             props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
@@ -303,10 +377,95 @@ def create_comparison_plot(all_results):
     
     print(f"Plot saved: {os.path.join(base_dir, 'results', 'experiment_plot.png')}")
 
+
+def create_kl_histograms(all_results):
+    """Create KL distribution histograms for detailed analysis."""
+    if not all_results:
+        return
+    
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Collect all KL distributions
+    all_neural_kls = []
+    all_domain_kls = []
+    
+    for result in all_results.values():
+        if 'kl_distribution' in result:
+            for kl_val, model_type in result['kl_distribution']:
+                if not np.isnan(kl_val) and not np.isinf(kl_val):
+                    if model_type == 'neural':
+                        all_neural_kls.append(kl_val)
+                    elif model_type == 'domain':
+                        all_domain_kls.append(kl_val)
+    
+    if len(all_neural_kls) == 0 and len(all_domain_kls) == 0:
+        print("No KL distribution data available for histograms")
+        return
+    
+    # Create histogram plot
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+    
+    # Neural model histogram
+    if len(all_neural_kls) > 0:
+        ax1.hist(all_neural_kls, bins=50, alpha=0.7, color='blue', density=True)
+        ax1.set_xlabel('KL Divergence', fontsize=12)
+        ax1.set_ylabel('Density', fontsize=12)
+        ax1.set_title('Neural Imputer KL Distribution', fontsize=14)
+        ax1.set_yscale('log')
+        ax1.grid(True, alpha=0.3)
+        
+        # Add statistics
+        mean_kl = np.mean(all_neural_kls)
+        median_kl = np.median(all_neural_kls)
+        ax1.axvline(mean_kl, color='red', linestyle='--', label=f'Mean: {mean_kl:.3f}')
+        ax1.axvline(median_kl, color='green', linestyle='--', label=f'Median: {median_kl:.3f}')
+        ax1.legend()
+    
+    # Domain model histogram
+    if len(all_domain_kls) > 0:
+        ax2.hist(all_domain_kls, bins=50, alpha=0.7, color='orange', density=True)
+        ax2.set_xlabel('KL Divergence', fontsize=12)
+        ax2.set_ylabel('Density', fontsize=12)
+        ax2.set_title('Domain Specific KL Distribution', fontsize=14)
+        ax2.set_yscale('log')
+        ax2.grid(True, alpha=0.3)
+        
+        # Add statistics
+        mean_kl = np.mean(all_domain_kls)
+        median_kl = np.median(all_domain_kls)
+        ax2.axvline(mean_kl, color='red', linestyle='--', label=f'Mean: {mean_kl:.3f}')
+        ax2.axvline(median_kl, color='green', linestyle='--', label=f'Median: {median_kl:.3f}')
+        ax2.legend()
+    
+    plt.tight_layout()
+    plt.savefig(os.path.join(base_dir, 'results', 'kl_histograms.png'), dpi=300, bbox_inches='tight')
+    plt.show()
+    
+    print(f"KL histograms saved: {os.path.join(base_dir, 'results', 'kl_histograms.png')}")
+    
+    # Print summary statistics
+    if len(all_neural_kls) > 0:
+        print(f"\nNeural KL Statistics:")
+        print(f"  Mean: {np.mean(all_neural_kls):.4f}")
+        print(f"  Median: {np.median(all_neural_kls):.4f}")
+        print(f"  Std: {np.std(all_neural_kls):.4f}")
+        print(f"  Min: {np.min(all_neural_kls):.4f}")
+        print(f"  Max: {np.max(all_neural_kls):.4f}")
+        print(f"  Count: {len(all_neural_kls)}")
+    
+    if len(all_domain_kls) > 0:
+        print(f"\nDomain KL Statistics:")
+        print(f"  Mean: {np.mean(all_domain_kls):.4f}")
+        print(f"  Median: {np.median(all_domain_kls):.4f}")
+        print(f"  Std: {np.std(all_domain_kls):.4f}")
+        print(f"  Min: {np.min(all_domain_kls):.4f}")
+        print(f"  Max: {np.max(all_domain_kls):.4f}")
+        print(f"  Count: {len(all_domain_kls)}")
+
 if __name__ == "__main__":
-    print("🚀 Starting graph imputation experiment...")
+    print("Starting graph imputation experiment...")
     
     # Run the test
     results = run_test()
     
-    print("\n🎉 Experiment finished!")
+    print("\nExperiment finished!")
