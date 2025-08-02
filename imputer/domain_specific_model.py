@@ -220,7 +220,7 @@ def learn_domain_specific_model_complete(adj_matrix: np.ndarray,
     # Learn parameters directly from complete data (no EM needed)
     # Add Laplace smoothing to handle small datasets
     learner = gum.BNLearner(complete_df, bn)
-    learner.useAprioriSmoothing(1.0)  # Laplace smoothing
+    learner.useSmoothingPrior(1.0)  # Laplace smoothing with weight 1.0
     learned_bn = learner.learnParameters(bn)
     
     print("Direct parameter learning completed (no EM required)")
