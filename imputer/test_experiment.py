@@ -35,10 +35,8 @@ from neural_imputer import (
 )
 
 # Test configuration
-# TEST_GRAPH_SIZE = [5, 7, 10]
-# TEST_TRAINING_SIZES = [10, 50, 100, 250, 500, 750, 1000, 1500, 1750, 2000]
-TEST_GRAPH_SIZE = [5, 7]
-TEST_TRAINING_SIZES = [10, 50, 100]
+TEST_GRAPH_SIZE = [5, 7, 10]
+TEST_TRAINING_SIZES = [10, 50, 100, 250, 500, 750, 1000, 1500, 1750, 2000]
 TEST_SIZE = 250
 
 def convert_to_json_serializable(obj):
