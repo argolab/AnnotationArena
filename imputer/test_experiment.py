@@ -207,63 +207,58 @@ def run_single_condition_experiment(n_nodes, train_size):
         print("All graphs failed for this condition!")
         return None
     
+    # Filter successful experiments and collect results
+    successful_graphs = [g for g in graph_results if g.get('status') == 'SUCCESS']
+    
+    if len(successful_graphs) == 0:
+        print("All graphs failed for this condition!")
+        return None
+    
     # Compute overall means and between-graph variation
-    all_graph_neural_means = [g['neural_mean'] for g in graph_results]
-    all_graph_em_means = [g['domain_em_mean'] for g in graph_results]
-    all_graph_complete_means = [g['domain_complete_mean'] for g in graph_results]
+    all_neural_kls = [g['neural_kl'] for g in successful_graphs]
+    all_em_kls = [g['domain_em_kl'] for g in successful_graphs]
+    all_complete_kls = [g['domain_complete_kl'] for g in successful_graphs]
     
     # Overall statistics
-    overall_neural_mean = np.mean(all_graph_neural_means)
-    overall_neural_std = np.std(all_graph_neural_means)  # Between-graph variation
-    overall_em_mean = np.mean(all_graph_em_means)
-    overall_em_std = np.std(all_graph_em_means)
-    overall_complete_mean = np.mean(all_graph_complete_means)
-    overall_complete_std = np.std(all_graph_complete_means)
-    
-    # Average within-graph variation
-    avg_within_neural_std = np.mean([g['neural_std'] for g in graph_results])
-    avg_within_em_std = np.mean([g['domain_em_std'] for g in graph_results])
-    avg_within_complete_std = np.mean([g['domain_complete_std'] for g in graph_results])
+    overall_neural_mean = np.mean(all_neural_kls)
+    overall_neural_std = np.std(all_neural_kls)  # Between-graph variation
+    overall_em_mean = np.mean(all_em_kls)
+    overall_em_std = np.std(all_em_kls)
+    overall_complete_mean = np.mean(all_complete_kls)
+    overall_complete_std = np.std(all_complete_kls)
     
     results = {
         'config': {
-            'target_parents': target_parents,
-            'missing_rate': missing_rate,
+            'target_parents': TARGET_PARENTS,
+            'missing_rate': MISSING_RATE,
             'n_nodes': n_nodes, 
             'train_size': train_size, 
-            'num_graphs': NUM_GRAPHS_PER_CONDITION,
-            'num_training_sets': NUM_TRAINING_SETS_PER_GRAPH
+            'num_graphs': NUM_GRAPHS_PER_CONDITION
         },
         'overall': {
             'neural_mean': overall_neural_mean,
-            'neural_between_std': overall_neural_std,
-            'neural_within_std': avg_within_neural_std,
+            'neural_std': overall_neural_std,
             'domain_em_mean': overall_em_mean,
-            'domain_em_between_std': overall_em_std,
-            'domain_em_within_std': avg_within_em_std,
+            'domain_em_std': overall_em_std,
             'domain_complete_mean': overall_complete_mean,
-            'domain_complete_between_std': overall_complete_std,
-            'domain_complete_within_std': avg_within_complete_std
+            'domain_complete_std': overall_complete_std
         },
-        'graph_results': graph_results,
+        'individual_graphs': successful_graphs,
         'kl_distribution': all_kl_values,
-        'successful_graphs': len(graph_results),
+        'successful_graphs': len(successful_graphs),
         'failed_experiments': failed_experiments
     }
     
     # Print comprehensive results
     print(f"\n{'='*60}")
-    print(f"CONDITION RESULTS ({len(graph_results)}/{NUM_GRAPHS_PER_CONDITION} successful graphs)")
+    print(f"CONDITION RESULTS ({len(successful_graphs)}/{NUM_GRAPHS_PER_CONDITION} successful graphs)")
     print(f"{'='*60}")
     print(f"Neural Imputer:")
-    print(f"  Overall: {overall_neural_mean:.4f} ± {overall_neural_std:.4f} (between-graph)")
-    print(f"  Avg within-graph variation: ± {avg_within_neural_std:.4f}")
+    print(f"  Overall: {overall_neural_mean:.4f} ± {overall_neural_std:.4f}")
     print(f"Domain EM:")
-    print(f"  Overall: {overall_em_mean:.4f} ± {overall_em_std:.4f} (between-graph)")  
-    print(f"  Avg within-graph variation: ± {avg_within_em_std:.4f}")
+    print(f"  Overall: {overall_em_mean:.4f} ± {overall_em_std:.4f}")  
     print(f"Domain Complete:")
-    print(f"  Overall: {overall_complete_mean:.4f} ± {overall_complete_std:.4f} (between-graph)")
-    print(f"  Avg within-graph variation: ± {avg_within_complete_std:.4f}")
+    print(f"  Overall: {overall_complete_mean:.4f} ± {overall_complete_std:.4f}")
     
     # Ratios and diagnostics
     em_ratio = overall_neural_mean / overall_em_mean if overall_em_mean > 0 else float('inf')
