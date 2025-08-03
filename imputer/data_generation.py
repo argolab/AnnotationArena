@@ -24,33 +24,50 @@ except ImportError:
     raise ImportError("pyAgrum is required for this implementation")
 
 
-def generate_random_bn_structure(n_nodes: int, edge_prob: float = 0.35, seed: int = 42) -> gum.BayesNet:
-    """Generate random BN structure using pyAgrum."""
-    print(f"Generating random BN with {n_nodes} nodes, edge_prob={edge_prob}, seed={seed}")
+def generate_direct_bn_structure(n_nodes: int, target_parents: float = 1.5, seed: int = 42) -> gum.BayesNet:
+    """Generate BN directly with O(1) parents using min(1, c/(i-1)) method."""
+    print(f"Generating direct BN with {n_nodes} nodes, target_parents={target_parents}, seed={seed}")
+    
+    np.random.seed(seed)
     
     # Create BN
-    bn = gum.BayesNet("RandomBN")
+    bn = gum.BayesNet("DirectBN")
     
     # Add binary variables
     for i in range(n_nodes):
         bn.add(gum.LabelizedVariable(str(i), str(i), ["0", "1"]))
     
-    # Add random edges (ensuring DAG)
-    np.random.seed(seed)  # Use provided seed
+    # Add edges using min(1, c/(i-1)) probability for O(1) parents
+    c = target_parents
     edges_added = 0
     
-    for i in range(n_nodes):
-        for j in range(i + 1, n_nodes):  # Only forward edges to ensure DAG
+    for child in range(1, n_nodes):  # Start from 1 since node 0 has no potential parents
+        num_candidates = child  # Nodes 0, 1, ..., child-1 are potential parents
+        edge_prob = min(1.0, c / num_candidates)
+        
+        for potential_parent in range(child):
             if np.random.random() < edge_prob:
-                bn.addArc(str(i), str(j))
+                bn.addArc(str(potential_parent), str(child))
                 edges_added += 1
-                print(f"  Added arc {i} -> {j}")
+                print(f"  Added arc {potential_parent} -> {child} (prob={edge_prob:.3f})")
     
     # Generate random CPTs
     for node_id in bn.nodes():
         bn.generateCPT(node_id)
     
     print(f"Generated BN: {bn.size()} nodes, {edges_added} arcs")
+    
+    # Print parent count statistics
+    parent_counts = []
+    for child in range(n_nodes):
+        parents = list(bn.parents(str(child)))
+        parent_counts.append(len(parents))
+        if len(parents) > 0:
+            print(f"  Node {child}: {len(parents)} parents {parents}")
+    
+    avg_parents = np.mean(parent_counts)
+    print(f"Average parents per node: {avg_parents:.2f}")
+    
     return bn
 
 
@@ -339,17 +356,17 @@ def generate_dataset(bn: gum.BayesNet,
 def create_experiment_data(n_nodes: int, 
                           train_size: int, 
                           test_size: int,
-                          edge_prob: float = 0.35,
+                          target_parents: float = 1.5,
                           obs_ratio: float = 0.5,
                           seed: int = 42) -> Tuple:
-    """Create complete experiment data using pyAgrum."""
+    """Create complete experiment data using direct BN generation."""
     print(f"Creating data: {n_nodes} nodes, {train_size} train, {test_size} test, seed={seed}")
     
-    # Generate BN structure and parameters
-    bn = generate_random_bn_structure(n_nodes, edge_prob, seed)
+    # Generate BN structure and parameters using direct method
+    bn = generate_direct_bn_structure(n_nodes, target_parents, seed)
     adj_matrix = create_adjacency_matrix(bn, n_nodes)
     
-    # Generate training and test data (without parameter embeddings)
+    # Generate training and test data
     train_data = generate_dataset_fair(bn, adj_matrix, n_nodes, train_size, obs_ratio)
     test_data = generate_dataset_fair(bn, adj_matrix, n_nodes, test_size, obs_ratio)
     

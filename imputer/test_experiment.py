@@ -41,7 +41,7 @@ TEST_TRAINING_SIZES = [10, 50, 250, 500, 1000, 1500, 2000]  # Training set sizes
 TEST_SIZE = 250  # Test set size
 
 # Parameter sweep ranges
-EDGE_PROBS = [0.3, 0.5, 0.7]  # Graph density parameters
+TARGET_PARENTS = [1.0, 1.5, 2.0]  # Average parent count per node (O(1) parents)
 MISSING_RATES = [0.3, 0.5]  # Missing data rates
 
 # Experimental design parameters
@@ -73,10 +73,10 @@ def clear_memory():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-def run_single_condition_experiment(edge_prob, missing_rate, n_nodes, train_size):
+def run_single_condition_experiment(target_parents, missing_rate, n_nodes, train_size):
     """Run experiment for a single parameter condition with proper nested design."""
     print(f"\n{'='*80}")
-    print(f"CONDITION: edge_prob={edge_prob}, missing_rate={missing_rate}, n_nodes={n_nodes}, train_size={train_size}")
+    print(f"CONDITION: target_parents={target_parents}, missing_rate={missing_rate}, n_nodes={n_nodes}, train_size={train_size}")
     print(f"Design: {NUM_GRAPHS_PER_CONDITION} graphs × {NUM_TRAINING_SETS_PER_GRAPH} training sets per graph")
     print(f"{'='*80}")
     
@@ -87,7 +87,7 @@ def run_single_condition_experiment(edge_prob, missing_rate, n_nodes, train_size
     obs_ratio = 1.0 - missing_rate
     
     # Create condition hash for reproducible seeding
-    condition_hash = hash((edge_prob, missing_rate, n_nodes, train_size)) % 10000
+    condition_hash = hash((target_parents, missing_rate, n_nodes, train_size)) % 10000
     
     clear_memory()
     
@@ -105,14 +105,14 @@ def run_single_condition_experiment(edge_prob, missing_rate, n_nodes, train_size
             # Generate base graph structure - this BN will be used for all training/test sets
             bn, adj_matrix, _, _ = create_experiment_data(
                 n_nodes, train_size, TEST_SIZE,
-                edge_prob=edge_prob, obs_ratio=obs_ratio, seed=graph_seed
+                target_parents=target_parents, obs_ratio=obs_ratio, seed=graph_seed
             )
             
             # Generate test set from this BN (large seed offset to avoid train/test overlap)
             test_seed = graph_seed + 9999
             _, _, _, test_data = create_experiment_data(
                 n_nodes, train_size, TEST_SIZE,
-                edge_prob=edge_prob, obs_ratio=obs_ratio, seed=test_seed
+                target_parents=target_parents, obs_ratio=obs_ratio, seed=test_seed
             )
             
             if len(test_data) == 0:
@@ -136,7 +136,7 @@ def run_single_condition_experiment(edge_prob, missing_rate, n_nodes, train_size
                     # Generate training data from the same BN structure
                     _, _, incomplete_train_data, _ = create_experiment_data(
                         n_nodes, train_size, TEST_SIZE,
-                        edge_prob=edge_prob, obs_ratio=obs_ratio, seed=train_seed
+                        target_parents=target_parents, obs_ratio=obs_ratio, seed=train_seed
                     )
                     
                     # Generate complete training data from same BN with same seed
@@ -188,7 +188,7 @@ def run_single_condition_experiment(edge_prob, missing_rate, n_nodes, train_size
                         graph_domain_complete_results.append(domain_complete_kl)
                         
                         # Store individual KL values for histograms
-                        condition_id = f"{edge_prob}_{missing_rate}_{n_nodes}_{train_size}"
+                        condition_id = f"{target_parents}_{missing_rate}_{n_nodes}_{train_size}"
                         if 'kl_distribution' in neural_results:
                             all_kl_values.extend([(kl, 'neural', condition_id, graph_idx, train_set_idx) for kl in neural_results['kl_distribution']])
                         if 'kl_distribution' in domain_em_results:
@@ -262,7 +262,7 @@ def run_single_condition_experiment(edge_prob, missing_rate, n_nodes, train_size
     
     results = {
         'config': {
-            'edge_prob': edge_prob,
+            'target_parents': target_parents,
             'missing_rate': missing_rate,
             'n_nodes': n_nodes, 
             'train_size': train_size, 
@@ -317,14 +317,14 @@ def run_test():
     print("="*60)
     print(f"Graph sizes: {TEST_GRAPH_SIZES}")
     print(f"Training sizes: {TEST_TRAINING_SIZES}")
-    print(f"Edge probabilities: {EDGE_PROBS}")
+    print(f"Target parent counts: {TARGET_PARENTS}")
     print(f"Missing rates: {MISSING_RATES}")
     print(f"Test size: {TEST_SIZE}")
     print(f"Using device: {DEVICE}")
     print(f"Design: {NUM_GRAPHS_PER_CONDITION} graphs × {NUM_TRAINING_SETS_PER_GRAPH} training sets per condition")
     
     # Calculate total experiments
-    total_conditions = len(EDGE_PROBS) * len(MISSING_RATES) * len(TEST_GRAPH_SIZES) * len(TEST_TRAINING_SIZES)
+    total_conditions = len(TARGET_PARENTS) * len(MISSING_RATES) * len(TEST_GRAPH_SIZES) * len(TEST_TRAINING_SIZES)
     total_model_trainings = total_conditions * NUM_GRAPHS_PER_CONDITION * NUM_TRAINING_SETS_PER_GRAPH * 3
     print(f"Total conditions: {total_conditions}")
     print(f"Total model trainings: {total_model_trainings}")
@@ -335,20 +335,20 @@ def run_test():
     
     try:
         # Main parameter sweep loops
-        for edge_prob in EDGE_PROBS:
+        for target_parents in TARGET_PARENTS:
             for missing_rate in MISSING_RATES:
                 for n_nodes in TEST_GRAPH_SIZES:
                     for train_size in TEST_TRAINING_SIZES:
                         print(f"\n{'='*100}")
                         print(f"CONDITION {completed_conditions + 1}/{total_conditions}")
-                        print(f"edge_prob={edge_prob}, missing_rate={missing_rate}, n_nodes={n_nodes}, train_size={train_size}")
+                        print(f"target_parents={target_parents}, missing_rate={missing_rate}, n_nodes={n_nodes}, train_size={train_size}")
                         print(f"{'='*100}")
                         
                         # Run experiment for this condition
-                        result = run_single_condition_experiment(edge_prob, missing_rate, n_nodes, train_size)
+                        result = run_single_condition_experiment(target_parents, missing_rate, n_nodes, train_size)
                 
                         if result:
-                            condition_key = (edge_prob, missing_rate, n_nodes, train_size)
+                            condition_key = (target_parents, missing_rate, n_nodes, train_size)
                             all_results[condition_key] = result
                             completed_conditions += 1
                             
@@ -375,16 +375,16 @@ def run_test():
         print(f"Completed {len(all_results)} out of {total_conditions} conditions")
         
         # Create summary table for each parameter combination
-        for edge_prob in EDGE_PROBS:
+        for target_parents in TARGET_PARENTS:
             for missing_rate in MISSING_RATES:
                 for n_nodes in TEST_GRAPH_SIZES:
-                    print(f"\n--- EDGE_PROB={edge_prob}, MISSING_RATE={missing_rate}, N_NODES={n_nodes} ---")
+                    print(f"\n--- TARGET_PARENTS={target_parents}, MISSING_RATE={missing_rate}, N_NODES={n_nodes} ---")
                     print(f"{'Train Size':<12} {'Neural KL':<16} {'Domain EM KL':<16} {'Domain Complete KL':<18} {'EM Ratio':<10} {'Status'}")
                     print("-" * 88)
                     
                     # Get results for this parameter combination
                     param_results = [(k, v) for k, v in all_results.items() 
-                                   if k[0] == edge_prob and k[1] == missing_rate and k[2] == n_nodes]
+                                   if k[0] == target_parents and k[1] == missing_rate and k[2] == n_nodes]
                     param_results.sort(key=lambda x: x[0][3])  # Sort by training size
                     
                     for (_, _, _, train_size), result in param_results:
@@ -436,29 +436,29 @@ def create_comparison_plot(all_results):
         return
     
     # Get all parameter combinations
-    param_combinations = sorted(set((k[0], k[1], k[2]) for k in all_results.keys()))  # (edge_prob, missing_rate, n_nodes)
+    param_combinations = sorted(set((k[0], k[1], k[2]) for k in all_results.keys()))  # (target_parents, missing_rate, n_nodes)
     
     # Create subplots for each parameter combination
-    fig, axes = plt.subplots(len(EDGE_PROBS)*len(MISSING_RATES), len(TEST_GRAPH_SIZES), 
-                           figsize=(8*len(TEST_GRAPH_SIZES), 6*len(EDGE_PROBS)*len(MISSING_RATES)))
+    fig, axes = plt.subplots(len(TARGET_PARENTS)*len(MISSING_RATES), len(TEST_GRAPH_SIZES), 
+                           figsize=(8*len(TEST_GRAPH_SIZES), 6*len(TARGET_PARENTS)*len(MISSING_RATES)))
     if len(param_combinations) == 1:
         axes = np.array([[axes]])
     elif len(TEST_GRAPH_SIZES) == 1:
         axes = axes.reshape(-1, 1)
-    elif len(EDGE_PROBS)*len(MISSING_RATES) == 1:
+    elif len(TARGET_PARENTS)*len(MISSING_RATES) == 1:
         axes = axes.reshape(1, -1)
     
     base_dir = os.path.dirname(os.path.abspath(__file__))
     
     plot_idx = 0
-    for edge_prob in EDGE_PROBS:
+    for target_parents in TARGET_PARENTS:
         for missing_rate in MISSING_RATES:
             for node_idx, n_nodes in enumerate(TEST_GRAPH_SIZES):
                 ax = axes[plot_idx, node_idx]
                 
                 # Get training sizes for this parameter combination
                 train_sizes = sorted(set(k[3] for k in all_results.keys() 
-                                       if k[0] == edge_prob and k[1] == missing_rate and k[2] == n_nodes))
+                                       if k[0] == target_parents and k[1] == missing_rate and k[2] == n_nodes))
                 neural_kls = []
                 domain_em_kls = []
                 domain_complete_kls = []
@@ -467,7 +467,7 @@ def create_comparison_plot(all_results):
                 domain_complete_stds = []
                 
                 for train_size in train_sizes:
-                    key = (edge_prob, missing_rate, n_nodes, train_size)
+                    key = (target_parents, missing_rate, n_nodes, train_size)
                     if key in all_results:
                         result = all_results[key]
                         overall = result.get('overall', {})
@@ -497,7 +497,7 @@ def create_comparison_plot(all_results):
                 
                 ax.set_xlabel('Training Samples', fontsize=10)
                 ax.set_ylabel('KL Divergence', fontsize=10)
-                ax.set_title(f'edge={edge_prob}, miss={missing_rate}, nodes={n_nodes}', fontsize=10)
+                ax.set_title(f'parents={target_parents}, miss={missing_rate}, nodes={n_nodes}', fontsize=10)
                 ax.legend(fontsize=8)
                 ax.grid(True, alpha=0.3)
                 ax.set_yscale('log')
