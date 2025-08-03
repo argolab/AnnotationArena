@@ -88,7 +88,7 @@ def create_adjacency_matrix(bn: gum.BayesNet, n_nodes: int) -> np.ndarray:
     return adj_matrix
 
 
-def create_parameter_embeddings(bn: gum.BayesNet, adj_matrix: np.ndarray) -> np.ndarray:
+def create_parameter_embeddings(bn: gum.BayesNet, adj_matrix: np.ndarray, observed_nodes=None) -> np.ndarray:
     """Create parameter embeddings from BN (adjacency + CPD data)."""
     n_nodes = adj_matrix.shape[0]
     
@@ -105,11 +105,15 @@ def create_parameter_embeddings(bn: gum.BayesNet, adj_matrix: np.ndarray) -> np.
     # Create CPD matrix
     cpd_data = np.zeros((n_nodes, max_cpd_size), dtype=np.float32)
     for i, cpd_values in enumerate(cpd_data_list):
-        cpd_data[i, :len(cpd_values)] = cpd_values
+        if observed_nodes is None or i in observed_nodes:
+            # Include CPD data for observed nodes (or all nodes if no mask)
+            cpd_data[i, :len(cpd_values)] = cpd_values
+        else:
+            # Zero out CPD data for unobserved nodes
+            cpd_data[i, :] = 0.0
     
     # Combine adjacency and CPD data
     param_embeddings = np.concatenate([adj_matrix, cpd_data], axis=1)
-    print(f"Parameter embeddings shape: {param_embeddings.shape}")
     
     return param_embeddings
 

@@ -13,6 +13,7 @@ warnings.filterwarnings('ignore')
 import json
 import numpy as np
 import matplotlib.pyplot as plt
+import torch
 from torch.utils.data import DataLoader
 
 # Import domain specific model
@@ -136,31 +137,47 @@ def run_simple_experiment(n_nodes=5, train_size=500, target_parents=1.5, missing
                     model = create_model_structure(n_node, input_dim, structure_dim)
                     
                     print(f"Model created with {sum(p.numel() for p in model.parameters())} parameters")
-                    model = train_model_structure(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=15)
+                    model = train_model_structure(model, train_loader, test_loader, epochs=100, lr=1e-4, patience=30)
                     
                     # Evaluate
                     neural_results = evaluate_neural_model_structure(model, test_data, n_node, 2)
                     
                 elif neural_type == "cpts":
-                    # Structure + CPTs neural model
-                    train_dataset = GraphDatasetWithCPTs(train_data, bn)
-                    test_dataset = GraphDatasetWithCPTs(test_data, bn)
+                    # Structure + CPTs neural model - use original parameter embeddings approach
+                    from data_generation import create_parameter_embeddings
+                    
+                    # Replace structure_info in training data with parameter embeddings per sample
+                    train_data_with_params = []
+                    for inputs, _, dimensions, mask, targets in train_data:
+                        # Get observed nodes for this sample
+                        observed_nodes = [i for i in range(n_node) if mask[i] == 0]
+                        param_embeddings = create_parameter_embeddings(bn, adj_matrix, observed_nodes)
+                        train_data_with_params.append((inputs, torch.FloatTensor(param_embeddings), dimensions, mask, targets))
+                    
+                    # Replace structure_info in test data with parameter embeddings per sample
+                    test_data_with_params = []
+                    for inputs, _, dimensions, mask, targets in test_data:
+                        # Get observed nodes for this sample
+                        observed_nodes = [i for i in range(n_node) if mask[i] == 0]
+                        param_embeddings = create_parameter_embeddings(bn, adj_matrix, observed_nodes)
+                        test_data_with_params.append((inputs, torch.FloatTensor(param_embeddings), dimensions, mask, targets))
+                    
+                    train_dataset = GraphDatasetStructure(train_data_with_params)
+                    test_dataset = GraphDatasetStructure(test_data_with_params)
                     
                     batch_size = min(32, len(train_data))
-                    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn_cpts)
-                    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn_cpts)
+                    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn_structure)
+                    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn_structure)
                     
                     input_dim = train_data[0][0].shape[1]
-                    structure_dim = train_data[0][1].shape[1]
-                    cpt_dim = train_dataset.max_cpt_size  # Get actual CPT dimension from dataset
-                    print(f"Using actual CPT dimension: {cpt_dim}")
-                    model = create_model_cpts(n_node, input_dim, structure_dim, cpt_dim)
+                    structure_dim = param_embeddings.shape[1]  # Use parameter embedding dimension
+                    model = create_model_structure(n_node, input_dim, structure_dim)
                     
                     print(f"Model created with {sum(p.numel() for p in model.parameters())} parameters")
-                    model = train_model_cpts(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=15)
+                    model = train_model_structure(model, train_loader, test_loader, epochs=100, lr=1e-4, patience=30)
                     
                     # Evaluate
-                    neural_results = evaluate_neural_model_cpts(model, test_data, bn, n_node, 2)
+                    neural_results = evaluate_neural_model_structure(model, test_data_with_params, n_node, 2)
                 
                 else:
                     raise ValueError(f"Unknown neural_type: {neural_type}")
@@ -441,11 +458,11 @@ if __name__ == "__main__":
     
     # Example usage - small batch for quick testing
     result = run_simple_experiment(
-        n_nodes=[5, 7],
-        train_size=[50, 200, 500],
+        n_nodes=[5, 7, 10],
+        train_size=[50, 200, 500, 1000],
         target_parents=1.0,
         missing_rate=0.4,
-        neural_type="structure"
+        neural_type="cpts"
     )
     
     print("\nExperiment completed!")

@@ -32,7 +32,7 @@ DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 def extract_cpts_for_observed_nodes(bn, observed_nodes, n_nodes, max_cpt_size=None):
     """Extract CPTs for observed nodes from the true BN."""
     if not PYAGRUM_AVAILABLE:
-        return np.zeros((n_nodes, 1))
+        return np.zeros((n_nodes, 8))
     
     cpt_data = []
     cpt_sizes = []
@@ -109,7 +109,7 @@ class Positional_Encoder(nn.Module):
         self.question_embedding = nn.Parameter(torch.randn(1, hidden_dim))
         
         # CPT processing layer
-        self.cpt_processor = nn.Linear(cpt_dim, hidden_dim // 2)
+        self.cpt_processor = nn.Linear(cpt_dim, hidden_dim)
         
         torch.nn.init.kaiming_normal_(self.node_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.question_embedding, mode='fan_out', nonlinearity='relu')
@@ -521,8 +521,10 @@ def evaluate_neural_model_cpts(model, test_data, bn, n_nodes, n_states=2):
         if not unobserved_nodes:
             continue
         
-        # Extract CPTs for observed nodes
-        cpt_info = extract_cpts_for_observed_nodes(bn, observed_nodes, n_nodes)
+        # Extract CPTs for observed nodes - use same max size as training
+        # Need to get max_cpt_size from somewhere - let's use the model's expected size
+        expected_cpt_dim = model.encoder.cpt_dim
+        cpt_info = extract_cpts_for_observed_nodes(bn, observed_nodes, n_nodes, expected_cpt_dim)
             
         # Get predictions for unobserved nodes
         for node in unobserved_nodes:
@@ -547,6 +549,8 @@ def evaluate_neural_model_cpts(model, test_data, bn, n_nodes, n_states=2):
                     pred_probs = pred_probs / np.sum(pred_probs)
                 
                 if np.any(np.isnan(true_probs)) or np.sum(true_probs) == 0:
+                    if failed_inferences < 5:  # Only print first few failures
+                        print(f"Invalid true_probs for node {node}: {true_probs}")
                     failed_inferences += 1
                     continue
                 
@@ -559,6 +563,8 @@ def evaluate_neural_model_cpts(model, test_data, bn, n_nodes, n_states=2):
                         )
                 
                 if np.isnan(kl) or np.isinf(kl) or kl < 0:
+                    if failed_inferences < 5:  # Only print first few failures
+                        print(f"Invalid KL for node {node}: kl={kl}, true_probs={true_probs}, pred_probs={pred_probs}")
                     failed_inferences += 1
                     continue
                 
