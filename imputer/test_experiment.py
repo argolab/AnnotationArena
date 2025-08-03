@@ -332,44 +332,42 @@ def run_test():
         print("="*100)
         print(f"Completed {len(all_results)} out of {total_conditions} conditions")
         
-        # Create summary table for each parameter combination
-        for target_parents in TARGET_PARENTS:
-            for missing_rate in MISSING_RATES:
-                for n_nodes in TEST_GRAPH_SIZES:
-                    print(f"\n--- TARGET_PARENTS={target_parents}, MISSING_RATE={missing_rate}, N_NODES={n_nodes} ---")
-                    print(f"{'Train Size':<12} {'Neural KL':<16} {'Domain EM KL':<16} {'Domain Complete KL':<18} {'EM Ratio':<10} {'Status'}")
-                    print("-" * 88)
-                    
-                    # Get results for this parameter combination
-                    param_results = [(k, v) for k, v in all_results.items() 
-                                   if k[0] == target_parents and k[1] == missing_rate and k[2] == n_nodes]
-                    param_results.sort(key=lambda x: x[0][3])  # Sort by training size
-                    
-                    for (_, _, _, train_size), result in param_results:
-                        overall = result.get('overall', {})
-                        neural_mean = overall.get('neural_mean', float('inf'))
-                        domain_em_mean = overall.get('domain_em_mean', float('inf'))
-                        domain_complete_mean = overall.get('domain_complete_mean', float('inf'))
-                        neural_std = overall.get('neural_between_std', 0.0)
-                        domain_em_std = overall.get('domain_em_between_std', 0.0)
-                        domain_complete_std = overall.get('domain_complete_between_std', 0.0)
-                        
-                        em_ratio = neural_mean / domain_em_mean if domain_em_mean > 0 else float('inf')
-                        
-                        # Determine status
-                        if neural_mean == float('inf') or domain_em_mean == float('inf') or domain_complete_mean == float('inf'):
-                            status = "FAILED"
-                        elif em_ratio < 0.5:
-                            status = "EXCELLENT"
-                        elif em_ratio < 1.0:
-                            status = "GOOD"
-                        else:
-                            status = "POOR"
-                        
-                        neural_str = f"{neural_mean:.4f}±{neural_std:.3f}"
-                        domain_em_str = f"{domain_em_mean:.4f}±{domain_em_std:.3f}"
-                        domain_complete_str = f"{domain_complete_mean:.4f}±{domain_complete_std:.3f}"
-                        print(f"{train_size:<12} {neural_str:<16} {domain_em_str:<16} {domain_complete_str:<18} {em_ratio:<10.2f} {status}")
+        # Create summary table for the simplified framework
+        print(f"\n--- TARGET_PARENTS={TARGET_PARENTS}, MISSING_RATE={MISSING_RATE} ---")
+        for n_nodes in TEST_GRAPH_SIZES:
+            print(f"\n--- N_NODES={n_nodes} ---")
+            print(f"{'Train Size':<12} {'Neural KL':<16} {'Domain EM KL':<16} {'Domain Complete KL':<18} {'EM Ratio':<10} {'Status'}")
+            print("-" * 88)
+            
+            # Get results for this graph size
+            node_results = [(k, v) for k, v in all_results.items() if k[0] == n_nodes]
+            node_results.sort(key=lambda x: x[0][1])  # Sort by training size
+            
+            for (n_nodes_key, train_size), result in node_results:
+                overall = result.get('overall', {})
+                neural_mean = overall.get('neural_mean', float('inf'))
+                domain_em_mean = overall.get('domain_em_mean', float('inf'))
+                domain_complete_mean = overall.get('domain_complete_mean', float('inf'))
+                neural_std = overall.get('neural_std', 0.0)
+                domain_em_std = overall.get('domain_em_std', 0.0)
+                domain_complete_std = overall.get('domain_complete_std', 0.0)
+                
+                em_ratio = neural_mean / domain_em_mean if domain_em_mean > 0 else float('inf')
+                
+                # Determine status
+                if neural_mean == float('inf') or domain_em_mean == float('inf') or domain_complete_mean == float('inf'):
+                    status = "FAILED"
+                elif em_ratio < 0.5:
+                    status = "EXCELLENT"
+                elif em_ratio < 1.0:
+                    status = "GOOD"
+                else:
+                    status = "POOR"
+                
+                neural_str = f"{neural_mean:.4f}±{neural_std:.3f}"
+                domain_em_str = f"{domain_em_mean:.4f}±{domain_em_std:.3f}"
+                domain_complete_str = f"{domain_complete_mean:.4f}±{domain_complete_std:.3f}"
+                print(f"{train_size:<12} {neural_str:<16} {domain_em_str:<16} {domain_complete_str:<18} {em_ratio:<10.2f} {status}")
         
         print("\nInterpretation:")
         print("- EM Ratio < 0.5: Neural imputer is much better than Domain EM")
@@ -393,74 +391,60 @@ def create_comparison_plot(all_results):
     if not all_results:
         return
     
-    # Get all parameter combinations
-    param_combinations = sorted(set((k[0], k[1], k[2]) for k in all_results.keys()))  # (target_parents, missing_rate, n_nodes)
-    
-    # Create subplots for each parameter combination
-    fig, axes = plt.subplots(len(TARGET_PARENTS)*len(MISSING_RATES), len(TEST_GRAPH_SIZES), 
-                           figsize=(8*len(TEST_GRAPH_SIZES), 6*len(TARGET_PARENTS)*len(MISSING_RATES)))
-    if len(param_combinations) == 1:
-        axes = np.array([[axes]])
-    elif len(TEST_GRAPH_SIZES) == 1:
-        axes = axes.reshape(-1, 1)
-    elif len(TARGET_PARENTS)*len(MISSING_RATES) == 1:
-        axes = axes.reshape(1, -1)
+    # Create subplots for each graph size
+    fig, axes = plt.subplots(1, len(TEST_GRAPH_SIZES), figsize=(8*len(TEST_GRAPH_SIZES), 6))
+    if len(TEST_GRAPH_SIZES) == 1:
+        axes = [axes]
     
     base_dir = os.path.dirname(os.path.abspath(__file__))
     
-    plot_idx = 0
-    for target_parents in TARGET_PARENTS:
-        for missing_rate in MISSING_RATES:
-            for node_idx, n_nodes in enumerate(TEST_GRAPH_SIZES):
-                ax = axes[plot_idx, node_idx]
+    for node_idx, n_nodes in enumerate(TEST_GRAPH_SIZES):
+        ax = axes[node_idx]
+        
+        # Get training sizes for this graph size
+        train_sizes = sorted(set(k[1] for k in all_results.keys() if k[0] == n_nodes))
+        neural_kls = []
+        domain_em_kls = []
+        domain_complete_kls = []
+        neural_stds = []
+        domain_em_stds = []
+        domain_complete_stds = []
+        
+        for train_size in train_sizes:
+            key = (n_nodes, train_size)
+            if key in all_results:
+                result = all_results[key]
+                overall = result.get('overall', {})
                 
-                # Get training sizes for this parameter combination
-                train_sizes = sorted(set(k[3] for k in all_results.keys() 
-                                       if k[0] == target_parents and k[1] == missing_rate and k[2] == n_nodes))
-                neural_kls = []
-                domain_em_kls = []
-                domain_complete_kls = []
-                neural_stds = []
-                domain_em_stds = []
-                domain_complete_stds = []
+                neural_mean = overall.get('neural_mean', float('inf'))
+                domain_em_mean = overall.get('domain_em_mean', float('inf'))
+                domain_complete_mean = overall.get('domain_complete_mean', float('inf'))
+                neural_std = overall.get('neural_std', 0.0)
+                domain_em_std = overall.get('domain_em_std', 0.0)
+                domain_complete_std = overall.get('domain_complete_std', 0.0)
                 
-                for train_size in train_sizes:
-                    key = (target_parents, missing_rate, n_nodes, train_size)
-                    if key in all_results:
-                        result = all_results[key]
-                        overall = result.get('overall', {})
-                        
-                        neural_mean = overall.get('neural_mean', float('inf'))
-                        domain_em_mean = overall.get('domain_em_mean', float('inf'))
-                        domain_complete_mean = overall.get('domain_complete_mean', float('inf'))
-                        neural_std = overall.get('neural_between_std', 0.0)
-                        domain_em_std = overall.get('domain_em_between_std', 0.0)
-                        domain_complete_std = overall.get('domain_complete_between_std', 0.0)
-                        
-                        neural_kls.append(neural_mean if neural_mean != float('inf') else np.nan)
-                        domain_em_kls.append(domain_em_mean if domain_em_mean != float('inf') else np.nan)
-                        domain_complete_kls.append(domain_complete_mean if domain_complete_mean != float('inf') else np.nan)
-                        neural_stds.append(neural_std)
-                        domain_em_stds.append(domain_em_std)
-                        domain_complete_stds.append(domain_complete_std)
-                
-                # Plot with error bars
-                if len(train_sizes) > 0:
-                    ax.errorbar(train_sizes, neural_kls, yerr=neural_stds, fmt='o-', label='Neural Imputer', 
-                               linewidth=2, markersize=6, capsize=4, color='blue')
-                    ax.errorbar(train_sizes, domain_em_kls, yerr=domain_em_stds, fmt='s-', label='Domain EM', 
-                               linewidth=2, markersize=6, capsize=4, color='orange')
-                    ax.errorbar(train_sizes, domain_complete_kls, yerr=domain_complete_stds, fmt='^-', label='Domain Complete', 
-                               linewidth=2, markersize=6, capsize=4, color='green')
-                
-                ax.set_xlabel('Training Samples', fontsize=10)
-                ax.set_ylabel('KL Divergence', fontsize=10)
-                ax.set_title(f'parents={target_parents}, miss={missing_rate}, nodes={n_nodes}', fontsize=10)
-                ax.legend(fontsize=8)
-                ax.grid(True, alpha=0.3)
-                ax.set_yscale('log')
-            
-            plot_idx += 1
+                neural_kls.append(neural_mean if neural_mean != float('inf') else np.nan)
+                domain_em_kls.append(domain_em_mean if domain_em_mean != float('inf') else np.nan)
+                domain_complete_kls.append(domain_complete_mean if domain_complete_mean != float('inf') else np.nan)
+                neural_stds.append(neural_std)
+                domain_em_stds.append(domain_em_std)
+                domain_complete_stds.append(domain_complete_std)
+        
+        # Plot with error bars
+        if len(train_sizes) > 0:
+            ax.errorbar(train_sizes, neural_kls, yerr=neural_stds, fmt='o-', label='Neural Imputer', 
+                       linewidth=2, markersize=6, capsize=4, color='blue')
+            ax.errorbar(train_sizes, domain_em_kls, yerr=domain_em_stds, fmt='s-', label='Domain EM', 
+                       linewidth=2, markersize=6, capsize=4, color='orange')
+            ax.errorbar(train_sizes, domain_complete_kls, yerr=domain_complete_stds, fmt='^-', label='Domain Complete', 
+                       linewidth=2, markersize=6, capsize=4, color='green')
+        
+        ax.set_xlabel('Training Samples', fontsize=10)
+        ax.set_ylabel('KL Divergence', fontsize=10)
+        ax.set_title(f'parents={TARGET_PARENTS}, miss={MISSING_RATE}, nodes={n_nodes}', fontsize=10)
+        ax.legend(fontsize=8)
+        ax.grid(True, alpha=0.3)
+        ax.set_yscale('log')
     
     plt.tight_layout()
     plt.savefig(os.path.join(base_dir, 'results', 'experiment_plot.png'), dpi=300, bbox_inches='tight')
