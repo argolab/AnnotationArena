@@ -318,6 +318,23 @@ class GraphDatasetWithCPTs(Dataset):
             self.input_dim = data[0][0].shape[1]
             self.embedding_dim = data[0][1].shape[1]
             self.n_states = data[0][4].shape[1]
+            
+            # Pre-compute max CPT size for this dataset to ensure consistency
+            self.max_cpt_size = self._compute_max_cpt_size()
+    
+    def _compute_max_cpt_size(self):
+        """Compute the maximum CPT size for this BN to ensure consistent tensor shapes."""
+        if not self.bn or not PYAGRUM_AVAILABLE:
+            return 8  # Safe default
+        
+        max_size = 2  # Minimum size for nodes with no parents
+        for node_id in self.bn.nodes():
+            node_str = str(node_id)
+            cpt = self.bn.cpt(node_str)
+            cpt_values = np.array(cpt.tolist()).flatten()
+            max_size = max(max_size, len(cpt_values))
+        
+        return max_size
 
     def __len__(self):
         return len(self.data)
@@ -331,12 +348,12 @@ class GraphDatasetWithCPTs(Dataset):
             if mask[node] == 0:  # Observed
                 observed_nodes.append(node)
         
-        # Extract CPTs for observed nodes
+        # Extract CPTs for observed nodes with consistent size
         if self.bn is not None:
-            cpt_info = extract_cpts_for_observed_nodes(self.bn, observed_nodes, self.n_nodes)
+            cpt_info = extract_cpts_for_observed_nodes(self.bn, observed_nodes, self.n_nodes, self.max_cpt_size)
         else:
-            # Fallback - use zeros
-            cpt_info = np.zeros((self.n_nodes, 8))
+            # Fallback - use zeros with consistent size
+            cpt_info = np.zeros((self.n_nodes, self.max_cpt_size))
         
         return {
             'inputs': inputs,
@@ -431,9 +448,10 @@ def create_model_cpts(n_nodes, input_dim, structure_dim, cpt_dim=None):
         attention_heads = 8
         encoder_layers = 6
     
-    # Default CPT dimension based on graph size
+    # Default CPT dimension based on graph size - should be 2^(max_parents + 1)
     if cpt_dim is None:
-        cpt_dim = min(16, 2 ** min(n_nodes, 4))  # Reasonable size based on graph complexity
+        # For target_parents=1.0, max parents is typically 2, so max CPT size is 2^3 = 8
+        cpt_dim = 8  # Conservative default for graphs with O(1) parents
     
     # Ensure divisibility by attention heads
     base_dim = structure_dim + (input_dim - 1)

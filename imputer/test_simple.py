@@ -152,7 +152,9 @@ def run_simple_experiment(n_nodes=5, train_size=500, target_parents=1.5, missing
                     
                     input_dim = train_data[0][0].shape[1]
                     structure_dim = train_data[0][1].shape[1]
-                    model = create_model_cpts(n_node, input_dim, structure_dim)
+                    cpt_dim = train_dataset.max_cpt_size  # Get actual CPT dimension from dataset
+                    print(f"Using actual CPT dimension: {cpt_dim}")
+                    model = create_model_cpts(n_node, input_dim, structure_dim, cpt_dim)
                     
                     print(f"Model created with {sum(p.numel() for p in model.parameters())} parameters")
                     model = train_model_cpts(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=15)
@@ -437,13 +439,13 @@ def create_scaling_plot(results, neural_type):
 if __name__ == "__main__":
     print("Simple Graph Imputation Testing")
     
-    # Example usage - batch experiment
+    # Example usage - small batch for quick testing
     result = run_simple_experiment(
         n_nodes=[5, 7],
-        train_size=[10, 100, 500, 1000, 1500, 1750, 2000],
-        target_parents=1,
+        train_size=[50, 200, 500],
+        target_parents=1.0,
         missing_rate=0.4,
-        neural_type="cpts"
+        neural_type="structure"
     )
     
     print("\nExperiment completed!")

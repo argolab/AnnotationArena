@@ -26,7 +26,7 @@ from domain_specific_model import (
 
 from data_generation import create_experiment_data, create_complete_training_data
 
-from neural_imputer import (
+from neural_imputer_structure import (
     create_model,
     train_model,
     GraphDataset,
@@ -35,18 +35,17 @@ from neural_imputer import (
     DEVICE
 )
 
-# Test configuration - Parameter sweep design
-TEST_GRAPH_SIZES = [5, 10]  # Number of nodes
+# Test configuration - Simplified framework
+TEST_GRAPH_SIZES = [5, 7, 10]  # Number of nodes
 TEST_TRAINING_SIZES = [10, 50, 250, 500, 1000, 1500, 2000]  # Training set sizes
 TEST_SIZE = 250  # Test set size
 
-# Parameter sweep ranges
-TARGET_PARENTS = [1.0, 1.5, 2.0]  # Average parent count per node (O(1) parents)
-MISSING_RATES = [0.3, 0.5]  # Missing data rates
+# Fixed parameters
+TARGET_PARENTS = 1.0  # Single target parent count
+MISSING_RATE = 0.4   # Single missing data rate
 
 # Experimental design parameters
-NUM_GRAPHS_PER_CONDITION = 3  # Number of different graph structures per parameter combination
-NUM_TRAINING_SETS_PER_GRAPH = 3  # Number of different training sets per graph structure
+NUM_GRAPHS_PER_CONDITION = 3  # Number of different graph structures per (n_nodes, train_size) combination
 BASE_SEED = 42  # Base seed for reproducible experiments
 
 def convert_to_json_serializable(obj):
@@ -73,21 +72,22 @@ def clear_memory():
         torch.cuda.empty_cache()
         torch.cuda.synchronize()
 
-def run_single_condition_experiment(target_parents, missing_rate, n_nodes, train_size):
-    """Run experiment for a single parameter condition with proper nested design."""
+def run_single_condition_experiment(n_nodes, train_size):
+    """Run experiment for a single condition with multiple graphs."""
     print(f"\n{'='*80}")
-    print(f"CONDITION: target_parents={target_parents}, missing_rate={missing_rate}, n_nodes={n_nodes}, train_size={train_size}")
-    print(f"Design: {NUM_GRAPHS_PER_CONDITION} graphs × {NUM_TRAINING_SETS_PER_GRAPH} training sets per graph")
+    print(f"CONDITION: n_nodes={n_nodes}, train_size={train_size}")
+    print(f"Fixed: target_parents={TARGET_PARENTS}, missing_rate={MISSING_RATE}")
+    print(f"Design: {NUM_GRAPHS_PER_CONDITION} different graphs")
     print(f"{'='*80}")
     
-    # Storage for nested results
+    # Storage for results across graphs
     graph_results = []
     all_kl_values = []
     failed_experiments = 0
-    obs_ratio = 1.0 - missing_rate
+    obs_ratio = 1.0 - MISSING_RATE
     
     # Create condition hash for reproducible seeding
-    condition_hash = hash((target_parents, missing_rate, n_nodes, train_size)) % 10000
+    condition_hash = hash((n_nodes, train_size)) % 10000
     
     clear_memory()
     
@@ -102,135 +102,100 @@ def run_single_condition_experiment(target_parents, missing_rate, n_nodes, train
         print(f"Graph seed: {graph_seed}")
         
         try:
-            # Generate base graph structure - this BN will be used for all training/test sets
-            bn, adj_matrix, _, _ = create_experiment_data(
+            # Generate complete experiment data for this graph
+            bn, adj_matrix, train_data, test_data = create_experiment_data(
                 n_nodes, train_size, TEST_SIZE,
-                target_parents=target_parents, obs_ratio=obs_ratio, seed=graph_seed
+                target_parents=TARGET_PARENTS, obs_ratio=obs_ratio, seed=graph_seed
             )
             
-            # Generate test set from this BN (large seed offset to avoid train/test overlap)
-            test_seed = graph_seed + 9999
-            _, _, _, test_data = create_experiment_data(
-                n_nodes, train_size, TEST_SIZE,
-                target_parents=target_parents, obs_ratio=obs_ratio, seed=test_seed
-            )
+            # Generate complete training data for domain baseline
+            complete_train_data = create_complete_training_data(bn, adj_matrix, n_nodes, train_size)
             
-            if len(test_data) == 0:
-                print(f"Failed to generate test data for graph {graph_idx + 1}")
+            if len(train_data) == 0 or len(test_data) == 0 or len(complete_train_data) == 0:
+                print(f"Failed to generate data for graph {graph_idx + 1}")
                 failed_experiments += 1
                 continue
             
-            # Storage for this graph's training set results
-            graph_neural_results = []
-            graph_domain_em_results = []
-            graph_domain_complete_results = []
+            print(f"Generated data: {len(train_data)} train, {len(test_data)} test, {len(complete_train_data)} complete")
             
-            # Loop over different training sets for this graph structure
-            for train_set_idx in range(NUM_TRAINING_SETS_PER_GRAPH):
-                print(f"\n--- Training Set {train_set_idx + 1}/{NUM_TRAINING_SETS_PER_GRAPH} (Graph {graph_idx + 1}) ---")
-                
-                # Generate training data from SAME BN but different sampling seed
-                train_seed = graph_seed + train_set_idx + 1  # Small offsets: +1, +2, +3
-                
-                try:
-                    # Generate training data from the same BN structure
-                    _, _, incomplete_train_data, _ = create_experiment_data(
-                        n_nodes, train_size, TEST_SIZE,
-                        target_parents=target_parents, obs_ratio=obs_ratio, seed=train_seed
-                    )
-                    
-                    # Generate complete training data from same BN with same seed
-                    # We'll generate it with the same train_seed to keep it consistent
-                    complete_train_data = create_complete_training_data(bn, adj_matrix, n_nodes, train_size)
-                    
-                    if len(incomplete_train_data) == 0 or len(complete_train_data) == 0:
-                        print(f"Failed to generate training data for training set {train_set_idx + 1}")
-                        continue
-                    
-                    # METHOD 1: Train neural imputer
-                    print(f"Training Neural Imputer...")
-                    train_dataset = GraphDataset(incomplete_train_data)
-                    test_dataset = GraphDataset(test_data)
-                    
-                    batch_size = min(32, len(incomplete_train_data))
-                    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
-                    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
-                    
-                    input_dim = incomplete_train_data[0][0].shape[1]
-                    structure_dim = incomplete_train_data[0][1].shape[1]
-                    model = create_model(n_nodes, input_dim, structure_dim)
-                    model = train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=15)
-                    neural_results = evaluate_neural_model(model, test_data, n_nodes, 2)
-                    
-                    # METHOD 2: Train domain EM
-                    print(f"Training Domain EM...")
-                    pyagrum_incomplete_data = convert_training_data_for_pyagrum(incomplete_train_data, n_nodes)
-                    learned_bn_em = learn_domain_specific_model(
-                        adj_matrix, pyagrum_incomplete_data, n_states=2, max_iter=100, epsilon=1e-3
-                    )
-                    domain_em_results = evaluate_domain_specific_model(learned_bn_em, test_data, n_nodes, 2)
-                    
-                    # METHOD 3: Train domain complete
-                    print(f"Training Domain Complete...")
-                    learned_bn_complete = learn_domain_specific_model_complete(
-                        adj_matrix, complete_train_data, n_nodes, n_states=2
-                    )
-                    domain_complete_results = evaluate_domain_specific_model(learned_bn_complete, test_data, n_nodes, 2)
-                    
-                    # Store results for this training set
-                    neural_kl = neural_results.get('mean_kl', float('inf'))
-                    domain_em_kl = domain_em_results.get('mean_kl', float('inf'))
-                    domain_complete_kl = domain_complete_results.get('mean_kl', float('inf'))
-                    
-                    if neural_kl != float('inf') and domain_em_kl != float('inf') and domain_complete_kl != float('inf'):
-                        graph_neural_results.append(neural_kl)
-                        graph_domain_em_results.append(domain_em_kl)
-                        graph_domain_complete_results.append(domain_complete_kl)
-                        
-                        # Store individual KL values for histograms
-                        condition_id = f"{target_parents}_{missing_rate}_{n_nodes}_{train_size}"
-                        if 'kl_distribution' in neural_results:
-                            all_kl_values.extend([(kl, 'neural', condition_id, graph_idx, train_set_idx) for kl in neural_results['kl_distribution']])
-                        if 'kl_distribution' in domain_em_results:
-                            all_kl_values.extend([(kl, 'domain_em', condition_id, graph_idx, train_set_idx) for kl in domain_em_results['kl_distribution']])
-                        if 'kl_distribution' in domain_complete_results:
-                            all_kl_values.extend([(kl, 'domain_complete', condition_id, graph_idx, train_set_idx) for kl in domain_complete_results['kl_distribution']])
-                        
-                        print(f"Set {train_set_idx + 1}: Neural={neural_kl:.4f}, EM={domain_em_kl:.4f}, Complete={domain_complete_kl:.4f}")
-                    else:
-                        print(f"Training set {train_set_idx + 1} failed evaluation")
-                    
-                    clear_memory()
-                    
-                except Exception as e:
-                    print(f"Training set {train_set_idx + 1} FAILED: {e}")
-                    clear_memory()
-                    continue
+            # METHOD 1: Train neural imputer
+            print(f"Training Neural Imputer...")
+            train_dataset = GraphDataset(train_data)
+            test_dataset = GraphDataset(test_data)
             
-            # Aggregate results for this graph
-            if len(graph_neural_results) > 0:
+            batch_size = min(32, len(train_data))
+            train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_fn)
+            test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_fn)
+            
+            input_dim = train_data[0][0].shape[1]
+            structure_dim = train_data[0][1].shape[1]
+            model = create_model(n_nodes, input_dim, structure_dim)
+            model = train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=15)
+            neural_results = evaluate_neural_model(model, test_data, n_nodes, 2)
+            
+            # METHOD 2: Train domain EM
+            print(f"Training Domain EM...")
+            pyagrum_data = convert_training_data_for_pyagrum(train_data, n_nodes)
+            learned_bn_em = learn_domain_specific_model(
+                adj_matrix, pyagrum_data, n_states=2, max_iter=100, epsilon=1e-3
+            )
+            domain_em_results = evaluate_domain_specific_model(learned_bn_em, test_data, n_nodes, 2)
+            
+            # METHOD 3: Train domain complete
+            print(f"Training Domain Complete...")
+            learned_bn_complete = learn_domain_specific_model_complete(
+                adj_matrix, complete_train_data, n_nodes, n_states=2
+            )
+            domain_complete_results = evaluate_domain_specific_model(learned_bn_complete, test_data, n_nodes, 2)
+            
+            # Store results for this graph
+            neural_kl = neural_results.get('mean_kl', float('inf'))
+            domain_em_kl = domain_em_results.get('mean_kl', float('inf'))
+            domain_complete_kl = domain_complete_results.get('mean_kl', float('inf'))
+            
+            if neural_kl != float('inf') and domain_em_kl != float('inf') and domain_complete_kl != float('inf'):
                 graph_result = {
                     'graph_idx': graph_idx,
-                    'neural_mean': np.mean(graph_neural_results),
-                    'neural_std': np.std(graph_neural_results),
-                    'neural_all': graph_neural_results,
-                    'domain_em_mean': np.mean(graph_domain_em_results),
-                    'domain_em_std': np.std(graph_domain_em_results),
-                    'domain_em_all': graph_domain_em_results,
-                    'domain_complete_mean': np.mean(graph_domain_complete_results),
-                    'domain_complete_std': np.std(graph_domain_complete_results),
-                    'domain_complete_all': graph_domain_complete_results,
-                    'n_training_sets': len(graph_neural_results)
+                    'neural_kl': neural_kl,
+                    'domain_em_kl': domain_em_kl,
+                    'domain_complete_kl': domain_complete_kl,
+                    'status': 'SUCCESS'
                 }
-                graph_results.append(graph_result)
                 
-                print(f"\nGraph {graph_idx + 1} Summary ({len(graph_neural_results)}/{NUM_TRAINING_SETS_PER_GRAPH} successful):")
-                print(f"  Neural: {graph_result['neural_mean']:.4f} ± {graph_result['neural_std']:.4f}")
-                print(f"  Domain EM: {graph_result['domain_em_mean']:.4f} ± {graph_result['domain_em_std']:.4f}")
-                print(f"  Domain Complete: {graph_result['domain_complete_mean']:.4f} ± {graph_result['domain_complete_std']:.4f}")
+                # Store individual KL distributions for histograms
+                condition_id = f"{n_nodes}_{train_size}"
+                if 'kl_distribution' in neural_results:
+                    all_kl_values.extend([(kl, 'neural', condition_id, graph_idx, 0) for kl in neural_results['kl_distribution']])
+                if 'kl_distribution' in domain_em_results:
+                    all_kl_values.extend([(kl, 'domain_em', condition_id, graph_idx, 0) for kl in domain_em_results['kl_distribution']])
+                if 'kl_distribution' in domain_complete_results:
+                    all_kl_values.extend([(kl, 'domain_complete', condition_id, graph_idx, 0) for kl in domain_complete_results['kl_distribution']])
+                
+                print(f"Graph {graph_idx + 1}: Neural={neural_kl:.4f}, EM={domain_em_kl:.4f}, Complete={domain_complete_kl:.4f}")
             else:
-                print(f"Graph {graph_idx + 1} completely failed")
-                failed_experiments += 1
+                graph_result = {
+                    'graph_idx': graph_idx,
+                    'neural_kl': neural_kl,
+                    'domain_em_kl': domain_em_kl,
+                    'domain_complete_kl': domain_complete_kl,
+                    'status': 'FAILED'
+                }
+                print(f"Graph {graph_idx + 1} failed evaluation")
+            
+            graph_results.append(graph_result)
+            clear_memory()
+            
+        except Exception as e:
+            print(f"Graph {graph_idx + 1} FAILED: {e}")
+            graph_result = {
+                'graph_idx': graph_idx,
+                'status': 'ERROR',
+                'error': str(e)
+            }
+            graph_results.append(graph_result)
+            failed_experiments += 1
+            clear_memory()
+            continue
         
         except Exception as e:
             print(f"Graph {graph_idx + 1} structure generation FAILED: {e}")
@@ -313,19 +278,19 @@ def run_single_condition_experiment(target_parents, missing_rate, n_nodes, train
 def run_test():
     """Run graph imputation comparison test."""
     print("="*60)
-    print("GRAPH IMPUTATION COMPARISON TEST")
+    print("SIMPLIFIED GRAPH IMPUTATION TEST")
     print("="*60)
     print(f"Graph sizes: {TEST_GRAPH_SIZES}")
     print(f"Training sizes: {TEST_TRAINING_SIZES}")
-    print(f"Target parent counts: {TARGET_PARENTS}")
-    print(f"Missing rates: {MISSING_RATES}")
+    print(f"Target parents: {TARGET_PARENTS}")
+    print(f"Missing rate: {MISSING_RATE}")
     print(f"Test size: {TEST_SIZE}")
     print(f"Using device: {DEVICE}")
-    print(f"Design: {NUM_GRAPHS_PER_CONDITION} graphs × {NUM_TRAINING_SETS_PER_GRAPH} training sets per condition")
+    print(f"Design: {NUM_GRAPHS_PER_CONDITION} graphs per condition")
     
     # Calculate total experiments
-    total_conditions = len(TARGET_PARENTS) * len(MISSING_RATES) * len(TEST_GRAPH_SIZES) * len(TEST_TRAINING_SIZES)
-    total_model_trainings = total_conditions * NUM_GRAPHS_PER_CONDITION * NUM_TRAINING_SETS_PER_GRAPH * 3
+    total_conditions = len(TEST_GRAPH_SIZES) * len(TEST_TRAINING_SIZES)
+    total_model_trainings = total_conditions * NUM_GRAPHS_PER_CONDITION * 3
     print(f"Total conditions: {total_conditions}")
     print(f"Total model trainings: {total_model_trainings}")
     print()
@@ -334,35 +299,33 @@ def run_test():
     completed_conditions = 0
     
     try:
-        # Main parameter sweep loops
-        for target_parents in TARGET_PARENTS:
-            for missing_rate in MISSING_RATES:
-                for n_nodes in TEST_GRAPH_SIZES:
-                    for train_size in TEST_TRAINING_SIZES:
-                        print(f"\n{'='*100}")
-                        print(f"CONDITION {completed_conditions + 1}/{total_conditions}")
-                        print(f"target_parents={target_parents}, missing_rate={missing_rate}, n_nodes={n_nodes}, train_size={train_size}")
-                        print(f"{'='*100}")
-                        
-                        # Run experiment for this condition
-                        result = run_single_condition_experiment(target_parents, missing_rate, n_nodes, train_size)
+        # Simplified loops - only n_nodes and train_size
+        for n_nodes in TEST_GRAPH_SIZES:
+            for train_size in TEST_TRAINING_SIZES:
+                print(f"\n{'='*100}")
+                print(f"CONDITION {completed_conditions + 1}/{total_conditions}")
+                print(f"n_nodes={n_nodes}, train_size={train_size}")
+                print(f"{'='*100}")
                 
-                        if result:
-                            condition_key = (target_parents, missing_rate, n_nodes, train_size)
-                            all_results[condition_key] = result
-                            completed_conditions += 1
-                            
-                            # Save intermediate results
-                            base_dir = os.path.dirname(os.path.abspath(__file__))
-                            os.makedirs(os.path.join(base_dir, 'results'), exist_ok=True)
-                            with open(os.path.join(base_dir, 'results', 'parameter_sweep_results.json'), 'w') as f:
-                                json_results = {f"{k[0]}_{k[1]}_{k[2]}_{k[3]}": convert_to_json_serializable(v) 
-                                              for k, v in all_results.items()}
-                                json.dump(json_results, f, indent=2)
-                            
-                            print(f"\n✅ Condition {completed_conditions}/{total_conditions} completed successfully")
-                        else:
-                            print(f"\n❌ Condition failed")
+                # Run experiment for this condition
+                result = run_single_condition_experiment(n_nodes, train_size)
+        
+                if result:
+                    condition_key = (n_nodes, train_size)
+                    all_results[condition_key] = result
+                    completed_conditions += 1
+                    
+                    # Save intermediate results
+                    base_dir = os.path.dirname(os.path.abspath(__file__))
+                    os.makedirs(os.path.join(base_dir, 'results'), exist_ok=True)
+                    with open(os.path.join(base_dir, 'results', 'simplified_results.json'), 'w') as f:
+                        json_results = {f"{k[0]}_{k[1]}": convert_to_json_serializable(v) 
+                                      for k, v in all_results.items()}
+                        json.dump(json_results, f, indent=2)
+                    
+                    print(f"\n✅ Condition {completed_conditions}/{total_conditions} completed successfully")
+                else:
+                    print(f"\n❌ Condition failed")
     
     except KeyboardInterrupt:
         print(f"\n⏹️  Parameter sweep interrupted by user after {completed_conditions} conditions")
