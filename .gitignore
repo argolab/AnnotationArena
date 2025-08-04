@@ -218,3 +218,5 @@ imputer/outputs
 imputer/results_graph
 CLAUDE.md
 imputer/results
+imputer/progressive_imputation/plots
+imputer/progressive_imputation/logs

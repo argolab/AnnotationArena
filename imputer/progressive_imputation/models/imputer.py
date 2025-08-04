@@ -427,7 +427,108 @@ def compute_kl_loss(predictions, targets, mask):
     
     return kl_loss
 
-def train_epoch(model, train_loader, optimizer):
+def compute_self_supervised_loss(predictions, inputs, original_mask, training_mask):
+    """
+    Compute self-supervised KL loss for AFA training.
+    
+    Train the model to predict some observed nodes from other observed nodes.
+    This ensures we never use unobserved ground truth for training.
+    
+    Args:
+        predictions: Model predictions (batch, n_nodes, n_states)
+        inputs: Original inputs with observed values (batch, n_nodes, input_dim)
+        original_mask: Original mask (0=observed, 1=unobserved)
+        training_mask: Training mask (0=visible, 1=masked_for_training)
+        
+    Returns:
+        KL divergence loss for masked observed nodes
+    """
+    # Only compute loss on nodes that are:
+    # 1. Originally observed (original_mask == 0)
+    # 2. Masked for training (training_mask == 1)
+    
+    batch_size, n_nodes, n_states = predictions.shape
+    device = predictions.device
+    
+    total_loss = 0.0
+    valid_samples = 0
+    
+    for b in range(batch_size):
+        # Find nodes that are observed but masked for training
+        observed_nodes = (original_mask[b] == 0).nonzero(as_tuple=True)[0]
+        masked_nodes = (training_mask[b] == 1).nonzero(as_tuple=True)[0]
+        
+        # Intersection: nodes that are observed AND masked for training
+        target_nodes = []
+        target_distributions = []
+        
+        for node in observed_nodes:
+            if node in masked_nodes:
+                target_nodes.append(node)
+                # Create true distribution from one-hot encoding in inputs
+                true_dist = torch.zeros(n_states, device=device)
+                true_value = torch.argmax(inputs[b, node, 1:]).item()  # Skip mask bit
+                true_dist[true_value] = 1.0  # Delta distribution
+                target_distributions.append(true_dist)
+        
+        if len(target_nodes) > 0:
+            # Get predictions for target nodes
+            target_predictions = predictions[b, target_nodes, :]  # (n_targets, n_states)
+            target_dists = torch.stack(target_distributions)  # (n_targets, n_states)
+            
+            # KL divergence loss: KL(true || pred)
+            # Use log_softmax for numerical stability
+            log_pred = F.log_softmax(target_predictions, dim=-1)
+            kl_loss = F.kl_div(log_pred, target_dists, reduction='batchmean')
+            
+            total_loss += kl_loss
+            valid_samples += 1
+    
+    if valid_samples == 0:
+        return torch.tensor(0.0, device=device, requires_grad=True)
+    
+    return total_loss / valid_samples
+
+def generate_training_mask(original_mask, visible_ratio=0.5, min_visible=1):
+    """
+    Generate training mask for self-supervised learning.
+    
+    For each sample, mask some of the observed nodes for training while
+    keeping others visible as context.
+    
+    Args:
+        original_mask: Original mask (0=observed, 1=unobserved)
+        visible_ratio: Ratio of observed nodes to keep visible
+        min_visible: Minimum number of nodes to keep visible
+        
+    Returns:
+        training_mask: Training mask (0=visible, 1=masked_for_training)
+    """
+    batch_size, n_nodes = original_mask.shape
+    training_mask = torch.zeros_like(original_mask)
+    
+    for b in range(batch_size):
+        # Find observed nodes
+        observed_indices = (original_mask[b] == 0).nonzero(as_tuple=True)[0]
+        n_observed = len(observed_indices)
+        
+        if n_observed <= min_visible:
+            # Too few observed nodes - can't mask any for training
+            continue
+            
+        # Determine how many to keep visible vs mask for training
+        n_visible = max(min_visible, int(n_observed * visible_ratio))
+        n_to_mask = n_observed - n_visible
+        
+        if n_to_mask > 0:
+            # Randomly select which observed nodes to mask for training
+            mask_indices = torch.randperm(n_observed)[:n_to_mask]
+            nodes_to_mask = observed_indices[mask_indices]
+            training_mask[b, nodes_to_mask] = 1
+    
+    return training_mask
+
+def train_epoch(model, train_loader, optimizer, use_self_supervised=False):
     """Train for one epoch."""
     model.train()
     total_loss = 0.0
@@ -442,7 +543,13 @@ def train_epoch(model, train_loader, optimizer):
         
         optimizer.zero_grad()
         predictions = model(inputs, structure_info, cpt_info, dimensions)
-        loss = compute_kl_loss(predictions, targets, mask)
+        
+        if use_self_supervised:
+            # Generate training mask for self-supervised learning
+            training_mask = generate_training_mask(mask, visible_ratio=0.5, min_visible=1)
+            loss = compute_self_supervised_loss(predictions, inputs, mask, training_mask)
+        else:
+            loss = compute_kl_loss(predictions, targets, mask)
         
         loss.backward()
         optimizer.step()
@@ -451,7 +558,7 @@ def train_epoch(model, train_loader, optimizer):
     
     return total_loss / len(train_loader)
 
-def validate_epoch(model, test_loader):
+def validate_epoch(model, test_loader, use_self_supervised=False):
     """Validate for one epoch."""
     model.eval()
     total_loss = 0.0
@@ -466,7 +573,13 @@ def validate_epoch(model, test_loader):
             targets = batch['targets'].to(DEVICE)
             
             predictions = model(inputs, structure_info, cpt_info, dimensions)
-            loss = compute_kl_loss(predictions, targets, mask)
+            
+            if use_self_supervised:
+                # Generate training mask for self-supervised validation
+                training_mask = generate_training_mask(mask, visible_ratio=0.5, min_visible=1)
+                loss = compute_self_supervised_loss(predictions, inputs, mask, training_mask)
+            else:
+                loss = compute_kl_loss(predictions, targets, mask)
             
             total_loss += loss.item()
     
@@ -513,7 +626,7 @@ def create_model(n_nodes, input_dim, structure_dim, cpt_dim=None):
     
     return model
 
-def train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=10):
+def train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=10, use_self_supervised=False):
     """Train the imputation model."""
     optimizer = optim.AdamW(model.parameters(), lr=lr)
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, patience=patience, factor=0.5)
@@ -521,9 +634,12 @@ def train_model(model, train_loader, test_loader, epochs=50, lr=1e-4, patience=1
     best_val_loss = float('inf')
     patience_counter = 0
     
-    for epoch in tqdm(range(epochs), desc="Training"):
-        train_loss = train_epoch(model, train_loader, optimizer)
-        val_loss = validate_epoch(model, test_loader)
+    training_mode = "self-supervised" if use_self_supervised else "standard"
+    logger.info(f"Training model with {training_mode} learning")
+    
+    for epoch in tqdm(range(epochs), desc=f"Training ({training_mode})"):
+        train_loss = train_epoch(model, train_loader, optimizer, use_self_supervised)
+        val_loss = validate_epoch(model, test_loader, use_self_supervised)
         
         scheduler.step(val_loss)
         

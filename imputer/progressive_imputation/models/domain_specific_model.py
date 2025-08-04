@@ -147,7 +147,8 @@ def learn_domain_specific_model(adj_matrix: np.ndarray,
                               training_data: pd.DataFrame,
                               n_states: int = 2,
                               max_iter: int = 100,
-                              epsilon: float = 1e-3) -> gum.BayesNet:
+                              epsilon: float = 1e-3,
+                              restart_seed: int = None) -> gum.BayesNet:
     """
     Main interface - learn BN using pyAgrum EM.
     
@@ -157,14 +158,21 @@ def learn_domain_specific_model(adj_matrix: np.ndarray,
         n_states: Number of states per variable (must be 2)
         max_iter: Maximum EM iterations
         epsilon: Convergence threshold
+        restart_seed: Random seed for this restart (for different initializations)
         
     Returns:
         Learned pyAgrum BayesNet
     """
-    logger.debug("USING PYAGRUM IMPLEMENTATION")
+    logger.debug(f"USING PYAGRUM IMPLEMENTATION (restart_seed={restart_seed})")
     
     # Create BN structure
     bn = create_pyagrum_bn_from_adjacency(adj_matrix)
+    
+    # If restart seed is provided, randomize initial CPTs
+    if restart_seed is not None:
+        np.random.seed(restart_seed)
+        for node_id in bn.nodes():
+            bn.generateCPT(node_id)  # Generate new random CPT
     
     # Learn with EM
     learned_bn = learn_with_pyagrum_em(bn, training_data, max_iter, epsilon)

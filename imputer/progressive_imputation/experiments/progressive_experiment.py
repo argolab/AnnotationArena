@@ -101,14 +101,14 @@ class ProgressiveExperiment:
         for budget, training_data in policy.observe_progressively(self.sample_pool):
             logger.info(f"Budget {budget}: Training on {len(training_data)} samples")
             
-            # Train and evaluate neural model
+            # Train and evaluate neural model on the same data
             neural_start = time.time()
             self.neural_model.reset()
             self.neural_model.train(training_data, self.bn, self.adj_matrix, self.n_nodes)
             neural_results = self.neural_model.evaluate(self.test_dataset, self.bn, self.adj_matrix, self.n_nodes)
             neural_time = time.time() - neural_start
             
-            # Train and evaluate domain model
+            # Train and evaluate domain model on exactly the same training and test data
             domain_start = time.time()
             self.domain_model.reset()
             self.domain_model.train(training_data, self.bn, self.adj_matrix, self.n_nodes)

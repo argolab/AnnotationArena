@@ -42,7 +42,7 @@ class NeuralParameterEmbeddingImputer(BaseImputationModel):
         self.patience = patience
         self.model = None
         
-    def train(self, training_data, bn, adj_matrix, n_nodes, **kwargs):
+    def train(self, training_data, bn, adj_matrix, n_nodes, use_afa=False, **kwargs):
         """
         Train the two-stream imputer on training data.
         
@@ -51,6 +51,7 @@ class NeuralParameterEmbeddingImputer(BaseImputationModel):
             bn: BayesNet object
             adj_matrix: Adjacency matrix
             n_nodes: Number of nodes
+            use_afa: Whether to use self-supervised training for AFA experiments
         """
         logger.debug(f"Training two-stream imputer on {len(training_data)} samples")
         
@@ -78,13 +79,15 @@ class NeuralParameterEmbeddingImputer(BaseImputationModel):
         self.model = create_model(n_nodes, input_dim, structure_dim, cpt_dim)
         logger.debug(f"Created model with {sum(p.numel() for p in self.model.parameters())} parameters")
         
+        # Use standard training for testing
         self.model = train_model(
             self.model, train_loader, test_loader, 
-            epochs=self.epochs, lr=self.lr, patience=self.patience
+            epochs=self.epochs, lr=self.lr, patience=self.patience,
+            use_self_supervised=False  # Always use standard training
         )
         
         self.is_trained = True
-        logger.info(f"Two-stream imputer training completed")
+        logger.info(f"Two-stream imputer training completed (standard)")
         
     def evaluate(self, test_data, bn, adj_matrix, n_nodes, **kwargs):
         """

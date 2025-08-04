@@ -5,6 +5,7 @@ Adapts the domain-specific model from the main codebase.
 """
 
 import logging
+import numpy as np
 
 from .domain_specific_model import (
     learn_domain_specific_model,
@@ -21,15 +22,16 @@ class DomainEMModel(BaseImputationModel):
     Domain-specific EM model for graph imputation.
     """
     
-    def __init__(self, max_iter=100, epsilon=1e-3):
+    def __init__(self, max_iter=100, epsilon=1e-3, n_restarts=5):
         super().__init__("Domain_EM")
         self.max_iter = max_iter
         self.epsilon = epsilon
+        self.n_restarts = n_restarts
         self.learned_bn = None
         
     def train(self, training_data, bn, adj_matrix, n_nodes, **kwargs):
         """
-        Train the domain EM model on training data.
+        Train the domain EM model on training data with random restarts.
         
         Args:
             training_data: List of training samples
@@ -37,19 +39,46 @@ class DomainEMModel(BaseImputationModel):
             adj_matrix: Adjacency matrix
             n_nodes: Number of nodes
         """
-        logger.debug(f"Training domain EM model on {len(training_data)} samples")
+        logger.debug(f"Training domain EM model on {len(training_data)} samples with {self.n_restarts} restarts")
         
         # Convert training data to pyAgrum format
         pyagrum_data = convert_training_data_for_pyagrum(training_data, n_nodes)
         
-        # Learn domain-specific model using EM
-        self.learned_bn = learn_domain_specific_model(
-            adj_matrix, pyagrum_data, n_states=2, 
-            max_iter=self.max_iter, epsilon=self.epsilon
-        )
+        # Try multiple random restarts and keep the best model
+        best_likelihood = float('-inf')
+        best_bn = None
         
+        for restart in range(self.n_restarts):
+            try:
+                logger.debug(f"EM restart {restart + 1}/{self.n_restarts}")
+                
+                # Learn domain-specific model using EM with different random seed
+                candidate_bn = learn_domain_specific_model(
+                    adj_matrix, pyagrum_data, n_states=2, 
+                    max_iter=self.max_iter, epsilon=self.epsilon,
+                    restart_seed=42 + restart * 1000  # Different seed per restart
+                )
+                
+                # Compute likelihood of the learned model
+                likelihood = self._compute_likelihood(candidate_bn, pyagrum_data)
+                
+                logger.debug(f"Restart {restart + 1} likelihood: {likelihood:.4f}")
+                
+                if likelihood > best_likelihood:
+                    best_likelihood = likelihood
+                    best_bn = candidate_bn
+                    logger.debug(f"New best model found at restart {restart + 1}")
+                    
+            except Exception as e:
+                logger.warning(f"EM restart {restart + 1} failed: {e}")
+                continue
+        
+        if best_bn is None:
+            raise RuntimeError("All EM restarts failed")
+            
+        self.learned_bn = best_bn
         self.is_trained = True
-        logger.info(f"Domain EM training completed")
+        logger.info(f"Domain EM training completed with {self.n_restarts} restarts, best likelihood: {best_likelihood:.4f}")
         
     def evaluate(self, test_data, bn, n_nodes, **kwargs):
         """
@@ -74,6 +103,72 @@ class DomainEMModel(BaseImputationModel):
         logger.debug(f"Domain EM evaluation: Mean KL = {results.get('mean_kl', float('inf')):.4f}")
         
         return results
+    
+    def _compute_likelihood(self, bn, data):
+        """
+        Compute log-likelihood of data given the learned BN.
+        
+        Args:
+            bn: Learned BayesNet
+            data: Training data (DataFrame)
+            
+        Returns:
+            float: Log-likelihood
+        """
+        try:
+            import pyagrum as gum
+            
+            # Simple likelihood estimation using complete cases
+            complete_data = data.dropna()
+            if len(complete_data) == 0:
+                return float('-inf')
+            
+            total_ll = 0.0
+            
+            for _, row in complete_data.iterrows():
+                sample_ll = 0.0
+                
+                # Compute likelihood for this sample
+                for node_id in bn.nodes():
+                    node_str = str(node_id)
+                    if node_str in row:
+                        value = row[node_str]
+                        
+                        # Get parents and their values
+                        parents = list(bn.parents(node_id))
+                        
+                        if parents:
+                            # Conditional probability
+                            parent_config = {}
+                            for parent_id in parents:
+                                parent_str = str(parent_id)
+                                if parent_str in row:
+                                    parent_config[parent_str] = row[parent_str]
+                            
+                            # Get CPT entry
+                            cpt = bn.cpt(node_str)
+                            if len(parent_config) == len(parents):
+                                prob = cpt[{**parent_config, node_str: value}]
+                                if prob > 0:
+                                    sample_ll += np.log(prob)
+                                else:
+                                    sample_ll += np.log(1e-10)  # Avoid log(0)
+                        else:
+                            # Marginal probability
+                            cpt = bn.cpt(node_str)
+                            prob = cpt[{node_str: value}]
+                            if prob > 0:
+                                sample_ll += np.log(prob)
+                            else:
+                                sample_ll += np.log(1e-10)
+                
+                total_ll += sample_ll
+            
+            return total_ll / len(complete_data) if len(complete_data) > 0 else float('-inf')
+            
+        except Exception as e:
+            logger.debug(f"Likelihood computation failed: {e}")
+            return float('-inf')
     
     def reset(self):
         """Reset model parameters for retraining."""
