@@ -118,7 +118,7 @@ def create_pyagrum_bn_from_adjacency(adj_matrix: np.ndarray) -> gum.BayesNet:
 def learn_with_pyagrum_em(bn: gum.BayesNet, 
                          training_data: pd.DataFrame,
                          max_iter: int = 100,
-                         epsilon: float = 1e-3) -> gum.BayesNet:
+                         epsilon: float = 1e-3) -> Tuple[gum.BayesNet, int]:
     """Learn BN parameters using pyAgrum EM."""
     logger.debug(f"=== LEARNING WITH PYAGRUM EM ===")
     logger.debug(f"EM config: max_iter={max_iter}, epsilon={epsilon}")
@@ -137,10 +137,11 @@ def learn_with_pyagrum_em(bn: gum.BayesNet,
     logger.debug("Running pyAgrum EM...")
     learned_bn = learner.learnParameters(bn)
     
-    logger.info(f"EM completed in {learner.EMnbrIterations()} iterations")
+    iterations = learner.EMnbrIterations()
+    logger.info(f"EM completed in {iterations} iterations")
     logger.debug(f"Final EM state: {learner.EMStateMessage()}")
     
-    return learned_bn
+    return learned_bn, iterations
 
 
 def learn_domain_specific_model(adj_matrix: np.ndarray, 
@@ -148,7 +149,7 @@ def learn_domain_specific_model(adj_matrix: np.ndarray,
                               n_states: int = 2,
                               max_iter: int = 100,
                               epsilon: float = 1e-3,
-                              restart_seed: int = None) -> gum.BayesNet:
+                              restart_seed: int = None) -> Tuple[gum.BayesNet, int]:
     """
     Main interface - learn BN using pyAgrum EM.
     
@@ -161,7 +162,7 @@ def learn_domain_specific_model(adj_matrix: np.ndarray,
         restart_seed: Random seed for this restart (for different initializations)
         
     Returns:
-        Learned pyAgrum BayesNet
+        Tuple of (Learned pyAgrum BayesNet, EM iterations)
     """
     logger.debug(f"USING PYAGRUM IMPLEMENTATION (restart_seed={restart_seed})")
     
@@ -175,9 +176,9 @@ def learn_domain_specific_model(adj_matrix: np.ndarray,
             bn.generateCPT(node_id)  # Generate new random CPT
     
     # Learn with EM
-    learned_bn = learn_with_pyagrum_em(bn, training_data, max_iter, epsilon)
+    learned_bn, iterations = learn_with_pyagrum_em(bn, training_data, max_iter, epsilon)
     
-    return learned_bn
+    return learned_bn, iterations
 
 
 def learn_domain_specific_model_complete(adj_matrix: np.ndarray, 

@@ -10,15 +10,21 @@ from visualization.multi_graph_plots import create_multi_graph_experiment_report
 
 def setup_logging(level=logging.INFO):
     """Setup logging configuration."""
+    # Get the directory where this script is located
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    logs_dir = os.path.join(script_dir, 'logs')
+    
     # Create logs directory if it doesn't exist
-    os.makedirs('logs', exist_ok=True)
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    log_file = os.path.join(logs_dir, 'progressive_imputation.log')
     
     logging.basicConfig(
         level=level,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(),
-            logging.FileHandler('logs/progressive_imputation.log')
+            logging.FileHandler(log_file)
         ]
     )
     
@@ -117,13 +123,17 @@ def main():
         logger.info("="*60)
         
         try:
+            # Get the directory where this script is located  
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            plots_dir = os.path.join(script_dir, 'plots')
+            
             # Create output directories
-            os.makedirs('plots', exist_ok=True)
+            os.makedirs(plots_dir, exist_ok=True)
             
             # Create multi-graph plots with error bars and separate node plots
-            create_multi_graph_experiment_report(results, output_dir="plots")
+            create_multi_graph_experiment_report(results, output_dir=plots_dir)
             
-            logger.info("\\nMulti-graph visualization completed! Check plots/ directory for saved figures.")
+            logger.info(f"\\nMulti-graph visualization completed! Check {plots_dir}/ directory for saved figures.")
             
         except Exception as plot_error:
             logger.warning(f"Plotting failed: {plot_error}")

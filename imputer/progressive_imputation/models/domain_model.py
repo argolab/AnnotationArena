@@ -44,8 +44,8 @@ class DomainEMModel(BaseImputationModel):
         # Convert training data to pyAgrum format
         pyagrum_data = convert_training_data_for_pyagrum(training_data, n_nodes)
         
-        # Try multiple random restarts and keep the best model
-        best_likelihood = float('-inf')
+        # Try multiple random restarts and keep the best model (fewest EM iterations = best convergence)
+        best_iterations = float('inf')
         best_bn = None
         
         for restart in range(self.n_restarts):
@@ -53,21 +53,18 @@ class DomainEMModel(BaseImputationModel):
                 logger.debug(f"EM restart {restart + 1}/{self.n_restarts}")
                 
                 # Learn domain-specific model using EM with different random seed
-                candidate_bn = learn_domain_specific_model(
+                candidate_bn, iterations = learn_domain_specific_model(
                     adj_matrix, pyagrum_data, n_states=2, 
                     max_iter=self.max_iter, epsilon=self.epsilon,
                     restart_seed=42 + restart * 1000  # Different seed per restart
                 )
                 
-                # Compute likelihood of the learned model
-                likelihood = self._compute_likelihood(candidate_bn, pyagrum_data)
+                logger.debug(f"Restart {restart + 1} converged in {iterations} iterations")
                 
-                logger.debug(f"Restart {restart + 1} likelihood: {likelihood:.4f}")
-                
-                if likelihood > best_likelihood:
-                    best_likelihood = likelihood
+                if iterations < best_iterations:
+                    best_iterations = iterations
                     best_bn = candidate_bn
-                    logger.debug(f"New best model found at restart {restart + 1}")
+                    logger.debug(f"New best model found at restart {restart + 1} ({iterations} iterations)")
                     
             except Exception as e:
                 logger.warning(f"EM restart {restart + 1} failed: {e}")
@@ -78,7 +75,7 @@ class DomainEMModel(BaseImputationModel):
             
         self.learned_bn = best_bn
         self.is_trained = True
-        logger.info(f"Domain EM training completed with {self.n_restarts} restarts, best likelihood: {best_likelihood:.4f}")
+        logger.info(f"Domain EM training completed with {self.n_restarts} restarts, best converged in {best_iterations} iterations")
         
     def evaluate(self, test_data, bn, n_nodes, **kwargs):
         """
@@ -103,72 +100,6 @@ class DomainEMModel(BaseImputationModel):
         logger.debug(f"Domain EM evaluation: Mean KL = {results.get('mean_kl', float('inf')):.4f}")
         
         return results
-    
-    def _compute_likelihood(self, bn, data):
-        """
-        Compute log-likelihood of data given the learned BN.
-        
-        Args:
-            bn: Learned BayesNet
-            data: Training data (DataFrame)
-            
-        Returns:
-            float: Log-likelihood
-        """
-        try:
-            import pyagrum as gum
-            
-            # Simple likelihood estimation using complete cases
-            complete_data = data.dropna()
-            if len(complete_data) == 0:
-                return float('-inf')
-            
-            total_ll = 0.0
-            
-            for _, row in complete_data.iterrows():
-                sample_ll = 0.0
-                
-                # Compute likelihood for this sample
-                for node_id in bn.nodes():
-                    node_str = str(node_id)
-                    if node_str in row:
-                        value = row[node_str]
-                        
-                        # Get parents and their values
-                        parents = list(bn.parents(node_id))
-                        
-                        if parents:
-                            # Conditional probability
-                            parent_config = {}
-                            for parent_id in parents:
-                                parent_str = str(parent_id)
-                                if parent_str in row:
-                                    parent_config[parent_str] = row[parent_str]
-                            
-                            # Get CPT entry
-                            cpt = bn.cpt(node_str)
-                            if len(parent_config) == len(parents):
-                                prob = cpt[{**parent_config, node_str: value}]
-                                if prob > 0:
-                                    sample_ll += np.log(prob)
-                                else:
-                                    sample_ll += np.log(1e-10)  # Avoid log(0)
-                        else:
-                            # Marginal probability
-                            cpt = bn.cpt(node_str)
-                            prob = cpt[{node_str: value}]
-                            if prob > 0:
-                                sample_ll += np.log(prob)
-                            else:
-                                sample_ll += np.log(1e-10)
-                
-                total_ll += sample_ll
-            
-            return total_ll / len(complete_data) if len(complete_data) > 0 else float('-inf')
-            
-        except Exception as e:
-            logger.debug(f"Likelihood computation failed: {e}")
-            return float('-inf')
     
     def reset(self):
         """Reset model parameters for retraining."""
