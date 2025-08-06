@@ -21,7 +21,7 @@ class ProgressiveExperiment:
     Main experiment runner for progressive imputation.
     """
     
-    def __init__(self, config):
+    def __init__(self, config, imputer_size="Large"):
         """
         Initialize experiment with configuration.
         
@@ -33,6 +33,7 @@ class ProgressiveExperiment:
                 - max_samples: Maximum training samples available
                 - test_samples: Number of test samples
                 - seed: Random seed
+            imputer_size: Size of imputer model ["Tiny", "Small", "Large"]
         """
         self.config = config
         self.n_nodes = config['n_nodes']
@@ -41,6 +42,7 @@ class ProgressiveExperiment:
         self.max_samples = config['max_samples']
         self.test_samples = config['test_samples']
         self.seed = config['seed']
+        self.imputer_size = imputer_size
         
         # Data will be generated in setup
         self.bn = None
@@ -49,10 +51,11 @@ class ProgressiveExperiment:
         self.test_dataset = None
         
         # Models
-        self.neural_model = NeuralParameterEmbeddingImputer()
+        self.neural_model = NeuralParameterEmbeddingImputer(model_size=imputer_size)
         self.domain_model = DomainEMModel()
         
         logger.info(f"Initialized experiment: {self.n_nodes} nodes, {self.max_samples} max samples")
+        logger.info(f"Imputer size: {imputer_size}")
         
     def setup(self):
         """Generate graph structure and datasets."""
@@ -130,8 +133,8 @@ class ProgressiveExperiment:
             results.append(step_result)
             
             logger.info(f"Budget {budget} results:")
-            logger.info(f"  Neural: KL={step_result['neural_kl']:.4f}, time={neural_time:.1f}s")
-            logger.info(f"  Domain: KL={step_result['domain_kl']:.4f}, time={domain_time:.1f}s")
+            logger.info(f"  {self.imputer_size}: KL={step_result['neural_kl']:.4f}, time={neural_time:.1f}s")
+            logger.info(f"  Domain EM: KL={step_result['domain_kl']:.4f}, time={domain_time:.1f}s")
             
         return results
     

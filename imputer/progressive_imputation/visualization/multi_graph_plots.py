@@ -7,16 +7,32 @@ statistical error bars and separate plots for different node sizes.
 
 import numpy as np
 import matplotlib.pyplot as plt
-import seaborn as sns
 from typing import Dict, List, Any, Optional
 import logging
 from pathlib import Path
+import os
 
 logger = logging.getLogger(__name__)
 
-# Set plotting style
-plt.style.use('seaborn-v0_8')
-sns.set_palette("husl")
+# Set clean matplotlib style for publication
+plt.rcParams.update({
+    'font.size': 11,
+    'font.family': 'serif',
+    'axes.linewidth': 0.8,
+    'axes.spines.top': False,
+    'axes.spines.right': False,
+    'axes.grid': True,
+    'grid.alpha': 0.3,
+    'legend.frameon': False,
+    'figure.dpi': 100
+})
+
+# Clean color palette
+COLORS = {
+    'imputer': '#2E8B57',      # Sea green
+    'domain_em': '#CD853F',    # Peru
+    'true_model': '#4169E1'    # Royal blue
+}
 
 def plot_cost_vs_kl_curves_separate_nodes(results: Dict[str, Any], output_dir: str = "plots") -> None:
     """
@@ -49,20 +65,24 @@ def plot_cost_vs_kl_curves_separate_nodes(results: Dict[str, Any], output_dir: s
             domain_kl_means = [r['domain_kl_mean'] for r in experiment_results]
             domain_kl_stds = [r['domain_kl_std'] for r in experiment_results]
             
-            # Plot Neural imputer with error bars
+            # Get imputer size from results (if available)
+            config = policy_results.get('config', {})
+            imputer_size = config.get('imputer_size', 'Imputer')
+            
+            # Plot Imputer with error bars
             ax.errorbar(costs, neural_kl_means, yerr=neural_kl_stds, 
-                       fmt='o-', label=f'Neural Imputer', 
+                       fmt='o-', label=f'{imputer_size}', color=COLORS['imputer'],
                        linewidth=2, markersize=6, alpha=0.8, capsize=5)
             
             # Plot Domain EM with error bars
             ax.errorbar(costs, domain_kl_means, yerr=domain_kl_stds, 
-                       fmt='s--', label=f'Domain EM', 
+                       fmt='s--', label='Domain EM', color=COLORS['domain_em'],
                        linewidth=2, markersize=6, alpha=0.8, capsize=5)
         
         ax.set_xlabel('Cost (Number of Training Samples)', fontsize=12)
         ax.set_ylabel('KL Divergence', fontsize=12)
-        ax.set_title(f'Progressive Imputation: {n_nodes} Nodes (±1 std, {policy_results["n_graphs"]} graphs)', 
-                    fontsize=14, fontweight='bold')
+        ax.set_title(f'Convergence Analysis: {n_nodes} Nodes (±1 std, {policy_results["n_graphs"]} graphs)', 
+                    fontsize=12)
         ax.legend(fontsize=11)
         ax.grid(True, alpha=0.3)
         ax.set_yscale('log')
@@ -269,21 +289,25 @@ def plot_convergence_analysis(results: Dict[str, Any], save_path: Optional[str] 
             ax.fill_between(budgets, 
                           np.array(neural_means) - np.array(neural_stds),
                           np.array(neural_means) + np.array(neural_stds),
-                          alpha=0.2, color='steelblue')
-            ax.plot(budgets, neural_means, 'o-', label='Neural Imputer', 
-                   color='steelblue', linewidth=2, markersize=6)
+                          alpha=0.2, color=COLORS['imputer'])
+            # Get imputer size from results (if available)
+            config = policy_results.get('config', {})
+            imputer_size = config.get('imputer_size', 'Imputer')
+            
+            ax.plot(budgets, neural_means, 'o-', label=f'{imputer_size}', 
+                   color=COLORS['imputer'], linewidth=2, markersize=6)
             
             ax.fill_between(budgets,
                           np.array(domain_means) - np.array(domain_stds), 
                           np.array(domain_means) + np.array(domain_stds),
-                          alpha=0.2, color='orange')
+                          alpha=0.2, color=COLORS['domain_em'])
             ax.plot(budgets, domain_means, 's--', label='Domain EM',
-                   color='orange', linewidth=2, markersize=6)
+                   color=COLORS['domain_em'], linewidth=2, markersize=6)
         
         ax.set_xlabel('Training Samples', fontsize=11)
         ax.set_ylabel('KL Divergence', fontsize=11)
         ax.set_title(f'{n_nodes} Nodes (±1 std, {policy_results["n_graphs"]} graphs)', 
-                    fontsize=12, fontweight='bold')
+                    fontsize=12)
         ax.legend(fontsize=10)
         ax.grid(True, alpha=0.3)
         ax.set_yscale('log')
@@ -292,7 +316,7 @@ def plot_convergence_analysis(results: Dict[str, Any], save_path: Optional[str] 
     for idx in range(len(results_by_nodes), len(axes)):
         axes[idx].set_visible(False)
     
-    plt.suptitle('Convergence Analysis Across Node Sizes', fontsize=16, fontweight='bold')
+    plt.suptitle('Convergence Analysis Across Node Sizes', fontsize=14)
     plt.tight_layout()
     
     if save_path:
@@ -303,6 +327,70 @@ def plot_convergence_analysis(results: Dict[str, Any], save_path: Optional[str] 
         plt.show()
     else:
         plt.close()
+
+def plot_step_by_step_kl(results: Dict[str, Any], output_dir: str = "plots") -> None:
+    """
+    Generate individual KL plots for each budget step.
+    
+    Args:
+        results: Results dictionary from multi-graph experiment
+        output_dir: Directory to save plots
+    """
+    # Create kl_steps subdirectory
+    kl_steps_dir = Path(output_dir) / "kl_steps"
+    kl_steps_dir.mkdir(parents=True, exist_ok=True)
+    
+    logger.info("Generating step-by-step KL plots...")
+    
+    # Group results by node size
+    results_by_nodes = {}
+    for (n_nodes, policy_name), policy_results in results.items():
+        if n_nodes not in results_by_nodes:
+            results_by_nodes[n_nodes] = {}
+        results_by_nodes[n_nodes][policy_name] = policy_results
+    
+    # Generate plots for each step
+    for n_nodes, node_results in results_by_nodes.items():
+        for policy_name, policy_results in node_results.items():
+            experiment_results = policy_results['results']
+            
+            for step_idx, step_result in enumerate(experiment_results):
+                budget = step_result['budget']
+                
+                fig, ax = plt.subplots(figsize=(8, 6))
+                
+                # Get imputer size from results (if available)
+                config = policy_results.get('config', {})
+                imputer_size = config.get('imputer_size', 'Imputer')
+                
+                # Create bar plot comparing methods at this step
+                methods = [imputer_size, 'Domain EM']
+                kl_means = [step_result['neural_kl_mean'], step_result['domain_kl_mean']]
+                kl_stds = [step_result['neural_kl_std'], step_result['domain_kl_std']]
+                colors = [COLORS['imputer'], COLORS['domain_em']]
+                
+                bars = ax.bar(methods, kl_means, yerr=kl_stds, 
+                             color=colors, alpha=0.8, capsize=5)
+                
+                ax.set_ylabel('KL Divergence')
+                ax.set_title(f'{n_nodes} Nodes - Budget {budget} Samples')
+                ax.set_yscale('log')
+                ax.grid(True, alpha=0.3)
+                
+                # Add value labels on bars
+                for i, (mean, std) in enumerate(zip(kl_means, kl_stds)):
+                    ax.text(i, mean + std * 1.1, f'{mean:.4f}', 
+                           ha='center', va='bottom', fontsize=10)
+                
+                plt.tight_layout()
+                
+                save_path = kl_steps_dir / f"step_{budget:04d}_nodes_{n_nodes}.png"
+                plt.savefig(save_path, dpi=300, bbox_inches='tight')
+                plt.close()
+                
+                logger.debug(f"Step plot saved: {save_path}")
+    
+    logger.info(f"Step-by-step KL plots saved to {kl_steps_dir}/")
 
 def create_multi_graph_experiment_report(results: Dict[str, Any], output_dir: str = "plots") -> None:
     """
@@ -319,15 +407,20 @@ def create_multi_graph_experiment_report(results: Dict[str, Any], output_dir: st
     # 1. Separate plots for each node size
     plot_cost_vs_kl_curves_separate_nodes(results, output_dir)
     
-    # 2. Overall performance comparison
-    plot_final_performance_comparison(results, 
-                                    save_path=f"{output_dir}/performance_comparison.png",
-                                    show_plot=False)
+    # 2. Step-by-step KL plots
+    plot_step_by_step_kl(results, output_dir)
     
-    # 3. Convergence analysis
-    plot_convergence_analysis(results,
-                            save_path=f"{output_dir}/convergence_analysis.png", 
-                            show_plot=False)
+    # 3. Convergence analysis (only if multiple node sizes)
+    results_by_nodes = {}
+    for (n_nodes, policy_name), policy_results in results.items():
+        if n_nodes not in results_by_nodes:
+            results_by_nodes[n_nodes] = {}
+        results_by_nodes[n_nodes][policy_name] = policy_results
+    
+    if len(results_by_nodes) > 1:
+        plot_convergence_analysis(results,
+                                save_path=f"{output_dir}/convergence_analysis.png", 
+                                show_plot=False)
     
     logger.info(f"Multi-graph plots saved to {output_dir}/ directory")
     

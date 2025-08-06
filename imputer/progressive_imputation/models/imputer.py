@@ -587,18 +587,37 @@ def validate_epoch(model, test_loader, use_self_supervised=False):
 
 # ================================= MODEL CREATION AND TRAINING =================================
 
-def create_model(n_nodes, input_dim, structure_dim, cpt_dim=None):
-    """Create imputation model with architecture scaled to graph size."""
+def create_model(n_nodes, input_dim, structure_dim, cpt_dim=None, model_size="Large"):
+    """Create imputation model with configurable architecture size."""
     
-    # Scale architecture based on graph size
-    if n_nodes <= 10:
-        hidden_dim_base = 64
-        attention_heads = 4
-        num_layers = 4
-    else:
-        hidden_dim_base = 128
-        attention_heads = 8
-        num_layers = 6
+    # Define architecture variants
+    model_configs = {
+        "Tiny": {
+            "hidden_dim_base": 32,
+            "attention_heads": 2,
+            "num_layers": 2
+        },
+        "Small": {
+            "hidden_dim_base": 64,
+            "attention_heads": 4,
+            "num_layers": 3
+        },
+        "Large": {  # Current default
+            "hidden_dim_base": 128,
+            "attention_heads": 8,
+            "num_layers": 4
+        }
+    }
+    
+    # Get configuration for requested size
+    if model_size not in model_configs:
+        logger.warning(f"Unknown model size '{model_size}', using 'Large'")
+        model_size = "Large"
+    
+    config = model_configs[model_size]
+    hidden_dim_base = config["hidden_dim_base"]
+    attention_heads = config["attention_heads"]
+    num_layers = config["num_layers"]
     
     # Default CPT dimension
     if cpt_dim is None:

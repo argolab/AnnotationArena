@@ -35,11 +35,12 @@ class NeuralParameterEmbeddingImputer(BaseImputationModel):
     - Parameter stream: True CPTs for observed, zeros for unobserved
     """
     
-    def __init__(self, epochs=100, lr=1e-4, patience=30):
-        super().__init__("Neural_TwoStream")
+    def __init__(self, epochs=100, lr=1e-4, patience=30, model_size="Large"):
+        super().__init__(f"Imputer_{model_size}")
         self.epochs = epochs
         self.lr = lr
         self.patience = patience
+        self.model_size = model_size
         self.model = None
         
     def train(self, training_data, bn, adj_matrix, n_nodes, use_afa=False, **kwargs):
@@ -76,8 +77,8 @@ class NeuralParameterEmbeddingImputer(BaseImputationModel):
         cpt_dim = compute_max_cpt_size(bn)
         
         # Create and train model
-        self.model = create_model(n_nodes, input_dim, structure_dim, cpt_dim)
-        logger.debug(f"Created model with {sum(p.numel() for p in self.model.parameters())} parameters")
+        self.model = create_model(n_nodes, input_dim, structure_dim, cpt_dim, model_size=self.model_size)
+        logger.debug(f"Created {self.model_size} model with {sum(p.numel() for p in self.model.parameters())} parameters")
         
         # Use standard training for testing
         self.model = train_model(

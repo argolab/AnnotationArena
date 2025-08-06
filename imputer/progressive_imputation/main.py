@@ -49,10 +49,11 @@ def main():
     logger.info("PROGRESSIVE IMPUTATION EXPERIMENTS")
     logger.info("="*60)
     
-    # Experiment configuration
-    node_sizes = [5]  # Multiple node sizes for separate plots
+    # Experiment configurations
+    node_sizes = [5]  # Start with 5 nodes
     target_parents = 1.5
-    missing_rate = 0.5
+    missing_rates = [0.5, 0.7]  # Train/test on same missing rates
+    imputer_sizes = ["Tiny", "Small", "Large"]  # Different model architectures
     max_samples = 2500
     test_samples = 250
     n_graphs = 10  # Number of graphs to average over
@@ -70,23 +71,89 @@ def main():
     logger.info(f"Configuration:")
     logger.info(f"  Node sizes: {node_sizes}")
     logger.info(f"  Target parents: {target_parents}")
-    logger.info(f"  Missing rate: {missing_rate}")
+    logger.info(f"  Missing rates: {missing_rates}")
+    logger.info(f"  Imputer sizes: {imputer_sizes}")
     logger.info(f"  Max samples: {max_samples}")
     logger.info(f"  Test samples: {test_samples}")
     logger.info(f"  Graphs per configuration: {n_graphs}")
-    logger.info(f"  Policies: {[p.name for p in policies]}")
+    logger.info(f"  Total experiments: {len(missing_rates)} × {len(imputer_sizes)} = {len(missing_rates) * len(imputer_sizes)}")
     
     try:
-        # Run multi-graph experiment suite
-        results = run_multi_graph_experiment_suite(
-            node_sizes=node_sizes,
-            target_parents=target_parents,
-            missing_rate=missing_rate,
-            max_samples=max_samples,
-            test_samples=test_samples,
-            policies=policies,
-            n_graphs=n_graphs
-        )
+        # Run experiments for each missing rate and imputer size combination
+        all_experiments = {}
+        
+        for missing_rate in missing_rates:
+            logger.info(f"\n{'='*80}")
+            logger.info(f"MISSING RATE: {missing_rate}")
+            logger.info(f"{'='*80}")
+            
+            for imputer_size in imputer_sizes:
+                logger.info(f"\n{'-'*60}")
+                logger.info(f"IMPUTER SIZE: {imputer_size}")
+                logger.info(f"{'-'*60}")
+                
+                # Create experiment identifier
+                experiment_key = f"missing_{missing_rate}_imputer_{imputer_size}"
+                
+                # Run multi-graph experiment suite for this configuration
+                results = run_multi_graph_experiment_suite(
+                    node_sizes=node_sizes,
+                    target_parents=target_parents,
+                    missing_rate=missing_rate,
+                    max_samples=max_samples,
+                    test_samples=test_samples,
+                    policies=policies,
+                    n_graphs=n_graphs,
+                    imputer_size=imputer_size  # Pass imputer size
+                )
+                
+                all_experiments[experiment_key] = {
+                    'results': results,
+                    'missing_rate': missing_rate,
+                    'imputer_size': imputer_size
+                }
+                
+                # Generate plots for this configuration
+                logger.info(f"\nGenerating plots for {experiment_key}...")
+                
+                # Get the directory where this script is located  
+                script_dir = os.path.dirname(os.path.abspath(__file__))
+                plots_dir = os.path.join(script_dir, 'plots', f'missing_{missing_rate}', f'imputer_{imputer_size}')
+                
+                # Create output directories
+                os.makedirs(plots_dir, exist_ok=True)
+                
+                # Create plots for this configuration
+                create_multi_graph_experiment_report(results, output_dir=plots_dir)
+                
+                logger.info(f"Plots saved to {plots_dir}/")
+        
+        # Print comprehensive summary
+        logger.info(f"\n{'='*80}")
+        logger.info(f"COMPREHENSIVE EXPERIMENT SUMMARY")
+        logger.info(f"{'='*80}")
+        
+        for experiment_key, experiment_data in all_experiments.items():
+            results = experiment_data['results']
+            missing_rate = experiment_data['missing_rate']
+            imputer_size = experiment_data['imputer_size']
+            
+            logger.info(f"\nExperiment: {experiment_key}")
+            logger.info(f"Missing Rate: {missing_rate}, Imputer Size: {imputer_size}")
+            
+            for (n_nodes, policy_name), policy_results in results.items():
+                final_result = policy_results['results'][-1]  # Last budget step
+                logger.info(f"  Final {imputer_size} KL: {final_result['neural_kl_mean']:.4f} ± {final_result['neural_kl_std']:.4f}")
+                logger.info(f"  Final Domain KL: {final_result['domain_kl_mean']:.4f} ± {final_result['domain_kl_std']:.4f}")
+                
+                # Winner
+                winner = imputer_size if final_result['neural_kl_mean'] < final_result['domain_kl_mean'] else 'Domain EM'
+                ratio = final_result['neural_kl_mean'] / final_result['domain_kl_mean']
+                logger.info(f"  Winner: {winner} (ratio: {ratio:.2f})")
+        
+        logger.info("\n" + "="*80)
+        logger.info("ALL EXPERIMENTS COMPLETED SUCCESSFULLY!")
+        logger.info("="*80)
         
         # Print summary
         logger.info("\\n" + "="*60)

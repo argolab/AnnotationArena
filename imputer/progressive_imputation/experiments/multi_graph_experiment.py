@@ -55,7 +55,8 @@ class MultiGraphExperiment:
             config['seed'] = base_config['seed'] + graph_idx * 10000
             
             # Run experiment on this graph instance
-            experiment = ProgressiveExperiment(config)
+            imputer_size = base_config.get('imputer_size', 'Large')
+            experiment = ProgressiveExperiment(config, imputer_size=imputer_size)
             experiment.setup()
             
             graph_results = experiment.run_multi_policy_experiment(policies)
@@ -176,7 +177,7 @@ class MultiGraphExperiment:
 
 def run_multi_graph_experiment_suite(node_sizes, target_parents=1.0, missing_rate=0.4,
                                     max_samples=3000, test_samples=250, policies=None,
-                                    n_graphs=10):
+                                    n_graphs=10, imputer_size="Large"):
     """
     Run multi-graph experiments across multiple node sizes.
     
@@ -188,6 +189,7 @@ def run_multi_graph_experiment_suite(node_sizes, target_parents=1.0, missing_rat
         test_samples: Number of test samples
         policies: List of policies to test
         n_graphs: Number of graph instances per configuration
+        imputer_size: Size of imputer model ["Tiny", "Small", "Large"]
         
     Returns:
         Dict mapping (n_nodes, policy_name) to aggregated results
@@ -214,7 +216,8 @@ def run_multi_graph_experiment_suite(node_sizes, target_parents=1.0, missing_rat
             'missing_rate': missing_rate,
             'max_samples': max_samples,
             'test_samples': test_samples,
-            'seed': 42 + n_nodes * 1000  # Base seed for this node size
+            'seed': 42 + n_nodes * 1000,  # Base seed for this node size
+            'imputer_size': imputer_size  # Add imputer size to config
         }
         
         # Run multi-graph experiment
