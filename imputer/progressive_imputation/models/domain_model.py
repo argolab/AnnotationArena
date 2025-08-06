@@ -45,7 +45,7 @@ class DomainEMModel(BaseImputationModel):
         pyagrum_data = convert_training_data_for_pyagrum(training_data, n_nodes)
         
         # Try multiple random restarts and keep the best model (fewest EM iterations = best convergence)
-        best_iterations = float('inf')
+        best_iterations = -1
         best_bn = None
         
         for restart in range(self.n_restarts):
@@ -61,7 +61,7 @@ class DomainEMModel(BaseImputationModel):
                 
                 logger.debug(f"Restart {restart + 1} converged in {iterations} iterations")
                 
-                if iterations < best_iterations:
+                if iterations > best_iterations:
                     best_iterations = iterations
                     best_bn = candidate_bn
                     logger.debug(f"New best model found at restart {restart + 1} ({iterations} iterations)")

@@ -50,7 +50,7 @@ def main():
     logger.info("="*60)
     
     # Experiment configuration
-    node_sizes = [3, 5, 7]  # Multiple node sizes for separate plots
+    node_sizes = [5]  # Multiple node sizes for separate plots
     target_parents = 1.5
     missing_rate = 0.5
     max_samples = 2500
