@@ -44,8 +44,8 @@ class DomainEMModel(BaseImputationModel):
         # Convert training data to pyAgrum format
         pyagrum_data = convert_training_data_for_pyagrum(training_data, n_nodes)
         
-        # Try multiple random restarts and keep the best model (fewest EM iterations = best convergence)
-        best_iterations = -1
+        # Try multiple random restarts and keep the best model (highest log-likelihood)
+        best_log_likelihood = -np.inf
         best_bn = None
         
         for restart in range(self.n_restarts):
@@ -53,18 +53,18 @@ class DomainEMModel(BaseImputationModel):
                 logger.debug(f"EM restart {restart + 1}/{self.n_restarts}")
                 
                 # Learn domain-specific model using EM with different random seed
-                candidate_bn, iterations = learn_domain_specific_model(
+                candidate_bn, log_likelihood = learn_domain_specific_model(
                     adj_matrix, pyagrum_data, n_states=2, 
                     max_iter=self.max_iter, epsilon=self.epsilon,
                     restart_seed=42 + restart * 1000  # Different seed per restart
                 )
                 
-                logger.debug(f"Restart {restart + 1} converged in {iterations} iterations")
+                logger.debug(f"Restart {restart + 1} log-likelihood: {log_likelihood:.4f}")
                 
-                if iterations > best_iterations:
-                    best_iterations = iterations
+                if log_likelihood > best_log_likelihood:
+                    best_log_likelihood = log_likelihood
                     best_bn = candidate_bn
-                    logger.debug(f"New best model found at restart {restart + 1} ({iterations} iterations)")
+                    logger.debug(f"New best model found at restart {restart + 1} (log-likelihood: {log_likelihood:.4f})")
                     
             except Exception as e:
                 logger.warning(f"EM restart {restart + 1} failed: {e}")
@@ -75,7 +75,7 @@ class DomainEMModel(BaseImputationModel):
             
         self.learned_bn = best_bn
         self.is_trained = True
-        logger.info(f"Domain EM training completed with {self.n_restarts} restarts, best converged in {best_iterations} iterations")
+        logger.info(f"Domain EM training completed with {self.n_restarts} restarts, best log-likelihood: {best_log_likelihood:.4f}")
         
     def evaluate(self, test_data, bn, n_nodes, **kwargs):
         """

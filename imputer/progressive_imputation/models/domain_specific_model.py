@@ -118,7 +118,7 @@ def create_pyagrum_bn_from_adjacency(adj_matrix: np.ndarray) -> gum.BayesNet:
 def learn_with_pyagrum_em(bn: gum.BayesNet, 
                          training_data: pd.DataFrame,
                          max_iter: int = 100,
-                         epsilon: float = 1e-3) -> Tuple[gum.BayesNet, int]:
+                         epsilon: float = 1e-3) -> Tuple[gum.BayesNet, float]:
     """Learn BN parameters using pyAgrum EM."""
     logger.debug(f"=== LEARNING WITH PYAGRUM EM ===")
     logger.debug(f"EM config: max_iter={max_iter}, epsilon={epsilon}")
@@ -137,11 +137,14 @@ def learn_with_pyagrum_em(bn: gum.BayesNet,
     logger.debug("Running pyAgrum EM...")
     learned_bn = learner.learnParameters(bn)
     
+    # Get final log-likelihood and iterations for logging
+    all_nodes = [str(node_id) for node_id in bn.nodes()]
+    log_likelihood = learner.logLikelihood(all_nodes)
     iterations = learner.EMnbrIterations()
-    logger.info(f"EM completed in {iterations} iterations")
+    logger.info(f"EM completed in {iterations} iterations, log-likelihood: {log_likelihood:.4f}")
     logger.debug(f"Final EM state: {learner.EMStateMessage()}")
     
-    return learned_bn, iterations
+    return learned_bn, log_likelihood
 
 
 def learn_domain_specific_model(adj_matrix: np.ndarray, 
@@ -149,7 +152,7 @@ def learn_domain_specific_model(adj_matrix: np.ndarray,
                               n_states: int = 2,
                               max_iter: int = 100,
                               epsilon: float = 1e-3,
-                              restart_seed: int = None) -> Tuple[gum.BayesNet, int]:
+                              restart_seed: int = None) -> Tuple[gum.BayesNet, float]:
     """
     Main interface - learn BN using pyAgrum EM.
     
@@ -162,7 +165,7 @@ def learn_domain_specific_model(adj_matrix: np.ndarray,
         restart_seed: Random seed for this restart (for different initializations)
         
     Returns:
-        Tuple of (Learned pyAgrum BayesNet, EM iterations)
+        Tuple of (Learned pyAgrum BayesNet, log-likelihood)
     """
     logger.debug(f"USING PYAGRUM IMPLEMENTATION (restart_seed={restart_seed})")
     
@@ -176,9 +179,9 @@ def learn_domain_specific_model(adj_matrix: np.ndarray,
             bn.generateCPT(node_id)  # Generate new random CPT
     
     # Learn with EM
-    learned_bn, iterations = learn_with_pyagrum_em(bn, training_data, max_iter, epsilon)
+    learned_bn, log_likelihood = learn_with_pyagrum_em(bn, training_data, max_iter, epsilon)
     
-    return learned_bn, iterations
+    return learned_bn, log_likelihood
 
 
 def learn_domain_specific_model_complete(adj_matrix: np.ndarray, 

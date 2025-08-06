@@ -27,16 +27,19 @@ plt.rcParams.update({
     'figure.dpi': 100
 })
 
-# Clean color palette
+# Clean color palette for different methods
 COLORS = {
-    'imputer': '#2E8B57',      # Sea green
-    'domain_em': '#CD853F',    # Peru
-    'true_model': '#4169E1'    # Royal blue
+    'domain_em': '#CD853F',     # Peru
+    'true_model': '#4169E1',    # Royal blue
+    'Tiny': '#FF6B6B',          # Light red
+    'Small': '#4ECDC4',         # Teal
+    'Large': '#45B7D1'          # Blue
 }
 
 def plot_cost_vs_kl_curves_separate_nodes(results: Dict[str, Any], output_dir: str = "plots") -> None:
     """
     Plot separate cost vs KL curves for each node size with error bars.
+    Now handles multiple imputer variants in the same plot.
     
     Args:
         results: Results dictionary from multi-graph experiment
@@ -46,17 +49,23 @@ def plot_cost_vs_kl_curves_separate_nodes(results: Dict[str, Any], output_dir: s
     
     # Group results by node size
     results_by_nodes = {}
-    for (n_nodes, policy_name), policy_results in results.items():
+    for (n_nodes, combined_policy_name), policy_results in results.items():
         if n_nodes not in results_by_nodes:
             results_by_nodes[n_nodes] = {}
-        results_by_nodes[n_nodes][policy_name] = policy_results
+        results_by_nodes[n_nodes][combined_policy_name] = policy_results
     
     # Create separate plot for each node size
     for n_nodes, node_results in results_by_nodes.items():
-        fig, ax = plt.subplots(figsize=(10, 6))
+        fig, ax = plt.subplots(figsize=(12, 7))
         
-        for policy_name, policy_results in node_results.items():
+        # Track domain EM (only plot once since it's the same for all imputer variants)
+        domain_em_plotted = False
+        n_graphs = 1
+        
+        # Plot all imputer variants
+        for combined_policy_name, policy_results in node_results.items():
             experiment_results = policy_results['results']
+            n_graphs = policy_results.get('n_graphs', 1)
             
             # Extract data with error bars
             costs = [r['budget'] for r in experiment_results]
@@ -65,23 +74,24 @@ def plot_cost_vs_kl_curves_separate_nodes(results: Dict[str, Any], output_dir: s
             domain_kl_means = [r['domain_kl_mean'] for r in experiment_results]
             domain_kl_stds = [r['domain_kl_std'] for r in experiment_results]
             
-            # Get imputer size from results (if available)
-            config = policy_results.get('config', {})
-            imputer_size = config.get('imputer_size', 'Imputer')
+            # Get imputer size from combined name (e.g., "RandomExample_Large")
+            imputer_size = policy_results.get('imputer_size', 'Large')
             
-            # Plot Imputer with error bars
+            # Plot Imputer variant with error bars
             ax.errorbar(costs, neural_kl_means, yerr=neural_kl_stds, 
-                       fmt='o-', label=f'{imputer_size}', color=COLORS['imputer'],
+                       fmt='o-', label=f'Imputer ({imputer_size})', color=COLORS[imputer_size],
                        linewidth=2, markersize=6, alpha=0.8, capsize=5)
             
-            # Plot Domain EM with error bars
-            ax.errorbar(costs, domain_kl_means, yerr=domain_kl_stds, 
-                       fmt='s--', label='Domain EM', color=COLORS['domain_em'],
-                       linewidth=2, markersize=6, alpha=0.8, capsize=5)
+            # Plot Domain EM only once (same across all variants)
+            if not domain_em_plotted:
+                ax.errorbar(costs, domain_kl_means, yerr=domain_kl_stds, 
+                           fmt='s--', label='Domain EM', color=COLORS['domain_em'],
+                           linewidth=2, markersize=6, alpha=0.8, capsize=5)
+                domain_em_plotted = True
         
         ax.set_xlabel('Cost (Number of Training Samples)', fontsize=12)
         ax.set_ylabel('KL Divergence', fontsize=12)
-        ax.set_title(f'Convergence Analysis: {n_nodes} Nodes (±1 std, {policy_results["n_graphs"]} graphs)', 
+        ax.set_title(f'Convergence Analysis: {n_nodes} Nodes (±1 std, {n_graphs} graphs)', 
                     fontsize=12)
         ax.legend(fontsize=11)
         ax.grid(True, alpha=0.3)
@@ -292,9 +302,9 @@ def plot_convergence_analysis(results: Dict[str, Any], save_path: Optional[str] 
                           alpha=0.2, color=COLORS['imputer'])
             # Get imputer size from results (if available)
             config = policy_results.get('config', {})
-            imputer_size = config.get('imputer_size', 'Imputer')
+            imputer_size = config.get('imputer_size', 'Large')
             
-            ax.plot(budgets, neural_means, 'o-', label=f'{imputer_size}', 
+            ax.plot(budgets, neural_means, 'o-', label=f'Imputer ({imputer_size})', 
                    color=COLORS['imputer'], linewidth=2, markersize=6)
             
             ax.fill_between(budgets,
@@ -328,69 +338,86 @@ def plot_convergence_analysis(results: Dict[str, Any], save_path: Optional[str] 
     else:
         plt.close()
 
-def plot_step_by_step_kl(results: Dict[str, Any], output_dir: str = "plots") -> None:
+def plot_kl_frequency_distributions(results: Dict[str, Any], output_dir: str = "plots") -> None:
     """
-    Generate individual KL plots for each budget step.
+    Generate KL frequency distribution histograms for each budget step.
+    Now handles multiple imputer variants - creates separate frequency plots for each variant.
     
     Args:
         results: Results dictionary from multi-graph experiment
         output_dir: Directory to save plots
     """
-    # Create kl_steps subdirectory
-    kl_steps_dir = Path(output_dir) / "kl_steps"
-    kl_steps_dir.mkdir(parents=True, exist_ok=True)
+    # Create kl_frequency subdirectory
+    kl_freq_dir = Path(output_dir) / "kl_frequency"
+    kl_freq_dir.mkdir(parents=True, exist_ok=True)
     
-    logger.info("Generating step-by-step KL plots...")
+    logger.info("Generating KL frequency distribution plots...")
     
     # Group results by node size
     results_by_nodes = {}
-    for (n_nodes, policy_name), policy_results in results.items():
+    for (n_nodes, combined_policy_name), policy_results in results.items():
         if n_nodes not in results_by_nodes:
             results_by_nodes[n_nodes] = {}
-        results_by_nodes[n_nodes][policy_name] = policy_results
+        results_by_nodes[n_nodes][combined_policy_name] = policy_results
     
-    # Generate plots for each step
+    # Generate frequency plots for each step and each imputer variant
     for n_nodes, node_results in results_by_nodes.items():
-        for policy_name, policy_results in node_results.items():
+        for combined_policy_name, policy_results in node_results.items():
             experiment_results = policy_results['results']
+            
+            # Get imputer size
+            imputer_size = policy_results.get('imputer_size', 'Large')
             
             for step_idx, step_result in enumerate(experiment_results):
                 budget = step_result['budget']
                 
-                fig, ax = plt.subplots(figsize=(8, 6))
+                # Get individual KL values (from all graphs)
+                neural_kl_values = step_result.get('neural_kl_values', [])
+                domain_kl_values = step_result.get('domain_kl_values', [])
                 
-                # Get imputer size from results (if available)
-                config = policy_results.get('config', {})
-                imputer_size = config.get('imputer_size', 'Imputer')
+                if not neural_kl_values or not domain_kl_values:
+                    logger.warning(f"No individual KL values for {imputer_size} budget {budget}, skipping frequency plot")
+                    continue
                 
-                # Create bar plot comparing methods at this step
-                methods = [imputer_size, 'Domain EM']
-                kl_means = [step_result['neural_kl_mean'], step_result['domain_kl_mean']]
-                kl_stds = [step_result['neural_kl_std'], step_result['domain_kl_std']]
-                colors = [COLORS['imputer'], COLORS['domain_em']]
+                # Create side-by-side histograms
+                fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
                 
-                bars = ax.bar(methods, kl_means, yerr=kl_stds, 
-                             color=colors, alpha=0.8, capsize=5)
+                # Neural imputer histogram
+                ax1.hist(neural_kl_values, bins=50, color=COLORS[imputer_size], alpha=0.7, edgecolor='black')
+                neural_mean = np.mean(neural_kl_values)
+                neural_median = np.median(neural_kl_values)
+                ax1.axvline(neural_mean, color='red', linestyle='--', linewidth=2, label=f'Mean: {neural_mean:.3f}')
+                ax1.axvline(neural_median, color='darkblue', linestyle='--', linewidth=2, label=f'Median: {neural_median:.3f}')
+                ax1.set_xlabel('KL Divergence')
+                ax1.set_ylabel('Frequency')
+                ax1.set_title(f'Imputer ({imputer_size}) KL Distribution')
+                ax1.legend()
+                ax1.grid(True, alpha=0.3)
                 
-                ax.set_ylabel('KL Divergence')
-                ax.set_title(f'{n_nodes} Nodes - Budget {budget} Samples')
-                ax.set_yscale('log')
-                ax.grid(True, alpha=0.3)
+                # Domain EM histogram
+                ax2.hist(domain_kl_values, bins=50, color=COLORS['domain_em'], alpha=0.7, edgecolor='black')
+                domain_mean = np.mean(domain_kl_values)
+                domain_median = np.median(domain_kl_values)
+                ax2.axvline(domain_mean, color='red', linestyle='--', linewidth=2, label=f'Mean: {domain_mean:.3f}')
+                ax2.axvline(domain_median, color='darkblue', linestyle='--', linewidth=2, label=f'Median: {domain_median:.3f}')
+                ax2.set_xlabel('KL Divergence')
+                ax2.set_ylabel('Frequency')
+                ax2.set_title('Domain EM KL Distribution')
+                ax2.legend()
+                ax2.grid(True, alpha=0.3)
                 
-                # Add value labels on bars
-                for i, (mean, std) in enumerate(zip(kl_means, kl_stds)):
-                    ax.text(i, mean + std * 1.1, f'{mean:.4f}', 
-                           ha='center', va='bottom', fontsize=10)
+                # Overall title
+                fig.suptitle(f'{n_nodes} Nodes - Budget {budget} Samples - KL Distributions on Test Data', fontsize=14)
                 
                 plt.tight_layout()
                 
-                save_path = kl_steps_dir / f"step_{budget:04d}_nodes_{n_nodes}.png"
+                save_path = kl_freq_dir / f"kl_freq_{imputer_size}_budget_{budget:04d}_nodes_{n_nodes}.png"
                 plt.savefig(save_path, dpi=300, bbox_inches='tight')
                 plt.close()
                 
-                logger.debug(f"Step plot saved: {save_path}")
+                logger.debug(f"KL frequency plot saved: {save_path}")
     
-    logger.info(f"Step-by-step KL plots saved to {kl_steps_dir}/")
+    logger.info(f"KL frequency distribution plots saved to {kl_freq_dir}/")
 
 def create_multi_graph_experiment_report(results: Dict[str, Any], output_dir: str = "plots") -> None:
     """
@@ -407,8 +434,8 @@ def create_multi_graph_experiment_report(results: Dict[str, Any], output_dir: st
     # 1. Separate plots for each node size
     plot_cost_vs_kl_curves_separate_nodes(results, output_dir)
     
-    # 2. Step-by-step KL plots
-    plot_step_by_step_kl(results, output_dir)
+    # 2. KL frequency distribution plots
+    plot_kl_frequency_distributions(results, output_dir)
     
     # 3. Convergence analysis (only if multiple node sizes)
     results_by_nodes = {}

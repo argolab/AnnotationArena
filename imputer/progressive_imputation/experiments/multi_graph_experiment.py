@@ -55,8 +55,8 @@ class MultiGraphExperiment:
             config['seed'] = base_config['seed'] + graph_idx * 10000
             
             # Run experiment on this graph instance
-            imputer_size = base_config.get('imputer_size', 'Large')
-            experiment = ProgressiveExperiment(config, imputer_size=imputer_size)
+            imputer_sizes = base_config.get('imputer_sizes', ['Large'])
+            experiment = ProgressiveExperiment(config, imputer_sizes=imputer_sizes)
             experiment.setup()
             
             graph_results = experiment.run_multi_policy_experiment(policies)
@@ -177,7 +177,7 @@ class MultiGraphExperiment:
 
 def run_multi_graph_experiment_suite(node_sizes, target_parents=1.0, missing_rate=0.4,
                                     max_samples=3000, test_samples=250, policies=None,
-                                    n_graphs=10, imputer_size="Large"):
+                                    n_graphs=10, imputer_sizes=None):
     """
     Run multi-graph experiments across multiple node sizes.
     
@@ -189,17 +189,21 @@ def run_multi_graph_experiment_suite(node_sizes, target_parents=1.0, missing_rat
         test_samples: Number of test samples
         policies: List of policies to test
         n_graphs: Number of graph instances per configuration
-        imputer_size: Size of imputer model ["Tiny", "Small", "Large"]
+        imputer_sizes: List of imputer model sizes ["Tiny", "Small", "Large"]
         
     Returns:
-        Dict mapping (n_nodes, policy_name) to aggregated results
+        Dict mapping (n_nodes, policy_name_imputer_size) to aggregated results
     """
     if policies is None:
         from policies.random_example_policy import RandomExamplePolicy
         policies = [RandomExamplePolicy()]
     
+    if imputer_sizes is None:
+        imputer_sizes = ["Large"]
+    
     logger.info(f"Running multi-graph experiment suite:")
     logger.info(f"  Node sizes: {node_sizes}")
+    logger.info(f"  Imputer sizes: {imputer_sizes}")
     logger.info(f"  Graphs per size: {n_graphs}")
     logger.info(f"  Total experiments: {len(node_sizes) * n_graphs}")
     
@@ -217,7 +221,7 @@ def run_multi_graph_experiment_suite(node_sizes, target_parents=1.0, missing_rat
             'max_samples': max_samples,
             'test_samples': test_samples,
             'seed': 42 + n_nodes * 1000,  # Base seed for this node size
-            'imputer_size': imputer_size  # Add imputer size to config
+            'imputer_sizes': imputer_sizes  # Add imputer sizes list to config
         }
         
         # Run multi-graph experiment
