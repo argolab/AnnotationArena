@@ -6,6 +6,7 @@ Adapts the domain-specific model from the main codebase.
 
 import logging
 import numpy as np
+import gc
 
 from .domain_specific_model import (
     learn_domain_specific_model,
@@ -69,6 +70,9 @@ class DomainEMModel(BaseImputationModel):
             except Exception as e:
                 logger.warning(f"EM restart {restart + 1} failed: {e}")
                 continue
+            finally:
+                # Force garbage collection after each restart to prevent memory buildup
+                gc.collect()
         
         if best_bn is None:
             raise RuntimeError("All EM restarts failed")
