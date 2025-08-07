@@ -12,7 +12,6 @@ import pandas as pd
 import warnings
 import logging
 import torch
-import gc
 from typing import List, Tuple, Dict, Optional
 warnings.filterwarnings('ignore')
 
@@ -145,9 +144,7 @@ def learn_with_pyagrum_em(bn: gum.BayesNet,
     logger.info(f"EM completed in {iterations} iterations, log-likelihood: {log_likelihood:.4f}")
     logger.debug(f"Final EM state: {learner.EMStateMessage()}")
     
-    # Explicitly clean up learner to prevent memory corruption
-    del learner
-    gc.collect()
+    # Let Python handle cleanup naturally
     
     return learned_bn, log_likelihood
 

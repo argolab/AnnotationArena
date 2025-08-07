@@ -6,7 +6,6 @@ Adapts the domain-specific model from the main codebase.
 
 import logging
 import numpy as np
-import gc
 
 from .domain_specific_model import (
     learn_domain_specific_model,
@@ -23,11 +22,11 @@ class DomainEMModel(BaseImputationModel):
     Domain-specific EM model for graph imputation.
     """
     
-    def __init__(self, max_iter=100, epsilon=1e-3, n_restarts=5):
+    def __init__(self, max_iter=100, epsilon=1e-3, n_restarts=2):
         super().__init__("Domain_EM")
         self.max_iter = max_iter
         self.epsilon = epsilon
-        self.n_restarts = n_restarts
+        self.n_restarts = 2  # Fixed at 2 for stability
         self.learned_bn = None
         
     def train(self, training_data, bn, adj_matrix, n_nodes, **kwargs):
@@ -45,41 +44,56 @@ class DomainEMModel(BaseImputationModel):
         # Convert training data to pyAgrum format
         pyagrum_data = convert_training_data_for_pyagrum(training_data, n_nodes)
         
-        # Try multiple random restarts and keep the best model (highest log-likelihood)
-        best_log_likelihood = -np.inf
-        best_bn = None
+        # Run exactly 2 EM restarts and keep the better one
+        first_bn, first_ll = None, -np.inf
+        second_bn, second_ll = None, -np.inf
         
-        for restart in range(self.n_restarts):
-            try:
-                logger.debug(f"EM restart {restart + 1}/{self.n_restarts}")
-                
-                # Learn domain-specific model using EM with different random seed
-                candidate_bn, log_likelihood = learn_domain_specific_model(
-                    adj_matrix, pyagrum_data, n_states=2, 
-                    max_iter=self.max_iter, epsilon=self.epsilon,
-                    restart_seed=42 + restart * 1000  # Different seed per restart
-                )
-                
-                logger.debug(f"Restart {restart + 1} log-likelihood: {log_likelihood:.4f}")
-                
-                if log_likelihood > best_log_likelihood:
-                    best_log_likelihood = log_likelihood
-                    best_bn = candidate_bn
-                    logger.debug(f"New best model found at restart {restart + 1} (log-likelihood: {log_likelihood:.4f})")
-                    
-            except Exception as e:
-                logger.warning(f"EM restart {restart + 1} failed: {e}")
-                continue
-            finally:
-                # Force garbage collection after each restart to prevent memory buildup
-                gc.collect()
+        # First restart
+        try:
+            logger.debug("EM restart 1/2")
+            first_bn, first_ll = learn_domain_specific_model(
+                adj_matrix, pyagrum_data, n_states=2,
+                max_iter=self.max_iter, epsilon=self.epsilon,
+                restart_seed=42
+            )
+            logger.debug(f"Restart 1 log-likelihood: {first_ll:.4f}")
+        except Exception as e:
+            logger.warning(f"EM restart 1 failed: {e}")
         
-        if best_bn is None:
-            raise RuntimeError("All EM restarts failed")
+        # Second restart
+        try:
+            logger.debug("EM restart 2/2")
+            second_bn, second_ll = learn_domain_specific_model(
+                adj_matrix, pyagrum_data, n_states=2,
+                max_iter=self.max_iter, epsilon=self.epsilon,
+                restart_seed=1042
+            )
+            logger.debug(f"Restart 2 log-likelihood: {second_ll:.4f}")
+        except Exception as e:
+            logger.warning(f"EM restart 2 failed: {e}")
+        
+        # Select the better model
+        if first_bn is None and second_bn is None:
+            raise RuntimeError("Both EM restarts failed")
+        elif first_bn is None:
+            self.learned_bn = second_bn
+            best_log_likelihood = second_ll
+            logger.debug("Using restart 2 (restart 1 failed)")
+        elif second_bn is None:
+            self.learned_bn = first_bn
+            best_log_likelihood = first_ll
+            logger.debug("Using restart 1 (restart 2 failed)")
+        elif first_ll >= second_ll:
+            self.learned_bn = first_bn
+            best_log_likelihood = first_ll
+            logger.debug("Using restart 1 (better log-likelihood)")
+        else:
+            self.learned_bn = second_bn
+            best_log_likelihood = second_ll
+            logger.debug("Using restart 2 (better log-likelihood)")
             
-        self.learned_bn = best_bn
         self.is_trained = True
-        logger.info(f"Domain EM training completed with {self.n_restarts} restarts, best log-likelihood: {best_log_likelihood:.4f}")
+        logger.info(f"Domain EM training completed with 2 restarts, best log-likelihood: {best_log_likelihood:.4f}")
         
     def evaluate(self, test_data, bn, n_nodes, **kwargs):
         """

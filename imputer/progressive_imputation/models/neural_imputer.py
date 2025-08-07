@@ -63,13 +63,15 @@ class NeuralParameterEmbeddingImputer(BaseImputationModel):
             structure_info = torch.FloatTensor(adj_matrix)
             train_data_prepared.append((inputs, structure_info, dimensions, mask, targets))
         
-        # Create dataset and data loader
+        # Create dataset and data loader with num_workers=0 to avoid multiprocessing
         train_dataset = ImputationDataset(train_data_prepared, bn)
         batch_size = min(32, len(training_data))
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, collate_fn=collate_batch)
+        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, 
+                                 collate_fn=collate_batch, num_workers=0, persistent_workers=False)
         
         # Create test loader (use training data for validation during training)
-        test_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False, collate_fn=collate_batch)
+        test_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=False, 
+                                collate_fn=collate_batch, num_workers=0, persistent_workers=False)
         
         # Get dimensions
         input_dim = training_data[0][0].shape[1]
@@ -86,6 +88,9 @@ class NeuralParameterEmbeddingImputer(BaseImputationModel):
             epochs=self.epochs, lr=self.lr, patience=self.patience,
             use_self_supervised=False  # Always use standard training
         )
+        
+        # Explicit cleanup of DataLoaders to prevent resource leaks
+        del train_loader, test_loader, train_dataset
         
         self.is_trained = True
         logger.info(f"Two-stream imputer training completed (standard)")

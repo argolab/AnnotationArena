@@ -59,13 +59,13 @@ def main():
     # n_graphs = 2
 
     # Experiment configurations CLSP
-    node_sizes = [5, 10, 15] 
-    target_parents = 1.5
-    missing_rates = [0.5, 0.7] 
+    node_sizes = [7, 5] 
+    target_parents = 1.0
+    missing_rates = [0.7, 0.5] 
     imputer_sizes = ["Tiny", "Small", "Large"] 
-    max_samples = 3000
+    max_samples = 2500
     test_samples = 250
-    n_graphs = 4 
+    n_graphs = 5
     
     # Create policies
     policies = [
