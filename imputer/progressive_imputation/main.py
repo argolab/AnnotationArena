@@ -59,9 +59,9 @@ def main():
     # n_graphs = 2
 
     # Experiment configurations CLSP
-    node_sizes = [7, 5] 
+    node_sizes = [5] 
     target_parents = 1.0
-    missing_rates = [0.7, 0.5] 
+    missing_rates = [0.5] 
     imputer_sizes = ["Tiny", "Small", "Large"] 
     max_samples = 2500
     test_samples = 250

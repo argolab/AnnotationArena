@@ -137,16 +137,16 @@ def learn_with_pyagrum_em(bn: gum.BayesNet,
     logger.debug("Running pyAgrum EM...")
     learned_bn = learner.learnParameters(bn)
     
-    # Get final log-likelihood and iterations for logging
-    all_nodes = [str(node_id) for node_id in bn.nodes()]
-    log_likelihood = learner.logLikelihood(all_nodes)
+    # Get final iterations for logging (skip log-likelihood to avoid segfaults)
+    # all_nodes = [str(node_id) for node_id in bn.nodes()]
+    # log_likelihood = learner.logLikelihood(all_nodes)
     iterations = learner.EMnbrIterations()
-    logger.info(f"EM completed in {iterations} iterations, log-likelihood: {log_likelihood:.4f}")
+    logger.info(f"EM completed in {iterations} iterations")
     logger.debug(f"Final EM state: {learner.EMStateMessage()}")
     
     # Let Python handle cleanup naturally
     
-    return learned_bn, log_likelihood
+    return learned_bn, iterations  # Return iterations instead of log-likelihood
 
 
 def learn_domain_specific_model(adj_matrix: np.ndarray, 
@@ -181,9 +181,9 @@ def learn_domain_specific_model(adj_matrix: np.ndarray,
             bn.generateCPT(node_id)  # Generate new random CPT
     
     # Learn with EM
-    learned_bn, log_likelihood = learn_with_pyagrum_em(bn, training_data, max_iter, epsilon)
+    learned_bn, iterations = learn_with_pyagrum_em(bn, training_data, max_iter, epsilon)
     
-    return learned_bn, log_likelihood
+    return learned_bn, iterations  # Return iterations instead of log-likelihood
 
 
 def learn_domain_specific_model_complete(adj_matrix: np.ndarray, 

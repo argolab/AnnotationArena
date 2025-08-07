@@ -22,7 +22,7 @@ class DomainEMModel(BaseImputationModel):
     Domain-specific EM model for graph imputation.
     """
     
-    def __init__(self, max_iter=100, epsilon=1e-3, n_restarts=3):
+    def __init__(self, max_iter=100, epsilon=1e-3, n_restarts=1):
         super().__init__("Domain_EM")
         self.max_iter = max_iter
         self.epsilon = epsilon
@@ -53,18 +53,18 @@ class DomainEMModel(BaseImputationModel):
                 logger.debug(f"EM restart {restart + 1}/{self.n_restarts}")
                 
                 # Learn domain-specific model using EM with different random seed
-                candidate_bn, log_likelihood = learn_domain_specific_model(
+                candidate_bn, iterations = learn_domain_specific_model(
                     adj_matrix, pyagrum_data, n_states=2, 
                     max_iter=self.max_iter, epsilon=self.epsilon,
                     restart_seed=42 + restart * 1000  # Different seed per restart
                 )
                 
-                logger.debug(f"Restart {restart + 1} log-likelihood: {log_likelihood:.4f}")
+                logger.debug(f"Restart {restart + 1} iterations: {iterations}")
                 
-                if log_likelihood > best_log_likelihood:
-                    best_log_likelihood = log_likelihood
+                # With single restart, just use the first successful model
+                if candidate_bn is not None:
                     best_bn = candidate_bn
-                    logger.debug(f"New best model found at restart {restart + 1} (log-likelihood: {log_likelihood:.4f})")
+                    logger.debug(f"EM model learned at restart {restart + 1}")
                     
             except Exception as e:
                 logger.warning(f"EM restart {restart + 1} failed: {e}")
@@ -75,7 +75,7 @@ class DomainEMModel(BaseImputationModel):
             
         self.learned_bn = best_bn
         self.is_trained = True
-        logger.info(f"Domain EM training completed with {self.n_restarts} restarts, best log-likelihood: {best_log_likelihood:.4f}")
+        logger.info(f"Domain EM training completed with {self.n_restarts} restart(s)")
         
     def evaluate(self, test_data, bn, n_nodes, **kwargs):
         """
