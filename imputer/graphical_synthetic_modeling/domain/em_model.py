@@ -482,10 +482,10 @@ class DomainEMModel(BaseImputationModel):
         logger.debug(f"Evaluating {self.name} log-loss on {len(test_data)} test samples")
         
         # Use the learned BN for log-loss computation
-        return self._compute_log_loss_with_bn(self.learned_bn, test_data, n_nodes)
+        return self._compute_log_loss_with_bn(self.learned_bn, test_data, n_nodes, n_states=2)
     
     def _compute_log_loss_with_bn(self, bayesnet: gum.BayesNet, test_data: List[SampleTuple], 
-                                 n_nodes: int) -> Dict[str, Any]:
+                                 n_nodes: int, n_states: int = 2) -> Dict[str, Any]:
         """
         Compute log-loss using exact Bayesian inference with given BayesNet.
         
@@ -554,13 +554,30 @@ class DomainEMModel(BaseImputationModel):
                 if evidence:
                     # Use posterior given evidence
                     posterior = infer.posterior(node_str)
-                    true_state = true_states[node].item()
-                    prob_true_state = posterior[{node_str: str(true_state)}]
+                    # Convert PyAgrum posterior to array format (same as neural)
+                    prob_array = np.array([
+                        posterior[{node_str: str(state)}] 
+                        for state in range(n_states)
+                    ])
                 else:
                     # No evidence - use marginal probability
                     marginal = bayesnet.cpt(node_str)
-                    true_state = true_states[node].item()
-                    prob_true_state = marginal[{node_str: str(true_state)}]
+                    # Convert PyAgrum CPT to array format (same as neural)
+                    prob_array = np.array([
+                        marginal[{node_str: str(state)}]
+                        for state in range(n_states)
+                    ])
+                
+                # Validate and normalize probabilities (same as neural evaluation)
+                if np.any(np.isnan(prob_array)) or np.sum(prob_array) == 0:
+                    logger.warning(f"Sample {sample_idx}, Node {node}: Invalid PyAgrum probabilities, using uniform")
+                    prob_array = np.ones(n_states) / n_states
+                else:
+                    prob_array = prob_array / np.sum(prob_array)  # Ensure normalization
+                
+                # Use same indexing method as neural evaluation
+                true_state = true_states[node].item()
+                prob_true_state = prob_array[true_state]  # Same as neural: array[index]
                 
                 # Add to log-loss: -log(prob)
                 if prob_true_state > 1e-10:

@@ -193,7 +193,7 @@ def plot_neural_vs_true_scatterplots(results: Dict[str, Any], output_dir: str = 
     """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
-    # Extract neural vs true log-loss data 
+    # Extract neural vs true log-loss data - individual sample level
     neural_true_data = []  # [(true_loss, neural_loss, budget, imputer_size)]
     
     budgets = set()
@@ -208,11 +208,11 @@ def plot_neural_vs_true_scatterplots(results: Dict[str, Any], output_dir: str = 
             budgets.add(budget)
             imputer_sizes.add(imputer_size)
             
-            # Get individual log-loss values (from graph aggregation)
+            # Get individual log-loss values for each test sample
             true_values = step_result.get('true_model_log_loss_values', [])
             neural_values = step_result.get('neural_log_loss_values', [])
             
-            # Pair up true and neural values
+            # Pair up true and neural values for each individual test sample
             min_len = min(len(true_values), len(neural_values))
             for i in range(min_len):
                 true_val = true_values[i]
@@ -226,49 +226,55 @@ def plot_neural_vs_true_scatterplots(results: Dict[str, Any], output_dir: str = 
     if neural_true_data:
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
         
-        # Subplot 1: Color by Budget Progression
+        # Subplot 1: Color by Budget Progression with continuous gradient
         budget_list = sorted(budgets)
-        budget_colors = cm.viridis(np.linspace(0, 1, len(budget_list)))
-        budget_to_color = {budget: budget_colors[i] for i, budget in enumerate(budget_list)}
+        budget_min, budget_max = min(budget_list), max(budget_list)
         
-        for i, (true_val, neural_val, budget, _) in enumerate(neural_true_data):
-            ax1.scatter(true_val, neural_val, c=[budget_to_color[budget]], 
-                       alpha=0.6, s=30)
+        # Create arrays for scatter plot with continuous color mapping
+        true_vals = [x[0] for x in neural_true_data]
+        neural_vals = [x[1] for x in neural_true_data]
+        budget_vals = [x[2] for x in neural_true_data]
         
-        # Add budget legend
-        for i, budget in enumerate(budget_list):
-            ax1.scatter([], [], c=[budget_colors[i]], label=f'Budget {budget}', s=50)
+        # Use scatter with continuous color mapping
+        scatter1 = ax1.scatter(true_vals, neural_vals, c=budget_vals, 
+                              cmap='viridis', alpha=0.6, s=20, vmin=budget_min, vmax=budget_max)
+        
+        # Add colorbar for budget
+        cbar1 = plt.colorbar(scatter1, ax=ax1)
+        cbar1.set_label('Budget (Training Samples)', fontsize=10)
         
         # Perfect agreement line
-        all_true = [x[0] for x in neural_true_data]
-        all_neural = [x[1] for x in neural_true_data]
-        min_val = min(min(all_true), min(all_neural))
-        max_val = max(max(all_true), max(all_neural))
-        ax1.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.5, 
-                label='Perfect Agreement')
+        min_val = min(min(true_vals), min(neural_vals))
+        max_val = max(max(true_vals), max(neural_vals))
+        ax1.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.7, 
+                label='Perfect Agreement', linewidth=2)
         
         ax1.set_xlabel('True Model Log-Loss', fontsize=12)
         ax1.set_ylabel('Neural Imputer Log-Loss', fontsize=12)
         ax1.set_title('Neural vs True (Budget Progression)', fontsize=12)
-        ax1.legend(fontsize=9, bbox_to_anchor=(1.05, 1), loc='upper left')
+        ax1.legend(fontsize=9)
         ax1.grid(True, alpha=0.3)
         
-        # Subplot 2: Color by Imputer Size
+        # Subplot 2: Color by Imputer Size with discrete colors but continuous feel
         size_list = sorted(imputer_sizes)
-        size_color_map = {'Tiny': '#ff9999', 'Small': '#cc4444', 'Large': '#990000'}
+        size_color_values = {'Tiny': 0.2, 'Small': 0.5, 'Large': 0.8}
         
-        for i, (true_val, neural_val, _, imputer_size) in enumerate(neural_true_data):
-            color = size_color_map.get(imputer_size, '#666666')
-            ax2.scatter(true_val, neural_val, c=color, alpha=0.6, s=30)
+        # Create color array based on imputer size
+        size_vals = [size_color_values.get(x[3], 0.5) for x in neural_true_data]
         
-        # Add imputer size legend
+        scatter2 = ax2.scatter(true_vals, neural_vals, c=size_vals, 
+                              cmap='Reds', alpha=0.6, s=20, vmin=0, vmax=1)
+        
+        # Add discrete legend for imputer sizes
         for size in size_list:
-            if size in size_color_map:
-                ax2.scatter([], [], c=size_color_map[size], label=f'{size} Imputer', s=50)
+            if size in size_color_values:
+                color_val = size_color_values[size]
+                color = plt.cm.Reds(color_val)
+                ax2.scatter([], [], c=[color], label=f'{size} Imputer', s=50)
         
         # Perfect agreement line
-        ax2.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.5,
-                label='Perfect Agreement')
+        ax2.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.7,
+                label='Perfect Agreement', linewidth=2)
         
         ax2.set_xlabel('True Model Log-Loss', fontsize=12)
         ax2.set_ylabel('Neural Imputer Log-Loss', fontsize=12)
@@ -302,7 +308,7 @@ def plot_em_vs_true_scatterplots(results: Dict[str, Any], output_dir: str = "plo
     """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
     
-    # Extract EM vs true log-loss data
+    # Extract EM vs true log-loss data - individual sample level
     em_true_data = []  # [(true_loss, em_loss, budget)]
     
     budgets = set()
@@ -314,11 +320,11 @@ def plot_em_vs_true_scatterplots(results: Dict[str, Any], output_dir: str = "plo
             budget = step_result['budget']
             budgets.add(budget)
             
-            # Get individual log-loss values (from graph aggregation)
+            # Get individual log-loss values for each test sample
             true_values = step_result.get('true_model_log_loss_values', [])
             em_values = step_result.get('domain_log_loss_values', [])
             
-            # Pair up true and EM values
+            # Pair up true and EM values for each individual test sample
             min_len = min(len(true_values), len(em_values))
             for i in range(min_len):
                 true_val = true_values[i]
@@ -332,26 +338,28 @@ def plot_em_vs_true_scatterplots(results: Dict[str, Any], output_dir: str = "plo
     if em_true_data:
         fig, ax = plt.subplots(1, 1, figsize=(8, 6))
         
-        # Color by Budget Progression
+        # Color by Budget Progression with continuous gradient
         budget_list = sorted(budgets)
-        budget_colors = cm.viridis(np.linspace(0, 1, len(budget_list)))
-        budget_to_color = {budget: budget_colors[i] for i, budget in enumerate(budget_list)}
+        budget_min, budget_max = min(budget_list), max(budget_list)
         
-        for i, (true_val, em_val, budget) in enumerate(em_true_data):
-            ax.scatter(true_val, em_val, c=[budget_to_color[budget]], 
-                      alpha=0.6, s=30)
+        # Create arrays for scatter plot with continuous color mapping
+        true_vals = [x[0] for x in em_true_data]
+        em_vals = [x[1] for x in em_true_data]
+        budget_vals = [x[2] for x in em_true_data]
         
-        # Add budget legend
-        for i, budget in enumerate(budget_list):
-            ax.scatter([], [], c=[budget_colors[i]], label=f'Budget {budget}', s=50)
+        # Use scatter with continuous color mapping
+        scatter = ax.scatter(true_vals, em_vals, c=budget_vals, 
+                            cmap='plasma', alpha=0.6, s=20, vmin=budget_min, vmax=budget_max)
+        
+        # Add colorbar for budget
+        cbar = plt.colorbar(scatter, ax=ax)
+        cbar.set_label('Budget (Training Samples)', fontsize=10)
         
         # Perfect agreement line
-        all_true = [x[0] for x in em_true_data]
-        all_em = [x[1] for x in em_true_data]
-        min_val = min(min(all_true), min(all_em))
-        max_val = max(max(all_true), max(all_em))
-        ax.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.5, 
-               label='Perfect Agreement')
+        min_val = min(min(true_vals), min(em_vals))
+        max_val = max(max(true_vals), max(em_vals))
+        ax.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.7, 
+               label='Perfect Agreement', linewidth=2)
         
         ax.set_xlabel('True Model Log-Loss', fontsize=12)
         ax.set_ylabel('EM Model Log-Loss', fontsize=12)

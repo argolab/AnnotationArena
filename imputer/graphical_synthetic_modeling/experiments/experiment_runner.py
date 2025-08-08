@@ -74,6 +74,11 @@ def aggregate_multi_graph_results(graph_results: List[Dict[str, Dict[str, Any]]]
             budgets = []
             n_training_samples = []
             
+            # Collect individual sample arrays for proper aggregation
+            neural_log_loss_arrays = []
+            domain_log_loss_arrays = []
+            true_log_loss_arrays = []
+            
             for graph_progressive_results in all_progressive_results:
                 if step_idx < len(graph_progressive_results):
                     step_result = graph_progressive_results[step_idx]
@@ -86,6 +91,11 @@ def aggregate_multi_graph_results(graph_results: List[Dict[str, Dict[str, Any]]]
                     domain_times.append(step_result.get('domain_time', 0.0))
                     budgets.append(step_result.get('budget', 0))
                     n_training_samples.append(step_result.get('n_training_samples', 0))
+                    
+                    # Collect individual sample arrays from each graph
+                    neural_log_loss_arrays.extend(step_result.get('neural_log_loss_values', []))
+                    domain_log_loss_arrays.extend(step_result.get('domain_log_loss_values', []))
+                    true_log_loss_arrays.extend(step_result.get('true_model_log_loss_values', []))
             
             # Compute aggregated statistics
             aggregated_step = {
@@ -115,9 +125,9 @@ def aggregate_multi_graph_results(graph_results: List[Dict[str, Dict[str, Any]]]
                 # Raw values for detailed analysis (flattened across graphs)
                 'neural_kl_values': neural_kls,
                 'domain_kl_values': domain_kls,
-                'neural_log_loss_values': neural_log_losses,
-                'domain_log_loss_values': domain_log_losses,
-                'true_model_log_loss_values': true_log_losses,
+                'neural_log_loss_values': neural_log_loss_arrays,  # Individual sample arrays
+                'domain_log_loss_values': domain_log_loss_arrays,  # Individual sample arrays
+                'true_model_log_loss_values': true_log_loss_arrays,  # Individual sample arrays
                 
                 # Evaluation counts
                 'neural_n_evaluations': len([x for x in neural_kls if not np.isinf(x)]),
