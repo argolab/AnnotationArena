@@ -95,7 +95,7 @@ def train_epoch(model: GraphImputer, train_loader: DataLoader,
     n_batches = 0
     
     for batch in train_loader:
-        inputs, structure_info, dimensions, mask, targets, cpt_info = batch
+        inputs, structure_info, dimensions, mask, targets, cpt_info, true_states = batch
         
         # Move to device
         inputs = inputs.to(DEVICE)
@@ -142,7 +142,7 @@ def validate_epoch(model: GraphImputer, val_loader: DataLoader) -> float:
     
     with torch.no_grad():
         for batch in val_loader:
-            inputs, structure_info, dimensions, mask, targets, cpt_info = batch
+            inputs, structure_info, dimensions, mask, targets, cpt_info, true_states = batch
             
             # Move to device
             inputs = inputs.to(DEVICE)
@@ -252,7 +252,7 @@ def evaluate_model(model: GraphImputer, test_data: List[SampleTuple],
     max_cpt_size = compute_max_cpt_size(bn) if bn else 8
     
     with torch.no_grad():
-        for sample_idx, (inputs, structure_info, dimensions, mask, targets) in enumerate(test_data):
+        for sample_idx, (inputs, structure_info, dimensions, mask, targets, true_states) in enumerate(test_data):
             # Identify unobserved nodes (mask == 1)
             unobserved_nodes = [i for i in range(n_nodes) if mask[i] == 1]
             observed_nodes = [i for i in range(n_nodes) if mask[i] == 0]
@@ -409,7 +409,7 @@ def evaluate_log_loss(model: GraphImputer, test_data: List[SampleTuple],
     max_cpt_size = compute_max_cpt_size(bn) if bn else 8
     
     with torch.no_grad():
-        for sample_idx, (inputs, structure_info, dimensions, mask, targets) in enumerate(test_data):
+        for sample_idx, (inputs, structure_info, dimensions, mask, targets, true_states) in enumerate(test_data):
             # Identify unobserved nodes (mask == 1)
             unobserved_nodes = [i for i in range(n_nodes) if mask[i] == 1]
             observed_nodes = [i for i in range(n_nodes) if mask[i] == 0]
@@ -443,8 +443,8 @@ def evaluate_log_loss(model: GraphImputer, test_data: List[SampleTuple],
                 # Get predicted probabilities (softmax output from model)
                 pred_probs = predictions[node, :].numpy()
                 
-                # Get true state for this unobserved node
-                true_state = torch.argmax(targets[node]).item()
+                # Get true state for this unobserved node from actual sampled states
+                true_state = true_states[node].item()
                 
                 # Get probability of true state
                 prob_true_state = pred_probs[true_state]

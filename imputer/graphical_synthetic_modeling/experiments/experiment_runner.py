@@ -247,7 +247,7 @@ class ProgressiveExperiment:
         if not self.sample_pool:
             raise ValueError("Sample pool must be generated before creating models")
             
-        sample_inputs, sample_structure, _, _, _ = self.sample_pool[0]
+        sample_inputs, sample_structure, _, _, _, _ = self.sample_pool[0]
         input_dim = sample_inputs.shape[1]
         structure_dim = sample_structure.shape[1]
         

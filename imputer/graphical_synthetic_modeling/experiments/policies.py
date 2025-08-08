@@ -13,7 +13,7 @@ from typing import List, Iterator, Tuple, Any
 logger = logging.getLogger(__name__)
 
 # Type alias for sample tuple
-SampleTuple = Tuple[Any, ...]  # Will be properly typed when imported
+SampleTuple = Tuple[Any, Any, Any, Any, Any, Any]  # Will be properly typed when imported
 
 
 class BaseObservationPolicy(ABC):

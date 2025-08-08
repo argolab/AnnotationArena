@@ -27,7 +27,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # Type alias for sample tuple
-SampleTuple = Tuple[torch.FloatTensor, torch.FloatTensor, torch.LongTensor, torch.FloatTensor, torch.FloatTensor]
+SampleTuple = Tuple[torch.FloatTensor, torch.FloatTensor, torch.LongTensor, torch.FloatTensor, torch.FloatTensor, torch.LongTensor]
 
 
 def generate_sample_from_bn_fair(bn: gum.BayesNet, 
@@ -55,6 +55,7 @@ def generate_sample_from_bn_fair(bn: gum.BayesNet,
         - dimensions: [n_nodes] node indices  
         - mask: [n_nodes] binary mask (0=observed, 1=unobserved)
         - targets: [n_nodes, 2] posterior probabilities for unobserved nodes
+        - true_states: [n_nodes] actual sampled states for all nodes
         
     Raises:
         Exception: Any inference failures will bubble up with full traceback for debugging
@@ -166,13 +167,17 @@ def generate_sample_from_bn_fair(bn: gum.BayesNet,
     # Create structural embeddings (adjacency matrix)
     structural_embeddings = np.tile(adj_matrix, (1, 1)).astype(np.float32)
     
+    # Create true_states tensor with actual sampled states for all nodes
+    true_states = np.array([node_states[i] for i in range(n_nodes)], dtype=np.int64)
+    
     # Convert to torch tensors
     sample_tuple = (
         torch.FloatTensor(inputs),
         torch.FloatTensor(structural_embeddings),
         torch.LongTensor(dimensions),
         torch.FloatTensor(mask),
-        torch.FloatTensor(targets)
+        torch.FloatTensor(targets),
+        torch.LongTensor(true_states)
     )
     
     logger.debug(f"Sample generated successfully: {len(observed_nodes)} observed, {len(unobserved_nodes)} unobserved")

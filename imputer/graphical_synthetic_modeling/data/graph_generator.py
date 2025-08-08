@@ -23,6 +23,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+
 def generate_direct_bn_structure(n_nodes: int, target_parents: float = 1.5, seed: int = 42) -> gum.BayesNet:
     """
     Generate Bayesian Network directly with O(1) parents using min(1, c/(i-1)) method.

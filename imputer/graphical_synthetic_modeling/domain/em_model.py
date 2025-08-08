@@ -30,7 +30,8 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # Type alias for sample tuple
-SampleTuple = Tuple[torch.FloatTensor, torch.FloatTensor, torch.LongTensor, torch.FloatTensor, torch.FloatTensor]
+SampleTuple = Tuple[torch.FloatTensor, torch.FloatTensor, torch.LongTensor, torch.FloatTensor, torch.FloatTensor, torch.LongTensor]
+
 
 
 class BaseImputationModel(ABC):
@@ -103,7 +104,7 @@ def convert_training_data_for_pyagrum(train_data: List[SampleTuple], n_nodes: in
     logger.debug(f"Converting {len(train_data)} samples for pyAgrum EM learning...")
     samples = []
     
-    for i, (inputs, embeddings, dimensions, mask, targets) in enumerate(train_data):
+    for i, (inputs, embeddings, dimensions, mask, targets, true_states) in enumerate(train_data):
         sample = {}
         observed_count = 0
         
@@ -247,7 +248,7 @@ class DomainEMModel(BaseImputationModel):
     from incomplete data. Provides both KL divergence and log-loss evaluation.
     """
     
-    def __init__(self, max_iter: int = 100, epsilon: float = 1e-3, n_restarts: int = 4):
+    def __init__(self, max_iter: int = 100, epsilon: float = 1e-3, n_restarts: int = 5):
         """
         Initialize EM model with configuration parameters.
         
@@ -289,6 +290,7 @@ class DomainEMModel(BaseImputationModel):
         best_bn = None
         best_likelihood = float('-inf')  # Use log-likelihood for proper model selection
         fallback_candidates = []  # Store (bn, iterations) for fallback selection
+        used_fallback = False  # Track whether we used iteration-based fallback
         
         for restart in range(self.n_restarts):
             logger.debug(f"EM restart {restart + 1}/{self.n_restarts}")
@@ -342,13 +344,13 @@ class DomainEMModel(BaseImputationModel):
                             logger.debug(f"New best model from restart {restart + 1} (LL={log_likelihood:.6f})")
                             
                     except Exception as e:
-                        logger.warning(f"Restart {restart + 1} - logLikelihood computation failed: {e}")
-                        logger.warning(f"Restart {restart + 1} will be available for iteration-based fallback")
+                        logger.info(f"Restart {restart + 1} - logLikelihood computation failed: {e}")
+                        logger.info(f"Restart {restart + 1} will be available for iteration-based fallback")
                         # Continue to next restart, but keep this candidate for fallback
                         continue
                         
             except Exception as e:
-                logger.warning(f"Restart {restart + 1} - EM learning failed: {e}")
+                logger.info(f"Restart {restart + 1} - EM learning failed: {e}")
                 # Continue to next restart
                 continue
         
@@ -357,12 +359,13 @@ class DomainEMModel(BaseImputationModel):
             logger.warning(f"No valid likelihood-based selection possible")
             logger.warning(f"Falling back to iteration-based selection from {len(fallback_candidates)} candidates")
             
+            used_fallback = True
             # Select the model with most iterations (assuming more iterations = better convergence)
             best_iterations = max(iterations for _, iterations in fallback_candidates)
             for candidate_bn, iterations in fallback_candidates:
                 if iterations == best_iterations:
                     best_bn = candidate_bn
-                    best_likelihood = -iterations  # Negative for consistent logging
+                    best_likelihood = best_iterations  # Store iterations for fallback logging
                     logger.warning(f"Selected model with {iterations} iterations (iteration-based fallback)")
                     break
         
@@ -373,9 +376,8 @@ class DomainEMModel(BaseImputationModel):
         self.is_trained = True
         
         # Report final results with appropriate context
-        if best_likelihood < 0 and abs(best_likelihood) < 1000:  # Negative iterations from fallback
-            iterations_used = -best_likelihood
-            logger.info(f"{self.name} training completed: selected model with {iterations_used:.0f} iterations (fallback)")
+        if used_fallback:
+            logger.info(f"{self.name} training completed: selected model with {best_likelihood:.0f} iterations (fallback)")
         else:
             logger.info(f"{self.name} training completed: best model with log-likelihood {best_likelihood:.6f}")
         
@@ -470,7 +472,7 @@ class DomainEMModel(BaseImputationModel):
         infer = gum.LazyPropagation(bayesnet)
         log_losses = []
         
-        for sample_idx, (inputs, embeddings, dimensions, mask, targets) in enumerate(test_data):
+        for sample_idx, (inputs, embeddings, dimensions, mask, targets, true_states) in enumerate(test_data):
             logger.debug(f"Processing sample {sample_idx} for log-loss")
             
             # Create evidence from observed nodes
@@ -506,12 +508,12 @@ class DomainEMModel(BaseImputationModel):
                 if evidence:
                     # Use posterior given evidence
                     posterior = infer.posterior(node_str)
-                    true_state = torch.argmax(targets[node]).item()
+                    true_state = true_states[node].item()
                     prob_true_state = posterior[{node_str: str(true_state)}]
                 else:
                     # No evidence - use marginal probability
                     marginal = bayesnet.cpt(node_str)
-                    true_state = torch.argmax(targets[node]).item()
+                    true_state = true_states[node].item()
                     prob_true_state = marginal[{node_str: str(true_state)}]
                 
                 # Add to log-loss: -log(prob)
@@ -575,7 +577,7 @@ def evaluate_domain_specific_model(learned_bn: gum.BayesNet, test_data: List[Sam
     infer = gum.LazyPropagation(learned_bn)
     kl_divergences = []
     
-    for sample_idx, (inputs, embeddings, dimensions, mask, targets) in enumerate(test_data):
+    for sample_idx, (inputs, embeddings, dimensions, mask, targets, true_states) in enumerate(test_data):
         
         # Create evidence from observed nodes
         evidence = {}
@@ -598,9 +600,7 @@ def evaluate_domain_specific_model(learned_bn: gum.BayesNet, test_data: List[Sam
             infer.setEvidence(evidence)
             infer.makeInference()
         
-        # Compute KL divergence for unobserved nodes
-        sample_kl = 0.0
-        
+        # Compute KL divergence for unobserved nodes - per-node aggregation for consistency with neural path
         for node in unobserved_nodes:
             node_str = str(node)
             
@@ -647,9 +647,19 @@ def evaluate_domain_specific_model(learned_bn: gum.BayesNet, test_data: List[Sam
                     else:
                         node_kl += 10  # Large penalty for zero predicted probability
             
-            sample_kl += node_kl
+            # Handle floating point precision issues in KL computation
+            if np.isnan(node_kl) or np.isinf(node_kl):
+                logger.warning(f"Sample {sample_idx}, Node {node}: Invalid KL={node_kl} (NaN/Inf), skipping")
+                continue
+            
+            # Clamp small negative values to 0 (due to numerical precision when pred ≈ true)
+            if node_kl < -1e-6:  # Only warn for significantly negative values
+                logger.warning(f"Sample {sample_idx}, Node {node}: Significantly negative KL={node_kl}, skipping")
+                continue
+                
+            node_kl = max(node_kl, 0.0)  # Ensure no negative due to numerical precision
+            kl_divergences.append(node_kl)  # Append per-node KL for consistency
         
-        kl_divergences.append(sample_kl)
         infer.eraseAllEvidence()
     
     if not kl_divergences:

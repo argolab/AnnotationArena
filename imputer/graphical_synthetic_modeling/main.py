@@ -259,23 +259,35 @@ def run_experiments(config: Dict[str, Any]) -> Dict[Any, Dict[str, Any]]:
     total_experiments = len(config['node_sizes']) * len(config['missing_rates']) * len(config['imputer_sizes'])
     logger.info(f"  Total experiments: {total_experiments}")
     
-    # Run experiment suite
+    # Run experiment suite for each missing rate
     logger.info("\\nStarting experimental runs...")
     
-    results = run_experiment_suite(
-        node_sizes=config['node_sizes'],
-        target_parents=config['target_parents'],
-        missing_rate=config['missing_rates'][0],  # Use first missing rate
-        max_samples=config['max_samples'],
-        test_samples=config['test_samples'],
-        policies=policies,
-        imputer_sizes=config['imputer_sizes'],
-        n_graphs=config['n_graphs']
-    )
+    all_results = {}
     
-    logger.info(f"\\nExperimental runs completed: {len(results)} configurations")
+    for missing_rate in config['missing_rates']:
+        logger.info(f"\\nRunning experiments for missing rate: {missing_rate}")
+        
+        results = run_experiment_suite(
+            node_sizes=config['node_sizes'],
+            target_parents=config['target_parents'],
+            missing_rate=missing_rate,
+            max_samples=config['max_samples'],
+            test_samples=config['test_samples'],
+            policies=policies,
+            imputer_sizes=config['imputer_sizes'],
+            n_graphs=config['n_graphs']
+        )
+        
+        # Store results with missing rate as part of the key structure
+        for key, value in results.items():
+            # Create new key: (n_nodes, policy_imputer, missing_rate)
+            extended_key = (key[0], key[1], missing_rate)
+            value['missing_rate'] = missing_rate
+            all_results[extended_key] = value
     
-    return results
+    logger.info(f"\\nExperimental runs completed: {len(all_results)} configurations")
+    
+    return all_results
 
 
 def save_results(results: Dict[Any, Dict[str, Any]], config: Dict[str, Any]) -> None:
@@ -320,12 +332,26 @@ def create_visualizations(results: Dict[Any, Dict[str, Any]], config: Dict[str, 
     
     logger.info("Generating visualization report...")
     
-    # Create comprehensive experiment report
-    create_experiment_report(
-        results=results,
-        output_dir=str(plots_dir),
-        missing_rate=config['missing_rates'][0] if config['missing_rates'] else None
-    )
+    # Group results by missing rate and create separate reports
+    for missing_rate in config['missing_rates']:
+        logger.info(f"Creating visualizations for missing rate: {missing_rate}")
+        
+        # Filter results for this missing rate
+        filtered_results = {}
+        for key, value in results.items():
+            if len(key) == 3 and key[2] == missing_rate:  # (n_nodes, policy_imputer, missing_rate)
+                # Convert back to original key format for visualization functions
+                original_key = (key[0], key[1])  # (n_nodes, policy_imputer)
+                filtered_results[original_key] = value
+        
+        if filtered_results:
+            create_experiment_report(
+                results=filtered_results,
+                output_dir=str(plots_dir),
+                missing_rate=missing_rate
+            )
+        else:
+            logger.warning(f"No results found for missing rate: {missing_rate}")
     
     logger.info(f"Visualization report completed: {plots_dir}/")
 
@@ -376,13 +402,13 @@ def main() -> None:
             logger.info(f"Total configurations: {len(results)}")
             
             # Print brief summary
-            for (n_nodes, policy_imputer_key), experiment_data in results.items():
+            for (n_nodes, policy_imputer_key, missing_rate), experiment_data in results.items():
                 if experiment_data['results']:
                     final_result = experiment_data['results'][-1]
                     neural_kl = final_result.get('neural_kl', float('inf'))
                     domain_kl = final_result.get('domain_kl', float('inf'))
                     winner = 'Neural' if neural_kl < domain_kl else 'Domain'
-                    logger.info(f"  {n_nodes} nodes, {policy_imputer_key}: Final winner = {winner}")
+                    logger.info(f"  {n_nodes} nodes, {policy_imputer_key}, missing_rate={missing_rate}: Final winner = {winner}")
         
     except KeyboardInterrupt:
         logger = logging.getLogger(__name__)

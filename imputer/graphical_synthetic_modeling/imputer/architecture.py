@@ -33,7 +33,7 @@ logger = logging.getLogger(__name__)
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Type alias for sample tuple
-SampleTuple = Tuple[torch.FloatTensor, torch.FloatTensor, torch.LongTensor, torch.FloatTensor, torch.FloatTensor]
+SampleTuple = Tuple[torch.FloatTensor, torch.FloatTensor, torch.LongTensor, torch.FloatTensor, torch.FloatTensor, torch.LongTensor]
 
 
 # ================================= CPT PROCESSING =================================
@@ -453,8 +453,8 @@ class ImputationDataset(Dataset):
         return len(self.samples)
     
     def __getitem__(self, idx: int) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, 
-                                           torch.Tensor, torch.Tensor, torch.Tensor]:
-        inputs, structure_info, dimensions, mask, targets = self.samples[idx]
+                                           torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        inputs, structure_info, dimensions, mask, targets, true_states = self.samples[idx]
         
         # Extract observed nodes (mask == 0)
         observed_nodes = [i for i in range(self.n_nodes) if mask[i] == 0]
@@ -463,7 +463,7 @@ class ImputationDataset(Dataset):
         cpt_info = extract_cpts_for_nodes(self.bn, observed_nodes, self.n_nodes, self.max_cpt_size)
         cpt_tensor = torch.FloatTensor(cpt_info)
         
-        return inputs, structure_info, dimensions, mask, targets, cpt_tensor
+        return inputs, structure_info, dimensions, mask, targets, cpt_tensor, true_states
 
 
 def collate_batch(batch: List[Tuple]) -> Tuple[torch.Tensor, ...]:
@@ -476,7 +476,7 @@ def collate_batch(batch: List[Tuple]) -> Tuple[torch.Tensor, ...]:
     Returns:
         Batched tensors ready for model forward pass
     """
-    inputs, structure_info, dimensions, masks, targets, cpt_info = zip(*batch)
+    inputs, structure_info, dimensions, masks, targets, cpt_info, true_states = zip(*batch)
     
     return (
         torch.stack(inputs),
@@ -484,7 +484,8 @@ def collate_batch(batch: List[Tuple]) -> Tuple[torch.Tensor, ...]:
         torch.stack(dimensions),
         torch.stack(masks),
         torch.stack(targets),
-        torch.stack(cpt_info)
+        torch.stack(cpt_info),
+        torch.stack(true_states)
     )
 
 
