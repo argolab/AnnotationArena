@@ -12,6 +12,7 @@ import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
 import logging
+import gc
 from tqdm import tqdm
 from typing import List, Tuple, Dict, Any, Optional
 
@@ -251,6 +252,12 @@ def evaluate_model(model: GraphImputer, test_data: List[SampleTuple],
     # Get maximum CPT size for consistent processing
     max_cpt_size = compute_max_cpt_size(bn) if bn else 8
     
+    # Create single inference engine for reuse throughout evaluation
+    true_infer = None
+    if bn:
+        import pyagrum as gum
+        true_infer = gum.LazyPropagation(bn)
+    
     with torch.no_grad():
         for sample_idx, (inputs, structure_info, dimensions, mask, targets, true_states) in enumerate(test_data):
             # Identify unobserved nodes (mask == 1)
@@ -281,16 +288,14 @@ def evaluate_model(model: GraphImputer, test_data: List[SampleTuple],
             
             # Compute true Bayesian posterior using ground truth BN
             true_posteriors = {}
-            if observed_nodes:  # Only compute if there are observed nodes
+            if observed_nodes and true_infer:  # Only compute if there are observed nodes and inference engine
                 # Create evidence from observed nodes for true posterior computation
                 evidence = {}
                 for obs_node in observed_nodes:
                     obs_state = torch.argmax(inputs[obs_node, 1:]).item()
                     evidence[str(obs_node)] = str(obs_state)
                 
-                # Use LazyPropagation on ground truth BN to get true posteriors
-                import pyagrum as gum
-                true_infer = gum.LazyPropagation(bn)
+                # Reuse the single inference engine
                 true_infer.setEvidence(evidence)
                 true_infer.makeInference()
                 
@@ -368,6 +373,14 @@ def evaluate_model(model: GraphImputer, test_data: List[SampleTuple],
             'kl_distribution': []
         }
     
+    # Clean up inference engine explicitly
+    if true_infer:
+        try:
+            true_infer.eraseAllEvidence()
+            del true_infer
+        except:
+            pass  # Ignore cleanup errors
+    
     results = {
         'mean_kl': np.mean(kl_divergences),
         'std_kl': np.std(kl_divergences),
@@ -379,6 +392,9 @@ def evaluate_model(model: GraphImputer, test_data: List[SampleTuple],
     
     logger.info(f"Imputation evaluation: Mean KL = {results['mean_kl']:.4f} ± {results['std_kl']:.4f}")
     logger.info(f"Successful evaluations: {results['n_evaluations']}")
+    
+    # Force garbage collection to clean up any residual PyAgrum objects
+    gc.collect()
     
     return results
 
@@ -478,5 +494,8 @@ def evaluate_log_loss(model: GraphImputer, test_data: List[SampleTuple],
     }
     
     logger.info(f"Neural imputer log-loss: Mean={results['mean_log_loss']:.4f} ± {results['std_log_loss']:.4f}")
+    
+    # Force garbage collection to clean up any residual PyAgrum objects
+    gc.collect()
     
     return results

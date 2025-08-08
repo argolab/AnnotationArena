@@ -11,7 +11,9 @@ import numpy as np
 import pandas as pd
 import torch
 import warnings
+import gc
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from typing import List, Tuple, Dict, Any, Optional
 
 # Suppress pandas warnings
@@ -31,6 +33,41 @@ logger = logging.getLogger(__name__)
 
 # Type alias for sample tuple
 SampleTuple = Tuple[torch.FloatTensor, torch.FloatTensor, torch.LongTensor, torch.FloatTensor, torch.FloatTensor, torch.LongTensor]
+
+
+@contextmanager
+def safe_inference_engine(bayesnet):
+    """
+    Context manager for safe PyAgrum inference engine creation and cleanup.
+    
+    Ensures proper cleanup of inference engines to prevent memory leaks
+    and segmentation faults during garbage collection.
+    
+    Args:
+        bayesnet: PyAgrum BayesNet to create inference for
+        
+    Yields:
+        PyAgrum LazyPropagation inference engine
+    """
+    infer = None
+    try:
+        if PYAGRUM_AVAILABLE and bayesnet:
+            import pyagrum as gum
+            infer = gum.LazyPropagation(bayesnet)
+            yield infer
+        else:
+            yield None
+    except Exception as e:
+        logger.warning(f"Inference engine error: {e}")
+        yield None
+    finally:
+        # Explicit cleanup
+        if infer:
+            try:
+                infer.eraseAllEvidence()
+                del infer
+            except:
+                pass  # Ignore cleanup errors
 
 
 
@@ -353,6 +390,12 @@ class DomainEMModel(BaseImputationModel):
                 logger.info(f"Restart {restart + 1} - EM learning failed: {e}")
                 # Continue to next restart
                 continue
+            finally:
+                # Clean up restart BN to prevent memory accumulation
+                try:
+                    del restart_bn
+                except:
+                    pass
         
         # If no valid likelihood-based selection, fall back to iteration-based selection
         if best_bn is None and fallback_candidates:
@@ -380,6 +423,9 @@ class DomainEMModel(BaseImputationModel):
             logger.info(f"{self.name} training completed: selected model with {best_likelihood:.0f} iterations (fallback)")
         else:
             logger.info(f"{self.name} training completed: best model with log-likelihood {best_likelihood:.6f}")
+        
+        # Force garbage collection after training to clean up all restart BNs
+        gc.collect()
         
     def evaluate(self, test_data: List[SampleTuple], bn: gum.BayesNet, 
                 n_nodes: int, **kwargs) -> Dict[str, Any]:
@@ -527,6 +573,14 @@ class DomainEMModel(BaseImputationModel):
             log_losses.append(example_log_loss)
             infer.eraseAllEvidence()
                     
+        # Clean up inference engine explicitly
+        try:
+            if infer:
+                infer.eraseAllEvidence()
+                del infer
+        except:
+            pass  # Ignore cleanup errors
+            
         # Compile results
         if not log_losses:
             logger.warning("No samples produced log-loss values!")
@@ -545,6 +599,9 @@ class DomainEMModel(BaseImputationModel):
         }
         
         logger.info(f"{self.name} log-loss: Mean={results['mean_log_loss']:.4f} ± {results['std_log_loss']:.4f}")
+        
+        # Force garbage collection to clean up any residual PyAgrum objects
+        gc.collect()
         
         return results
     
@@ -574,7 +631,9 @@ def evaluate_domain_specific_model(learned_bn: gum.BayesNet, test_data: List[Sam
     """
     logger.debug(f"Evaluating domain model on {len(test_data)} samples")
     
+    # Create inference engines for reuse throughout evaluation
     infer = gum.LazyPropagation(learned_bn)
+    true_infer = gum.LazyPropagation(ground_truth_bn) if ground_truth_bn else None
     kl_divergences = []
     
     for sample_idx, (inputs, embeddings, dimensions, mask, targets, true_states) in enumerate(test_data):
@@ -611,10 +670,9 @@ def evaluate_domain_specific_model(learned_bn: gum.BayesNet, test_data: List[Sam
                 predicted = learned_bn.cpt(node_str)
             
             # Get TRUE Bayesian posterior using ground truth BN (not one-hot sample!)
-            if ground_truth_bn is not None:
+            if true_infer is not None:
                 # Use ground truth BN to compute true posterior
                 if evidence:
-                    true_infer = gum.LazyPropagation(ground_truth_bn)
                     true_infer.setEvidence(evidence)
                     true_infer.makeInference()
                     true_posterior = true_infer.posterior(node_str)
@@ -662,6 +720,17 @@ def evaluate_domain_specific_model(learned_bn: gum.BayesNet, test_data: List[Sam
         
         infer.eraseAllEvidence()
     
+    # Clean up inference engines explicitly
+    try:
+        if infer:
+            infer.eraseAllEvidence()
+            del infer
+        if true_infer:
+            true_infer.eraseAllEvidence()
+            del true_infer
+    except:
+        pass  # Ignore cleanup errors
+    
     if not kl_divergences:
         logger.warning("No KL divergences computed!")
         return {
@@ -679,5 +748,8 @@ def evaluate_domain_specific_model(learned_bn: gum.BayesNet, test_data: List[Sam
     }
     
     logger.debug(f"Domain evaluation: Mean KL = {results['mean_kl']:.4f} ± {results['std_kl']:.4f}")
+    
+    # Force garbage collection to clean up any residual PyAgrum objects
+    gc.collect()
     
     return results
