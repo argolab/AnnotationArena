@@ -221,3 +221,6 @@ imputer/results
 imputer/progressive_imputation/plots
 imputer/progressive_imputation/logs
 *.out
+imputer/graphical_synthetic_modeling/outputs
+imputer/progressive_imputation
+imputer/legacy

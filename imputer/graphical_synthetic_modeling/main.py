@@ -1,0 +1,405 @@
+#!/usr/bin/env python3
+"""
+Clean entry point for progressive imputation experiments.
+
+Provides command-line interface for running comprehensive experiments comparing
+neural imputers against domain-specific EM baselines across multiple graph sizes.
+"""
+
+import argparse
+import logging
+import os
+import json
+import pickle
+import sys
+from pathlib import Path
+from datetime import datetime
+from typing import List, Dict, Any
+
+# Import our clean modules
+from experiments.experiment_runner import run_experiment_suite, save_experiment_results
+from experiments.policies import RandomExamplePolicy
+from utils.visualization import create_experiment_report
+
+
+def setup_logging(output_dir: Path, log_level: str = "INFO") -> None:
+    """
+    Setup structured logging to separate files.
+    
+    Creates three log files:
+    - info.log: INFO level messages (also to stdout)  
+    - debug.log: DEBUG level messages for troubleshooting
+    - error.log: ERROR level messages with full tracebacks
+    
+    Args:
+        output_dir: Directory for log files
+        log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
+    """
+    logs_dir = output_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Convert string level to logging constant
+    numeric_level = getattr(logging, log_level.upper(), logging.INFO)
+    
+    # Create formatters
+    detailed_formatter = logging.Formatter(
+        '%(asctime)s - %(name)s - %(levelname)s - %(funcName)s:%(lineno)d - %(message)s'
+    )
+    simple_formatter = logging.Formatter(
+        '%(asctime)s - %(levelname)s - %(message)s'
+    )
+    
+    # Get root logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)  # Capture all levels
+    
+    # Clear any existing handlers
+    root_logger.handlers.clear()
+    
+    # Console handler (INFO and above)
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setLevel(logging.INFO)
+    console_handler.setFormatter(simple_formatter)
+    root_logger.addHandler(console_handler)
+    
+    # Info log file (INFO and above) 
+    info_handler = logging.FileHandler(logs_dir / "info.log")
+    info_handler.setLevel(logging.INFO)
+    info_handler.setFormatter(detailed_formatter)
+    root_logger.addHandler(info_handler)
+    
+    # Debug log file (DEBUG and above)
+    debug_handler = logging.FileHandler(logs_dir / "debug.log")
+    debug_handler.setLevel(logging.DEBUG)
+    debug_handler.setFormatter(detailed_formatter)
+    root_logger.addHandler(debug_handler)
+    
+    # Error log file (ERROR only)
+    error_handler = logging.FileHandler(logs_dir / "error.log")
+    error_handler.setLevel(logging.ERROR)
+    error_handler.setFormatter(detailed_formatter)
+    root_logger.addHandler(error_handler)
+    
+    # Set specific logger levels to reduce noise
+    logging.getLogger('matplotlib').setLevel(logging.WARNING)
+    logging.getLogger('torch').setLevel(logging.WARNING)
+    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"Logging initialized: level={log_level}, output_dir={output_dir}")
+    logger.debug(f"Log files created in {logs_dir}/")
+
+
+def parse_arguments() -> argparse.Namespace:
+    """
+    Parse command-line arguments for experiment configuration.
+    
+    Returns:
+        Parsed arguments namespace
+    """
+    parser = argparse.ArgumentParser(
+        description="Progressive Imputation Experiments with Neural Transformers vs Domain EM",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    
+    # Graph configuration
+    parser.add_argument(
+        '--node-sizes', type=int, nargs='+', default=[5, 10, 15],
+        help='Graph sizes (number of nodes) to test'
+    )
+    parser.add_argument(
+        '--target-parents', type=float, default=1.0,
+        help='Target parents per node for graph generation'
+    )
+    
+    # Missing data configuration
+    parser.add_argument(
+        '--missing-rates', type=float, nargs='+', default=[0.4],
+        help='Missing data rates for test samples'
+    )
+    
+    # Model configuration
+    parser.add_argument(
+        '--imputer-sizes', choices=['Tiny', 'Small', 'Large'], nargs='+', 
+        default=['Large'], help='Neural imputer model sizes to test'
+    )
+    
+    # Training configuration
+    parser.add_argument(
+        '--max-samples', type=int, default=3000,
+        help='Maximum training samples available to policies'
+    )
+    parser.add_argument(
+        '--test-samples', type=int, default=250,
+        help='Number of test samples for evaluation'
+    )
+    parser.add_argument(
+        '--start-examples', type=int, default=10,
+        help='Starting number of training examples'
+    )
+    parser.add_argument(
+        '--increment', type=int, default=150,
+        help='Increment in training examples per progressive step'
+    )
+    
+    # Experiment configuration
+    parser.add_argument(
+        '--n-graphs', type=int, default=1,
+        help='Number of random graph instances per configuration'
+    )
+    parser.add_argument(
+        '--seed', type=int, default=42,
+        help='Random seed for reproducibility'
+    )
+    
+    # Output configuration
+    parser.add_argument(
+        '--output-dir', type=Path, 
+        default=Path(__file__).parent / "outputs",
+        help='Output directory for results, plots, and logs'
+    )
+    parser.add_argument(
+        '--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
+        default='INFO', help='Logging level'
+    )
+    parser.add_argument(
+        '--save-results', action='store_true', default=True,
+        help='Save detailed results to pickle/json files'
+    )
+    
+    return parser.parse_args()
+
+
+def create_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
+    """
+    Create experiment configuration dictionary from parsed arguments.
+    
+    Args:
+        args: Parsed command-line arguments
+        
+    Returns:
+        Configuration dictionary for experiments
+    """
+    return {
+        'node_sizes': args.node_sizes,
+        'target_parents': args.target_parents,
+        'missing_rates': args.missing_rates,
+        'imputer_sizes': args.imputer_sizes,
+        'max_samples': args.max_samples,
+        'test_samples': args.test_samples,
+        'start_examples': args.start_examples,
+        'increment': args.increment,
+        'n_graphs': args.n_graphs,
+        'seed': args.seed,
+        'output_dir': str(args.output_dir),
+        'log_level': args.log_level,
+        'save_results': args.save_results
+    }
+
+
+def create_observation_policies(config: Dict[str, Any]) -> List[RandomExamplePolicy]:
+    """
+    Create observation policies for progressive experiments.
+    
+    Args:
+        config: Experiment configuration dictionary
+        
+    Returns:
+        List of observation policies
+    """
+    policies = [
+        RandomExamplePolicy(
+            start_examples=config['start_examples'],
+            increment=config['increment'],
+            max_examples=config['max_samples'],
+            seed=config['seed']
+        )
+    ]
+    
+    logger = logging.getLogger(__name__)
+    logger.info(f"Created {len(policies)} observation policies")
+    for policy in policies:
+        logger.debug(f"Policy: {policy}")
+        
+    return policies
+
+
+def run_experiments(config: Dict[str, Any]) -> Dict[Any, Dict[str, Any]]:
+    """
+    Run comprehensive progressive imputation experiments.
+    
+    Args:
+        config: Experiment configuration dictionary
+        
+    Returns:
+        Complete experimental results
+        
+    Raises:
+        Exception: Any experimental failures bubble up for debugging
+    """
+    logger = logging.getLogger(__name__)
+    
+    # Create observation policies
+    policies = create_observation_policies(config)
+    
+    # Log experiment configuration
+    logger.info("="*80)
+    logger.info("PROGRESSIVE IMPUTATION EXPERIMENTS")
+    logger.info("="*80)
+    
+    logger.info("Configuration:")
+    logger.info(f"  Node sizes: {config['node_sizes']}")
+    logger.info(f"  Missing rates: {config['missing_rates']}")
+    logger.info(f"  Imputer sizes: {config['imputer_sizes']}")
+    logger.info(f"  Training samples: {config['start_examples']} to {config['max_samples']} (increment: {config['increment']})")
+    logger.info(f"  Test samples: {config['test_samples']}")
+    logger.info(f"  Random graphs: {config['n_graphs']} per configuration")
+    logger.info(f"  Random seed: {config['seed']}")
+    
+    total_experiments = len(config['node_sizes']) * len(config['missing_rates']) * len(config['imputer_sizes'])
+    logger.info(f"  Total experiments: {total_experiments}")
+    
+    # Run experiment suite
+    logger.info("\\nStarting experimental runs...")
+    
+    results = run_experiment_suite(
+        node_sizes=config['node_sizes'],
+        target_parents=config['target_parents'],
+        missing_rate=config['missing_rates'][0],  # Use first missing rate
+        max_samples=config['max_samples'],
+        test_samples=config['test_samples'],
+        policies=policies,
+        imputer_sizes=config['imputer_sizes'],
+        n_graphs=config['n_graphs']
+    )
+    
+    logger.info(f"\\nExperimental runs completed: {len(results)} configurations")
+    
+    return results
+
+
+def save_results(results: Dict[Any, Dict[str, Any]], config: Dict[str, Any]) -> None:
+    """
+    Save experimental results to structured output files.
+    
+    Args:
+        results: Experimental results from run_experiments
+        config: Experiment configuration dictionary
+    """
+    if not config['save_results']:
+        return
+        
+    logger = logging.getLogger(__name__)
+    output_dir = Path(config['output_dir'])
+    
+    # Save detailed results
+    logger.info("Saving experimental results...")
+    save_experiment_results(results, output_dir / "results")
+    
+    # Save configuration
+    config_path = output_dir / "results" / "experiment_config.json"
+    with open(config_path, 'w') as f:
+        # Convert Path objects to strings for JSON serialization
+        json_config = {k: str(v) if isinstance(v, Path) else v for k, v in config.items()}
+        json.dump(json_config, f, indent=2)
+        
+    logger.info(f"Configuration saved to {config_path}")
+
+
+def create_visualizations(results: Dict[Any, Dict[str, Any]], config: Dict[str, Any]) -> None:
+    """
+    Create comprehensive visualization report.
+    
+    Args:
+        results: Experimental results from run_experiments
+        config: Experiment configuration dictionary
+    """
+    logger = logging.getLogger(__name__)
+    output_dir = Path(config['output_dir'])
+    plots_dir = output_dir / "plots"
+    
+    logger.info("Generating visualization report...")
+    
+    # Create comprehensive experiment report
+    create_experiment_report(
+        results=results,
+        output_dir=str(plots_dir),
+        missing_rate=config['missing_rates'][0] if config['missing_rates'] else None
+    )
+    
+    logger.info(f"Visualization report completed: {plots_dir}/")
+
+
+def main() -> None:
+    """
+    Main entry point for progressive imputation experiments.
+    
+    Parses command-line arguments, sets up logging, runs experiments,
+    saves results, and creates visualizations.
+    """
+    try:
+        # Parse command-line arguments
+        args = parse_arguments()
+        
+        # Create output directories
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        (args.output_dir / "plots").mkdir(exist_ok=True)
+        (args.output_dir / "results").mkdir(exist_ok=True)
+        
+        # Setup logging
+        setup_logging(args.output_dir, args.log_level)
+        
+        logger = logging.getLogger(__name__)
+        logger.info("Progressive imputation experiments starting...")
+        
+        # Create experiment configuration
+        config = create_experiment_config(args)
+        
+        # Run experiments
+        results = run_experiments(config)
+        
+        # Save results
+        save_results(results, config)
+        
+        # Create visualizations  
+        create_visualizations(results, config)
+        
+        # Final summary
+        logger.info("="*80)
+        logger.info("EXPERIMENTS COMPLETED SUCCESSFULLY")
+        logger.info("="*80)
+        logger.info(f"Results saved to: {args.output_dir}")
+        logger.info(f"Logs available in: {args.output_dir / 'logs'}/")
+        logger.info(f"Plots available in: {args.output_dir / 'plots'}/")
+        
+        if results:
+            logger.info(f"Total configurations: {len(results)}")
+            
+            # Print brief summary
+            for (n_nodes, policy_imputer_key), experiment_data in results.items():
+                if experiment_data['results']:
+                    final_result = experiment_data['results'][-1]
+                    neural_kl = final_result.get('neural_kl', float('inf'))
+                    domain_kl = final_result.get('domain_kl', float('inf'))
+                    winner = 'Neural' if neural_kl < domain_kl else 'Domain'
+                    logger.info(f"  {n_nodes} nodes, {policy_imputer_key}: Final winner = {winner}")
+        
+    except KeyboardInterrupt:
+        logger = logging.getLogger(__name__)
+        logger.warning("Experiment interrupted by user")
+        sys.exit(1)
+        
+    except Exception as e:
+        # Logger may not be initialized if error occurs early
+        try:
+            logger = logging.getLogger(__name__)
+            logger.error(f"Experiment failed: {e}", exc_info=True)
+        except:
+            print(f"FATAL ERROR: {e}", file=sys.stderr)
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    main()
