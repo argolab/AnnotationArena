@@ -377,6 +377,154 @@ def plot_em_vs_true_scatterplots(results: Dict[str, Any], output_dir: str = "plo
     else:
         logger.warning("No valid EM vs true log-loss data available for scatterplots")
 
+def create_unified_scatterplots(results, output_dir="improved_plots", missing_rate=None):
+    """
+    Create unified 3-subplot scatterplot: Neural vs True, EM vs True, all on same axes.
+    """
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Extract all data for consistent axis scaling
+    neural_true_data = []
+    em_true_data = []
+    
+    budgets = set()
+    imputer_sizes = set()
+    
+    for key, policy_results in results.items():
+        experiment_results = policy_results['results']
+        imputer_size = policy_results.get('imputer_size', 'Unknown')
+        
+        for step_result in experiment_results:
+            budget = step_result['budget']
+            budgets.add(budget)
+            imputer_sizes.add(imputer_size)
+            
+            # Get individual sample values
+            true_values = step_result.get('true_model_log_loss_values', [])
+            neural_values = step_result.get('neural_log_loss_values', [])
+            em_values = step_result.get('domain_log_loss_values', [])
+            
+            # Collect neural vs true pairs
+            min_len_neural = min(len(true_values), len(neural_values))
+            for i in range(min_len_neural):
+                if not (np.isnan(true_values[i]) or np.isinf(true_values[i]) or 
+                       np.isnan(neural_values[i]) or np.isinf(neural_values[i])):
+                    neural_true_data.append((true_values[i], neural_values[i], budget, imputer_size))
+            
+            # Collect EM vs true pairs
+            min_len_em = min(len(true_values), len(em_values))
+            for i in range(min_len_em):
+                if not (np.isnan(true_values[i]) or np.isinf(true_values[i]) or 
+                       np.isnan(em_values[i]) or np.isinf(em_values[i])):
+                    em_true_data.append((true_values[i], em_values[i], budget))
+    
+    if not neural_true_data and not em_true_data:
+        print("No valid data for scatterplots")
+        return
+    
+    # Get consistent axis limits across all subplots
+    all_true = ([x[0] for x in neural_true_data] + [x[0] for x in em_true_data])
+    all_pred = ([x[1] for x in neural_true_data] + [x[1] for x in em_true_data])
+    
+    min_val = min(min(all_true), min(all_pred))
+    max_val = max(max(all_true), max(all_pred))
+    axis_margin = (max_val - min_val) * 0.05
+    axis_min, axis_max = min_val - axis_margin, max_val + axis_margin
+    
+    # Create 3-subplot figure
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 5))
+    
+    # Consistent scatter parameters
+    scatter_size = 20
+    scatter_alpha = 0.3
+    
+    budgets_list = sorted(budgets)
+    budget_min, budget_max = min(budgets_list), max(budgets_list)
+    
+    # Subplot 1: Neural vs True (Budget Progression)
+    if neural_true_data:
+        true_vals = [x[0] for x in neural_true_data]
+        neural_vals = [x[1] for x in neural_true_data]
+        budget_vals = [x[2] for x in neural_true_data]
+        
+        scatter1 = ax1.scatter(true_vals, neural_vals, c=budget_vals, 
+                              cmap='viridis', alpha=scatter_alpha, s=scatter_size, 
+                              vmin=budget_min, vmax=budget_max)
+        
+        # Add colorbar
+        cbar1 = plt.colorbar(scatter1, ax=ax1)
+        cbar1.set_label('Budget (Training Samples)', fontsize=10)
+    
+    # Perfect agreement line (all subplots)
+    ax1.plot([axis_min, axis_max], [axis_min, axis_max], 'k--', alpha=0.7, 
+            label='Perfect Agreement', linewidth=2)
+    
+    ax1.set_xlim(axis_min, axis_max)
+    ax1.set_ylim(axis_min, axis_max)
+    ax1.set_xlabel('True Model Log-Loss', fontsize=12)
+    ax1.set_ylabel('Neural Imputer Log-Loss', fontsize=12)
+    ax1.set_title('Neural vs True (Budget Progression)', fontsize=12)
+    ax1.legend(fontsize=9)
+    ax1.grid(True, alpha=0.3)
+    
+    # Subplot 2: Neural vs True (Imputer Size)
+    if neural_true_data:
+        size_color_values = {'Tiny': 0.2, 'Small': 0.5, 'Large': 0.8}
+        size_vals = [size_color_values.get(x[3], 0.5) for x in neural_true_data]
+        
+        scatter2 = ax2.scatter(true_vals, neural_vals, c=size_vals, 
+                              cmap='Reds', alpha=scatter_alpha, s=scatter_size, vmin=0, vmax=1)
+        
+        # Add discrete legend
+        for size in sorted(set([x[3] for x in neural_true_data])):
+            if size in size_color_values:
+                color_val = size_color_values[size]
+                color = plt.cm.Reds(color_val)
+                ax2.scatter([], [], c=[color], label=f'{size} Imputer', s=50)
+    
+    ax2.plot([axis_min, axis_max], [axis_min, axis_max], 'k--', alpha=0.7,
+            label='Perfect Agreement', linewidth=2)
+    
+    ax2.set_xlim(axis_min, axis_max)
+    ax2.set_ylim(axis_min, axis_max)
+    ax2.set_xlabel('True Model Log-Loss', fontsize=12)
+    ax2.set_ylabel('Neural Imputer Log-Loss', fontsize=12)
+    ax2.set_title('Neural vs True (Imputer Size)', fontsize=12)
+    ax2.legend(fontsize=9)
+    ax2.grid(True, alpha=0.3)
+    
+    # Subplot 3: EM vs True (Budget Progression)
+    if em_true_data:
+        true_vals_em = [x[0] for x in em_true_data]
+        em_vals = [x[1] for x in em_true_data]
+        budget_vals_em = [x[2] for x in em_true_data]
+        
+        scatter3 = ax3.scatter(true_vals_em, em_vals, c=budget_vals_em, 
+                              cmap='viridis', alpha=scatter_alpha, s=scatter_size,
+                              vmin=budget_min, vmax=budget_max)
+        
+        # Add colorbar
+        cbar3 = plt.colorbar(scatter3, ax=ax3)
+        cbar3.set_label('Budget (Training Samples)', fontsize=10)
+    
+    ax3.plot([axis_min, axis_max], [axis_min, axis_max], 'k--', alpha=0.7,
+            label='Perfect Agreement', linewidth=2)
+    
+    ax3.set_xlim(axis_min, axis_max)
+    ax3.set_ylim(axis_min, axis_max)
+    ax3.set_xlabel('True Model Log-Loss', fontsize=12)
+    ax3.set_ylabel('EM Model Log-Loss', fontsize=12)
+    ax3.set_title('EM vs True (Budget Progression)', fontsize=12)
+    ax3.legend(fontsize=9)
+    ax3.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    missing_suffix = f"_missing_{missing_rate}" if missing_rate is not None else ""
+    save_path = f"{output_dir}/unified_scatterplots{missing_suffix}.png"
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    print(f"Unified scatterplots saved to {save_path}")
+
 
 def create_experiment_report(results: Dict[str, Any], output_dir: str = "plots",
                            missing_rate: Optional[float] = None) -> None:
@@ -401,6 +549,11 @@ def create_experiment_report(results: Dict[str, Any], output_dir: str = "plots",
     plot_log_loss_comparison(results, output_dir, missing_rate)
     plot_neural_vs_true_scatterplots(results, output_dir, missing_rate)
     plot_em_vs_true_scatterplots(results, output_dir, missing_rate)
+
+    try:
+        create_unified_scatterplots(results, output_dir, missing_rate)
+    except:
+        pass
     
     logger.info(f"All plots saved to {output_dir}/ directory")
     
