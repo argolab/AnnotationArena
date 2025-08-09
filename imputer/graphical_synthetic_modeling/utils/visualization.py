@@ -1,8 +1,5 @@
 """
 Visualization utilities for progressive imputation experiments.
-
-Provides clean plotting functions for analyzing experimental results with
-professional publication-quality formatting and statistical analysis.
 """
 
 import numpy as np
