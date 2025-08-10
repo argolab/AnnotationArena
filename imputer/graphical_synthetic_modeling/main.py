@@ -166,6 +166,10 @@ def parse_arguments() -> argparse.Namespace:
         '--save-results', action='store_true', default=True,
         help='Save detailed results to pickle/json files'
     )
+    parser.add_argument(
+        '--use-likelihood-selection', action='store_true', default=False,
+        help='Use log-likelihood for EM model selection (default: iteration-based, safer)'
+    )
     
     return parser.parse_args()
 
@@ -193,7 +197,8 @@ def create_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         'seed': args.seed,
         'output_dir': str(args.output_dir),
         'log_level': args.log_level,
-        'save_results': args.save_results
+        'save_results': args.save_results,
+        'use_likelihood_selection': args.use_likelihood_selection
     }
 
 

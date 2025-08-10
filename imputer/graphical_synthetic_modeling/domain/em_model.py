@@ -285,7 +285,8 @@ class DomainEMModel(BaseImputationModel):
     from incomplete data. Provides both KL divergence and log-loss evaluation.
     """
     
-    def __init__(self, max_iter: int = 100, epsilon: float = 1e-3, n_restarts: int = 5):
+    def __init__(self, max_iter: int = 100, epsilon: float = 1e-3, n_restarts: int = 5, 
+                 use_likelihood_selection: bool = False):
         """
         Initialize EM model with configuration parameters.
         
@@ -293,14 +294,18 @@ class DomainEMModel(BaseImputationModel):
             max_iter: Maximum EM iterations per restart
             epsilon: Convergence threshold for EM
             n_restarts: Number of random restarts for robust learning
+            use_likelihood_selection: If True, use log-likelihood for model selection.
+                                    If False, use iteration-based selection (safer for large problems)
         """
         super().__init__("Domain_EM")
         self.max_iter = max_iter
         self.epsilon = epsilon
         self.n_restarts = n_restarts
+        self.use_likelihood_selection = use_likelihood_selection
         self.learned_bn: Optional[gum.BayesNet] = None
         
-        logger.debug(f"Initialized {self.name}: max_iter={max_iter}, epsilon={epsilon}, restarts={n_restarts}")
+        logger.debug(f"Initialized {self.name}: max_iter={max_iter}, epsilon={epsilon}, "
+                    f"restarts={n_restarts}, likelihood_selection={use_likelihood_selection}")
         
     def train(self, training_data: List[SampleTuple], bn: gum.BayesNet, 
               adj_matrix: np.ndarray, n_nodes: int, **kwargs) -> None:
@@ -340,9 +345,10 @@ class DomainEMModel(BaseImputationModel):
         # Convert training data to pyAgrum format
         pyagrum_data = convert_training_data_for_pyagrum(training_data, n_nodes)
         
-        # Try multiple random restarts with fallback to iteration-based selection
+        # Try multiple random restarts with configurable selection method
         best_bn = None
-        best_likelihood = float('-inf')  # Use log-likelihood for proper model selection
+        # Initialize based on selection method: log-likelihood (higher is better) or iterations (higher is better)
+        best_likelihood = float('-inf') if self.use_likelihood_selection else 0
         fallback_candidates = []  # Store (bn, iterations) for fallback selection
         used_fallback = False  # Track whether we used iteration-based fallback
         
@@ -385,43 +391,51 @@ class DomainEMModel(BaseImputationModel):
                             pass
                         continue
                     
-                    # Try likelihood-based selection
-                    try:
-                        # Create learner to compute log-likelihood on training data
-                        likelihood_learner = gum.BNLearner(pyagrum_data, candidate_bn, ["?"])
-                        
-                        # Debug: Check learner properties
-                        logger.debug(f"Restart {restart + 1} - Learner has {likelihood_learner.nbRows()} rows, {likelihood_learner.nbCols()} cols")
-                        logger.debug(f"Restart {restart + 1} - Variable names: {likelihood_learner.names()}")
-                        
-                        # Get all variable names for complete likelihood computation
-                        all_variable_names = [str(i) for i in range(n_nodes)]
-                        log_likelihood = likelihood_learner.logLikelihood(all_variable_names)
-                        logger.debug(f"Restart {restart + 1} log-likelihood: {log_likelihood:.6f}")
-                        
-                        # Check for suspicious zero likelihood
-                        if abs(log_likelihood) < 1e-10:
-                            logger.warning(f"Restart {restart + 1}: Invalid zero log-likelihood {log_likelihood}")
-                            logger.warning(f"Discarding corrupted BN to prevent GC crash")
-                            # Immediately clean up corrupted BN to prevent GC issues
-                            try:
-                                candidate_bn = None
-                                del candidate_bn
-                            except:
-                                pass
+                    # Choose selection method based on configuration
+                    if self.use_likelihood_selection:
+                        # Try likelihood-based selection
+                        try:
+                            # Create learner to compute log-likelihood on training data
+                            likelihood_learner = gum.BNLearner(pyagrum_data, candidate_bn, ["?"])
+                            
+                            # Debug: Check learner properties
+                            logger.debug(f"Restart {restart + 1} - Learner has {likelihood_learner.nbRows()} rows, {likelihood_learner.nbCols()} cols")
+                            logger.debug(f"Restart {restart + 1} - Variable names: {likelihood_learner.names()}")
+                            
+                            # Get all variable names for complete likelihood computation
+                            all_variable_names = [str(i) for i in range(n_nodes)]
+                            log_likelihood = likelihood_learner.logLikelihood(all_variable_names)
+                            logger.debug(f"Restart {restart + 1} log-likelihood: {log_likelihood:.6f}")
+                            
+                            # Check for suspicious zero likelihood
+                            if abs(log_likelihood) < 1e-10:
+                                logger.warning(f"Restart {restart + 1}: Invalid zero log-likelihood {log_likelihood}")
+                                logger.warning(f"Discarding corrupted BN to prevent crash")
+                                # Immediately clean up corrupted BN
+                                try:
+                                    candidate_bn = None
+                                    del candidate_bn
+                                except:
+                                    pass
+                                continue
+                                
+                            # Normal likelihood-based selection
+                            if log_likelihood > best_likelihood:
+                                best_bn = candidate_bn
+                                best_likelihood = log_likelihood
+                                logger.debug(f"New best model from restart {restart + 1} (LL={log_likelihood:.6f})")
+                            
+                        except Exception as e:
+                            logger.info(f"Restart {restart + 1} - logLikelihood computation failed: {e}")
+                            logger.info(f"Restart {restart + 1} will be available for iteration-based fallback")
+                            # Continue to next restart, but keep this candidate for fallback
                             continue
-                            
-                        # Normal likelihood-based selection
-                        if log_likelihood > best_likelihood:
+                    else:
+                        # Use iteration-based selection (safer, default)
+                        if iterations > best_likelihood:  # Using best_likelihood variable to store best iterations
                             best_bn = candidate_bn
-                            best_likelihood = log_likelihood
-                            logger.debug(f"New best model from restart {restart + 1} (LL={log_likelihood:.6f})")
-                            
-                    except Exception as e:
-                        logger.info(f"Restart {restart + 1} - logLikelihood computation failed: {e}")
-                        logger.info(f"Restart {restart + 1} will be available for iteration-based fallback")
-                        # Continue to next restart, but keep this candidate for fallback
-                        continue
+                            best_likelihood = iterations
+                            logger.debug(f"New best model from restart {restart + 1} ({iterations} iterations)")
                         
             except Exception as e:
                 logger.info(f"Restart {restart + 1} - EM learning failed: {e}")
@@ -471,8 +485,10 @@ class DomainEMModel(BaseImputationModel):
         # Report final results with appropriate context
         if used_fallback:
             logger.info(f"{self.name} training completed: selected model with {best_likelihood:.0f} iterations (fallback)")
-        else:
+        elif self.use_likelihood_selection:
             logger.info(f"{self.name} training completed: best model with log-likelihood {best_likelihood:.6f}")
+        else:
+            logger.info(f"{self.name} training completed: best model with {best_likelihood:.0f} iterations")
         
         # Force garbage collection after training to clean up all restart BNs
         # Also clean up any lingering fallback candidates

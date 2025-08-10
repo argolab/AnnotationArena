@@ -227,7 +227,8 @@ class ProgressiveExperiment:
         self.test_dataset: Optional[List[SampleTuple]] = None
         
         # Domain model for baseline comparison
-        self.domain_model = DomainEMModel()
+        use_likelihood = config.get('use_likelihood_selection', False)
+        self.domain_model = DomainEMModel(use_likelihood_selection=use_likelihood)
         
         logger.info(f"Initialized experiment: {self.n_nodes} nodes, {self.max_samples} max samples")
         logger.info(f"Imputer sizes: {imputer_sizes}")
