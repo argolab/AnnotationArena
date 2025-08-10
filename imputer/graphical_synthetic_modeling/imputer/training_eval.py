@@ -499,3 +499,27 @@ def evaluate_log_loss(model: GraphImputer, test_data: List[SampleTuple],
     gc.collect()
     
     return results
+
+
+def evaluate_cross_entropy(model: torch.nn.Module, test_data: List[SampleTuple],
+                          bn: gum.BayesNet, n_nodes: int, **kwargs) -> Dict[str, Any]:
+    """
+    Evaluate neural model using cross-entropy H(p_true, q_neural).
+    
+    Args:
+        model: Trained neural imputation model
+        test_data: List of test samples with missing values
+        bn: Ground truth BayesNet for computing true posteriors
+        n_nodes: Number of nodes
+        **kwargs: Additional evaluation parameters
+        
+    Returns:
+        dict: Cross-entropy evaluation results
+    """
+    from imputer.architecture import compute_max_cpt_size
+    from imputer.cross_entropy_eval import evaluate_neural_cross_entropy
+    
+    # Compute max CPT size for this BN
+    max_cpt_size = compute_max_cpt_size(bn) if bn else 8
+    
+    return evaluate_neural_cross_entropy(model, test_data, bn, n_nodes, max_cpt_size)

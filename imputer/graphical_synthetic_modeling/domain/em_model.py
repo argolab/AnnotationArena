@@ -320,6 +320,23 @@ class DomainEMModel(BaseImputationModel):
         """
         logger.info(f"Training {self.name} on {len(training_data)} samples with {self.n_restarts} restarts")
         
+        # Adaptive configuration based on problem complexity to prevent memory issues
+        data_size = len(training_data)
+        complexity_factor = n_nodes * data_size
+        
+        if complexity_factor > 3000:  # Large problem: 10 nodes × 400+ samples
+            logger.warning(f"Large EM problem detected (complexity={complexity_factor})")
+            logger.warning(f"Reducing restarts and iterations to prevent memory corruption")
+            adaptive_restarts = min(3, self.n_restarts)  # Reduce restarts
+            adaptive_max_iter = min(50, self.max_iter)   # Reduce iterations
+            adaptive_epsilon = max(1e-2, self.epsilon)   # Looser convergence
+        else:
+            adaptive_restarts = self.n_restarts
+            adaptive_max_iter = self.max_iter
+            adaptive_epsilon = self.epsilon
+        
+        logger.debug(f"Using adaptive config: restarts={adaptive_restarts}, max_iter={adaptive_max_iter}, epsilon={adaptive_epsilon}")
+        
         # Convert training data to pyAgrum format
         pyagrum_data = convert_training_data_for_pyagrum(training_data, n_nodes)
         
@@ -329,8 +346,8 @@ class DomainEMModel(BaseImputationModel):
         fallback_candidates = []  # Store (bn, iterations) for fallback selection
         used_fallback = False  # Track whether we used iteration-based fallback
         
-        for restart in range(self.n_restarts):
-            logger.debug(f"EM restart {restart + 1}/{self.n_restarts}")
+        for restart in range(adaptive_restarts):
+            logger.debug(f"EM restart {restart + 1}/{adaptive_restarts}")
             
             # Create fresh BN structure for this restart (don't modify the original)
             restart_bn = create_pyagrum_bn_from_adjacency(adj_matrix)
@@ -345,14 +362,28 @@ class DomainEMModel(BaseImputationModel):
                 # EM learning with exception handling
                 logger.debug(f"Learning EM parameters with seed {restart_seed}")
                 candidate_bn, iterations = learn_with_pyagrum_em(
-                    restart_bn, pyagrum_data, self.max_iter, self.epsilon
+                    restart_bn, pyagrum_data, adaptive_max_iter, adaptive_epsilon
                 )
                 
                 logger.debug(f"Restart {restart + 1} completed in {iterations} iterations")
                 
                 if candidate_bn is not None:
-                    # Store for potential fallback
-                    fallback_candidates.append((candidate_bn, iterations))
+                    # Validate BN before storing to prevent corrupted objects
+                    try:
+                        # Quick validation - check if we can access basic properties
+                        _ = candidate_bn.size()
+                        _ = list(candidate_bn.nodes())
+                        # Store for potential fallback only if valid
+                        fallback_candidates.append((candidate_bn, iterations))
+                    except Exception as validation_error:
+                        logger.warning(f"Restart {restart + 1}: BN validation failed: {validation_error}")
+                        logger.warning(f"Discarding invalid BN")
+                        try:
+                            candidate_bn = None
+                            del candidate_bn
+                        except:
+                            pass
+                        continue
                     
                     # Try likelihood-based selection
                     try:
@@ -371,7 +402,13 @@ class DomainEMModel(BaseImputationModel):
                         # Check for suspicious zero likelihood
                         if abs(log_likelihood) < 1e-10:
                             logger.warning(f"Restart {restart + 1}: Invalid zero log-likelihood {log_likelihood}")
-                            logger.warning(f"Will be available for iteration-based fallback")
+                            logger.warning(f"Discarding corrupted BN to prevent GC crash")
+                            # Immediately clean up corrupted BN to prevent GC issues
+                            try:
+                                candidate_bn = None
+                                del candidate_bn
+                            except:
+                                pass
                             continue
                             
                         # Normal likelihood-based selection
@@ -391,11 +428,24 @@ class DomainEMModel(BaseImputationModel):
                 # Continue to next restart
                 continue
             finally:
-                # Clean up restart BN to prevent memory accumulation
+                # Clean up restart BN and any pyAgrum objects to prevent memory accumulation
                 try:
+                    # Clear any inference engines or internal state
+                    if 'restart_bn' in locals():
+                        restart_bn = None
+                    if 'likelihood_learner' in locals():
+                        del likelihood_learner
                     del restart_bn
                 except:
                     pass
+                
+                # Force garbage collection after each restart to prevent circular references
+                gc.collect()
+                
+                # For large problems, add extra safety delay to let memory settle
+                if complexity_factor > 3000:
+                    import time
+                    time.sleep(0.1)  # 100ms delay for memory stabilization
         
         # If no valid likelihood-based selection, fall back to iteration-based selection
         if best_bn is None and fallback_candidates:
@@ -425,6 +475,15 @@ class DomainEMModel(BaseImputationModel):
             logger.info(f"{self.name} training completed: best model with log-likelihood {best_likelihood:.6f}")
         
         # Force garbage collection after training to clean up all restart BNs
+        # Also clean up any lingering fallback candidates
+        for candidate_bn, _ in fallback_candidates:
+            try:
+                if candidate_bn is not best_bn:  # Don't delete the selected model
+                    candidate_bn = None
+            except:
+                pass
+        fallback_candidates.clear()
+        
         gc.collect()
         
     def evaluate(self, test_data: List[SampleTuple], bn: gum.BayesNet, 
@@ -621,6 +680,32 @@ class DomainEMModel(BaseImputationModel):
         gc.collect()
         
         return results
+    
+    def evaluate_cross_entropy(self, test_data: List[SampleTuple], true_bn: gum.BayesNet, 
+                              n_nodes: int, **kwargs) -> Dict[str, Any]:
+        """
+        Evaluate cross-entropy: H(p_true, q_learned).
+        
+        Args:
+            test_data: List of test samples with missing values
+            true_bn: Ground truth BayesNet for computing true posteriors
+            n_nodes: Number of nodes
+            **kwargs: Additional evaluation parameters (unused)
+            
+        Returns:
+            dict: Cross-entropy evaluation results
+            
+        Raises:
+            ValueError: If model is not trained
+        """
+        if not self.is_trained:
+            raise ValueError("Model must be trained before cross-entropy evaluation")
+            
+        logger.debug(f"Evaluating {self.name} cross-entropy on {len(test_data)} test samples")
+        
+        # Use the cross-entropy evaluation function
+        from imputer.cross_entropy_eval import evaluate_em_cross_entropy
+        return evaluate_em_cross_entropy(self.learned_bn, test_data, true_bn, n_nodes)
     
     def reset(self) -> None:
         """Reset model parameters for retraining."""

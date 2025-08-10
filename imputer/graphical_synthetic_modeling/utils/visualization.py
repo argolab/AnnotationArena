@@ -523,6 +523,182 @@ def create_unified_scatterplots(results, output_dir="improved_plots", missing_ra
     print(f"Unified scatterplots saved to {save_path}")
 
 
+def create_gibbs_inequality_scatterplots(results, output_dir="plots", missing_rate=None):
+    """
+    Create Gibbs inequality scatterplots: Cross-entropy vs True entropy.
+    
+    The Gibbs inequality states H(p_true) ≤ H(p_true, q_model), so all points should
+    be above or on the perfect agreement diagonal. Shows distributional agreement
+    rather than point predictions like log-loss plots.
+    
+    Creates 3-subplot figure:
+    1. Neural Cross-entropy vs True Entropy (Budget Progression)
+    2. Neural Cross-entropy vs True Entropy (Imputer Size) 
+    3. EM Cross-entropy vs True Entropy (Budget Progression)
+    
+    Args:
+        results: Results dictionary from experiment_runner
+        output_dir: Directory to save plots
+        missing_rate: Missing rate for filename suffix
+    """
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Extract all cross-entropy vs entropy data for consistent axis scaling
+    neural_entropy_data = []  # [(true_entropy, cross_entropy, budget, imputer_size)]
+    em_entropy_data = []      # [(true_entropy, cross_entropy, budget)]
+    
+    budgets = set()
+    imputer_sizes = set()
+    
+    for key, policy_results in results.items():
+        experiment_results = policy_results['results']
+        imputer_size = policy_results.get('imputer_size', 'Unknown')
+        
+        for step_result in experiment_results:
+            budget = step_result['budget']
+            budgets.add(budget)
+            imputer_sizes.add(imputer_size)
+            
+            # Get individual sample cross-entropy and true entropy values
+            neural_cross_entropy_values = step_result.get('neural_cross_entropy_values', [])
+            domain_cross_entropy_values = step_result.get('domain_cross_entropy_values', [])
+            true_entropy_values = step_result.get('true_entropy_values', [])
+            
+            # Note: true_entropy_values is the same for both neural and EM since it only depends on true posterior
+            
+            # Collect neural cross-entropy vs true entropy pairs
+            min_len_neural = min(len(neural_cross_entropy_values), len(true_entropy_values))
+            for i in range(min_len_neural):
+                true_ent = true_entropy_values[i]
+                cross_ent = neural_cross_entropy_values[i]
+                
+                if not (np.isnan(true_ent) or np.isinf(true_ent) or 
+                       np.isnan(cross_ent) or np.isinf(cross_ent)):
+                    neural_entropy_data.append((true_ent, cross_ent, budget, imputer_size))
+            
+            # Collect EM cross-entropy vs true entropy pairs  
+            min_len_em = min(len(domain_cross_entropy_values), len(true_entropy_values))
+            for i in range(min_len_em):
+                true_ent = true_entropy_values[i]
+                cross_ent = domain_cross_entropy_values[i]
+                
+                if not (np.isnan(true_ent) or np.isinf(true_ent) or 
+                       np.isnan(cross_ent) or np.isinf(cross_ent)):
+                    em_entropy_data.append((true_ent, cross_ent, budget))
+    
+    if not neural_entropy_data and not em_entropy_data:
+        logger.warning("No valid cross-entropy vs entropy data for Gibbs inequality plots")
+        return
+    
+    # Get consistent axis limits across all subplots
+    all_true_entropy = ([x[0] for x in neural_entropy_data] + [x[0] for x in em_entropy_data])
+    all_cross_entropy = ([x[1] for x in neural_entropy_data] + [x[1] for x in em_entropy_data])
+    
+    if not all_true_entropy or not all_cross_entropy:
+        logger.warning("Empty entropy data for Gibbs inequality plots")
+        return
+    
+    min_entropy = min(min(all_true_entropy), min(all_cross_entropy))
+    max_entropy = max(max(all_true_entropy), max(all_cross_entropy))
+    axis_margin = (max_entropy - min_entropy) * 0.05
+    axis_min, axis_max = min_entropy - axis_margin, max_entropy + axis_margin
+    
+    # Create 3-subplot figure
+    fig, (ax1, ax2, ax3) = plt.subplots(1, 3, figsize=(18, 5))
+    
+    # Consistent scatter parameters
+    scatter_size = 20
+    scatter_alpha = 0.3
+    
+    budgets_list = sorted(budgets)
+    budget_min, budget_max = min(budgets_list), max(budgets_list)
+    
+    # Subplot 1: Neural Cross-entropy vs True Entropy (Budget Progression)
+    if neural_entropy_data:
+        true_ent_vals = [x[0] for x in neural_entropy_data]
+        cross_ent_vals = [x[1] for x in neural_entropy_data]
+        budget_vals = [x[2] for x in neural_entropy_data]
+        
+        scatter1 = ax1.scatter(true_ent_vals, cross_ent_vals, c=budget_vals, 
+                              cmap='viridis', alpha=scatter_alpha, s=scatter_size, 
+                              vmin=budget_min, vmax=budget_max)
+        
+        # Add colorbar
+        cbar1 = plt.colorbar(scatter1, ax=ax1)
+        cbar1.set_label('Budget (Training Samples)', fontsize=10)
+    
+    # Perfect agreement line (Gibbs inequality boundary: cross_entropy = true_entropy)
+    ax1.plot([axis_min, axis_max], [axis_min, axis_max], 'k--', alpha=0.7, 
+            label='Perfect Agreement', linewidth=2)
+    
+    ax1.set_xlim(axis_min, axis_max)
+    ax1.set_ylim(axis_min, axis_max)
+    ax1.set_xlabel('True Entropy H(p_true)', fontsize=12)
+    ax1.set_ylabel('Cross-Entropy H(p_true, q_neural)', fontsize=12)
+    ax1.set_title('Neural vs True (Budget Progression)', fontsize=12)
+    ax1.legend(fontsize=9)
+    ax1.grid(True, alpha=0.3)
+    
+    # Subplot 2: Neural Cross-entropy vs True Entropy (Imputer Size)
+    if neural_entropy_data:
+        size_color_values = {'Tiny': 0.2, 'Small': 0.5, 'Large': 0.8}
+        size_vals = [size_color_values.get(x[3], 0.5) for x in neural_entropy_data]
+        
+        scatter2 = ax2.scatter(true_ent_vals, cross_ent_vals, c=size_vals, 
+                              cmap='Reds', alpha=scatter_alpha, s=scatter_size, vmin=0, vmax=1)
+        
+        # Add discrete legend
+        for size in sorted(set([x[3] for x in neural_entropy_data])):
+            if size in size_color_values:
+                color_val = size_color_values[size]
+                color = plt.cm.Reds(color_val)
+                ax2.scatter([], [], c=[color], label=f'{size} Imputer', s=50)
+    
+    ax2.plot([axis_min, axis_max], [axis_min, axis_max], 'k--', alpha=0.7,
+            label='Perfect Agreement', linewidth=2)
+    
+    ax2.set_xlim(axis_min, axis_max)
+    ax2.set_ylim(axis_min, axis_max)
+    ax2.set_xlabel('True Entropy H(p_true)', fontsize=12)
+    ax2.set_ylabel('Cross-Entropy H(p_true, q_neural)', fontsize=12)
+    ax2.set_title('Neural vs True (Imputer Size)', fontsize=12)
+    ax2.legend(fontsize=9)
+    ax2.grid(True, alpha=0.3)
+    
+    # Subplot 3: EM Cross-entropy vs True Entropy (Budget Progression)
+    if em_entropy_data:
+        true_ent_vals_em = [x[0] for x in em_entropy_data]
+        cross_ent_vals_em = [x[1] for x in em_entropy_data]
+        budget_vals_em = [x[2] for x in em_entropy_data]
+        
+        scatter3 = ax3.scatter(true_ent_vals_em, cross_ent_vals_em, c=budget_vals_em, 
+                              cmap='viridis', alpha=scatter_alpha, s=scatter_size,
+                              vmin=budget_min, vmax=budget_max)
+        
+        # Add colorbar
+        cbar3 = plt.colorbar(scatter3, ax=ax3)
+        cbar3.set_label('Budget (Training Samples)', fontsize=10)
+    
+    ax3.plot([axis_min, axis_max], [axis_min, axis_max], 'k--', alpha=0.7,
+            label='Perfect Agreement', linewidth=2)
+    
+    ax3.set_xlim(axis_min, axis_max)
+    ax3.set_ylim(axis_min, axis_max)
+    ax3.set_xlabel('True Entropy H(p_true)', fontsize=12)
+    ax3.set_ylabel('Cross-Entropy H(p_true, q_em)', fontsize=12)
+    ax3.set_title('EM vs True (Budget Progression)', fontsize=12)
+    ax3.legend(fontsize=9)
+    ax3.grid(True, alpha=0.3)
+    
+    plt.tight_layout()
+    
+    missing_suffix = f"_missing_{missing_rate}" if missing_rate is not None else ""
+    save_path = f"{output_dir}/gibbs_inequality_scatterplots{missing_suffix}.png"
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
+    logger.info(f"Gibbs inequality scatterplots saved to {save_path}")
+    plt.close()
+
+
 def create_experiment_report(results: Dict[str, Any], output_dir: str = "plots",
                            missing_rate: Optional[float] = None) -> None:
     """
@@ -550,6 +726,12 @@ def create_experiment_report(results: Dict[str, Any], output_dir: str = "plots",
     try:
         create_unified_scatterplots(results, output_dir, missing_rate)
     except:
+        pass
+
+    try:
+        create_gibbs_inequality_scatterplots(results, output_dir, missing_rate)
+    except Exception as e:
+        logger.warning(f"Failed to create Gibbs inequality plots: {e}")
         pass
     
     logger.info(f"All plots saved to {output_dir}/ directory")

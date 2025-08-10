@@ -14,7 +14,7 @@ from pathlib import Path
 from data.graph_generator import generate_experiment_graph
 from data.sample_generator import generate_sample_pool, generate_test_dataset
 from imputer.architecture import create_model, DEVICE, SampleTuple
-from imputer.training_eval import train_model, evaluate_model, evaluate_log_loss, ImputationDataset, collate_batch
+from imputer.training_eval import train_model, evaluate_model, evaluate_log_loss, evaluate_cross_entropy, ImputationDataset, collate_batch
 from domain.em_model import DomainEMModel
 from experiments.policies import BaseObservationPolicy, SampleTuple
 
@@ -69,6 +69,9 @@ def aggregate_multi_graph_results(graph_results: List[Dict[str, Dict[str, Any]]]
             neural_log_losses = []
             domain_log_losses = []
             true_log_losses = []
+            neural_cross_entropies = []
+            domain_cross_entropies = []
+            true_entropies = []
             neural_times = []
             domain_times = []
             budgets = []
@@ -78,6 +81,9 @@ def aggregate_multi_graph_results(graph_results: List[Dict[str, Dict[str, Any]]]
             neural_log_loss_arrays = []
             domain_log_loss_arrays = []
             true_log_loss_arrays = []
+            neural_cross_entropy_arrays = []
+            domain_cross_entropy_arrays = []
+            true_entropy_arrays = []
             
             for graph_progressive_results in all_progressive_results:
                 if step_idx < len(graph_progressive_results):
@@ -87,6 +93,9 @@ def aggregate_multi_graph_results(graph_results: List[Dict[str, Dict[str, Any]]]
                     neural_log_losses.append(step_result.get('neural_log_loss', float('inf')))
                     domain_log_losses.append(step_result.get('domain_log_loss', float('inf')))
                     true_log_losses.append(step_result.get('true_model_log_loss', float('inf')))
+                    neural_cross_entropies.append(step_result.get('mean_cross_entropy', float('inf')))
+                    domain_cross_entropies.append(step_result.get('mean_cross_entropy', float('inf')))
+                    true_entropies.append(step_result.get('mean_true_entropy', float('inf')))
                     neural_times.append(step_result.get('neural_time', 0.0))
                     domain_times.append(step_result.get('domain_time', 0.0))
                     budgets.append(step_result.get('budget', 0))
@@ -96,6 +105,9 @@ def aggregate_multi_graph_results(graph_results: List[Dict[str, Dict[str, Any]]]
                     neural_log_loss_arrays.extend(step_result.get('neural_log_loss_values', []))
                     domain_log_loss_arrays.extend(step_result.get('domain_log_loss_values', []))
                     true_log_loss_arrays.extend(step_result.get('true_model_log_loss_values', []))
+                    neural_cross_entropy_arrays.extend(step_result.get('neural_cross_entropy_values', []))
+                    domain_cross_entropy_arrays.extend(step_result.get('domain_cross_entropy_values', []))
+                    true_entropy_arrays.extend(step_result.get('true_entropy_values', []))
             
             # Compute aggregated statistics
             aggregated_step = {
@@ -122,12 +134,23 @@ def aggregate_multi_graph_results(graph_results: List[Dict[str, Dict[str, Any]]]
                 'true_model_log_loss': np.mean(true_log_losses) if true_log_losses else float('inf'),
                 'true_model_log_loss_std': np.std(true_log_losses) if len(true_log_losses) > 1 else 0.0,
                 
+                # Cross-entropy metrics
+                'neural_cross_entropy': np.mean(neural_cross_entropies) if neural_cross_entropies else float('inf'),
+                'neural_cross_entropy_std': np.std(neural_cross_entropies) if len(neural_cross_entropies) > 1 else 0.0,
+                'domain_cross_entropy': np.mean(domain_cross_entropies) if domain_cross_entropies else float('inf'),
+                'domain_cross_entropy_std': np.std(domain_cross_entropies) if len(domain_cross_entropies) > 1 else 0.0,
+                'true_entropy': np.mean(true_entropies) if true_entropies else float('inf'),
+                'true_entropy_std': np.std(true_entropies) if len(true_entropies) > 1 else 0.0,
+                
                 # Raw values for detailed analysis (flattened across graphs)
                 'neural_kl_values': neural_kls,
                 'domain_kl_values': domain_kls,
                 'neural_log_loss_values': neural_log_loss_arrays,  # Individual sample arrays
                 'domain_log_loss_values': domain_log_loss_arrays,  # Individual sample arrays
                 'true_model_log_loss_values': true_log_loss_arrays,  # Individual sample arrays
+                'neural_cross_entropy_values': neural_cross_entropy_arrays,  # Individual sample arrays
+                'domain_cross_entropy_values': domain_cross_entropy_arrays,  # Individual sample arrays
+                'true_entropy_values': true_entropy_arrays,  # Individual sample arrays
                 
                 # Evaluation counts
                 'neural_n_evaluations': len([x for x in neural_kls if not np.isinf(x)]),
@@ -347,10 +370,16 @@ class ProgressiveExperiment:
                     trained_model, self.test_dataset, self.bn, self.n_nodes
                 )
                 
+                # Evaluate neural model (cross-entropy)
+                logger.debug(f"Evaluating {imputer_size} neural imputer cross-entropy")
+                neural_cross_entropy_results = evaluate_cross_entropy(
+                    trained_model, self.test_dataset, self.bn, self.n_nodes
+                )
+                
                 neural_time = time.time() - neural_start
                 
                 # Combine results
-                combined_neural_results = {**neural_results, **neural_log_loss_results}
+                combined_neural_results = {**neural_results, **neural_log_loss_results, **neural_cross_entropy_results}
                 neural_results_by_size[imputer_size] = combined_neural_results
                 neural_times_by_size[imputer_size] = neural_time
                 
@@ -370,13 +399,20 @@ class ProgressiveExperiment:
             logger.debug("Evaluating domain EM model log-loss") 
             domain_log_loss_results = self.domain_model.evaluate_log_loss(self.test_dataset, self.bn, self.n_nodes)
             
+            logger.debug("Evaluating domain EM model cross-entropy")
+            domain_cross_entropy_results = self.domain_model.evaluate_cross_entropy(self.test_dataset, self.bn, self.n_nodes)
+            
             domain_time = time.time() - domain_start
             
             # Combine domain results
-            combined_domain_results = {**domain_results, **domain_log_loss_results}
+            combined_domain_results = {**domain_results, **domain_log_loss_results, **domain_cross_entropy_results}
             
             logger.info(f"  Domain EM: KL={domain_results.get('mean_kl', float('inf')):.4f}, "
                        f"LogLoss={domain_log_loss_results.get('mean_log_loss', float('inf')):.4f}, time={domain_time:.1f}s")
+            
+            # Force garbage collection after EM training to prevent memory accumulation
+            import gc
+            gc.collect()
             
             # Evaluate true model log-loss (ground truth baseline)
             logger.debug("Evaluating true model log-loss")
@@ -417,7 +453,11 @@ class ProgressiveExperiment:
                     'neural_kl_distribution': neural_results.get('kl_distribution', []),
                     'neural_log_loss_values': neural_results.get('log_loss_values', []),
                     'domain_log_loss_values': combined_domain_results.get('log_loss_values', []),
-                    'true_model_log_loss_values': true_model_log_loss_results.get('log_loss_values', [])
+                    'true_model_log_loss_values': true_model_log_loss_results.get('log_loss_values', []),
+                    # Cross-entropy values
+                    'neural_cross_entropy_values': combined_neural_results.get('cross_entropy_values', []),
+                    'domain_cross_entropy_values': combined_domain_results.get('cross_entropy_values', []),
+                    'true_entropy_values': combined_neural_results.get('true_entropy_values', [])
                 }
                 
                 results_by_size[imputer_size].append(step_result)
