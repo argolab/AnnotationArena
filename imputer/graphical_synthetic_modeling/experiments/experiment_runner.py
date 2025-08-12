@@ -357,7 +357,7 @@ class ProgressiveExperiment:
                 logger.debug(f"Training {imputer_size} neural imputer")
                 trained_model = train_model(
                     neural_model, train_loader, val_loader,
-                    epochs=100, lr=1e-4, patience=30
+                    epochs=100, lr=1e-4, patience=45
                 )
                 
                 # Evaluate neural model (KL divergence)

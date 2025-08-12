@@ -285,7 +285,7 @@ class DomainEMModel(BaseImputationModel):
     from incomplete data. Provides both KL divergence and log-loss evaluation.
     """
     
-    def __init__(self, max_iter: int = 100, epsilon: float = 1e-3, n_restarts: int = 5, 
+    def __init__(self, max_iter: int = 100, epsilon: float = 1e-3, n_restarts: int = 3, 
                  use_likelihood_selection: bool = False):
         """
         Initialize EM model with configuration parameters.
@@ -329,16 +329,9 @@ class DomainEMModel(BaseImputationModel):
         data_size = len(training_data)
         complexity_factor = n_nodes * data_size
         
-        if complexity_factor > 3000:  # Large problem: 10 nodes × 400+ samples
-            logger.warning(f"Large EM problem detected (complexity={complexity_factor})")
-            logger.warning(f"Reducing restarts and iterations to prevent memory corruption")
-            adaptive_restarts = min(3, self.n_restarts)  # Reduce restarts
-            adaptive_max_iter = min(50, self.max_iter)   # Reduce iterations
-            adaptive_epsilon = max(1e-2, self.epsilon)   # Looser convergence
-        else:
-            adaptive_restarts = self.n_restarts
-            adaptive_max_iter = self.max_iter
-            adaptive_epsilon = self.epsilon
+        adaptive_restarts = self.n_restarts
+        adaptive_max_iter = self.max_iter
+        adaptive_epsilon = self.epsilon
         
         logger.debug(f"Using adaptive config: restarts={adaptive_restarts}, max_iter={adaptive_max_iter}, epsilon={adaptive_epsilon}")
         

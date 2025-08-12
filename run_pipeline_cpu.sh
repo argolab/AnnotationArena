@@ -6,9 +6,9 @@
 
 #SBATCH --job-name=ActiveLearner
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=12GB
+#SBATCH --mem-per-cpu=24GB
 #SBATCH --gpus=1
-#SBATCH --partition=gpu
+#SBATCH --partition=gpu-a100
 #SBATCH --account=a100acct
 #SBATCH --mail-user="psingh54@jhu.edu"
 
@@ -17,4 +17,5 @@ module load cuda/12.1
 
 conda activate llm_rubric_env
 
-python /export/fs06/psingh54/AnnotationArena/imputer/progressive_imputation/main.py
+python /Users/prabhavsingh/Documents/JHU/JHUResearch/AnnotationArena/imputer/graphical_synthetic_modeling/main.py --node-sizes 25 10 \
+ --imputer-sizes Tiny Small Large --max-samples 2800 --test-samples 250 --start-examples 10 --increment 300 --missing-rates 0.7 0.5 --n-graphs 3
