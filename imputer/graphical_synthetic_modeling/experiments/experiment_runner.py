@@ -204,6 +204,7 @@ class ProgressiveExperiment:
                 - max_samples: Maximum training samples available
                 - test_samples: Number of test samples
                 - seed: Random seed
+                - alpha: Optional Dirichlet concentration parameter for CPT generation
             imputer_sizes: List of imputer model sizes ["Tiny", "Small", "Large"]
                           If None, defaults to ["Large"]
         """
@@ -214,6 +215,7 @@ class ProgressiveExperiment:
         self.max_samples = config['max_samples']
         self.test_samples = config['test_samples']
         self.seed = config['seed']
+        self.alpha = config.get('alpha', None)  # Dirichlet concentration parameter (None = default CPTs)
         
         # Default to single Large imputer if not specified
         if imputer_sizes is None:
@@ -246,7 +248,7 @@ class ProgressiveExperiment:
         # Generate graph structure
         logger.debug(f"Generating graph: {self.n_nodes} nodes, {self.target_parents} parents")
         self.bn, self.adj_matrix = generate_experiment_graph(
-            self.n_nodes, self.target_parents, self.seed
+            self.n_nodes, self.target_parents, self.seed, self.alpha
         )
         
         # Generate sample pool with missing data for progressive experiments
@@ -552,11 +554,20 @@ def run_experiment_suite(node_sizes: List[int], target_parents: float = 1.0,
         logger.info(f"GRAPH SIZE: {n_nodes} nodes")
         logger.info(f"{'='*60}")
         
+        # Define alpha candidates for Dirichlet CPT sampling (emphasizing challenging sparse cases)
+        alpha_candidates = [0.1, 0.2, 0.3, 0.5, 1.0, 2.0]
+        
         # Run multiple graph instances for statistical analysis
         graph_results = []
         
         for graph_idx in range(n_graphs):
-            logger.info(f"\\nGraph instance {graph_idx + 1}/{n_graphs} for {n_nodes} nodes")
+            # Alpha selection: None for single graph (backward compatibility), random for multi-graph
+            if n_graphs == 1:
+                alpha = None  # Use current generateCPT() behavior
+                logger.info(f"\\nGraph instance {graph_idx + 1}/{n_graphs} for {n_nodes} nodes (using default CPT generation)")
+            else:
+                alpha = np.random.choice(alpha_candidates)
+                logger.info(f"\\nGraph instance {graph_idx + 1}/{n_graphs} for {n_nodes} nodes (using Dirichlet α={alpha:.1f})")
             
             # Configuration for this graph instance
             config = {
@@ -565,7 +576,8 @@ def run_experiment_suite(node_sizes: List[int], target_parents: float = 1.0,
                 'missing_rate': missing_rate,
                 'max_samples': max_samples,
                 'test_samples': test_samples,
-                'seed': 42 + n_nodes * 1000 + graph_idx * 10  # Unique seed per graph instance
+                'seed': 42 + n_nodes * 1000 + graph_idx * 10,  # Unique seed per graph instance
+                'alpha': alpha  # Add alpha parameter for Dirichlet CPT sampling
             }
             
             # Create and setup experiment

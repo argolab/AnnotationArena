@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 
-def generate_direct_bn_structure(n_nodes: int, target_parents: float = 1.5, seed: int = 42) -> gum.BayesNet:
+def generate_direct_bn_structure(n_nodes: int, target_parents: float = 1.5, seed: int = 42, alpha: Optional[float] = None) -> gum.BayesNet:
     """
     Generate Bayesian Network directly with O(1) parents using min(1, c/(i-1)) method.
     
@@ -35,9 +35,11 @@ def generate_direct_bn_structure(n_nodes: int, target_parents: float = 1.5, seed
         n_nodes: Number of nodes in the network
         target_parents: Target average number of parents per node (c parameter)
         seed: Random seed for reproducible generation
+        alpha: Dirichlet concentration parameter for CPT generation.
+               If None, uses pyAgrum's default random CPT generation.
         
     Returns:
-        gum.BayesNet: Generated Bayesian Network with random CPDs
+        gum.BayesNet: Generated Bayesian Network with CPDs
     """
     logger.debug(f"Generating direct BN with {n_nodes} nodes, target_parents={target_parents}, seed={seed}")
     
@@ -63,11 +65,15 @@ def generate_direct_bn_structure(n_nodes: int, target_parents: float = 1.5, seed
                 bn.addArc(str(potential_parent), str(child))
                 edges_added += 1
     
-    # Generate random CPDs for all nodes
-    for node_id in bn.nodes():
-        bn.generateCPT(node_id)
-    
-    logger.debug(f"Generated BN: {bn.size()} nodes, {edges_added} arcs")
+    # Generate CPDs: either Dirichlet sampling or default random
+    if alpha is not None:
+        assign_dirichlet_cpts(bn, alpha, seed + 10000)  # Separate seed for CPT sampling
+        logger.debug(f"Generated BN with Dirichlet CPTs (α={alpha:.1f}): {bn.size()} nodes, {edges_added} arcs")
+    else:
+        # Use pyAgrum's default random CPT generation
+        for node_id in bn.nodes():
+            bn.generateCPT(node_id)
+        logger.debug(f"Generated BN with default CPTs: {bn.size()} nodes, {edges_added} arcs")
     
     # Log parent count statistics for verification
     parent_counts = []
@@ -79,6 +85,58 @@ def generate_direct_bn_structure(n_nodes: int, target_parents: float = 1.5, seed
     logger.debug(f"Average parents per node: {avg_parents:.2f}")
     
     return bn
+
+
+def assign_dirichlet_cpts(bn: gum.BayesNet, alpha: float, seed: int) -> None:
+    """
+    Assign Dirichlet-sampled CPTs to all nodes in the Bayesian Network.
+    
+    For each node, samples from Dirichlet distribution for each parent configuration.
+    Uses the dictionary-based CPT assignment method from pyAgrum.
+    
+    Args:
+        bn: pyAgrum BayesNet with structure already defined
+        alpha: Dirichlet concentration parameter (lower = more sparse)
+        seed: Random seed for reproducible CPT sampling
+    """
+    import itertools
+    
+    logger.debug(f"Assigning Dirichlet CPTs with α={alpha:.1f}, seed={seed}")
+    
+    # Set numpy seed for Dirichlet sampling
+    np.random.seed(seed)
+    
+    for node_idx in bn.nodes():
+        node_str = str(node_idx)
+        parents = list(bn.parents(node_str))
+        
+        if not parents:
+            # Root node: single Dirichlet sample for binary states
+            dirichlet_probs = np.random.dirichlet([alpha, alpha])
+            bn.cpt(node_str).fillWith(dirichlet_probs.tolist())
+            logger.debug(f"Node {node_str} (root): Dirichlet CPT = {dirichlet_probs}")
+            
+        else:
+            # Node with parents: use dictionary method for each parent configuration
+            logger.debug(f"Node {node_str} has parents: {parents}")
+            
+            # Generate all possible parent configurations (binary nodes)
+            parent_configs = list(itertools.product([0, 1], repeat=len(parents)))
+            
+            for config in parent_configs:
+                # Create evidence dictionary for this parent configuration
+                # IMPORTANT: parent keys must be strings (variable names), values can be ints
+                evidence = {str(parents[i]): config[i] for i in range(len(parents))}
+                
+                # Sample Dirichlet distribution for this configuration
+                dirichlet_probs = np.random.dirichlet([alpha, alpha])
+                
+                # Set CPT values using pyAgrum's dictionary method
+                bn.cpt(node_str)[evidence] = dirichlet_probs.tolist()
+                
+                logger.debug(f"Node {node_str}, parents {evidence}: Dirichlet CPT = {dirichlet_probs}")
+    
+    logger.debug(f"Completed Dirichlet CPT assignment for {bn.size()} nodes")
 
 
 def create_adjacency_matrix(bn: gum.BayesNet, n_nodes: int) -> np.ndarray:
@@ -185,7 +243,7 @@ def create_parameter_embeddings_with_masking(bn: gum.BayesNet, adj_matrix: np.nd
 
 
 def generate_experiment_graph(n_nodes: int, target_parents: float = 1.0, 
-                            seed: int = 42) -> Tuple[gum.BayesNet, np.ndarray]:
+                            seed: int = 42, alpha: Optional[float] = None) -> Tuple[gum.BayesNet, np.ndarray]:
     """
     Generate a complete Bayesian Network for progressive imputation experiments.
     
@@ -196,14 +254,19 @@ def generate_experiment_graph(n_nodes: int, target_parents: float = 1.0,
         n_nodes: Number of nodes in the graph
         target_parents: Target number of parents per node (O(1) parents)
         seed: Random seed for reproducible generation
+        alpha: Dirichlet concentration parameter for CPT generation. 
+               If None, uses pyAgrum's default random CPT generation.
         
     Returns:
         Tuple[gum.BayesNet, np.ndarray]: BayesNet object and adjacency matrix
     """
-    logger.info(f"Generating experiment graph: {n_nodes} nodes, target_parents={target_parents}, seed={seed}")
+    if alpha is not None:
+        logger.info(f"Generating experiment graph: {n_nodes} nodes, target_parents={target_parents}, seed={seed}, alpha={alpha:.1f}")
+    else:
+        logger.info(f"Generating experiment graph: {n_nodes} nodes, target_parents={target_parents}, seed={seed} (default CPTs)")
     
     # Generate BN structure using direct method
-    bn = generate_direct_bn_structure(n_nodes, target_parents, seed)
+    bn = generate_direct_bn_structure(n_nodes, target_parents, seed, alpha)
     adj_matrix = create_adjacency_matrix(bn, n_nodes)
     
     # Log final statistics
