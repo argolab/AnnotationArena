@@ -63,19 +63,19 @@ def setup_logging(output_dir: Path, log_level: str = "INFO") -> None:
     root_logger.addHandler(console_handler)
     
     # Info log file (INFO and above) 
-    info_handler = logging.FileHandler(logs_dir / "info.log")
+    info_handler = logging.FileHandler(logs_dir / "info_2.log")
     info_handler.setLevel(logging.INFO)
     info_handler.setFormatter(detailed_formatter)
     root_logger.addHandler(info_handler)
     
     # Debug log file (DEBUG and above)
-    debug_handler = logging.FileHandler(logs_dir / "debug.log")
+    debug_handler = logging.FileHandler(logs_dir / "debug_2.log")
     debug_handler.setLevel(logging.DEBUG)
     debug_handler.setFormatter(detailed_formatter)
     root_logger.addHandler(debug_handler)
     
     # Error log file (ERROR only)
-    error_handler = logging.FileHandler(logs_dir / "error.log")
+    error_handler = logging.FileHandler(logs_dir / "error_2.log")
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(detailed_formatter)
     root_logger.addHandler(error_handler)
@@ -333,7 +333,7 @@ def create_visualizations(results: Dict[Any, Dict[str, Any]], config: Dict[str, 
     """
     logger = logging.getLogger(__name__)
     output_dir = Path(config['output_dir'])
-    plots_dir = output_dir / "plots"
+    plots_dir = output_dir / "plots/minor"
     
     logger.info("Generating visualization report...")
     

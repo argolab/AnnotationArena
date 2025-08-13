@@ -17,5 +17,5 @@ module load cuda/12.1
 
 conda activate llm_rubric_env
 
-python /Users/prabhavsingh/Documents/JHU/JHUResearch/AnnotationArena/imputer/graphical_synthetic_modeling/main.py --node-sizes 25 10 \
- --imputer-sizes Tiny Small Large --max-samples 2800 --test-samples 250 --start-examples 10 --increment 300 --missing-rates 0.7 0.5 --n-graphs 3
+python /export/fs06/psingh54/AnnotationArena/imputer/graphical_synthetic_modeling/main.py --node-sizes 5 7 10 \
+ --imputer-sizes Tiny Small Large --max-samples 2000 --test-samples 250 --start-examples 10 --increment 200 --missing-rates 0.5 --n-graphs 3

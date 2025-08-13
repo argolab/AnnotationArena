@@ -555,7 +555,7 @@ def run_experiment_suite(node_sizes: List[int], target_parents: float = 1.0,
         logger.info(f"{'='*60}")
         
         # Define alpha candidates for Dirichlet CPT sampling (emphasizing challenging sparse cases)
-        alpha_candidates = [0.1, 0.2, 0.3, 0.5, 1.0, 2.0]
+        alpha_candidates = [0.1, 0.3, 0.7, 1.0, 2.0]
         
         # Run multiple graph instances for statistical analysis
         graph_results = []
@@ -576,7 +576,7 @@ def run_experiment_suite(node_sizes: List[int], target_parents: float = 1.0,
                 'missing_rate': missing_rate,
                 'max_samples': max_samples,
                 'test_samples': test_samples,
-                'seed': 42 + n_nodes * 1000 + graph_idx * 10,  # Unique seed per graph instance
+                'seed': 42 + n_nodes * 100 + graph_idx * 10,  # Unique seed per graph instance
                 'alpha': alpha  # Add alpha parameter for Dirichlet CPT sampling
             }
             
