@@ -22,18 +22,19 @@ from experiments.policies import RandomExamplePolicy
 from utils.visualization import create_experiment_report
 
 
-def setup_logging(output_dir: Path, log_level: str = "INFO") -> None:
+def setup_logging(output_dir: Path, log_level: str = "INFO", enable_debug_file: bool = False) -> None:
     """
     Setup structured logging to separate files.
     
-    Creates three log files:
+    Creates log files based on configuration:
     - info.log: INFO level messages (also to stdout)  
-    - debug.log: DEBUG level messages for troubleshooting
+    - debug.log: DEBUG level messages (only if enable_debug_file=True)
     - error.log: ERROR level messages with full tracebacks
     
     Args:
         output_dir: Directory for log files
         log_level: Logging level (DEBUG, INFO, WARNING, ERROR)
+        enable_debug_file: Whether to create debug.log file (saves space)
     """
     logs_dir = output_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -63,19 +64,20 @@ def setup_logging(output_dir: Path, log_level: str = "INFO") -> None:
     root_logger.addHandler(console_handler)
     
     # Info log file (INFO and above) 
-    info_handler = logging.FileHandler(logs_dir / "info_2.log")
+    info_handler = logging.FileHandler(logs_dir / "info.log")
     info_handler.setLevel(logging.INFO)
     info_handler.setFormatter(detailed_formatter)
     root_logger.addHandler(info_handler)
     
-    # Debug log file (DEBUG and above)
-    debug_handler = logging.FileHandler(logs_dir / "debug_2.log")
-    debug_handler.setLevel(logging.DEBUG)
-    debug_handler.setFormatter(detailed_formatter)
-    root_logger.addHandler(debug_handler)
+    # Debug log file (DEBUG and above) - only if enabled
+    if enable_debug_file:
+        debug_handler = logging.FileHandler(logs_dir / "debug.log")
+        debug_handler.setLevel(logging.DEBUG)
+        debug_handler.setFormatter(detailed_formatter)
+        root_logger.addHandler(debug_handler)
     
     # Error log file (ERROR only)
-    error_handler = logging.FileHandler(logs_dir / "error_2.log")
+    error_handler = logging.FileHandler(logs_dir / "error.log")
     error_handler.setLevel(logging.ERROR)
     error_handler.setFormatter(detailed_formatter)
     root_logger.addHandler(error_handler)
@@ -86,8 +88,11 @@ def setup_logging(output_dir: Path, log_level: str = "INFO") -> None:
     logging.getLogger('urllib3').setLevel(logging.WARNING)
     
     logger = logging.getLogger(__name__)
-    logger.info(f"Logging initialized: level={log_level}, output_dir={output_dir}")
-    logger.debug(f"Log files created in {logs_dir}/")
+    if enable_debug_file:
+        logger.info(f"Logging initialized: level={log_level}, output_dir={output_dir}, debug_file=enabled")
+        logger.debug(f"Log files created in {logs_dir}/")
+    else:
+        logger.info(f"Logging initialized: level={log_level}, output_dir={output_dir}, debug_file=disabled")
 
 
 def parse_arguments() -> argparse.Namespace:
@@ -161,6 +166,10 @@ def parse_arguments() -> argparse.Namespace:
     parser.add_argument(
         '--log-level', choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
         default='INFO', help='Logging level'
+    )
+    parser.add_argument(
+        '--debug', action='store_true', default=False,
+        help='Enable debug.log file creation (saves disk space when disabled)'
     )
     parser.add_argument(
         '--save-results', action='store_true', default=True,
@@ -325,21 +334,39 @@ def save_results(results: Dict[Any, Dict[str, Any]], config: Dict[str, Any]) -> 
 
 def create_visualizations(results: Dict[Any, Dict[str, Any]], config: Dict[str, Any]) -> None:
     """
-    Create comprehensive visualization report.
+    Create comprehensive visualization report with timestamp organization.
     
     Args:
         results: Experimental results from run_experiments
         config: Experiment configuration dictionary
     """
+    from datetime import datetime
+    
     logger = logging.getLogger(__name__)
     output_dir = Path(config['output_dir'])
-    plots_dir = output_dir / "plots/minor"
     
-    logger.info("Generating visualization report...")
+    # Create timestamp folder for this experiment
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    experiment_name = f"experiment_{timestamp}"
+    
+    # Add configuration details to folder name
+    node_sizes_str = "_".join(map(str, config['node_sizes']))
+    missing_rates_str = "_".join([f"{mr:.1f}" for mr in config['missing_rates']])
+    imputer_sizes_str = "_".join(config['imputer_sizes'])
+    
+    experiment_folder = f"{experiment_name}_nodes_{node_sizes_str}_missing_{missing_rates_str}_imputers_{imputer_sizes_str}_graphs_{config['n_graphs']}"
+    plots_dir = output_dir / "plots" / experiment_folder
+    plots_dir.mkdir(parents=True, exist_ok=True)
+    
+    logger.info(f"Generating visualization report in: {plots_dir}")
     
     # Group results by missing rate and create separate reports
     for missing_rate in config['missing_rates']:
         logger.info(f"Creating visualizations for missing rate: {missing_rate}")
+        
+        # Create missing rate subfolder
+        missing_rate_dir = plots_dir / f"missing_rate_{missing_rate:.1f}"
+        missing_rate_dir.mkdir(exist_ok=True)
         
         # Filter results for this missing rate
         filtered_results = {}
@@ -350,11 +377,28 @@ def create_visualizations(results: Dict[Any, Dict[str, Any]], config: Dict[str, 
                 filtered_results[original_key] = value
         
         if filtered_results:
+            # Create visualizations for all node sizes together
             create_experiment_report(
                 results=filtered_results,
-                output_dir=str(plots_dir),
+                output_dir=str(missing_rate_dir),
                 missing_rate=missing_rate
             )
+            
+            # Create individual node size subfolders
+            node_sizes_in_results = set(key[0] for key in filtered_results.keys())
+            for n_nodes in sorted(node_sizes_in_results):
+                node_dir = missing_rate_dir / f"nodes_{n_nodes}"
+                node_dir.mkdir(exist_ok=True)
+                
+                # Filter results for this specific node size
+                node_results = {k: v for k, v in filtered_results.items() if k[0] == n_nodes}
+                
+                if node_results:
+                    create_experiment_report(
+                        results=node_results,
+                        output_dir=str(node_dir),
+                        missing_rate=missing_rate
+                    )
         else:
             logger.warning(f"No results found for missing rate: {missing_rate}")
     
@@ -378,7 +422,7 @@ def main() -> None:
         (args.output_dir / "results").mkdir(exist_ok=True)
         
         # Setup logging
-        setup_logging(args.output_dir, args.log_level)
+        setup_logging(args.output_dir, args.log_level, args.debug)
         
         logger = logging.getLogger(__name__)
         logger.info("Progressive imputation experiments starting...")

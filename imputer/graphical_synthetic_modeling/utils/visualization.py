@@ -281,8 +281,11 @@ def plot_neural_vs_true_scatterplots(results: Dict[str, Any], output_dir: str = 
         
         plt.tight_layout()
         
+        # Create filename with node size information
+        node_sizes_in_data = sorted(set(key[0] for key in results.keys()))
+        node_sizes_str = "_".join(map(str, node_sizes_in_data))
         missing_suffix = f"_missing_{missing_rate}" if missing_rate is not None else ""
-        save_path = f"{output_dir}/neural_vs_true_scatterplots{missing_suffix}.png"
+        save_path = f"{output_dir}/neural_vs_true_scatterplots_nodes_{node_sizes_str}{missing_suffix}.png"
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         logger.info(f"Neural vs True scatterplots saved to {save_path}")
         plt.close()
@@ -366,8 +369,11 @@ def plot_em_vs_true_scatterplots(results: Dict[str, Any], output_dir: str = "plo
         
         plt.tight_layout()
         
+        # Create filename with node size information  
+        node_sizes_in_data = sorted(set(key[0] for key in results.keys()))
+        node_sizes_str = "_".join(map(str, node_sizes_in_data))
         missing_suffix = f"_missing_{missing_rate}" if missing_rate is not None else ""
-        save_path = f"{output_dir}/em_vs_true_scatterplots{missing_suffix}.png"
+        save_path = f"{output_dir}/em_vs_true_scatterplots_nodes_{node_sizes_str}{missing_suffix}.png"
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
         logger.info(f"EM vs True scatterplots saved to {save_path}")
         plt.close()
@@ -517,8 +523,11 @@ def create_unified_scatterplots(results, output_dir="improved_plots", missing_ra
     
     plt.tight_layout()
     
+    # Create filename with node size information
+    node_sizes_in_data = sorted(set(key[0] for key in results.keys()))
+    node_sizes_str = "_".join(map(str, node_sizes_in_data))
     missing_suffix = f"_missing_{missing_rate}" if missing_rate is not None else ""
-    save_path = f"{output_dir}/unified_scatterplots{missing_suffix}.png"
+    save_path = f"{output_dir}/unified_scatterplots_nodes_{node_sizes_str}{missing_suffix}.png"
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"Unified scatterplots saved to {save_path}")
 
@@ -692,8 +701,11 @@ def create_gibbs_inequality_scatterplots(results, output_dir="plots", missing_ra
     
     plt.tight_layout()
     
+    # Create filename with node size information
+    node_sizes_in_data = sorted(set(key[0] for key in results.keys()))
+    node_sizes_str = "_".join(map(str, node_sizes_in_data))
     missing_suffix = f"_missing_{missing_rate}" if missing_rate is not None else ""
-    save_path = f"{output_dir}/gibbs_inequality_scatterplots{missing_suffix}.png"
+    save_path = f"{output_dir}/gibbs_inequality_scatterplots_nodes_{node_sizes_str}{missing_suffix}.png"
     plt.savefig(save_path, dpi=300, bbox_inches='tight')
     logger.info(f"Gibbs inequality scatterplots saved to {save_path}")
     plt.close()
