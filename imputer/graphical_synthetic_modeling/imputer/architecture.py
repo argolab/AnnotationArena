@@ -32,6 +32,18 @@ logger = logging.getLogger(__name__)
 # Determine device for computation
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+# Log device information
+if torch.cuda.is_available():
+    logger.info(f"CUDA device detected: {torch.cuda.get_device_name(0)} ({torch.cuda.get_device_properties(0).total_memory // 1024**3} GB)")
+    logger.info(f"Using device: {DEVICE}")
+else:
+    logger.info(f"CUDA not available, using CPU: {DEVICE}")
+
+# CUDA optimization settings
+if torch.cuda.is_available():
+    torch.backends.cudnn.benchmark = True  # Optimize for consistent input sizes
+    torch.backends.cudnn.deterministic = False  # Allow non-deterministic operations for speed
+
 # Type alias for sample tuple
 SampleTuple = Tuple[torch.FloatTensor, torch.FloatTensor, torch.LongTensor, torch.FloatTensor, torch.FloatTensor, torch.LongTensor]
 

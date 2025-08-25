@@ -77,15 +77,28 @@ def plot_convergence_curves(results: Dict[str, Any], output_dir: str = "plots",
             domain_kls = [r['domain_kl'] for r in experiment_results]
             domain_kl_stds = [r.get('domain_kl_std', 0.0) for r in experiment_results]
             
-            # Plot neural imputer variant with error bars
-            ax.errorbar(costs, neural_kls, yerr=neural_kl_stds,
+            # Add small horizontal offset to prevent error bar overlap
+            cost_range = max(costs) - min(costs) if len(costs) > 1 else 100
+            offset = 0.015 * cost_range  # 1.5% of cost range
+            
+            # Different offset for each imputer size
+            if imputer_size == 'Tiny':
+                neural_costs = [c - offset for c in costs]
+            elif imputer_size == 'Small':
+                neural_costs = costs  # No offset for middle size
+            else:  # Large
+                neural_costs = [c + offset for c in costs]
+            
+            # Plot neural imputer variant with error bars and offset
+            ax.errorbar(neural_costs, neural_kls, yerr=neural_kl_stds,
                        fmt='o-', label=f'Imputer ({imputer_size})', 
                        color=COLORS[imputer_size], linewidth=2, markersize=6, 
                        alpha=0.8, capsize=5)
             
-            # Plot domain EM only once (same across all variants)
+            # Plot domain EM only once (same across all variants) - slight negative offset
             if not domain_em_plotted:
-                ax.errorbar(costs, domain_kls, yerr=domain_kl_stds,
+                domain_costs = [c - offset * 0.5 for c in costs]
+                ax.errorbar(domain_costs, domain_kls, yerr=domain_kl_stds,
                            fmt='s--', label='Domain EM', color=COLORS['domain_em'],
                            linewidth=2, markersize=6, alpha=0.8, capsize=5)
                 domain_em_plotted = True
@@ -422,8 +435,10 @@ def create_unified_scatterplots(results, output_dir="improved_plots", missing_ra
                     em_true_data.append((true_values[i], em_values[i], budget))
     
     if not neural_true_data and not em_true_data:
-        print("No valid data for scatterplots")
+        logger.warning("No valid data for scatterplots")
         return
+    
+    logger.info(f"Unified scatterplots: {len(neural_true_data)} neural points, {len(em_true_data)} EM points")
     
     # Get consistent axis limits across all subplots
     all_true = ([x[0] for x in neural_true_data] + [x[0] for x in em_true_data])
@@ -711,6 +726,124 @@ def create_gibbs_inequality_scatterplots(results, output_dir="plots", missing_ra
     plt.close()
 
 
+def plot_em_vs_neural_scatterplots(results: Dict[str, Any], output_dir: str = "plots",
+                                   missing_rate: Optional[float] = None) -> None:
+    """
+    Create EM vs Imputer cross-entropy comparison scatterplots.
+    
+    Direct comparison between EM and Imputer model cross-entropy values with budget progression
+    color coding. Points above the diagonal line indicate EM wins, below indicates Imputer wins.
+    
+    Args:
+        results: Results dictionary from experiment_runner
+        output_dir: Directory to save plots
+        missing_rate: Missing rate for filename suffix
+    """
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+    
+    # Extract EM vs imputer cross-entropy data - individual sample level
+    em_imputer_data = []  # [(em_cross_entropy, imputer_cross_entropy, budget, imputer_size)]
+    
+    budgets = set()
+    imputer_sizes = set()
+    
+    for (n_nodes, combined_policy_name), policy_results in results.items():
+        experiment_results = policy_results['results']
+        imputer_size = policy_results.get('imputer_size', 'Unknown')
+        
+        for step_result in experiment_results:
+            budget = step_result['budget']
+            budgets.add(budget)
+            imputer_sizes.add(imputer_size)
+            
+            # Get individual cross-entropy values for each test sample
+            em_values = step_result.get('domain_cross_entropy_values', [])
+            imputer_values = step_result.get('neural_cross_entropy_values', [])
+            
+            # Pair up EM and imputer cross-entropy values for each individual test sample
+            min_len = min(len(em_values), len(imputer_values))
+            for i in range(min_len):
+                em_val = em_values[i]
+                imputer_val = imputer_values[i]
+                
+                if not (np.isnan(em_val) or np.isinf(em_val) or 
+                       np.isnan(imputer_val) or np.isinf(imputer_val)):
+                    em_imputer_data.append((em_val, imputer_val, budget, imputer_size))
+    
+    # Create scatterplots if we have data
+    if em_imputer_data:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(15, 6))
+        
+        # Subplot 1: Color by Budget Progression
+        budget_list = sorted(budgets)
+        budget_min, budget_max = min(budget_list), max(budget_list)
+        
+        # Create arrays for scatter plot with continuous color mapping
+        em_vals = [x[0] for x in em_imputer_data]
+        imputer_vals = [x[1] for x in em_imputer_data]
+        budget_vals = [x[2] for x in em_imputer_data]
+        
+        # Use scatter with continuous color mapping
+        scatter1 = ax1.scatter(em_vals, imputer_vals, c=budget_vals, 
+                              cmap='plasma', alpha=0.6, s=20, vmin=budget_min, vmax=budget_max)
+        
+        # Add colorbar for budget
+        cbar1 = plt.colorbar(scatter1, ax=ax1)
+        cbar1.set_label('Budget (Training Samples)', fontsize=10)
+        
+        # Perfect agreement line
+        min_val = min(min(em_vals), min(imputer_vals))
+        max_val = max(max(em_vals), max(imputer_vals))
+        ax1.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.7, 
+                label='EM = Imputer', linewidth=2)
+        
+        ax1.set_xlabel('EM Cross-Entropy', fontsize=12)
+        ax1.set_ylabel('Imputer Cross-Entropy', fontsize=12)
+        ax1.set_title('EM vs Imputer Cross-Entropy (Budget Progression)', fontsize=12)
+        ax1.legend(fontsize=9)
+        ax1.grid(True, alpha=0.3)
+        
+        # Subplot 2: Color by Imputer Size
+        size_list = sorted(imputer_sizes)
+        size_color_values = {'Tiny': 0.2, 'Small': 0.5, 'Large': 0.8}
+        
+        # Create color array based on imputer size
+        size_vals = [size_color_values.get(x[3], 0.5) for x in em_imputer_data]
+        
+        scatter2 = ax2.scatter(em_vals, imputer_vals, c=size_vals, 
+                              cmap='Reds', alpha=0.6, s=20, vmin=0, vmax=1)
+        
+        # Add discrete legend for imputer sizes
+        for size in size_list:
+            if size in size_color_values:
+                color_val = size_color_values[size]
+                color = plt.cm.Reds(color_val)
+                ax2.scatter([], [], c=[color], label=f'{size} Imputer', s=50)
+        
+        # Perfect agreement line
+        ax2.plot([min_val, max_val], [min_val, max_val], 'k--', alpha=0.7,
+                label='EM = Imputer', linewidth=2)
+        
+        ax2.set_xlabel('EM Cross-Entropy', fontsize=12)
+        ax2.set_ylabel('Imputer Cross-Entropy', fontsize=12)
+        ax2.set_title('EM vs Imputer Cross-Entropy (Imputer Size)', fontsize=12)
+        ax2.legend(fontsize=9)
+        ax2.grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        # Create filename with node size information
+        node_sizes_in_data = sorted(set(key[0] for key in results.keys()))
+        node_sizes_str = "_".join(map(str, node_sizes_in_data))
+        missing_suffix = f"_missing_{missing_rate}" if missing_rate is not None else ""
+        save_path = f"{output_dir}/em_vs_imputer_cross_entropy_nodes_{node_sizes_str}{missing_suffix}.png"
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        logger.info(f"EM vs Imputer cross-entropy scatterplots saved to {save_path}")
+        plt.close()
+    else:
+        logger.warning("No valid EM vs imputer cross-entropy data available for scatterplots")
+
+
 def create_experiment_report(results: Dict[str, Any], output_dir: str = "plots",
                            missing_rate: Optional[float] = None) -> None:
     """
@@ -734,6 +867,7 @@ def create_experiment_report(results: Dict[str, Any], output_dir: str = "plots",
     plot_log_loss_comparison(results, output_dir, missing_rate)
     plot_neural_vs_true_scatterplots(results, output_dir, missing_rate)
     plot_em_vs_true_scatterplots(results, output_dir, missing_rate)
+    plot_em_vs_neural_scatterplots(results, output_dir, missing_rate)
 
     try:
         create_unified_scatterplots(results, output_dir, missing_rate)

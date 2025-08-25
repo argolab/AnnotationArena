@@ -115,7 +115,15 @@ def train_epoch(model: GraphImputer, train_loader: DataLoader,
         
         # Backward pass and optimization
         loss.backward()
+        
+        # Gradient clipping for stability
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        
         optimizer.step()
+        
+        # Clear CUDA cache periodically for memory efficiency
+        if torch.cuda.is_available() and batch_idx % 10 == 0:
+            torch.cuda.empty_cache()
         
         total_loss += loss.item()
         n_batches += 1

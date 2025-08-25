@@ -20,6 +20,8 @@ from typing import List, Dict, Any
 from experiments.experiment_runner import run_experiment_suite, save_experiment_results
 from experiments.policies import RandomExamplePolicy
 from utils.visualization import create_experiment_report
+from utils.runtime_plotting import create_runtime_analysis_report
+from utils.step_progression_plots import create_step_progression_report
 
 
 def setup_logging(output_dir: Path, log_level: str = "INFO", enable_debug_file: bool = False) -> None:
@@ -180,6 +182,16 @@ def parse_arguments() -> argparse.Namespace:
         help='Use log-likelihood for EM model selection (default: iteration-based, safer)'
     )
     
+    # New visualization options
+    parser.add_argument(
+        '--plot-runtimes', action='store_true',
+        help='Include runtime performance plots in visualization'
+    )
+    parser.add_argument(
+        '--plot-step-progression', action='store_true', 
+        help='Create step-by-step progression plots showing learning dynamics'
+    )
+    
     return parser.parse_args()
 
 
@@ -207,7 +219,9 @@ def create_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         'output_dir': str(args.output_dir),
         'log_level': args.log_level,
         'save_results': args.save_results,
-        'use_likelihood_selection': args.use_likelihood_selection
+        'use_likelihood_selection': args.use_likelihood_selection,
+        'plot_runtimes': args.plot_runtimes,
+        'plot_step_progression': args.plot_step_progression
     }
 
 
@@ -383,6 +397,21 @@ def create_visualizations(results: Dict[Any, Dict[str, Any]], config: Dict[str, 
                 output_dir=str(missing_rate_dir),
                 missing_rate=missing_rate
             )
+            
+            # Add new visualization modules if requested
+            if config.get('plot_runtimes'):
+                create_runtime_analysis_report(
+                    results=filtered_results,
+                    output_dir=str(missing_rate_dir),
+                    missing_rate=missing_rate
+                )
+            
+            if config.get('plot_step_progression'):
+                create_step_progression_report(
+                    results=filtered_results,
+                    output_dir=str(missing_rate_dir),
+                    missing_rate=missing_rate
+                )
             
             # Create individual node size subfolders
             node_sizes_in_results = set(key[0] for key in filtered_results.keys())
