@@ -17,6 +17,7 @@ from imputer.architecture import create_model, DEVICE, SampleTuple
 from imputer.training_eval import train_model, evaluate_model, evaluate_log_loss, evaluate_cross_entropy, ImputationDataset, collate_batch
 from domain.em_model import DomainEMModel
 from experiments.policies import BaseObservationPolicy, SampleTuple
+from utils.attention_pipeline import save_model_after_training
 
 logger = logging.getLogger(__name__)
 
@@ -216,6 +217,9 @@ class ProgressiveExperiment:
         self.test_samples = config['test_samples']
         self.seed = config['seed']
         self.alpha = config.get('alpha', None)  # Dirichlet concentration parameter (None = default CPTs)
+        self.cpt_generation = config.get('cpt_generation', 'default')  # CPT generation method
+        self.logistic_std = config.get('logistic_std', 1.0)  # Logistic regression standard deviation
+        self.save_models = config.get('save_models', False)  # Save models for attention analysis
         
         # Default to single Large imputer if not specified
         if imputer_sizes is None:
@@ -227,6 +231,7 @@ class ProgressiveExperiment:
         self.adj_matrix = None  
         self.sample_pool: Optional[List[SampleTuple]] = None
         self.test_dataset: Optional[List[SampleTuple]] = None
+        self.neural_models = {}  # Store trained models for saving
         
         # Domain model for baseline comparison
         use_likelihood = config.get('use_likelihood_selection', False)
@@ -248,7 +253,8 @@ class ProgressiveExperiment:
         # Generate graph structure
         logger.debug(f"Generating graph: {self.n_nodes} nodes, {self.target_parents} parents")
         self.bn, self.adj_matrix = generate_experiment_graph(
-            self.n_nodes, self.target_parents, self.seed, self.alpha
+            self.n_nodes, self.target_parents, self.seed, self.alpha,
+            self.cpt_generation, self.logistic_std
         )
         
         # Generate sample pool with missing data for progressive experiments
@@ -388,6 +394,9 @@ class ProgressiveExperiment:
                 
                 logger.info(f"  Imputer ({imputer_size}): KL={neural_results.get('mean_kl', float('inf')):.4f}, "
                            f"LogLoss={neural_log_loss_results.get('mean_log_loss', float('inf')):.4f}, time={neural_time:.1f}s")
+                
+                # Store final budget models for potential saving
+                self.neural_models[imputer_size] = trained_model
             
             # Train and evaluate domain model (once per budget - same for all imputer variants)
             domain_start = time.time()
@@ -464,6 +473,32 @@ class ProgressiveExperiment:
                 }
                 
                 results_by_size[imputer_size].append(step_result)
+        
+        # Save final budget models if requested
+        logger.info(f"Checking model saving: save_models={self.save_models}, neural_models={list(self.neural_models.keys())}")
+        if self.save_models:
+            output_dir = self.config.get('output_dir', 'outputs')
+            logger.info(f"Starting model saving to {output_dir}")
+            for imputer_size, model in self.neural_models.items():
+                logger.info(f"Attempting to save {imputer_size} model: {model is not None}")
+                if model is not None:
+                    try:
+                        saved_path = save_model_after_training(
+                            experiment=self,
+                            output_dir=output_dir,
+                            imputer_size=imputer_size,
+                            save_models=True
+                        )
+                        if saved_path:
+                            logger.info(f"Saved {imputer_size} model to: {saved_path}")
+                        else:
+                            logger.warning(f"Model saving returned None for {imputer_size}")
+                    except Exception as e:
+                        logger.error(f"Failed to save {imputer_size} model: {e}")
+                        import traceback
+                        logger.error(f"Traceback: {traceback.format_exc()}")
+        else:
+            logger.info("Model saving disabled")
                 
         return results_by_size
     
@@ -510,7 +545,9 @@ def run_experiment_suite(node_sizes: List[int], target_parents: float = 1.0,
                         test_samples: int = 250, 
                         policies: Optional[List[BaseObservationPolicy]] = None,
                         imputer_sizes: Optional[List[str]] = None,
-                        n_graphs: int = 1) -> Dict[Tuple[int, str], Dict[str, Any]]:
+                        n_graphs: int = 1, cpt_generation: str = 'default',
+                        logistic_std: float = 1.0,
+                        global_config: Optional[Dict[str, Any]] = None) -> Dict[Tuple[int, str], Dict[str, Any]]:
     """
     Run experiments across multiple graph sizes with comprehensive evaluation.
     
@@ -570,15 +607,33 @@ def run_experiment_suite(node_sizes: List[int], target_parents: float = 1.0,
                 logger.info(f"\\nGraph instance {graph_idx + 1}/{n_graphs} for {n_nodes} nodes (using Dirichlet α={alpha:.1f})")
             
             # Configuration for this graph instance
-            config = {
-                'n_nodes': n_nodes,
-                'target_parents': target_parents,
-                'missing_rate': missing_rate,
-                'max_samples': max_samples,
-                'test_samples': test_samples,
-                'seed': 42 + n_nodes * 100 + graph_idx * 10,  # Unique seed per graph instance
-                'alpha': alpha  # Add alpha parameter for Dirichlet CPT sampling
-            }
+            # Start with the full original config and override specific values
+            if global_config:
+                config = dict(global_config)  # Copy all original config parameters
+                config.update({
+                    'n_nodes': n_nodes,
+                    'target_parents': target_parents,
+                    'missing_rate': missing_rate,
+                    'max_samples': max_samples,
+                    'test_samples': test_samples,
+                    'seed': 42 + n_nodes * 100 + graph_idx * 10,  # Unique seed per graph instance
+                    'alpha': alpha,  # Add alpha parameter for Dirichlet CPT sampling
+                    'cpt_generation': cpt_generation,
+                    'logistic_std': logistic_std
+                })
+            else:
+                # Backward compatibility - create minimal config
+                config = {
+                    'n_nodes': n_nodes,
+                    'target_parents': target_parents,
+                    'missing_rate': missing_rate,
+                    'max_samples': max_samples,
+                    'test_samples': test_samples,
+                    'seed': 42 + n_nodes * 100 + graph_idx * 10,  # Unique seed per graph instance
+                    'alpha': alpha,  # Add alpha parameter for Dirichlet CPT sampling
+                    'cpt_generation': cpt_generation,
+                    'logistic_std': logistic_std
+                }
             
             # Create and setup experiment
             experiment = ProgressiveExperiment(config, imputer_sizes)

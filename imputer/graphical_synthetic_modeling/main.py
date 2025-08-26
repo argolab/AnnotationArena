@@ -22,6 +22,7 @@ from experiments.policies import RandomExamplePolicy
 from utils.visualization import create_experiment_report
 from utils.runtime_plotting import create_runtime_analysis_report
 from utils.step_progression_plots import create_step_progression_report
+from utils.attention_pipeline import create_attention_analysis_report
 
 
 def setup_logging(output_dir: Path, log_level: str = "INFO", enable_debug_file: bool = False) -> None:
@@ -192,6 +193,26 @@ def parse_arguments() -> argparse.Namespace:
         help='Create step-by-step progression plots showing learning dynamics'
     )
     
+    # CPT generation options
+    parser.add_argument(
+        '--cpt-generation', choices=['default', 'dirichlet', 'logistic'],
+        default='default', help='CPT generation method'
+    )
+    parser.add_argument(
+        '--logistic-std', type=float, default=1.0,
+        help='Standard deviation for Gaussian weights in logistic regression CPTs'
+    )
+    
+    # Attention analysis options
+    parser.add_argument(
+        '--analyze-attention', action='store_true', default=False,
+        help='Enable attention pattern analysis for Large imputers (requires model saving)'
+    )
+    parser.add_argument(
+        '--save-models', action='store_true', default=False,
+        help='Save trained models for post-hoc analysis'
+    )
+    
     return parser.parse_args()
 
 
@@ -221,7 +242,11 @@ def create_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         'save_results': args.save_results,
         'use_likelihood_selection': args.use_likelihood_selection,
         'plot_runtimes': args.plot_runtimes,
-        'plot_step_progression': args.plot_step_progression
+        'plot_step_progression': args.plot_step_progression,
+        'cpt_generation': args.cpt_generation,
+        'logistic_std': args.logistic_std,
+        'analyze_attention': args.analyze_attention,
+        'save_models': args.save_models
     }
 
 
@@ -303,7 +328,10 @@ def run_experiments(config: Dict[str, Any]) -> Dict[Any, Dict[str, Any]]:
             test_samples=config['test_samples'],
             policies=policies,
             imputer_sizes=config['imputer_sizes'],
-            n_graphs=config['n_graphs']
+            n_graphs=config['n_graphs'],
+            cpt_generation=config['cpt_generation'],
+            logistic_std=config['logistic_std'],
+            global_config=config
         )
         
         # Store results with missing rate as part of the key structure
@@ -408,6 +436,13 @@ def create_visualizations(results: Dict[Any, Dict[str, Any]], config: Dict[str, 
             
             if config.get('plot_step_progression'):
                 create_step_progression_report(
+                    results=filtered_results,
+                    output_dir=str(missing_rate_dir),
+                    missing_rate=missing_rate
+                )
+            
+            if config.get('analyze_attention'):
+                create_attention_analysis_report(
                     results=filtered_results,
                     output_dir=str(missing_rate_dir),
                     missing_rate=missing_rate

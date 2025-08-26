@@ -260,7 +260,8 @@ class TransformerLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, embedding_stream: torch.Tensor, parameter_stream: torch.Tensor, 
-                mask: Optional[torch.Tensor] = None) -> Tuple[torch.Tensor, torch.Tensor]:
+                mask: Optional[torch.Tensor] = None, 
+                return_attention: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Process both streams with attention and cross-stream updates.
         
@@ -275,8 +276,8 @@ class TransformerLayer(nn.Module):
         # Embedding stream processing
         # 1. Multi-head self-attention with residual connection
         embedding_norm = self.norm1(embedding_stream)
-        attn_out, _ = self.attention(embedding_norm, embedding_norm, embedding_norm, 
-                                   key_padding_mask=mask)
+        attn_out, attn_weights = self.attention(embedding_norm, embedding_norm, embedding_norm, 
+                                               key_padding_mask=mask, average_attn_weights=False)
         embedding_stream = embedding_stream + self.dropout(attn_out)
         
         # 2. Feed-forward with residual connection
