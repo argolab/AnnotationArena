@@ -212,3 +212,9 @@ src/input_llm_rubric/data
 src/output_llm_rubric
 src/logs_llm_rubric
 src/*.pik
+src/*.json
+src/plots
+src/predictions
+src/predictions_prev
+src/prev_models
+src/models
