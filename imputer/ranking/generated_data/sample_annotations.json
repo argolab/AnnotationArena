@@ -1,0 +1,94 @@
+{
+  "sample_queries": [
+    {
+      "type": "rating",
+      "query": "Annotator 3.0 rates Item 6.0 on Attribute 4.0",
+      "result": "Rating: 1.0/5"
+    },
+    {
+      "type": "rating",
+      "query": "Annotator 1.0 rates Item 4.0 on Attribute 3.0",
+      "result": "Rating: 2.0/5"
+    },
+    {
+      "type": "rating",
+      "query": "Annotator 3.0 rates Item 1.0 on Attribute 3.0",
+      "result": "Rating: 1.0/5"
+    },
+    {
+      "type": "rating",
+      "query": "Annotator 1.0 rates Item 2.0 on Attribute 3.0",
+      "result": "Rating: 5.0/5"
+    },
+    {
+      "type": "rating",
+      "query": "Annotator 2.0 rates Item 7.0 on Attribute 5.0",
+      "result": "Rating: 1.0/5"
+    },
+    {
+      "type": "rating",
+      "query": "Annotator 4.0 rates Item 3.0 on Attribute 2.0",
+      "result": "Rating: 4.0/5"
+    },
+    {
+      "type": "rating",
+      "query": "Annotator 4.0 rates Item 1.0 on Attribute 1.0",
+      "result": "Rating: 3.0/5"
+    },
+    {
+      "type": "rating",
+      "query": "Annotator 4.0 rates Item 10.0 on Attribute 5.0",
+      "result": "Rating: 1.0/5"
+    },
+    {
+      "type": "rating",
+      "query": "Annotator 1.0 rates Item 4.0 on Attribute 5.0",
+      "result": "Rating: 3.0/5"
+    },
+    {
+      "type": "rating",
+      "query": "Annotator 3.0 rates Item 9.0 on Attribute 4.0",
+      "result": "Rating: 1.0/5"
+    },
+    {
+      "type": "comparison",
+      "query": "Annotator 1.0 compares Item 10.0 vs Item 5.0 on Attribute 2.0",
+      "result": "Winner: Item A"
+    },
+    {
+      "type": "comparison",
+      "query": "Annotator 5.0 compares Item 10.0 vs Item 5.0 on Attribute 4.0",
+      "result": "Winner: Item B"
+    },
+    {
+      "type": "comparison",
+      "query": "Annotator 1.0 compares Item 8.0 vs Item 3.0 on Attribute 4.0",
+      "result": "Winner: Item A"
+    },
+    {
+      "type": "comparison",
+      "query": "Annotator 2.0 compares Item 5.0 vs Item 3.0 on Attribute 4.0",
+      "result": "Winner: Item A"
+    },
+    {
+      "type": "comparison",
+      "query": "Annotator 1.0 compares Item 5.0 vs Item 10.0 on Attribute 4.0",
+      "result": "Winner: Item B"
+    },
+    {
+      "type": "ranking",
+      "query": "Annotator 1.0 ranks items [9, 8, 7, 2] on Attribute 3.0",
+      "result": "Ranking: [2, 7, 9, 8] (best to worst)"
+    },
+    {
+      "type": "ranking",
+      "query": "Annotator 1.0 ranks items [4, 8, 1, 9] on Attribute 5.0",
+      "result": "Ranking: [1, 8, 4, 9] (best to worst)"
+    },
+    {
+      "type": "ranking",
+      "query": "Annotator 4.0 ranks items [4, 6, 9, 8] on Attribute 5.0",
+      "result": "Ranking: [4, 8, 9, 6] (best to worst)"
+    }
+  ]
+}
