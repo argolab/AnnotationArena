@@ -224,3 +224,9 @@ imputer/progressive_imputation/logs
 imputer/graphical_synthetic_modeling/outputs
 imputer/progressive_imputation
 imputer/legacy
+
+# Ranking Ignore
+/Users/prabhavsingh/Documents/JHU/JHUResearch/AnnotationArena/imputer/ranking/domain_results/*.png
+/Users/prabhavsingh/Documents/JHU/JHUResearch/AnnotationArena/imputer/ranking/generated_data/*.json
+/Users/prabhavsingh/Documents/JHU/JHUResearch/AnnotationArena/imputer/ranking/models/domain_model
+/Users/prabhavsingh/Documents/JHU/JHUResearch/AnnotationArena/imputer/ranking/models/complete_data_generator
