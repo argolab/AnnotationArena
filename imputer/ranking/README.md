@@ -1,16 +1,16 @@
 # Ranking System for Annotation Arena
 
-This directory contains the implementation of a sophisticated synthetic ranking and rating system for machine learning experiments. The system models human annotation behaviors using hierarchical Bayesian methods with Stan/PyStan for inference.
+This directory contains the implementation of a sophisticated synthetic ranking and rating system for machine learning experiments. The system models human annotation behaviors using hierarchical Bayesian methods with **cmdstanpy** for inference.
 
 ## Overview
 
 The ranking system extends the progressive imputation codebase by adding:
 
-1. **Synthetic Human Annotations**: Generate realistic rating and ranking data
-2. **Multiple Annotation Types**: Unary ratings, pairwise comparisons, listwise rankings  
+1. **Synthetic Human Annotations**: Generate realistic rating and ranking data using Stan
+2. **Mixed Annotation Types**: Unary ratings and listwise rankings (pairwise comparisons removed) 
 3. **Hierarchical Modeling**: Model individual annotator differences and preferences
-4. **Bayesian Inference**: Use Stan for principled uncertainty quantification
-5. **Active Learning**: Intelligent query selection for annotation efficiency
+4. **Bayesian Inference**: Use cmdstanpy for MCMC sampling and uncertainty quantification
+5. **Progressive Training**: Compare domain model (MCMC) vs neural imputer on increasing data budgets
 
 ## Core Concept
 
@@ -27,19 +27,15 @@ The ranking system extends the progressive imputation codebase by adding:
 
 1. **Unary Categorical Ratings** 
    - "Rate this item 1-5 stars"
-   - Gaussian noise + binning model
+   - Model: Base score + Gaussian noise → thresholded into categories
+   - Implementation: `base_scores[ij, k] + normal_rng(0, σ_measurement)` binned by rating thresholds
 
-2. **Pairwise Comparisons**
-   - "Is item A better than item B?"
-   - Categorical responses: "much better", "slightly better", "same", etc.
+2. **Listwise Rankings** 
+   - "Rank these K items from best to worst"  
+   - Model: Plackett-Luce with Gumbel noise for ranking generation
+   - Implementation: `base_scores[ij, k] / temperature + gumbel_noise` sorted for ranking order
 
-3. **Listwise Rankings** 
-   - "Rank these 5 items from best to worst"
-   - Plackett-Luce model with Gumbel noise
-
-4. **Best/Worst Selection**
-   - "Pick the best and worst from this set"
-   - Simplified ranking with lower cognitive load
+**Note**: Pairwise comparisons were removed as they are a special case of listwise rankings.
 
 ### Model Hierarchy
 
@@ -53,22 +49,29 @@ Observations: f(zᵢⱼₖ + noise)         # Various noise/binning models
 
 ## Implementation Status
 
-**Phase 1: Foundation** *(Planned)*
-- [ ] Basic synthetic data generation
-- [ ] Simple Stan model for unary ratings
-- [ ] PyStan integration layer
-- [ ] Model validation framework
+**Phase 1: Data Generation** ✅ **COMPLETED**
+- [x] Hierarchical Bayesian data generation using Stan
+- [x] Mixed annotation types (ratings + rankings)
+- [x] Complete annotation space generation with deterministic train/test splits
+- [x] Configurable hyperparameters (annotator variance, measurement noise, etc.)
 
-**Phase 2: Extensions** *(Future)*  
-- [ ] Multi-annotator hierarchical models
-- [ ] Pairwise comparison models
-- [ ] Ranking model integration
-- [ ] Active learning strategies
+**Phase 2: Domain Model** ✅ **COMPLETED**
+- [x] Stan MCMC model for inference from observed annotations
+- [x] Rating likelihood: Gaussian noise + thresholding  
+- [x] Ranking likelihood: Plackett-Luce model
+- [x] Progressive training with increasing data budgets
+- [x] KL divergence and log-likelihood evaluation
 
-**Phase 3: Integration** *(Future)*
-- [ ] Connection to progressive imputation experiments
-- [ ] Large-scale evaluation framework
-- [ ] Performance optimization
+**Phase 3: Neural Imputer** 🔄 **IN PROGRESS**
+- [x] Transformer architecture with additive compositional embeddings
+- [x] Mixed annotation heads (rating + ranking)
+- [x] Progressive masking training protocol
+- [ ] Ranking evaluation fixes and Plackett-Luce loss integration
+
+**Phase 4: Comparison Framework** ⏳ **PENDING**
+- [ ] Domain vs Neural model comparison on same datasets
+- [ ] Visualization and analysis of results
+- [ ] Performance benchmarking
 
 ## Research Applications
 
@@ -84,14 +87,41 @@ This system enables investigation of:
 
 1. **Install Dependencies**:
    ```bash
-   pip install pystan numpy scipy pandas
+   conda install -c conda-forge cmdstanpy
+   pip install numpy scipy pandas matplotlib torch
    ```
 
-2. **Review Documentation**: Start with `RANKING_NOTES.md` for the mathematical framework
+2. **Generate Data**:
+   ```bash
+   python complete_data_generator.py
+   ```
 
-3. **Explore Examples**: Implementation examples in `PYSTAN_INTEGRATION.md`
+3. **Run Domain Model**:
+   ```bash
+   python domain_model_trainer.py
+   ```
 
-4. **Run Tests**: Validation scripts (to be implemented)
+4. **Run Neural Imputer**:
+   ```bash
+   python neural_imputer_trainer.py
+   ```
+
+## Current Implementation
+
+### Data Generation (`complete_data_generator.py`)
+- **Stan Model**: `models/complete_data_generator.stan` 
+- **Hierarchical Generation**: Items → Attributes → Annotators → Scores → Annotations
+- **Output**: Train/test splits with ground truth embeddings and preferences
+
+### Domain Model (`domain_model_trainer.py`)  
+- **Stan Model**: `models/domain_model.stan`
+- **MCMC Inference**: Learn embeddings and preferences from observed annotations
+- **Progressive Training**: 20%, 50%, 100% data budgets with time tracking
+
+### Neural Imputer (`neural_imputer_trainer.py`)
+- **Architecture**: Transformer with additive compositional embeddings (e_i + e_j + e_k)
+- **Mixed Heads**: Rating head (categorical) + Ranking head (Plackett-Luce utilities)
+- **Training**: Progressive masking with increasing data budgets
 
 ## Integration with Existing Codebase
 

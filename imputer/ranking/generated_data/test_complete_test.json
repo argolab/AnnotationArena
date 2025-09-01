@@ -1,0 +1,446 @@
+{
+  "ratings": [
+    {
+      "attribute": 5,
+      "annotator": 2,
+      "item": 1,
+      "value": 3
+    },
+    {
+      "attribute": 2,
+      "annotator": 5,
+      "item": 9,
+      "value": 4
+    },
+    {
+      "attribute": 3,
+      "annotator": 4,
+      "item": 6,
+      "value": 2
+    },
+    {
+      "attribute": 2,
+      "annotator": 1,
+      "item": 5,
+      "value": 3
+    },
+    {
+      "attribute": 5,
+      "annotator": 1,
+      "item": 10,
+      "value": 5
+    },
+    {
+      "attribute": 2,
+      "annotator": 1,
+      "item": 10,
+      "value": 3
+    },
+    {
+      "attribute": 3,
+      "annotator": 5,
+      "item": 10,
+      "value": 2
+    },
+    {
+      "attribute": 3,
+      "annotator": 5,
+      "item": 8,
+      "value": 2
+    },
+    {
+      "attribute": 2,
+      "annotator": 5,
+      "item": 6,
+      "value": 2
+    },
+    {
+      "attribute": 4,
+      "annotator": 3,
+      "item": 7,
+      "value": 2
+    },
+    {
+      "attribute": 2,
+      "annotator": 3,
+      "item": 7,
+      "value": 4
+    },
+    {
+      "attribute": 3,
+      "annotator": 2,
+      "item": 3,
+      "value": 4
+    },
+    {
+      "attribute": 5,
+      "annotator": 4,
+      "item": 10,
+      "value": 4
+    },
+    {
+      "attribute": 4,
+      "annotator": 2,
+      "item": 8,
+      "value": 1
+    },
+    {
+      "attribute": 2,
+      "annotator": 1,
+      "item": 1,
+      "value": 3
+    },
+    {
+      "attribute": 3,
+      "annotator": 3,
+      "item": 10,
+      "value": 3
+    },
+    {
+      "attribute": 1,
+      "annotator": 5,
+      "item": 2,
+      "value": 2
+    },
+    {
+      "attribute": 1,
+      "annotator": 2,
+      "item": 9,
+      "value": 5
+    },
+    {
+      "attribute": 1,
+      "annotator": 2,
+      "item": 4,
+      "value": 5
+    },
+    {
+      "attribute": 2,
+      "annotator": 4,
+      "item": 9,
+      "value": 4
+    },
+    {
+      "attribute": 4,
+      "annotator": 4,
+      "item": 6,
+      "value": 3
+    },
+    {
+      "attribute": 5,
+      "annotator": 1,
+      "item": 5,
+      "value": 5
+    },
+    {
+      "attribute": 2,
+      "annotator": 3,
+      "item": 3,
+      "value": 4
+    },
+    {
+      "attribute": 4,
+      "annotator": 3,
+      "item": 5,
+      "value": 5
+    },
+    {
+      "attribute": 5,
+      "annotator": 2,
+      "item": 5,
+      "value": 5
+    },
+    {
+      "attribute": 3,
+      "annotator": 1,
+      "item": 1,
+      "value": 2
+    },
+    {
+      "attribute": 1,
+      "annotator": 5,
+      "item": 4,
+      "value": 1
+    },
+    {
+      "attribute": 1,
+      "annotator": 1,
+      "item": 9,
+      "value": 4
+    },
+    {
+      "attribute": 1,
+      "annotator": 4,
+      "item": 6,
+      "value": 5
+    },
+    {
+      "attribute": 5,
+      "annotator": 5,
+      "item": 4,
+      "value": 1
+    },
+    {
+      "attribute": 5,
+      "annotator": 4,
+      "item": 6,
+      "value": 4
+    },
+    {
+      "attribute": 2,
+      "annotator": 5,
+      "item": 4,
+      "value": 1
+    },
+    {
+      "attribute": 3,
+      "annotator": 5,
+      "item": 7,
+      "value": 2
+    },
+    {
+      "attribute": 2,
+      "annotator": 2,
+      "item": 9,
+      "value": 5
+    },
+    {
+      "attribute": 5,
+      "annotator": 4,
+      "item": 4,
+      "value": 4
+    },
+    {
+      "attribute": 1,
+      "annotator": 4,
+      "item": 8,
+      "value": 5
+    },
+    {
+      "attribute": 5,
+      "annotator": 2,
+      "item": 7,
+      "value": 5
+    },
+    {
+      "attribute": 2,
+      "annotator": 2,
+      "item": 10,
+      "value": 5
+    },
+    {
+      "attribute": 2,
+      "annotator": 5,
+      "item": 10,
+      "value": 3
+    },
+    {
+      "attribute": 2,
+      "annotator": 5,
+      "item": 2,
+      "value": 2
+    },
+    {
+      "attribute": 4,
+      "annotator": 1,
+      "item": 10,
+      "value": 4
+    },
+    {
+      "attribute": 2,
+      "annotator": 4,
+      "item": 2,
+      "value": 1
+    },
+    {
+      "attribute": 3,
+      "annotator": 2,
+      "item": 1,
+      "value": 2
+    },
+    {
+      "attribute": 1,
+      "annotator": 5,
+      "item": 8,
+      "value": 2
+    },
+    {
+      "attribute": 2,
+      "annotator": 4,
+      "item": 6,
+      "value": 2
+    },
+    {
+      "attribute": 4,
+      "annotator": 3,
+      "item": 2,
+      "value": 2
+    },
+    {
+      "attribute": 5,
+      "annotator": 5,
+      "item": 2,
+      "value": 3
+    },
+    {
+      "attribute": 3,
+      "annotator": 4,
+      "item": 10,
+      "value": 2
+    },
+    {
+      "attribute": 4,
+      "annotator": 1,
+      "item": 7,
+      "value": 4
+    },
+    {
+      "attribute": 2,
+      "annotator": 4,
+      "item": 1,
+      "value": 2
+    }
+  ],
+  "rankings": [
+    {
+      "attribute": 3,
+      "annotator": 1,
+      "items": [
+        1,
+        3,
+        7,
+        8,
+        6,
+        10,
+        2,
+        5,
+        4,
+        9
+      ],
+      "order": [
+        2,
+        10,
+        5,
+        1,
+        8,
+        4,
+        6,
+        3,
+        9,
+        7
+      ]
+    },
+    {
+      "attribute": 5,
+      "annotator": 1,
+      "items": [
+        10,
+        5,
+        4,
+        2,
+        8,
+        9,
+        7,
+        1,
+        6,
+        3
+      ],
+      "order": [
+        2,
+        7,
+        1,
+        8,
+        9,
+        4,
+        5,
+        3,
+        6,
+        10
+      ]
+    },
+    {
+      "attribute": 5,
+      "annotator": 5,
+      "items": [
+        10,
+        5,
+        7,
+        1,
+        2,
+        6,
+        8,
+        3,
+        4,
+        9
+      ],
+      "order": [
+        2,
+        3,
+        1,
+        5,
+        6,
+        4,
+        7,
+        9,
+        10,
+        8
+      ]
+    },
+    {
+      "attribute": 2,
+      "annotator": 5,
+      "items": [
+        6,
+        4,
+        8,
+        5,
+        7,
+        9,
+        2,
+        3,
+        10,
+        1
+      ],
+      "order": [
+        3,
+        6,
+        8,
+        9,
+        5,
+        1,
+        4,
+        10,
+        7,
+        2
+      ]
+    },
+    {
+      "attribute": 4,
+      "annotator": 2,
+      "items": [
+        4,
+        9,
+        7,
+        5,
+        2,
+        10,
+        3,
+        1,
+        6,
+        8
+      ],
+      "order": [
+        4,
+        9,
+        5,
+        8,
+        10,
+        3,
+        1,
+        6,
+        2,
+        7
+      ]
+    }
+  ]
+}

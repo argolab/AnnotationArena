@@ -1,0 +1,10 @@
+{
+  "total_possible_ratings": 250,
+  "total_possible_rankings": 25,
+  "train_ratings": 200,
+  "test_ratings": 50,
+  "train_rankings": 20,
+  "test_rankings": 5,
+  "train_fraction": 0.8,
+  "test_fraction": 0.2
+}
