@@ -254,7 +254,7 @@ class DomainModelTrainer:
         
         return entropy(true_probs, learned_probs)
     
-    def _create_initial_values(self, stan_data: Dict[str, Any], seed: int) -> List[Dict[str, Any]]:
+    def _create_initial_values(self, stan_data: Dict[str, Any], seed: int, config: DomainModelConfig) -> List[Dict[str, Any]]:
         """Create reasonable initial values for Stan parameters"""
         
         np.random.seed(seed)
@@ -290,7 +290,7 @@ class DomainModelTrainer:
             }
         
         # Return list of initial values for each chain
-        return [create_init() for _ in range(4)]  # Create 4 different initializations
+        return [create_init() for _ in range(config.chains)]
     
     def compute_log_loss_on_missing(self, fit, observed_test: Dict[str, Any], missing_test: Dict[str, Any], stan_data: Dict[str, Any]) -> Dict[str, float]:
         """Compute log-loss on missing test annotations using posterior predictive distribution"""
@@ -494,7 +494,7 @@ class DomainModelTrainer:
             stan_data = self.prepare_stan_data(subset_data, config, data['config'])
             
             # Create reasonable initial values
-            init_values = self._create_initial_values(stan_data, seed + i)
+            init_values = self._create_initial_values(stan_data, seed + i, config)
             
             # Train model with comprehensive logging
             import time

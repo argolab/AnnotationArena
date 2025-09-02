@@ -121,7 +121,7 @@ model {
         int ij_idx = (i-1)*J + j;
         
         // Base score: z_ijk = v_ij · e_k
-        real base_score = base_scores[ij_idx, k-1];
+        real base_score = base_scores[ij_idx, k];
         
         // Rating likelihood: P(rating = c) = Φ((Q_c - z)/σ_m) - Φ((Q_{c-1} - z)/σ_m)
         // where Q_c are the thresholds and ε ~ N(0, σ_m²)
@@ -162,7 +162,7 @@ model {
         vector[ranking_size] item_scores;
         for (r in 1:ranking_size) {
             int k = ranking_items[n, r];
-            item_scores[r] = base_scores[ij_idx, k-1] / temperature;
+            item_scores[r] = base_scores[ij_idx, k] / temperature;
         }
         
         // Plackett-Luce likelihood - fixed version
@@ -220,7 +220,7 @@ generated quantities {
         int c = rating_values[n];
         int ij_idx = (i-1)*J + j;
         
-        real base_score = base_scores[ij_idx, k-1];
+        real base_score = base_scores[ij_idx, k];
         real upper_threshold = rating_thresholds[ij_idx][c+1];
         real lower_threshold = rating_thresholds[ij_idx][c];
         
@@ -250,7 +250,7 @@ generated quantities {
         vector[ranking_size] item_scores;
         for (r in 1:ranking_size) {
             int k = ranking_items[n, r];
-            item_scores[r] = base_scores[ij_idx, k-1] / temperature;
+            item_scores[r] = base_scores[ij_idx, k] / temperature;
         }
         
         // Same fixed logic as in model block

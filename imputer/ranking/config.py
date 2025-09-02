@@ -8,13 +8,13 @@ from typing import List, Optional
 class ExperimentConfig:
     """Master configuration for ranking annotation experiments."""
     
-    K: int = 16  # number of items
-    I: int = 10  # number of attributes  
-    J: int = 5   # number of annotators
-    D: int = 32  # embedding dimension
+    K: int = 5  # number of items
+    I: int = 3  # number of attributes  
+    J: int = 3   # number of annotators
+    D: int = 16  # embedding dimension
     C: int = 5   # number of rating categories
-    ranking_size: int = 5  # size of ranking sets
-    rankings_per_annotator_attribute: int = 10  # rankings per (annotator, attribute) pair
+    ranking_size: int = 3  # size of ranking sets
+    rankings_per_annotator_attribute: int = 3  # rankings per (annotator, attribute) pair
     
     train_fraction: float = 0.80
     test_fraction: float = 0.20
@@ -29,9 +29,9 @@ class ExperimentConfig:
     
     chains: int = 3           # number of MCMC chains
     iter_warmup: int = 1000   # warmup iterations
-    iter_sampling: int = 3000 # sampling iterations
+    iter_sampling: int = 1000 # sampling iterations
     adapt_delta: float = 0.8  # target acceptance rate
-    max_treedepth: int = 12   # maximum tree depth
+    max_treedepth: int = 10   # maximum tree depth
     
     budget_fractions: List[float] = None
     
@@ -40,7 +40,7 @@ class ExperimentConfig:
     
     def __post_init__(self):
         if self.budget_fractions is None:
-            self.budget_fractions = [0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
+            self.budget_fractions = [0.1, 1.0]
     
     def to_data_generation_config(self):
         """Convert to DatasetConfig for data generation."""
