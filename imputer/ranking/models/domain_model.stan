@@ -34,6 +34,7 @@ data {
     real<lower=0> temperature;
     
     // Prior scales
+    // Use this as a paramters?
     real<lower=0> sigma_embedding_prior;
     real<lower=0> sigma_preference_prior;
 }
@@ -49,6 +50,7 @@ parameters {
     matrix[I*J, D] annotator_preferences;
     
     // Rating thresholds (per annotator-attribute pair) as cumulative inverse CDF values
+    // TODO - Try with raw probabilities directly
     array[I*J] ordered[C-1] rating_thresholds_raw;
 }
 
@@ -101,6 +103,7 @@ model {
     }
     
     // Rating threshold priors: ordered thresholds
+    // TODO: Why 2?
     for (ij in 1:(I*J)) {
         for (c in 1:(C-1)) {
             rating_thresholds_raw[ij][c] ~ normal(0, 2.0);  // Diffuse prior on thresholds
@@ -118,7 +121,7 @@ model {
         int ij_idx = (i-1)*J + j;
         
         // Base score: z_ijk = v_ij · e_k
-        real base_score = base_scores[ij_idx, k];
+        real base_score = base_scores[ij_idx, k-1];
         
         // Rating likelihood: P(rating = c) = Φ((Q_c - z)/σ_m) - Φ((Q_{c-1} - z)/σ_m)
         // where Q_c are the thresholds and ε ~ N(0, σ_m²)
@@ -159,11 +162,12 @@ model {
         vector[ranking_size] item_scores;
         for (r in 1:ranking_size) {
             int k = ranking_items[n, r];
-            item_scores[r] = base_scores[ij_idx, k] / temperature;
+            item_scores[r] = base_scores[ij_idx, k-1] / temperature;
         }
         
         // Plackett-Luce likelihood - fixed version
         // Convert ranking order to proper Plackett-Luce format
+        // TODO: What is it doing?
         array[ranking_size] int item_order;
         for (pos in 1:ranking_size) {
             item_order[ranking_orders[n, pos]] = pos;  // Map item rank to position
@@ -216,7 +220,7 @@ generated quantities {
         int c = rating_values[n];
         int ij_idx = (i-1)*J + j;
         
-        real base_score = base_scores[ij_idx, k];
+        real base_score = base_scores[ij_idx, k-1];
         real upper_threshold = rating_thresholds[ij_idx][c+1];
         real lower_threshold = rating_thresholds[ij_idx][c];
         
@@ -246,7 +250,7 @@ generated quantities {
         vector[ranking_size] item_scores;
         for (r in 1:ranking_size) {
             int k = ranking_items[n, r];
-            item_scores[r] = base_scores[ij_idx, k] / temperature;
+            item_scores[r] = base_scores[ij_idx, k-1] / temperature;
         }
         
         // Same fixed logic as in model block
