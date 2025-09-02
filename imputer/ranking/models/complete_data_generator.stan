@@ -117,27 +117,47 @@ generated quantities {
         }
     }
     
-    // ===== Generate sample rankings (multiple per annotator-attribute) =====
+    // ===== Generate sample rankings (adjacent items by utility) =====
     for (i in 1:I) {
         for (j in 1:J) {
             int ij_idx = (i-1)*J + j;
             
-            // Generate multiple rankings for this annotator-attribute pair
+            // Sort items by base utility
+            array[K] int sorted_items;
+            array[K] real item_utilities;
+            for (k in 1:K) {
+                sorted_items[k] = k;
+                item_utilities[k] = base_scores[ij_idx, k];
+            }
+            
+            // Bubble sort items by utility (descending)
+            for (i_sort in 1:(K-1)) {
+                for (j_sort in 1:(K-i_sort)) {
+                    if (item_utilities[j_sort] < item_utilities[j_sort+1]) {
+                        real temp_util = item_utilities[j_sort];
+                        item_utilities[j_sort] = item_utilities[j_sort+1];
+                        item_utilities[j_sort+1] = temp_util;
+                        
+                        int temp_item = sorted_items[j_sort];
+                        sorted_items[j_sort] = sorted_items[j_sort+1];
+                        sorted_items[j_sort+1] = temp_item;
+                    }
+                }
+            }
+            
+            // Generate sliding window rankings
             for (ranking_idx in 1:rankings_per_annotator_attribute) {
                 int global_ranking_idx = (ij_idx-1)*rankings_per_annotator_attribute + ranking_idx;
-            
-                // Sample items to rank (without replacement)
-                array[K] int available_items;
-                for (k in 1:K) available_items[k] = k;
+                int start_pos = ranking_idx;
                 
-                // Select ranking_size items
+                // Select adjacent items
                 for (r in 1:ranking_size) {
-                    int remaining = K - r + 1;
-                    int selected_idx = categorical_rng(rep_vector(1.0/remaining, remaining));
-                    all_ranking_items[global_ranking_idx, r] = available_items[selected_idx];
-                    
-                    // Remove selected item
-                    available_items[selected_idx] = available_items[remaining];
+                    int pos = start_pos + r - 1;
+                    if (pos <= K) {
+                        all_ranking_items[global_ranking_idx, r] = sorted_items[pos];
+                    } else {
+                        all_ranking_items[global_ranking_idx, r] = sorted_items[K - ranking_size + r];
+                    }
                 }
                 
                 // Generate ranking using Gumbel noise

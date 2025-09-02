@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""
-Domain model training and evaluation for mixed annotation types using Stan MCMC.
-
-This module provides progressive training similar to the Gaussian experiments,
-computing log-likelihood and KL divergence metrics.
-"""
+"""Domain model training and evaluation for mixed annotation types using Stan MCMC."""
 
 import numpy as np
 import json
@@ -27,26 +22,22 @@ except ImportError:
 
 @dataclass
 class DomainModelConfig:
-    """Configuration for domain model training"""
-    # MCMC parameters
-    chains: int = 4
-    iter_warmup: int = 1000
-    iter_sampling: int = 1000
-    adapt_delta: float = 0.8
-    max_treedepth: int = 10
+    """Configuration for domain model training."""
+    chains: int = 4          # MCMC chains
+    iter_warmup: int = 2000  # warmup iterations
+    iter_sampling: int = 5000 # sampling iterations
+    adapt_delta: float = 0.8  # target acceptance rate
+    max_treedepth: int = 15   # maximum tree depth
     
-    # Model hyperparameters (should match data generation)
-    sigma_annotator: float = 0.3
-    sigma_measurement: float = 0.1
-    alpha_dirichlet: float = 2.0
-    temperature: float = 0.5
+    sigma_annotator: float = 0.3    # annotator preference variance
+    sigma_measurement: float = 0.1  # measurement noise variance
+    alpha_dirichlet: float = 2.0    # Dirichlet concentration
+    temperature: float = 0.5        # ranking temperature
     
-    # Prior scales
-    sigma_embedding_prior: float = 1.0
-    sigma_preference_prior: float = 1.0
+    sigma_embedding_prior: float = 1.0   # embedding prior scale
+    sigma_preference_prior: float = 1.0  # preference prior scale
     
-    # Progressive training
-    budget_fractions: List[float] = None  # [0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
+    budget_fractions: List[float] = None  # progressive training fractions
     
     def __post_init__(self):
         if self.budget_fractions is None:
@@ -54,24 +45,21 @@ class DomainModelConfig:
 
 @dataclass
 class ProgressiveResults:
-    """Results from progressive training"""
+    """Results from progressive training."""
     budget_fractions: List[float]
     training_log_likelihoods: List[float]
     test_log_likelihoods: List[float]
     kl_divergences: List[float]
     training_times: List[float]
     n_observations: List[int]
-    
-    # Per-annotation-type metrics
-    ratings_log_lik: List[float]
-    # Removed: comparisons_log_lik: List[float]
+    ratings_log_lik: List[float]  # per-annotation-type metrics
     rankings_log_lik: List[float]
 
 class DomainModelTrainer:
-    """MCMC trainer for mixed annotation domain model"""
+    """MCMC trainer for mixed annotation domain model following 'train on all' paradigm."""
     
     def __init__(self, model_path: Optional[str] = None):
-        """Initialize trainer with Stan model"""
+        """Initialize trainer with Stan model."""
         if not STAN_AVAILABLE:
             raise ImportError("Stan not available - cannot train domain model")
             
@@ -83,7 +71,7 @@ class DomainModelTrainer:
         logger.info("Stan model compiled successfully")
     
     def load_data(self, data_path: Path) -> Dict[str, Any]:
-        """Load train/test annotation data"""
+        """Load train/test annotation data."""
         
         with open(data_path / "test_complete_train.json", 'r') as f:
             train_data = json.load(f)
@@ -140,7 +128,7 @@ class DomainModelTrainer:
         J = max(rating_annotators + ranking_annotators)
         C = max(rating_values)
         ranking_size = len(ranking_items[0]) if ranking_items else 4
-        D = 32  # Default embedding dimension
+        D = 16  # Default embedding dimension
         
         stan_data = {
             # Dimensions
@@ -180,8 +168,8 @@ class DomainModelTrainer:
         
         return stan_data
     
-    def sample_subset(self, train_data: Dict[str, Any], fraction: float, seed: int = 42) -> Dict[str, Any]:
-        """Sample a fraction of training data for progressive training"""
+    def sample_training_subset(self, train_data: Dict[str, Any], fraction: float, seed: int = 42) -> Dict[str, Any]:
+        """Sample a fraction of COMPLETE training data for progressive experiments"""
         
         np.random.seed(seed)
         
@@ -201,29 +189,29 @@ class DomainModelTrainer:
             'rankings': sampled_rankings
         }
     
-    def mask_data_for_training(self, data: Dict[str, Any], mask_fraction: float = 0.5, seed: int = 42) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-        """Mask a fraction of data positions for imputation training"""
+    def mask_test_data_for_evaluation(self, test_data: Dict[str, Any], mask_fraction: float = 0.5, seed: int = 42) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+        """Mask a fraction of test annotations to evaluate imputation capability"""
         
         np.random.seed(seed)
         
-        visible_data = {'ratings': [], 'rankings': []}
-        masked_data = {'ratings': [], 'rankings': []}
+        observed_data = {'ratings': [], 'rankings': []}
+        missing_data = {'ratings': [], 'rankings': []}
         
         # Mask ratings
-        for rating in data['ratings']:
+        for rating in test_data['ratings']:
             if np.random.random() < mask_fraction:
-                masked_data['ratings'].append(rating)
+                missing_data['ratings'].append(rating)
             else:
-                visible_data['ratings'].append(rating)
+                observed_data['ratings'].append(rating)
         
-        # Mask rankings
-        for ranking in data['rankings']:
+        # Mask rankings  
+        for ranking in test_data['rankings']:
             if np.random.random() < mask_fraction:
-                masked_data['rankings'].append(ranking)
+                missing_data['rankings'].append(ranking)
             else:
-                visible_data['rankings'].append(ranking)
+                observed_data['rankings'].append(ranking)
         
-        return visible_data, masked_data
+        return observed_data, missing_data
     
     def compute_kl_divergence(self, learned_embeddings: np.ndarray, 
                             true_embeddings: np.ndarray) -> float:
@@ -275,24 +263,110 @@ class DomainModelTrainer:
                     idx = i*J + j
                     annotator_preferences[idx] = mean_preferences[i] + np.random.normal(0, 0.1, D)
             
-            # Uniform rating probabilities (slightly perturbed)
-            rating_probs = []
+            # Initialize ordered rating thresholds
+            rating_thresholds_raw = []
             for ij in range(I*J):
-                # Start with uniform, add small noise
-                probs = np.ones(C) / C + np.random.normal(0, 0.01, C)
-                probs = np.maximum(probs, 0.01)  # Ensure positive
-                probs = probs / np.sum(probs)  # Normalize
-                rating_probs.append(probs.tolist())
+                # Create ordered thresholds: Q_1 < Q_2 < ... < Q_{C-1}
+                thresholds = np.sort(np.random.normal(0, 1, C-1))
+                rating_thresholds_raw.append(thresholds.tolist())
             
             return {
                 'embeddings': embeddings.tolist(),
                 'mean_preferences': mean_preferences.tolist(),
                 'annotator_preferences': annotator_preferences.tolist(),
-                'rating_probs': rating_probs
+                'rating_thresholds_raw': rating_thresholds_raw
             }
         
         # Return list of initial values for each chain
         return [create_init() for _ in range(4)]  # Create 4 different initializations
+    
+    def compute_log_loss_on_missing(self, fit, observed_test: Dict[str, Any], missing_test: Dict[str, Any], stan_data: Dict[str, Any]) -> Dict[str, float]:
+        """Compute log-loss on missing test annotations using posterior predictive distribution"""
+        
+        # Get dimensions and parameters
+        J = stan_data['J']
+        C = stan_data['C']
+        sigma_measurement = stan_data['sigma_measurement']
+        temperature = stan_data['temperature']
+        
+        # Extract posterior means for prediction
+        embeddings = np.mean(fit.stan_variable('embeddings'), axis=0)  # [K, D]
+        preferences = np.mean(fit.stan_variable('annotator_preferences'), axis=0)  # [I*J, D]  
+        threshold_samples = fit.stan_variable('rating_thresholds_raw')  # [samples, I*J, C-1]
+        thresholds_mean = np.mean(threshold_samples, axis=0)  # [I*J, C-1]
+        
+        # Compute base scores
+        base_scores = preferences @ embeddings.T  # [I*J, K]
+        
+        results = {'ratings': 0.0, 'rankings': 0.0, 'total': 0.0}
+        total_log_loss = 0.0
+        
+        # 1. RATING LOG-LOSS
+        if missing_test['ratings']:
+            rating_log_loss = 0.0
+            for r in missing_test['ratings']:
+                i, j, k, c_true = r['attribute'], r['annotator'], r['item'], r['value'] 
+                ij_idx = (i-1)*J + (j-1)
+                
+                # Base score z_ijk = v_ij · e_k
+                base_score = base_scores[ij_idx, k-1]
+                
+                # Compute rating probabilities using corrected likelihood
+                # P(rating = c) = Φ((Q_c - z)/σ_m) - Φ((Q_{c-1} - z)/σ_m)
+                from scipy.stats import norm
+                
+                # Create threshold boundaries: [-∞, Q_1, Q_2, ..., Q_{C-1}, +∞]
+                full_thresholds = np.concatenate([
+                    [-np.inf], 
+                    thresholds_mean[ij_idx], 
+                    [np.inf]
+                ])
+                
+                # Compute probability for true category c_true
+                upper_thresh = full_thresholds[c_true]  # c_true is 1-indexed
+                lower_thresh = full_thresholds[c_true-1]
+                
+                upper_prob = 1.0 if upper_thresh == np.inf else norm.cdf((upper_thresh - base_score) / sigma_measurement)
+                lower_prob = 0.0 if lower_thresh == -np.inf else norm.cdf((lower_thresh - base_score) / sigma_measurement)
+                
+                prob = upper_prob - lower_prob
+                prob = max(prob, 1e-10)  # Numerical stability
+                
+                rating_log_loss += -np.log(prob)
+            
+            rating_log_loss /= len(missing_test['ratings'])
+            results['ratings'] = rating_log_loss
+            total_log_loss += rating_log_loss
+        
+        # 2. RANKING LOG-LOSS (Plackett-Luce)
+        if missing_test['rankings']:
+            ranking_log_loss = 0.0
+            for r in missing_test['rankings']:
+                i, j = r['attribute'], r['annotator']
+                items = r['items']
+                true_order = r['order']
+                ij_idx = (i-1)*J + (j-1)
+                
+                # Get item scores and apply temperature scaling
+                item_scores = np.array([base_scores[ij_idx, k-1] / temperature for k in items])
+                
+                # Compute Plackett-Luce log-likelihood
+                ranking_log_lik = 0.0
+                for pos in range(len(items)):
+                    chosen_idx = true_order[pos] - 1  # Convert to 0-indexed
+                    remaining_scores = item_scores[pos:]  # Remaining items
+                    
+                    log_sum_exp_remaining = np.logaddexp.reduce(remaining_scores)
+                    ranking_log_lik += item_scores[chosen_idx] - log_sum_exp_remaining
+                
+                ranking_log_loss += -ranking_log_lik
+            
+            ranking_log_loss /= len(missing_test['rankings'])
+            results['rankings'] = ranking_log_loss
+            total_log_loss += ranking_log_loss
+        
+        results['total'] = total_log_loss / (len([k for k in ['ratings', 'rankings'] if missing_test[k]]))
+        return results
     
     def evaluate_imputation_accuracy(self, fit, visible_test: Dict[str, Any], masked_test: Dict[str, Any], stan_data: Dict[str, Any]) -> Dict[str, float]:
         """Evaluate imputation accuracy on masked test positions"""
@@ -368,9 +442,19 @@ class DomainModelTrainer:
         return results
     
     def progressive_training(self, data_path: Path, config: DomainModelConfig, 
-                           seed: int = 42) -> ProgressiveResults:
+                           seed: int = 42, output_dir: Path = None) -> ProgressiveResults:
         """Perform progressive training with increasing data budgets"""
         
+        # Setup output directory for logging
+        if output_dir is None:
+            output_dir = Path("domain_results")
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Setup comprehensive logging
+        log_dir = output_dir / "stan_logs"
+        log_dir.mkdir(exist_ok=True)
+        
+        logger.info(f"Stan logs will be saved to: {log_dir}")
         logger.info("Loading data for progressive training...")
         data = self.load_data(data_path)
         
@@ -391,21 +475,25 @@ class DomainModelTrainer:
         for i, fraction in enumerate(config.budget_fractions):
             logger.info(f"Training with budget fraction {fraction:.1%} ({i+1}/{len(config.budget_fractions)})...")
             
-            # Sample subset of training data
-            subset_data = self.sample_subset(data['train'], fraction, seed + i)
+            # Sample subset of COMPLETE training data (no masking during training)
+            subset_data = self.sample_training_subset(data['train'], fraction, seed + i)
             
-            # Mask 50% for imputation training
-            visible_train, masked_train = self.mask_data_for_training(subset_data, mask_fraction=0.5, seed=seed + i + 100)
-            
-            # Train on visible data only
-            stan_data = self.prepare_stan_data(visible_train, config)
+            # Train on ALL available annotations in the subset
+            stan_data = self.prepare_stan_data(subset_data, config)
             
             # Create reasonable initial values
             init_values = self._create_initial_values(stan_data, seed + i)
             
-            # Train model
+            # Train model with comprehensive logging
             import time
             start_time = time.time()
+            
+            # Setup detailed Stan output files
+            stan_output_dir = log_dir / f"fraction_{fraction:.1f}"
+            stan_output_dir.mkdir(exist_ok=True)
+            
+            logger.info(f"Running MCMC for fraction {fraction:.1%}...")
+            logger.info(f"Stan files: {stan_output_dir}")
             
             fit = self.model.sample(
                 data=stan_data,
@@ -415,8 +503,43 @@ class DomainModelTrainer:
                 adapt_delta=config.adapt_delta,
                 max_treedepth=config.max_treedepth,
                 seed=seed + i,
-                inits=init_values
+                inits=init_values,
+                output_dir=str(stan_output_dir),
+                save_warmup=True,
+                show_progress=True
             )
+            
+            # Save Stan diagnostics and summaries
+            try:
+                # Save fit summary
+                with open(stan_output_dir / "fit_summary.txt", 'w') as f:
+                    f.write(str(fit.summary()))
+                
+                # Save diagnostics
+                diagnostics = fit.diagnose()
+                with open(stan_output_dir / "diagnostics.txt", 'w') as f:
+                    f.write(str(diagnostics))
+                
+                # Save sample metadata
+                import json
+                sample_metadata = {
+                    'chains': config.chains,
+                    'iter_warmup': config.iter_warmup,
+                    'iter_sampling': config.iter_sampling,
+                    'adapt_delta': config.adapt_delta,
+                    'max_treedepth': config.max_treedepth,
+                    'seed': seed + i,
+                    'budget_fraction': fraction,
+                    'n_observations': len(subset_data['ratings']) + len(subset_data['rankings']),
+                    'stan_data_dims': {k: v for k, v in stan_data.items() if isinstance(v, (int, float))}
+                }
+                with open(stan_output_dir / "sample_metadata.json", 'w') as f:
+                    json.dump(sample_metadata, f, indent=2)
+                
+                logger.info(f"Stan output saved to {stan_output_dir}")
+                
+            except Exception as e:
+                logger.warning(f"Failed to save some Stan diagnostics: {e}")
             
             training_time = time.time() - start_time
             
@@ -427,30 +550,33 @@ class DomainModelTrainer:
             # Compute KL divergence
             kl_div = self.compute_kl_divergence(learned_embeddings, true_embeddings)
             
-            # Evaluate imputation accuracy on test set (mask 50% of test)
-            visible_test, masked_test = self.mask_data_for_training(data['test'], mask_fraction=0.5, seed=seed + i + 200)
-            accuracy_results = self.evaluate_imputation_accuracy(fit, visible_test, masked_test, stan_data)
+            # Evaluate imputation on test set: artificially mask 50% and predict them
+            observed_test, missing_test = self.mask_test_data_for_evaluation(data['test'], mask_fraction=0.5, seed=seed + i + 200)
             
-            # Per-annotation-type accuracies
-            rating_acc = accuracy_results['rating_accuracy']
-            comparison_acc = 0.0  # No comparisons to evaluate
-            ranking_acc = accuracy_results['ranking_accuracy']
+            # Compute log-loss on missing test annotations
+            test_log_loss = self.compute_log_loss_on_missing(fit, observed_test, missing_test, stan_data)
+            
+            # Extract per-annotation-type log-losses
+            rating_log_loss = test_log_loss.get('ratings', 0.0)
+            ranking_log_loss = test_log_loss.get('rankings', 0.0)
+            total_test_log_loss = test_log_loss.get('total', 0.0)
             
             # Store results
             results.training_log_likelihoods.append(training_log_lik)
-            results.test_log_likelihoods.append(np.mean([rating_acc, ranking_acc]))  # Average accuracy
+            results.test_log_likelihoods.append(total_test_log_loss)  # Log-loss on test set
             results.kl_divergences.append(kl_div)
             results.training_times.append(training_time)
-            results.n_observations.append(len(visible_train['ratings']) + len(visible_train['rankings']))
-            results.ratings_log_lik.append(rating_acc)
-            # results.comparisons_log_lik.append(0.0)  # Removed comparison tracking
-            results.rankings_log_lik.append(ranking_acc)
+            results.n_observations.append(len(subset_data['ratings']) + len(subset_data['rankings']))
+            results.ratings_log_lik.append(rating_log_loss)
+            results.rankings_log_lik.append(ranking_log_loss)
             
             logger.info(f"  Training log-likelihood: {training_log_lik:.3f}")
-            logger.info(f"  Rating accuracy: {rating_acc:.3f}")
-            logger.info(f"  Ranking accuracy (Kendall tau): {ranking_acc:.3f}")
+            logger.info(f"  Test log-loss: {total_test_log_loss:.3f}")
+            logger.info(f"  Rating log-loss: {rating_log_loss:.3f}")
+            logger.info(f"  Ranking log-loss: {ranking_log_loss:.3f}")
             logger.info(f"  KL divergence: {kl_div:.3f}")
             logger.info(f"  Training time: {training_time:.1f}s")
+            logger.info(f"  Observations used: {len(subset_data['ratings']) + len(subset_data['rankings'])}")
         
         return results
     
@@ -461,14 +587,14 @@ class DomainModelTrainer:
         
         fig, axes = plt.subplots(2, 2, figsize=(12, 10))
         
-        # 1. Training log-likelihood and test accuracy curves
+        # 1. Training log-likelihood and test log-loss curves
         ax = axes[0, 0]
         ax.plot(results.budget_fractions, results.training_log_likelihoods, 'b-o', label='Training Log-Likelihood')
         ax2 = ax.twinx()
-        ax2.plot(results.budget_fractions, results.test_log_likelihoods, 'r-o', label='Test Accuracy')
+        ax2.plot(results.budget_fractions, results.test_log_likelihoods, 'r-o', label='Test Log-Loss')
         ax.set_xlabel('Budget Fraction')
         ax.set_ylabel('Training Log-Likelihood', color='b')
-        ax2.set_ylabel('Test Imputation Accuracy', color='r')
+        ax2.set_ylabel('Test Log-Loss (lower = better)', color='r')
         ax.set_title('Domain Model Performance')
         ax.grid(True)
         
@@ -488,13 +614,13 @@ class DomainModelTrainer:
         ax.set_title('MCMC Training Time')
         ax.grid(True)
         
-        # 4. Per-annotation-type accuracies
+        # 4. Per-annotation-type log-losses
         ax = axes[1, 1]
-        ax.plot(results.budget_fractions, results.ratings_log_lik, 'b-o', label='Rating Accuracy')
-        ax.plot(results.budget_fractions, results.rankings_log_lik, 'g-o', label='Ranking Accuracy (τ)')
+        ax.plot(results.budget_fractions, results.ratings_log_lik, 'b-o', label='Rating Log-Loss')
+        ax.plot(results.budget_fractions, results.rankings_log_lik, 'g-o', label='Ranking Log-Loss')
         ax.set_xlabel('Budget Fraction')
-        ax.set_ylabel('Imputation Accuracy')
-        ax.set_title('Per-Annotation-Type Accuracy')
+        ax.set_ylabel('Log-Loss (lower = better)')
+        ax.set_title('Per-Annotation-Type Log-Loss')
         ax.legend()
         ax.grid(True)
         
@@ -520,17 +646,17 @@ def main():
     # Train model
     data_path = Path(__file__).parent / "generated_data"
     trainer = DomainModelTrainer()
-    results = trainer.progressive_training(data_path, config, seed=12345)
-    
-    # Create plots
     output_dir = Path(__file__).parent / "domain_results"
+    results = trainer.progressive_training(data_path, config, seed=12345, output_dir=output_dir)
+    
+    # Create plots  
     trainer.plot_results(results, output_dir)
     
     # Print summary
     print("Domain Model Training Complete!")
-    print(f"Final test accuracy: {results.test_log_likelihoods[-1]:.3f}")
-    print(f"Final rating accuracy: {results.ratings_log_lik[-1]:.3f}")
-    print(f"Final ranking accuracy: {results.rankings_log_lik[-1]:.3f}")
+    print(f"Final test log-loss: {results.test_log_likelihoods[-1]:.3f}")
+    print(f"Final rating log-loss: {results.ratings_log_lik[-1]:.3f}")
+    print(f"Final ranking log-loss: {results.rankings_log_lik[-1]:.3f}")
     print(f"Final KL divergence: {results.kl_divergences[-1]:.3f}")
     print(f"Total training time: {sum(results.training_times):.1f}s")
 

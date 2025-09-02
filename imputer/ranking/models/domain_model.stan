@@ -19,13 +19,6 @@ data {
     array[N_ratings] int<lower=1, upper=K> rating_items;
     array[N_ratings] int<lower=1, upper=C> rating_values;
     
-    // Observed comparisons
-    int<lower=0> N_comparisons;
-    array[N_comparisons] int<lower=1, upper=I> comparison_attributes;
-    array[N_comparisons] int<lower=1, upper=J> comparison_annotators;
-    array[N_comparisons] int<lower=1, upper=K> comparison_items_a;
-    array[N_comparisons] int<lower=1, upper=K> comparison_items_b;
-    array[N_comparisons] int<lower=0, upper=1> comparison_results;
     
     // Observed rankings
     int<lower=0> N_rankings;
@@ -55,16 +48,16 @@ parameters {
     // Annotator-specific preferences
     matrix[I*J, D] annotator_preferences;
     
-    // Rating thresholds (per annotator-attribute pair)
-    array[I*J] simplex[C] rating_probs;
+    // Rating thresholds (per annotator-attribute pair) as cumulative inverse CDF values
+    array[I*J] ordered[C-1] rating_thresholds_raw;
 }
 
 transformed parameters {
     // Base utility scores
     matrix[I*J, K] base_scores;
     
-    // Rating thresholds
-    array[I*J] vector[C] rating_thresholds;
+    // Rating thresholds with -inf and +inf boundaries
+    array[I*J] vector[C+1] rating_thresholds;
     
     // Compute base scores: z_ij_k = v_ij · e_k
     for (i in 1:I) {
@@ -76,9 +69,13 @@ transformed parameters {
         }
     }
     
-    // Convert rating probabilities to cumulative thresholds
+    // Construct full threshold vector with boundaries
     for (ij in 1:(I*J)) {
-        rating_thresholds[ij] = cumulative_sum(rating_probs[ij]);
+        rating_thresholds[ij][1] = negative_infinity();  // -∞ for category 1
+        for (c in 2:C) {
+            rating_thresholds[ij][c] = rating_thresholds_raw[ij][c-1];
+        }
+        rating_thresholds[ij][C+1] = positive_infinity();  // +∞ for category C
     }
 }
 
@@ -103,9 +100,11 @@ model {
         }
     }
     
-    // Rating threshold priors: p_ij ~ Dir(α/C, ..., α/C)
+    // Rating threshold priors: ordered thresholds
     for (ij in 1:(I*J)) {
-        rating_probs[ij] ~ dirichlet(rep_vector(alpha_dirichlet/C, C));
+        for (c in 1:(C-1)) {
+            rating_thresholds_raw[ij][c] ~ normal(0, 2.0);  // Diffuse prior on thresholds
+        }
     }
     
     // ===== LIKELIHOODS =====
@@ -118,60 +117,39 @@ model {
         int c = rating_values[n];
         int ij_idx = (i-1)*J + j;
         
-        // Noisy score: s = z_ijk + ε, ε ~ N(0, σ_m²)
+        // Base score: z_ijk = v_ij · e_k
         real base_score = base_scores[ij_idx, k];
-        real pref_norm = sqrt(dot_self(annotator_preferences[ij_idx]));
-        real total_std = sqrt(pref_norm^2 + sigma_measurement^2);
-        real standardized_score = base_score / total_std;
-        real cdf_val = Phi(standardized_score);
         
-        // Binning likelihood with numerical stability
-        real bin_prob;
-        if (c == 1) {
-            bin_prob = rating_thresholds[ij_idx][c] - cdf_val;
-        } else if (c == C) {
-            bin_prob = cdf_val - rating_thresholds[ij_idx][c-1];
+        // Rating likelihood: P(rating = c) = Φ((Q_c - z)/σ_m) - Φ((Q_{c-1} - z)/σ_m)
+        // where Q_c are the thresholds and ε ~ N(0, σ_m²)
+        real upper_threshold = rating_thresholds[ij_idx][c+1];
+        real lower_threshold = rating_thresholds[ij_idx][c];
+        
+        real upper_prob, lower_prob;
+        
+        if (upper_threshold == positive_infinity()) {
+            upper_prob = 1.0;
         } else {
-            bin_prob = rating_thresholds[ij_idx][c] - rating_thresholds[ij_idx][c-1];
+            upper_prob = Phi((upper_threshold - base_score) / sigma_measurement);
         }
         
-        // Ensure positive probability
+        if (lower_threshold == negative_infinity()) {
+            lower_prob = 0.0;
+        } else {
+            lower_prob = Phi((lower_threshold - base_score) / sigma_measurement);
+        }
+        
+        real bin_prob = upper_prob - lower_prob;
+        
+        // Numerical stability
         if (bin_prob > 1e-8) {
             target += log(bin_prob);
         } else {
-            target += log(1e-8);  // Minimum probability to avoid -inf
+            target += log(1e-8);
         }
     }
     
-    // 2. COMPARISON LIKELIHOOD
-    for (n in 1:N_comparisons) {
-        int i = comparison_attributes[n];
-        int j = comparison_annotators[n];
-        int k_a = comparison_items_a[n];
-        int k_b = comparison_items_b[n];
-        int result = comparison_results[n];
-        int ij_idx = (i-1)*J + j;
-        
-        // Score difference with noise
-        real score_a = base_scores[ij_idx, k_a];
-        real score_b = base_scores[ij_idx, k_b];
-        real score_diff = score_a - score_b;
-        real noise_std = sigma_measurement * sqrt(2);  // Independent noise on both scores
-        
-        // Probit likelihood: P(a > b) = Φ((z_a - z_b) / σ_noise)
-        real prob = Phi(score_diff / noise_std);
-        
-        // Ensure probability is in valid range [1e-8, 1-1e-8]
-        prob = fmax(1e-8, fmin(1 - 1e-8, prob));
-        
-        if (result == 1) {
-            target += log(prob);
-        } else {
-            target += log(1 - prob);
-        }
-    }
-    
-    // 3. RANKING LIKELIHOOD (Plackett-Luce with Gumbel noise)
+    // 2. RANKING LIKELIHOOD (Plackett-Luce with Gumbel noise)
     for (n in 1:N_rankings) {
         int i = ranking_attributes[n];
         int j = ranking_annotators[n];
@@ -227,7 +205,6 @@ model {
 generated quantities {
     // Log-likelihood components for evaluation
     real log_lik_ratings = 0;
-    real log_lik_comparisons = 0;
     real log_lik_rankings = 0;
     real total_log_lik = 0;
     
@@ -240,39 +217,25 @@ generated quantities {
         int ij_idx = (i-1)*J + j;
         
         real base_score = base_scores[ij_idx, k];
-        real pref_norm = sqrt(dot_self(annotator_preferences[ij_idx]));
-        real total_std = sqrt(pref_norm^2 + sigma_measurement^2);
-        real standardized_score = base_score / total_std;
-        real cdf_val = Phi(standardized_score);
+        real upper_threshold = rating_thresholds[ij_idx][c+1];
+        real lower_threshold = rating_thresholds[ij_idx][c];
         
-        if (c == 1) {
-            log_lik_ratings += log(rating_thresholds[ij_idx][c] - cdf_val + 1e-10);
-        } else if (c == C) {
-            log_lik_ratings += log(cdf_val - rating_thresholds[ij_idx][c-1] + 1e-10);
+        real upper_prob, lower_prob;
+        
+        if (upper_threshold == positive_infinity()) {
+            upper_prob = 1.0;
         } else {
-            log_lik_ratings += log(rating_thresholds[ij_idx][c] - rating_thresholds[ij_idx][c-1] + 1e-10);
+            upper_prob = Phi((upper_threshold - base_score) / sigma_measurement);
         }
-    }
-    
-    for (n in 1:N_comparisons) {
-        int i = comparison_attributes[n];
-        int j = comparison_annotators[n];
-        int k_a = comparison_items_a[n];
-        int k_b = comparison_items_b[n];
-        int result = comparison_results[n];
-        int ij_idx = (i-1)*J + j;
         
-        real score_a = base_scores[ij_idx, k_a];
-        real score_b = base_scores[ij_idx, k_b];
-        real score_diff = score_a - score_b;
-        real noise_std = sigma_measurement * sqrt(2);
-        real prob = Phi(score_diff / noise_std);
-        
-        if (result == 1) {
-            log_lik_comparisons += log(prob + 1e-10);
+        if (lower_threshold == negative_infinity()) {
+            lower_prob = 0.0;
         } else {
-            log_lik_comparisons += log(1 - prob + 1e-10);
+            lower_prob = Phi((lower_threshold - base_score) / sigma_measurement);
         }
+        
+        real bin_prob = upper_prob - lower_prob;
+        log_lik_ratings += log(bin_prob + 1e-10);
     }
     
     for (n in 1:N_rankings) {
@@ -321,5 +284,5 @@ generated quantities {
         }
     }
     
-    total_log_lik = log_lik_ratings + log_lik_comparisons + log_lik_rankings;
+    total_log_lik = log_lik_ratings + log_lik_rankings;
 }
