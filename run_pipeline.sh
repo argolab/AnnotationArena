@@ -6,9 +6,9 @@
 
 #SBATCH --job-name=ActiveLearner
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=12GB
+#SBATCH --mem-per-cpu=24GB
 #SBATCH --gpus=1
-#SBATCH --partition=gpu-a100
+#SBATCH --partition=gpu
 #SBATCH --account=a100acct
 #SBATCH --mail-user="psingh54@jhu.edu"
 
@@ -17,28 +17,5 @@ module load cuda/12.1
 
 conda activate llm_rubric_env
 
-wandb login
-
-python /export/fs06/psingh54/ActiveRubric-Internal/src/activeLearner.py \
-    --examples_per_cycle 50 \
-    --experiment variable_gradient_comparison \
-    --loss_type cross_entropy \
-    --resample_validation \
-    --dataset hanna \
-    --runner prabhav \
-    --use_embedding True \
-    --cold_start True \
-    --cycles 8 \
-    --validation_set_size 50 \
-    --active_set_size 100 \
-    --epochs_per_cycle 10 \
-    --train_option dynamic_masking \
-    --gradient_top_only True \
-    --num_patterns_per_example 3 \
-    --visible_ratio 0.5 \
-    --features_per_example 5 \
-    --experiment_name NewHistoricalQuery_VarGrad_3Patterns_0.5_Ratio \
-    --log_level INFO \
-    --use_wandb \
-    --wandb_project active-learning-hanna \
-    --wandb_entity prabhavsingh55221-johns-hopkins-university
+python /export/fs06/psingh54/AnnotationArena/imputer/graphical_synthetic_modeling/main.py --node-sizes 7 5 \
+ --imputer-sizes Tiny Small Large --max-samples 2000 --test-samples 500 --start-examples 10 --increment 200 --missing-rates 0.3 0.5 0.7 --n-graphs 5

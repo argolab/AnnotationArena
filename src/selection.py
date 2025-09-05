@@ -400,7 +400,7 @@ class FastVOICalculator(VOICalculator):
             inputs_grad = inputs.clone().requires_grad_(True)
             
             # Forward pass
-            outputs = model(inputs_grad, annotators, questions, embeddings)
+            outputs, _ = model(inputs_grad, annotators, questions, embeddings)
             
             # Extract predictions for target indices
             if isinstance(target_indices, list) and len(target_indices) == 1:
@@ -1314,7 +1314,7 @@ class EntropyExampleSelectionStrategy(ExampleSelectionStrategy):
             
             # Make predictions
             with torch.no_grad():
-                outputs = self.model(inputs, annotators, questions, embeddings)
+                outputs, _ = self.model(inputs, annotators, questions, embeddings)
                 
                 # Calculate entropy for all masked positions
                 total_entropy = 0.0
@@ -1404,7 +1404,7 @@ class EntropyFeatureSelectionStrategy(FeatureSelectionStrategy):
         
         # Make predictions
         with torch.no_grad():
-            outputs = self.model(inputs, annotators, questions, embeddings)
+            outputs, _ = self.model(inputs, annotators, questions, embeddings)
             
             # Calculate entropy for each masked position
             position_entropies = []
@@ -1640,7 +1640,7 @@ class BADGESelectionStrategy(ExampleSelectionStrategy):
         
         # 2. For each masked position, compute hypothetical label and gradient embedding
         with torch.no_grad():
-            outputs = model(inputs, annotators, questions, question_embeddings)
+            outputs, _ = model(inputs, annotators, questions, question_embeddings)
         
         all_position_embeddings = []
         total_uncertainty = 0.0
@@ -1772,7 +1772,7 @@ class ArgmaxVOICalculator(VOICalculator):
 
         with torch.no_grad():
             # Get initial outputs and compute initial loss
-            outputs = model(inputs, annotators, questions, embeddings)
+            outputs, _ = model(inputs, annotators, questions, embeddings)
             
             # Extract predictions for target indices
             if isinstance(target_indices, list) and len(target_indices) == 1:
@@ -1802,7 +1802,7 @@ class ArgmaxVOICalculator(VOICalculator):
             input_with_answer[:, candidate_idx, 0] = 0  # Mark as observed
             
             # Get predictions with argmax value
-            new_outputs = model(input_with_answer, annotators, questions, embeddings)
+            new_outputs, _ = model(input_with_answer, annotators, questions, embeddings)
             
             # Extract target predictions
             if isinstance(target_indices, list) and len(target_indices) == 1:
@@ -3453,7 +3453,7 @@ class NewGradientTopOnlySelector(GradientSelector):
             # Step 1: Generate fake labels for all masked positions
             fake_labels = {}
             with torch.no_grad():
-                temp_outputs = model(inputs, annotators, questions, embeddings)
+                temp_outputs, _ = model(inputs, annotators, questions, embeddings)
                 for pos in masked_positions:
                     pos_probs = F.softmax(temp_outputs[0, pos], dim=0)
                     sampled_class = torch.multinomial(pos_probs, 1).item()
@@ -3499,7 +3499,7 @@ class NewGradientTopOnlySelector(GradientSelector):
                 
                 model.zero_grad()
                 # Compute outputs using output_inputs (with proper masking)
-                outputs = model(output_inputs, annotators, questions, embeddings)
+                outputs, _ = model(output_inputs, annotators, questions, embeddings)
                 
                 # Compute loss using loss_inputs (all positions use actual loss)
                 loss = model.compute_total_loss(
@@ -3580,7 +3580,7 @@ class NewGradientTopOnlySelector(GradientSelector):
                     # Step 2: Generate fake labels for all masked positions
                     fake_labels = {}
                     with torch.no_grad():
-                        temp_outputs = model(inputs, annotators, questions, embeddings)
+                        temp_outputs, _ = model(inputs, annotators, questions, embeddings)
                         for pos in masked_positions:
                             pos_probs = F.softmax(temp_outputs[i, pos], dim=0)
                             sampled_class = torch.multinomial(pos_probs, 1).item()
@@ -3626,7 +3626,7 @@ class NewGradientTopOnlySelector(GradientSelector):
                         
                         model.zero_grad()
                         # Compute outputs using output_inputs (with proper masking)
-                        outputs = model(output_inputs, annotators, questions, embeddings)
+                        outputs, _ = model(output_inputs, annotators, questions, embeddings)
                         
                         # Compute loss using loss_inputs (all positions use actual loss)
                         example_loss = model.compute_total_loss(

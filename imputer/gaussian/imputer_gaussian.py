@@ -137,18 +137,16 @@ class Positional_Encoder(nn.Module):
         torch.nn.init.kaiming_normal_(self.question_embedding, mode='fan_out', nonlinearity='relu')
         self.num_annotator = num_annotator
 
-    def forward(self, x, annotators, questions, embeddings):
+    def forward(self, x, annotators, questions):
         """Create encoded representations combining annotator and question features."""
         batch_size = x.shape[0]
         question_embeds = self.question_embedding[questions]
         annotators = torch.where(annotators < 0, torch.full_like(annotators, self.num_annotator), annotators)
         annotator_embeds = self.annotator_embedding[annotators]
-        
-        if len(embeddings.shape) == 4:
-            embeddings = embeddings.squeeze(0)
+    
             
         combined_embeds = question_embeds + annotator_embeds
-        feature_x = torch.cat((combined_embeds, embeddings, x[:,:,1:]), dim=-1)
+        feature_x = torch.cat((combined_embeds, x[:,:,1:]), dim=-1)
         param_x = x[:,:,1:].clone()
         
         # Initialize query stream: [batch_size, seq_len, 2] - [binary_decision, weight]
@@ -174,22 +172,17 @@ class EncoderLayer(nn.Module):
         self.out = nn.Linear(feature_dim, feature_dim)
         
         # Query stream processing
-        # self.query_Q = nn.Linear(2, 2)
-        # self.query_K = nn.Linear(2, 2)
-        # self.query_V = nn.Linear(2, 2)
-        # self.query_out = nn.Linear(2, 2)
+        self.query_Q = nn.Linear(2, 2)
+        self.query_K = nn.Linear(2, 2)
+        self.query_V = nn.Linear(2, 2)
+        self.query_out = nn.Linear(2, 2)
         
         self.norm_1 = NormLayer(feature_dim)
         self.norm_2 = NormLayer(feature_dim)
-
-        self.query_update = nn.Linear(feature_dim + 2, 2)
-
-        # self.norm_query = NormLayer(2)
-
+        self.norm_query = NormLayer(2)
         self.dropout_1 = nn.Dropout(dropout)
         self.dropout_2 = nn.Dropout(dropout)
-
-        # self.dropout_query = nn.Dropout(dropout)
+        self.dropout_query = nn.Dropout(dropout)
         
         self.ff = FeedForward(feature_dim, dropout=dropout)
         self.param_update = nn.Linear(feature_dim + param_dim, param_dim)
@@ -202,15 +195,47 @@ class EncoderLayer(nn.Module):
         )
 
     def multihead_attention(self, feature_x, batch_size):
-        """Apply multi-head attention to the features."""
-        Q = self.Q(feature_x).view(batch_size, -1, self.attention_heads, self.feature_dim // self.attention_heads).transpose(1, 2)
-        K = self.K(feature_x).view(batch_size, -1, self.attention_heads, self.feature_dim // self.attention_heads).transpose(1, 2)
-        V = self.V(feature_x).view(batch_size, -1, self.attention_heads, self.feature_dim // self.attention_heads).transpose(1, 2)
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.feature_dim // self.attention_heads)
-        scores = F.softmax(scores, dim=-1)
-        scores = self.dropout_1(scores)
-        scores = torch.matmul(scores, V)
-        scores = scores.transpose(1, 2).contiguous().view(batch_size, -1, self.feature_dim)
+        """Apply multi-head attention to the features with flexible head dimensions."""
+        
+        # Calculate head dimension, allowing for remainder
+        base_head_dim = self.feature_dim // self.attention_heads
+        remainder = self.feature_dim % self.attention_heads
+        
+        # Create head dimensions - distribute remainder across first few heads
+        head_dims = [base_head_dim + (1 if i < remainder else 0) for i in range(self.attention_heads)]
+        
+        # Split the feature dimension for Q, K, V
+        Q = self.Q(feature_x)  # [batch_size, seq_len, feature_dim]
+        K = self.K(feature_x)  # [batch_size, seq_len, feature_dim]
+        V = self.V(feature_x)  # [batch_size, seq_len, feature_dim]
+        
+        # Process each head separately since they have different dimensions
+        attention_outputs = []
+        start_idx = 0
+        
+        for i in range(self.attention_heads):
+            head_dim = head_dims[i]
+            
+            # Extract head-specific portions
+            Q_head = Q[:, :, start_idx:start_idx + head_dim]  # [batch_size, seq_len, head_dim]
+            K_head = K[:, :, start_idx:start_idx + head_dim]  # [batch_size, seq_len, head_dim]
+            V_head = V[:, :, start_idx:start_idx + head_dim]  # [batch_size, seq_len, head_dim]
+            
+            # Compute attention scores for this head
+            scores = torch.matmul(Q_head, K_head.transpose(-2, -1)) / math.sqrt(head_dim)
+            scores = F.softmax(scores, dim=-1)
+            scores = self.dropout_1(scores)
+            
+            # Apply attention to values
+            attended = torch.matmul(scores, V_head)  # [batch_size, seq_len, head_dim]
+            attention_outputs.append(attended)
+            
+            start_idx += head_dim
+        
+        # Concatenate all head outputs back together
+        scores = torch.cat(attention_outputs, dim=-1)  # [batch_size, seq_len, feature_dim]
+        
+        # Apply output projection
         output = self.out(scores)
         return output
     
@@ -239,17 +264,10 @@ class EncoderLayer(nn.Module):
         feature_x = feature_x + self.dropout_2(self.ff(feature_x_ff))
         
         # Query stream self-attention
-        # query_x_norm = self.norm_query(query_x)
-        # query_attention_output = self.query_attention(query_x_norm)
-        # query_x = query_x + self.dropout_query(query_attention_output)
-        
-        # query_x_norm = self.norm_query(query_x)
-        # query_attention_output = self.query_attention(query_x_norm)
-        # query_x = query_x + self.dropout_query(query_attention_output)
+        query_x_norm = self.norm_query(query_x)
+        query_attention_output = self.query_attention(query_x_norm)
+        query_x = query_x + self.dropout_query(query_attention_output)
 
-        # Query update using feature context
-        query_combined = torch.cat([feature_x, query_x], dim=-1)
-        query_x = self.query_update(query_combined)
 
         # Param update and smoothing
         combined = torch.cat([feature_x, param_x], dim=-1)
@@ -267,7 +285,7 @@ class Encoder(nn.Module):
              num_annotator, annotator_embedding_dim, dropout=0.1):
         """Initialize encoder with multiple layers."""
         super().__init__()
-        self.feature_dim = annotator_embedding_dim + max_choices + 384
+        self.feature_dim = annotator_embedding_dim + max_choices
         self.param_dim = max_choices
         self.position_encoder = Positional_Encoder(question_num, max_choices, num_annotator, annotator_embedding_dim)
 
@@ -280,9 +298,9 @@ class Encoder(nn.Module):
         self.norm = NormLayer(self.feature_dim)
         self.annotator_embedding_dim = annotator_embedding_dim
 
-    def forward(self, x, annotators, questions, embeddings):
+    def forward(self, x, annotators, questions):
         """Process input through all encoder layers with per-layer smoothing."""
-        feature_x, param_x, query_x = self.position_encoder(x, annotators, questions, embeddings)
+        feature_x, param_x, query_x = self.position_encoder(x, annotators, questions)
         
         mask = x[:, :, 0]
         
@@ -336,9 +354,10 @@ class ImputerEmbedding(nn.Module):
         self.dataset = dataset
         logger.debug(f"Dataset set with {len(dataset)} examples")
     
-    def forward(self, x, annotators, questions, embeddings):
+    def forward(self, x, annotators, questions):
+
         """Forward pass through the model."""
-        feature_x, param_x, query_x = self.encoder(x, annotators, questions, embeddings)
+        feature_x, param_x, query_x = self.encoder(x, annotators, questions)
         return param_x, query_x
     
     def set_current_cycle(self, cycle):
@@ -377,102 +396,6 @@ class ImputerEmbedding(nn.Module):
             'cycle': cycle,
             'timestamp': time.time()
         })
-
-    def compute_query_stream_loss(self, query_predictions, example_idx):
-        """
-        Train query stream to predict historical query patterns (professor's approach)
-        
-        Given current state, predict which positions were likely queried historically
-        """
-        if len(self.historical_patterns) < 10:
-            return torch.tensor(0.0, device=self.device)
-        
-        current_data = self.dataset[example_idx]
-        current_state = (current_data[1][:, 0] == 0).float().to(self.device)
-        
-        relevant_patterns = []
-        for pattern in self.historical_patterns:
-            historical_state = torch.tensor(pattern['current_state'], device=self.device).float()
-            if torch.all(current_state <= historical_state):
-                relevant_patterns.append(pattern)
-        
-        if not relevant_patterns:
-            return torch.tensor(0.0, device=self.device)
-        
-        total_decision_loss = 0
-        for pattern in relevant_patterns:
-            target_query_pattern = torch.tensor(pattern['query_pattern'], device=self.device).float()
-            
-            predicted_query_probs = torch.sigmoid(query_predictions[0, :, 0])
-            
-            loss = F.binary_cross_entropy(predicted_query_probs, target_query_pattern)
-            total_decision_loss += loss
-        
-        decision_loss = total_decision_loss / len(relevant_patterns)
-        
-        query_frequencies = torch.zeros(query_predictions.shape[1], device=self.device)
-        for pos in range(query_predictions.shape[1]):
-            times_queried = sum(1 for pattern in relevant_patterns if pattern['query_pattern'][pos] > 0)
-            query_frequencies[pos] = times_queried / len(relevant_patterns)
-        
-        predicted_weights = F.softmax(query_predictions[0, :, 1], dim=0)
-        weight_loss = F.mse_loss(predicted_weights, query_frequencies)
-        
-        return decision_loss + weight_loss
-
-    def generate_masking_pattern_from_query_stream(self, inputs, annotators, questions, embeddings, visible_ratio):
-        """
-        Generate intelligent masking pattern using query stream predictions.
-        
-        Args:
-            inputs: Input tensor [sequence_length, input_dim]
-            annotators: Annotator indices [sequence_length]
-            questions: Question indices [sequence_length]
-            embeddings: Text embeddings [sequence_length, embedding_dim]
-            visible_ratio: Ratio of observed positions to keep visible
-            
-        Returns:
-            List of positions to mask
-        """
-        observed_positions = [pos for pos in range(inputs.shape[0]) if inputs[pos, 0] == 0]
-        
-        if len(observed_positions) == 0:
-            return []
-        
-        inputs_batch = inputs.unsqueeze(0).to(self.device)
-        annotators_batch = annotators.unsqueeze(0).to(self.device)
-        questions_batch = questions.unsqueeze(0).to(self.device)
-        embeddings_batch = embeddings.unsqueeze(0).to(self.device) if embeddings is not None else None
-        
-        with torch.no_grad():
-            _, query_predictions = self(inputs_batch, annotators_batch, questions_batch, embeddings_batch)
-            
-            # Get query decisions and weights
-            query_probs = torch.sigmoid(query_predictions[0, :, 0])  # Binary decisions
-            query_weights = torch.softmax(query_predictions[0, :, 1], dim=0)  # Weights
-            
-            # Combine probability and weight for masking decisions
-            combined_scores = query_probs * query_weights
-        
-        # Apply constraint: only observed positions can be masked
-        observed_mask = torch.zeros(inputs.shape[0], device=self.device)
-        observed_mask[observed_positions] = 1.0
-        
-        constrained_scores = combined_scores * observed_mask + (1 - observed_mask) * (-1e9)
-        
-        num_to_mask = max(1, len(observed_positions) - int(len(observed_positions) * visible_ratio))
-        
-        if num_to_mask >= len(observed_positions):
-            return observed_positions
-        
-        probs = F.softmax(constrained_scores, dim=0)
-        
-        try:
-            masked_indices = torch.multinomial(probs, num_to_mask, replacement=False)
-            return masked_indices.cpu().tolist()
-        except:
-            logger.info('ERROR! ERROR! Stop Code.')
-            return random.sample(observed_positions, num_to_mask)
 
     def compute_log_loss(self, outputs, targets, weights=None):
         """
@@ -530,57 +453,8 @@ class ImputerEmbedding(nn.Module):
 
         self.training_queue.append(new_entry)
 
-    def normalize_gradient(self, grad_dict):
-        """
-        Normalize gradients by their total L2 norm.
-
-        Args:
-            grad_dict: Dictionary of gradients
-
-        Returns:
-            dict: Normalized gradients
-        """
-        total_norm_squared = 0.0
-        for name, grad in grad_dict.items():
-            total_norm_squared += torch.sum(grad ** 2).item()
-
-        if total_norm_squared <= 1e-10:
-            return grad_dict
-
-        total_norm = math.sqrt(total_norm_squared)
-        normalized_grad_dict = {}
-
-        for name, grad in grad_dict.items():
-            normalized_grad_dict[name] = grad / total_norm
-
-        return normalized_grad_dict
-
-    def compute_grad_dot_product(self, grad_dict1, grad_dict2):
-        """
-        Compute dot product between two gradient dictionaries.
-
-        Args:
-            grad_dict1: First gradient dictionary
-            grad_dict2: Second gradient dictionary
-
-        Returns:
-            float: Dot product
-        """
-        dot_product = 0.0
-        for name in grad_dict1:
-            if name in grad_dict2:
-                dot_product += torch.sum(-grad_dict1[name] * grad_dict2[name]).item()
-
-        return dot_product
     
-    def _is_top_layer_param(self, param_name):
-
-        # TODO: @Haojun - Changed This
-        # top_layer_identifiers = ['encoder.layers.5.out']
-        top_layer_identifiers = ['encoder.layers.5.smoothing']
-        return any(identifier in param_name.lower() for identifier in top_layer_identifiers)
-    
-    def predict(self, inputs, annotators, questions, embeddings, positions=None, train=True, weight=1.0, example_idx=None):
+    def predict(self, inputs, annotators, questions, positions=None, train=True, weight=1.0, example_idx=None):
         """
         Predict distributions for specified positions.
         
@@ -600,7 +474,7 @@ class ImputerEmbedding(nn.Module):
         self.eval()
         
         with torch.no_grad():
-            outputs, _ = self(inputs, annotators, questions, embeddings)
+            outputs, _ = self(inputs, annotators, questions)
             
             if positions is not None:
                 if isinstance(positions, list):
@@ -637,7 +511,6 @@ class ImputerEmbedding(nn.Module):
                     'inputs': inputs[i].detach().cpu().clone(),
                     'annotators': annotators[i].detach().cpu().clone(),
                     'questions': questions[i].detach().cpu().clone(),
-                    'embeddings': None if embeddings is None else embeddings[i].detach().cpu().clone(),
                     'positions': positions if positions is not None else list(range(inputs.shape[1])),
                     'weight': weight,
                     'timestamp': len(self.prediction_history),
@@ -737,7 +610,7 @@ class ImputerEmbedding(nn.Module):
             for example_idx, queue_entry in unique_examples.items():
                 current_data = self.dataset[example_idx]
                 
-                known_questions, inputs, answers, annotators, questions, embeddings = current_data
+                known_questions, inputs, answers, annotators, questions = current_data
                 
                 observed_positions = [pos for pos in range(inputs.shape[0]) if inputs[pos, 0] == 0]
                 
@@ -751,27 +624,21 @@ class ImputerEmbedding(nn.Module):
                         'inputs': inputs.clone(),
                         'annotators': annotators.clone(),
                         'questions': questions.clone(),
-                        'embeddings': embeddings.clone() if embeddings is not None else None,
                         'weight': queue_entry.get('weight', 1.0),
                         'original_observed_mask': (inputs[:, 0] == 0).float(),
                         'original_targets': inputs[:, 1:].clone(),
                         'example_idx': example_idx
                     }
                     
-                    if epoch == 0:
-                        num_visible = max(1, int(len(observed_positions) * visible_ratio))
-                        if num_visible >= len(observed_positions):
-                            visible_positions = observed_positions.copy()
-                        else:
-                            visible_positions = np.random.choice(
-                                observed_positions, size=num_visible, replace=False
-                            ).tolist()
-                        
-                        positions_to_mask = [pos for pos in observed_positions if pos not in visible_positions]
+                    num_visible = max(1, int(len(observed_positions) * visible_ratio))
+                    if num_visible >= len(observed_positions):
+                        visible_positions = observed_positions.copy()
                     else:
-                        positions_to_mask = self.generate_masking_pattern_from_query_stream(
-                            inputs, annotators, questions, embeddings, visible_ratio
-                        )
+                        visible_positions = np.random.choice(
+                            observed_positions, size=num_visible, replace=False
+                        ).tolist()
+                    
+                    positions_to_mask = [pos for pos in observed_positions if pos not in visible_positions]
                     
                     masking_pattern = torch.zeros(inputs.shape[0])
                     for pos in positions_to_mask:
@@ -795,14 +662,13 @@ class ImputerEmbedding(nn.Module):
                 batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
                 batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
                 batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
-                batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device) if batch_examples[0]['embeddings'] is not None else None
                 batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
                 
                 batch_targets = torch.stack([e['original_targets'] for e in batch_examples]).to(self.device)
                 batch_observed_mask = torch.stack([e['original_observed_mask'] for e in batch_examples]).to(self.device)
                 
                 optimizer.zero_grad()
-                outputs, query_predictions = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
+                outputs, query_predictions = self(batch_inputs, batch_annotators, batch_questions)
                 
                 batch_size_actual, seq_len, num_classes = outputs.shape
                 outputs_flat = outputs.view(-1, num_classes)
@@ -811,9 +677,11 @@ class ImputerEmbedding(nn.Module):
                 current_mask = batch_inputs[:, :, 0]
                 currently_visible = (current_mask == 0).float()
 
+                # Two-component loss: reconstruction (masked) + consistency (observed)
                 artificially_masked = batch_observed_mask * (1 - currently_visible)
                 still_observed = batch_observed_mask * currently_visible 
 
+                # Combined loss with different weights
                 reconstruction_weight = 0.5
                 consistency_weight = 0.5
                 loss_mask = reconstruction_weight * artificially_masked + consistency_weight * still_observed
@@ -830,68 +698,27 @@ class ImputerEmbedding(nn.Module):
 
                 total_valid = loss_mask_flat.sum()
                 if total_valid > 0:
-                    supervised_loss = weighted_loss.sum() / total_valid
+                    main_loss = weighted_loss.sum() / total_valid
                 else:
-                    supervised_loss = weighted_loss.sum()
+                    main_loss = weighted_loss.sum()
+            
                 
-                originally_missing = 1 - batch_observed_mask
-                originally_missing_flat = originally_missing.view(-1)
-                
-                expected_loss = torch.tensor(0.0, device=self.device)
-                if originally_missing_flat.sum() > 0:
-                    missing_indices = originally_missing_flat.bool()
-                    outputs_missing = outputs_flat[missing_indices]
-                    current_pred_dist = F.softmax(outputs_missing, dim=-1)
-                    log_probs_missing = F.log_softmax(outputs_missing, dim=-1)
-                    expected_kl_per_position = -(current_pred_dist * log_probs_missing).sum(dim=-1)
-                    expected_loss = expected_kl_per_position.mean()
-                
-                main_loss = supervised_loss + (0*expected_loss)
-                
-                query_loss = torch.tensor(0.0, device=self.device)
-                if len(batch_examples) > 0:
-                    for i, example in enumerate(batch_examples):
-                        if i < batch_inputs.shape[0]:
-                            example_idx = example['example_idx']
-                            example_query_loss = self.compute_query_stream_loss(query_predictions[i:i+1], example_idx)
-                            query_loss += example_query_loss
-                
-                total_loss = main_loss + masking_lambda * query_loss
+                total_loss = main_loss
                 
                 if total_loss > 0:
                     total_loss.backward()
                     optimizer.step()
                     epoch_loss += main_loss.item()
-                    epoch_query_loss += query_loss.item()
                     batch_count += 1
-                    
-                    if WANDB_AVAILABLE and wandb.run is not None:
-                        wandb.log({
-                            "batch_loss": main_loss.item(), 
-                            "batch_query_loss": query_loss.item(),
-                            "epoch": epoch
-                        })
             
-            for example_idx in unique_examples.keys():
-                if example_idx in example_masking_patterns:
-                    patterns_as_lists = [pattern.tolist() if isinstance(pattern, torch.Tensor) else pattern 
-                                    for pattern in example_masking_patterns[example_idx]]
-                    pattern_losses = [epoch_loss / max(1, batch_count)] * len(patterns_as_lists)
-                    self.collect_pattern_effectiveness(example_idx, patterns_as_lists, pattern_losses)
+        
             
             avg_epoch_loss = epoch_loss / max(1, batch_count)
-            avg_query_loss = epoch_query_loss / max(1, batch_count)
             epoch_losses.append(avg_epoch_loss)
             self.training_losses.append(avg_epoch_loss)
             
-            logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}, Query Loss: {avg_query_loss:.4f}")
+            logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}")
             
-            if WANDB_AVAILABLE and wandb.run is not None:
-                wandb.log({
-                    "epoch_loss_dynamic": avg_epoch_loss, 
-                    "epoch_query_loss": avg_query_loss,
-                    "epoch": epoch
-                })
 
         end_time = time.time()
         logger.info(f'Time taken for all Epoch: {end_time - start_time}')
@@ -907,7 +734,7 @@ class ImputerEmbedding(nn.Module):
 
         return epoch_losses
     
-    def compute_total_loss(self, outputs, labels, inputs, questions, embeddings, full_supervision=False):
+    def compute_total_loss(self, outputs, labels, inputs, questions, full_supervision=False):
         """
         Compute total loss over all positions based on supervision type.
         Maintained for backward compatibility with activelearner.py.
