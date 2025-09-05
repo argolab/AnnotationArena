@@ -34,6 +34,7 @@ data {
     real<lower=0> temperature;
     
     // Prior scales
+    // Use this as a paramters?
     real<lower=0> sigma_embedding_prior;
     real<lower=0> sigma_preference_prior;
 }
@@ -49,6 +50,7 @@ parameters {
     matrix[I*J, D] annotator_preferences;
     
     // Rating thresholds (per annotator-attribute pair) as cumulative inverse CDF values
+    // TODO - Try with raw probabilities directly
     array[I*J] ordered[C-1] rating_thresholds_raw;
 }
 
@@ -101,6 +103,7 @@ model {
     }
     
     // Rating threshold priors: ordered thresholds
+    // TODO: Why 2?
     for (ij in 1:(I*J)) {
         for (c in 1:(C-1)) {
             rating_thresholds_raw[ij][c] ~ normal(0, 2.0);  // Diffuse prior on thresholds
@@ -164,6 +167,7 @@ model {
         
         // Plackett-Luce likelihood - fixed version
         // Convert ranking order to proper Plackett-Luce format
+        // TODO: What is it doing?
         array[ranking_size] int item_order;
         for (pos in 1:ranking_size) {
             item_order[ranking_orders[n, pos]] = pos;  // Map item rank to position

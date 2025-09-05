@@ -85,17 +85,32 @@ class DomainModelTrainer:
         with open(data_path / "test_complete_stats.json", 'r') as f:
             stats = json.load(f)
         
+        # Need to infer I,J from data since ground truth doesn't store them directly
+        ratings_sample = train_data['ratings'][0] if train_data['ratings'] else test_data['ratings'][0]
+        rankings_sample = train_data['rankings'][0] if train_data['rankings'] else test_data['rankings'][0]
+        
+        data_config = {
+            'K': len(ground_truth['embeddings']),
+            'D': len(ground_truth['embeddings'][0]), 
+            'I': max([r['attribute'] for r in train_data['ratings'] + test_data['ratings']] + 
+                    [r['attribute'] for r in train_data['rankings'] + test_data['rankings']]),
+            'J': max([r['annotator'] for r in train_data['ratings'] + test_data['ratings']] + 
+                    [r['annotator'] for r in train_data['rankings'] + test_data['rankings']]),
+            'C': max([r['value'] for r in train_data['ratings'] + test_data['ratings']]),
+            'ranking_size': len(rankings_sample['items']) if train_data['rankings'] or test_data['rankings'] else 5
+        }
+        
         return {
             'train': train_data,
             'test': test_data,
             'ground_truth': ground_truth,
-            'stats': stats
+            'stats': stats,
+            'config': data_config
         }
     
-    def prepare_stan_data(self, observed_data: Dict[str, Any], config: DomainModelConfig) -> Dict[str, Any]:
-        """Convert observed data to Stan format"""
+    def prepare_stan_data(self, observed_data: Dict[str, Any], config: DomainModelConfig, data_config: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Convert observed data to Stan format."""
         
-        # Extract ratings
         ratings = observed_data['ratings']
         N_ratings = len(ratings)
         
@@ -104,15 +119,6 @@ class DomainModelTrainer:
         rating_items = [r['item'] for r in ratings]
         rating_values = [r['value'] for r in ratings]
         
-        # Comparisons removed - no longer used
-        N_comparisons = 0
-        comparison_attributes = []
-        comparison_annotators = []
-        comparison_items_a = []
-        comparison_items_b = []
-        comparison_results = []
-        
-        # Extract rankings
         rankings = observed_data['rankings']
         N_rankings = len(rankings)
         
@@ -121,14 +127,20 @@ class DomainModelTrainer:
         ranking_items = [r['items'] for r in rankings]
         ranking_orders = [r['order'] for r in rankings]
         
-        # Infer dimensions from data
-        K = max([max(rating_items)] + 
-                [max(items) for items in ranking_items])
-        I = max(rating_attributes + ranking_attributes)
-        J = max(rating_annotators + ranking_annotators)
-        C = max(rating_values)
-        ranking_size = len(ranking_items[0]) if ranking_items else 4
-        D = 16  # Default embedding dimension
+        if data_config is not None:
+            K = data_config['K']
+            I = data_config['I'] 
+            J = data_config['J']
+            D = data_config['D']
+            C = data_config['C']
+            ranking_size = data_config['ranking_size']
+        else:
+            K = max([max(rating_items)] + [max(items) for items in ranking_items])
+            I = max(rating_attributes + ranking_attributes)
+            J = max(rating_annotators + ranking_annotators)
+            C = max(rating_values)
+            ranking_size = len(ranking_items[0]) if ranking_items else 4
+            D = 32  # fallback, but should use data_config
         
         stan_data = {
             # Dimensions
@@ -242,7 +254,7 @@ class DomainModelTrainer:
         
         return entropy(true_probs, learned_probs)
     
-    def _create_initial_values(self, stan_data: Dict[str, Any], seed: int) -> List[Dict[str, Any]]:
+    def _create_initial_values(self, stan_data: Dict[str, Any], seed: int, config: DomainModelConfig) -> List[Dict[str, Any]]:
         """Create reasonable initial values for Stan parameters"""
         
         np.random.seed(seed)
@@ -278,7 +290,7 @@ class DomainModelTrainer:
             }
         
         # Return list of initial values for each chain
-        return [create_init() for _ in range(4)]  # Create 4 different initializations
+        return [create_init() for _ in range(config.chains)]
     
     def compute_log_loss_on_missing(self, fit, observed_test: Dict[str, Any], missing_test: Dict[str, Any], stan_data: Dict[str, Any]) -> Dict[str, float]:
         """Compute log-loss on missing test annotations using posterior predictive distribution"""
@@ -479,10 +491,10 @@ class DomainModelTrainer:
             subset_data = self.sample_training_subset(data['train'], fraction, seed + i)
             
             # Train on ALL available annotations in the subset
-            stan_data = self.prepare_stan_data(subset_data, config)
+            stan_data = self.prepare_stan_data(subset_data, config, data['config'])
             
             # Create reasonable initial values
-            init_values = self._create_initial_values(stan_data, seed + i)
+            init_values = self._create_initial_values(stan_data, seed + i, config)
             
             # Train model with comprehensive logging
             import time

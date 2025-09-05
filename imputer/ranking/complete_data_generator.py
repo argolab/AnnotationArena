@@ -22,7 +22,7 @@ class DatasetConfig:
     K: int = 32
     I: int = 10
     J: int = 5
-    D: int = 32
+    D: int = 16
     C: int = 5
     ranking_size: int = 5
     rankings_per_annotator_attribute: int = 10
