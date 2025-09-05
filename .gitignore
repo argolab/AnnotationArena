@@ -231,5 +231,6 @@ imputer/ranking/domain_results
 imputer/ranking/generated_data
 imputer/ranking/models/domain_model
 imputer/ranking/models/complete_data_generator
+imputer/ranking/outputs
 
 **/.DS_Store 

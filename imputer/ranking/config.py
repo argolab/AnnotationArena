@@ -8,13 +8,13 @@ from typing import List, Optional
 class ExperimentConfig:
     """Master configuration for ranking annotation experiments."""
     
-    K: int = 5  # number of items
-    I: int = 3  # number of attributes  
+    K: int = 10  # number of items
+    I: int = 5  # number of attributes  
     J: int = 3   # number of annotators
     D: int = 16  # embedding dimension
     C: int = 5   # number of rating categories
-    ranking_size: int = 3  # size of ranking sets
-    rankings_per_annotator_attribute: int = 3  # rankings per (annotator, attribute) pair
+    ranking_size: int = 5  # size of ranking sets
+    rankings_per_annotator_attribute: int = 10  # rankings per (annotator, attribute) pair
     
     train_fraction: float = 0.80
     test_fraction: float = 0.20

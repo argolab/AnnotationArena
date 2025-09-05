@@ -19,13 +19,13 @@ except ImportError:
 
 @dataclass
 class DatasetConfig:
-    K: int = 32
-    I: int = 10
-    J: int = 5
-    D: int = 16
-    C: int = 5
-    ranking_size: int = 5
-    rankings_per_annotator_attribute: int = 10
+    K: int = 10  # number of items
+    I: int = 5  # number of attributes  
+    J: int = 3   # number of annotators
+    D: int = 16  # embedding dimension
+    C: int = 5   # number of rating categories
+    ranking_size: int = 5  # size of ranking sets
+    rankings_per_annotator_attribute: int = 10  # rankings per (annotator, attribute) pair
     
     train_fraction: float = 0.80
     test_fraction: float = 0.20
