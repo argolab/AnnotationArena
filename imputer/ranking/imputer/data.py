@@ -23,6 +23,7 @@ class RankingData:
     item_ids: List[int]
     rating_value: Optional[int] = None
     ranking_order: Optional[List[int]] = None
+    # TODO: do we need a observed flag?
 
 
 class DataConverter:
@@ -129,3 +130,109 @@ class DataConverter:
             ))
         return variables
 
+    def create_training_batch(
+        self,
+        rating_variables: List[Dict[str, Any]],
+        ranking_variables: List[Dict[str, Any]],
+        rating_data: Dict[Tuple[int, int, int], int],
+        ranking_data: Dict[Tuple[int, int, Tuple[int, ...]], Dict[str, List[int]]],
+        test_data: Optional[Dict[str, Any]] = None,
+        mask_rate: float = 0.5,
+    ) -> Dict[str, torch.Tensor]:
+        """Create a single training batch (legacy tensor format with masking).
+
+        Returns a dict of tensors including inputs, targets, and masks along with 'all_variables'.
+        """
+        all_variables = rating_variables + ranking_variables
+        num_variables = len(all_variables)
+
+        variable_data = torch.zeros(1, num_variables, max(self.num_likert_classes, self.max_rank_size))
+        variable_types = torch.zeros(1, num_variables, dtype=torch.long)
+        attribute_ids = torch.zeros(1, num_variables, dtype=torch.long)
+        annotator_ids = torch.zeros(1, num_variables, dtype=torch.long)
+        item_ids = torch.full((1, num_variables, self.max_rank_size), -1, dtype=torch.long)
+
+        rating_targets = torch.zeros(1, num_variables, self.num_likert_classes)
+        ranking_targets = torch.zeros(1, num_variables, self.max_rank_size)
+        rating_mask = torch.zeros(1, num_variables, dtype=torch.bool)
+        ranking_mask = torch.zeros(1, num_variables, dtype=torch.bool)
+        rating_masked = torch.zeros(1, num_variables, dtype=torch.bool)
+        ranking_masked = torch.zeros(1, num_variables, dtype=torch.bool)
+
+        # Exclusions from test
+        test_exclusions = set()
+        if test_data is not None:
+            t_r, t_g = self.process_training_data(test_data)
+            test_exclusions.update(t_r.keys())
+            test_exclusions.update(t_g.keys())
+
+        # Collect available for masking
+        available_rating_vars = []
+        available_ranking_vars = []
+        for i, var in enumerate(all_variables):
+            if var['type'] == 'rating':
+                key = (var['attribute'], var['annotator'], var['item'])
+                if key in rating_data and key not in test_exclusions:
+                    available_rating_vars.append(i)
+            else:
+                items = var['items']
+                key = (var['attribute'], var['annotator'], tuple(items))
+                if key in ranking_data and key not in test_exclusions:
+                    available_ranking_vars.append(i)
+
+        import random
+        num_rating_masked = int(len(available_rating_vars) * mask_rate)
+        num_ranking_masked = int(len(available_ranking_vars) * mask_rate)
+        masked_rating_indices = set(random.sample(available_rating_vars, num_rating_masked)) if available_rating_vars else set()
+        masked_ranking_indices = set(random.sample(available_ranking_vars, num_ranking_masked)) if available_ranking_vars else set()
+
+        for i, var in enumerate(all_variables):
+            attribute_ids[0, i] = var['attribute'] - 1
+            annotator_ids[0, i] = var['annotator'] - 1
+
+            if var['type'] == 'rating':
+                variable_types[0, i] = 0
+                item_ids[0, i, 0] = var['item'] - 1
+                key = (var['attribute'], var['annotator'], var['item'])
+                if key in rating_data and key not in test_exclusions:
+                    rating_value = rating_data[key] - 1
+                    rating_targets[0, i, rating_value] = 1.0
+                    rating_mask[0, i] = True
+                    if i in masked_rating_indices:
+                        rating_masked[0, i] = True
+                    else:
+                        variable_data[0, i, rating_value] = 1.0
+            else:
+                variable_types[0, i] = 1
+                items = var['items']
+                for j, item in enumerate(items):
+                    if j < self.max_rank_size:
+                        item_ids[0, i, j] = item - 1
+                key = (var['attribute'], var['annotator'], tuple(items))
+                if key in ranking_data and key not in test_exclusions:
+                    order = ranking_data[key]['order']
+                    for j, pos in enumerate(order):
+                        if j < self.max_rank_size:
+                            ranking_targets[0, i, j] = pos
+                    ranking_mask[0, i] = True
+                    if i in masked_ranking_indices:
+                        ranking_masked[0, i] = True
+                    else:
+                        for j, pos in enumerate(order):
+                            if j < self.max_rank_size:
+                                variable_data[0, i, j] = pos
+
+        return {
+            'variable_data': variable_data,
+            'variable_types': variable_types,
+            'attribute_ids': attribute_ids,
+            'annotator_ids': annotator_ids,
+            'item_ids': item_ids,
+            'rating_targets': rating_targets,
+            'ranking_targets': ranking_targets,
+            'rating_mask': rating_mask,
+            'ranking_mask': ranking_mask,
+            'rating_masked': rating_masked,
+            'ranking_masked': ranking_masked,
+            'all_variables': all_variables,
+        }
