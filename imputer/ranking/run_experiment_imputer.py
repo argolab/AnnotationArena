@@ -22,7 +22,7 @@ def main():
     
     # Training parameters
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--learning_rate', type=float, default=1e-4)
     parser.add_argument('--mask_rate', type=float, default=0.5)
     parser.add_argument('--alpha', type=float, default=1.0, help='Weight for observed variables')
     parser.add_argument('--beta', type=float, default=1.0, help='Weight for masked variables')

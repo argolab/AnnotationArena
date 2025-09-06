@@ -73,7 +73,7 @@ class PlackettLuceLoss(nn.Module):
                     valid_scores = scores[valid_positions]
                     valid_targets = target_ranks[valid_positions]
                     # Sort by target rank (ascending: 1 is best)
-                    _, sort_indices = torch.sort(valid_targets, descending=False)
+                    _, sort_indices = torch.sort(valid_targets, descending=True)
                     sorted_scores = valid_scores[sort_indices]
 
                     pl_loss = 0.0
