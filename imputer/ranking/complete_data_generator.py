@@ -25,7 +25,7 @@ class DatasetConfig:
     D: int = 16  # embedding dimension
     C: int = 5   # number of rating categories
     ranking_size: int = 5  # size of ranking sets
-    rankings_per_annotator_attribute: int = 10  # rankings per (annotator, attribute) pair
+    rankings_per_annotator_attribute: int = 100  # rankings per (annotator, attribute) pair
     
     train_fraction: float = 0.80
     test_fraction: float = 0.20
