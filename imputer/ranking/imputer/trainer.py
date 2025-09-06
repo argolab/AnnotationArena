@@ -36,17 +36,18 @@ class ImputerTrainer:
         ranking_logits = out['ranking']
 
         # Structured predictions and references for loss computation
-        predictions = adapt_batched_logits_to_predictions({'rating': rating_logits, 'ranking': ranking_logits})
+        # Only create references for variables that have supervision (mask = True)
+        predictions_full = adapt_batched_logits_to_predictions({'rating': rating_logits, 'ranking': ranking_logits})
+        predictions: List["TopLayerPredictionResult"] = []
         references: List[RankingData] = []
         masked_flags: List[bool] = []
         all_vars = batch['all_variables']
 
-        # Reconstruct references from batch tensors (0-indexed)
+        # Reconstruct references from batch tensors (0-indexed) - only for supervised variables
         for i, var in enumerate(all_vars):
-            if var['type'] == 'rating':
-                rating_val = None
-                if rating_mask[0, i]:
-                    rating_val = int(torch.argmax(rating_targets[0, i]).item())
+            if var['type'] == 'rating' and rating_mask[0, i]:  # Only if has supervision
+                rating_val = int(torch.argmax(rating_targets[0, i]).item())
+                predictions.append(predictions_full[i])
                 references.append(RankingData(
                     annotator_id=var['annotator'] - 1,
                     attribute_id=var['attribute'] - 1,
@@ -55,15 +56,14 @@ class ImputerTrainer:
                     rating_value=rating_val,
                 ))
                 masked_flags.append(bool(rating_masked[0, i].item()))
-            else:
-                ranking_order = None
-                if ranking_mask[0, i]:
-                    scores_vec = ranking_targets[0, i]
-                    ranking_order = []
-                    for j in range(scores_vec.shape[0]):
-                        s = int(scores_vec[j].item())
-                        if s > 0:
-                            ranking_order.append(int(s))
+            elif var['type'] == 'ranking' and ranking_mask[0, i]:  # Only if has supervision
+                scores_vec = ranking_targets[0, i]
+                ranking_order = []
+                for j in range(scores_vec.shape[0]):
+                    s = int(scores_vec[j].item())
+                    if s > 0:
+                        ranking_order.append(int(s))
+                predictions.append(predictions_full[i])
                 references.append(RankingData(
                     annotator_id=var['annotator'] - 1,
                     attribute_id=var['attribute'] - 1,
@@ -161,14 +161,15 @@ class ImputerTrainer:
                             test_ranking_targets[0, i, j] = pos
 
             # Structured loss on masked test entries
-            predictions = adapt_batched_logits_to_predictions({'rating': rating_logits, 'ranking': ranking_logits})
+            # Only create references for variables that have test supervision (test_mask = True)
+            predictions_full = adapt_batched_logits_to_predictions({'rating': rating_logits, 'ranking': ranking_logits})
+            predictions: List["TopLayerPredictionResult"] = []
             references: List[RankingData] = []
             masked_flags: List[bool] = []
             for i, var in enumerate(all_variables):
-                if var['type'] == 'rating':
-                    rating_val = None
-                    if test_rating_mask[0, i]:
-                        rating_val = int(torch.argmax(test_rating_targets[0, i]).item())
+                if var['type'] == 'rating' and test_rating_mask[0, i]:  # Only if has test supervision
+                    rating_val = int(torch.argmax(test_rating_targets[0, i]).item())
+                    predictions.append(predictions_full[i])
                     references.append(RankingData(
                         annotator_id=var['annotator'] - 1,
                         attribute_id=var['attribute'] - 1,
@@ -176,16 +177,15 @@ class ImputerTrainer:
                         item_ids=[var['item'] - 1],
                         rating_value=rating_val,
                     ))
-                    masked_flags.append(bool(test_rating_mask[0, i].item()))
-                else:
-                    ranking_order = None
-                    if test_ranking_mask[0, i]:
-                        scores_vec = test_ranking_targets[0, i]
-                        ranking_order = []
-                        for j in range(scores_vec.shape[0]):
-                            s = int(scores_vec[j].item())
-                            if s > 0:
-                                ranking_order.append(int(s))
+                    masked_flags.append(True)  # All test evaluation entries are "masked" for loss computation
+                elif var['type'] == 'ranking' and test_ranking_mask[0, i]:  # Only if has test supervision
+                    scores_vec = test_ranking_targets[0, i]
+                    ranking_order = []
+                    for j in range(scores_vec.shape[0]):
+                        s = int(scores_vec[j].item())
+                        if s > 0:
+                            ranking_order.append(int(s))
+                    predictions.append(predictions_full[i])
                     references.append(RankingData(
                         annotator_id=var['annotator'] - 1,
                         attribute_id=var['attribute'] - 1,
@@ -193,7 +193,7 @@ class ImputerTrainer:
                         item_ids=[it - 1 for it in var['items'][: converter.max_rank_size]],
                         ranking_order=ranking_order,
                     ))
-                    masked_flags.append(bool(test_ranking_mask[0, i].item()))
+                    masked_flags.append(True)  # All test evaluation entries are "masked" for loss computation
 
             losses_eval = self.loss_strategy.compute(predictions, references, masked_flags)
             test_rating_loss = losses_eval['rating_loss_masked']
