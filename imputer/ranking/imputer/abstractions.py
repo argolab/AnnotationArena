@@ -27,27 +27,59 @@ class RankingData:
 
 
 class EmbeddingProviderBase(nn.Module):
-    """Base class for producing per-variable embeddings from structured inputs."""
+    """Very abstract provider base for embedding components."""
 
     def __init__(self):
         super().__init__()
 
-    def encode_structured(
-        self,
-        variables: List[RankingData],
-        num_likert_classes: int,
-        max_rank_size: int,
-        device: Optional[torch.device] = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Convert structured variables into model tensors and embeddings.
 
-        Returns a 5-tuple of tensors (all shaped [1, V, ...] for V variables):
-          - feature_embeddings: [1, V, D]
-          - param_data:        [1, V, P] where P=max(C, R)
-          - variable_types:    [1, V] 0=rating, 1=ranking
-          - attribute_ids:     [1, V]
-          - annotator_ids:     [1, V]
-        Implementations may leverage internal learned tables to build features.
-        """
+class RankingEmbeddingProviderBase(EmbeddingProviderBase):
+    """Base for ranking/rating embedding providers.
+
+    - Implements forward(List[RankingData]) to route rating vs ranking.
+    - Subclasses implement get_rating_embedding and get_ranking_embedding to return a D-dim feature vector.
+    - Returns only feature embeddings [1, V, D]; no parameter stream.
+    """
+
+    def __init__(self, *, num_likert_classes: int, max_rank_size: int, embedding_dim: int):
+        super().__init__()
+        self.num_likert_classes = int(num_likert_classes)
+        self.max_rank_size = int(max_rank_size)
+        self.embedding_dim = int(embedding_dim) # word_embedding dim
+
+    # Abstract hooks for subclasses
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int) -> torch.Tensor:
         raise NotImplementedError
 
+    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int]) -> torch.Tensor:
+        raise NotImplementedError
+
+    @torch.no_grad()
+    def _ensure_device(self) -> torch.device:
+        # Use parameters' device if any, else CPU
+        try:
+            p = next(self.parameters())
+            return p.device
+        except StopIteration:
+            return torch.device('cpu')
+
+    def forward(
+        self,
+        variables: List[RankingData],
+    ) -> torch.Tensor:
+        V = len(variables)  # this will be the input token length for transformer
+        D = self.embedding_dim
+        device = self._ensure_device()
+
+        feature_embeddings = torch.zeros(1, V, D, device=device)
+
+        for i, var in enumerate(variables):
+            if var.is_listwise:
+                feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size])
+                feature_embeddings[0, i] = feat
+            else:
+                item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
+                feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id)
+                feature_embeddings[0, i] = feat
+
+        return feature_embeddings
