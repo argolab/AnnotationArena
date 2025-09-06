@@ -141,18 +141,28 @@ class DefaultLossStrategy(LossStrategyBase):
         N = len(predictions)
         device = predictions[0].device if predictions else torch.device('cpu')
 
+        # for all prediction, check if either rating or ranking has data.
+        for p in predictions:
+            if p.rating_logits is None and p.ranking_logits is None:
+                raise ValueError("Either rating or ranking logits must be provided")
+            # check the data conform with the is_listwise flag.
+            if p.is_listwise is False and p.rating_logits is None:
+                raise ValueError("Rating logits must be provided for rating")
+            if p.is_listwise is True and p.ranking_logits is None:
+                raise ValueError("Ranking logits must be provided for ranking")
+
         # Infer dimensions
-        C = next((p.rating_logits.shape[-1] for p in predictions if p.is_listwise is False), 0)
-        R = next((p.ranking_logits.shape[-1] for p in predictions if p.is_listwise is True), 0)
+        C = next((p.rating_logits.shape[-1] for p in predictions if p.rating_logits is not None), 0) # FIXME: should we use is_listwise for stricter checking? Implicitly checking either rating or ranking has to contain data.
+        R = next((p.ranking_logits.shape[-1] for p in predictions if p.ranking_logits is not None), 0)
 
         # Stack logits to [1, N, C/R]
         rating_logits = torch.stack([
-            p.rating_logits if p.is_listwise is False else torch.zeros(C, device=device) # FIXME: maybe wrong?
+            p.rating_logits if p.rating_logits is not None else torch.zeros(C, device=device)
             for p in predictions
         ], dim=0).unsqueeze(0)
 
         ranking_logits = torch.stack([
-            p.ranking_logits if p.is_listwise is True else torch.zeros(R, device=device)
+            p.ranking_logits if p.ranking_logits is not None else torch.zeros(R, device=device)
             for p in predictions
         ], dim=0).unsqueeze(0)
 
