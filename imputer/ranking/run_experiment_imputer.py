@@ -161,8 +161,7 @@ def main():
             logger.info(f"Epoch {epoch}: Total={losses['total_loss']:.4f}, "
                        f"Observed={losses['observed_loss']:.4f}, "
                        f"Masked={losses['masked_loss']:.4f}")
-            logger.info(f"           Test Rating={test_eval['test_rating_loss']:.4f}, "
-                       f"Test Ranking={test_eval['test_ranking_loss']:.4f}")
+            logger.info(f"TEST LOSS & METRICS: {test_eval}")
     
     logger.info("Training completed!")
     
