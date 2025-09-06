@@ -139,7 +139,11 @@ class ImputerTrainer:
             annotator_ids = batch['annotator_ids'].to(self.device)
             item_ids = batch['item_ids'].to(self.device)
 
-            out = self.model(test_variable_data, variable_types, attribute_ids, annotator_ids, item_ids)
+            ranking_data_list = self.model._convert_legacy_tensors_to_ranking_data(
+                test_variable_data, variable_types, attribute_ids, annotator_ids, item_ids
+            )
+
+            out = self.model(ranking_data_list)
             rating_logits = out['rating']
             ranking_logits = out['ranking']
 

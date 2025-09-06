@@ -49,22 +49,44 @@ class DataConverter:
         rating_variables: List[Dict[str, Any]] = []
         ranking_variables: List[Dict[str, Any]] = []
 
-        # Create rating variables directly from actual rating data
-        for rating in train_data['ratings'] + test_data['ratings']:
+        # Create rating variables from training data
+        for rating in train_data['ratings']:
             rating_variables.append({
                 'type': 'rating', 
                 'attribute': rating['attribute'], 
                 'annotator': rating['annotator'], 
-                'item': rating['item']
+                'item': rating['item'],
+                'source': 'train'
+            })
+        
+        # Create rating variables from test data
+        for rating in test_data['ratings']:
+            rating_variables.append({
+                'type': 'rating', 
+                'attribute': rating['attribute'], 
+                'annotator': rating['annotator'], 
+                'item': rating['item'],
+                'source': 'test'
             })
 
-        # Create ranking variables directly from actual ranking data
-        for ranking in train_data['rankings'] + test_data['rankings']:
+        # Create ranking variables from training data
+        for ranking in train_data['rankings']:
             ranking_variables.append({
                 'type': 'ranking',
                 'attribute': ranking['attribute'],
                 'annotator': ranking['annotator'], 
-                'items': ranking['items'][: self.max_rank_size]
+                'items': ranking['items'][: self.max_rank_size],
+                'source': 'train'
+            })
+        
+        # Create ranking variables from test data
+        for ranking in test_data['rankings']:
+            ranking_variables.append({
+                'type': 'ranking',
+                'attribute': ranking['attribute'],
+                'annotator': ranking['annotator'], 
+                'items': ranking['items'][: self.max_rank_size],
+                'source': 'test'
             })
 
         return rating_variables, ranking_variables
@@ -172,37 +194,27 @@ class DataConverter:
         rating_masked = torch.zeros(1, num_variables, dtype=torch.bool)
         ranking_masked = torch.zeros(1, num_variables, dtype=torch.bool)
 
-        # Exclusions from test
-        test_exclusions_ratings = set()
-        test_exclusions_rankings = set()
-        if test_data is not None:
-            t_r, t_g = self.process_training_data(test_data)
-            test_exclusions_ratings.update(t_r.keys())
-            # For rankings, create a set of (attribute, annotator, tuple(items)) for exclusions
-            for ranking_entry in t_g:
-                key = (ranking_entry['attribute'], ranking_entry['annotator'], tuple(ranking_entry['items']))
-                test_exclusions_rankings.add(key)
-
-        # Collect available for masking
+        # Collect available for masking - only training variables with data
         available_rating_vars = []
         available_ranking_vars = []
         for i, var in enumerate(all_variables):
-            if var['type'] == 'rating':
-                key = (var['attribute'], var['annotator'], var['item'])
-                if key in rating_data and key not in test_exclusions_ratings:
-                    available_rating_vars.append(i)
-            else:
-                items = var['items']
-                key = (var['attribute'], var['annotator'], tuple(items))
-                # Check if ranking exists in the list and is not in test exclusions
-                ranking_exists = any(
-                    ranking_entry['attribute'] == var['attribute'] and
-                    ranking_entry['annotator'] == var['annotator'] and
-                    ranking_entry['items'] == items
-                    for ranking_entry in ranking_data
-                )
-                if ranking_exists and key not in test_exclusions_rankings:
-                    available_ranking_vars.append(i)
+            # Only consider variables from training data
+            if var.get('source') == 'train':
+                if var['type'] == 'rating':
+                    key = (var['attribute'], var['annotator'], var['item'])
+                    if key in rating_data:
+                        available_rating_vars.append(i)
+                else:
+                    items = var['items']
+                    # Check if ranking exists in the training data list
+                    ranking_exists = any(
+                        ranking_entry['attribute'] == var['attribute'] and
+                        ranking_entry['annotator'] == var['annotator'] and
+                        ranking_entry['items'] == items
+                        for ranking_entry in ranking_data
+                    )
+                    if ranking_exists:
+                        available_ranking_vars.append(i)
 
         import random
         num_rating_masked = int(len(available_rating_vars) * mask_rate)
@@ -214,46 +226,58 @@ class DataConverter:
             attribute_ids[0, i] = var['attribute'] - 1
             annotator_ids[0, i] = var['annotator'] - 1
 
-            if var['type'] == 'rating':
-                variable_types[0, i] = 0
-                item_ids[0, i, 0] = var['item'] - 1
-                key = (var['attribute'], var['annotator'], var['item'])
-                if key in rating_data and key not in test_exclusions_ratings:
-                    rating_value = rating_data[key] - 1
-                    rating_targets[0, i, rating_value] = 1.0
-                    rating_mask[0, i] = True
-                    if i in masked_rating_indices:
-                        rating_masked[0, i] = True
-                    else:
-                        variable_data[0, i, rating_value] = 1.0
-            else:
-                variable_types[0, i] = 1
-                items = var['items']
-                for j, item in enumerate(items):
-                    if j < self.max_rank_size:
-                        item_ids[0, i, j] = item - 1
-                key = (var['attribute'], var['annotator'], tuple(items))
-                # Find matching ranking in the list
-                matching_ranking = None
-                for ranking_entry in ranking_data:
-                    if (ranking_entry['attribute'] == var['attribute'] and
-                        ranking_entry['annotator'] == var['annotator'] and
-                        ranking_entry['items'] == items):
-                        matching_ranking = ranking_entry
-                        break
-                
-                if matching_ranking and key not in test_exclusions_rankings:
-                    order = matching_ranking['order']
-                    for j, pos in enumerate(order):
+            # Only process training variables for supervision
+            if var.get('source') == 'train':
+                if var['type'] == 'rating':
+                    variable_types[0, i] = 0
+                    item_ids[0, i, 0] = var['item'] - 1
+                    key = (var['attribute'], var['annotator'], var['item'])
+                    if key in rating_data:
+                        rating_value = rating_data[key] - 1
+                        rating_targets[0, i, rating_value] = 1.0
+                        rating_mask[0, i] = True
+                        if i in masked_rating_indices:
+                            rating_masked[0, i] = True
+                        else:
+                            variable_data[0, i, rating_value] = 1.0
+                else:
+                    variable_types[0, i] = 1
+                    items = var['items']
+                    for j, item in enumerate(items):
                         if j < self.max_rank_size:
-                            ranking_targets[0, i, j] = pos
-                    ranking_mask[0, i] = True
-                    if i in masked_ranking_indices:
-                        ranking_masked[0, i] = True
-                    else:
+                            item_ids[0, i, j] = item - 1
+                    # Find matching ranking in the list
+                    matching_ranking = None
+                    for ranking_entry in ranking_data:
+                        if (ranking_entry['attribute'] == var['attribute'] and
+                            ranking_entry['annotator'] == var['annotator'] and
+                            ranking_entry['items'] == items):
+                            matching_ranking = ranking_entry
+                            break
+                    
+                    if matching_ranking:
+                        order = matching_ranking['order']
                         for j, pos in enumerate(order):
                             if j < self.max_rank_size:
-                                variable_data[0, i, j] = pos
+                                ranking_targets[0, i, j] = pos
+                        ranking_mask[0, i] = True
+                        if i in masked_ranking_indices:
+                            ranking_masked[0, i] = True
+                        else:
+                            for j, pos in enumerate(order):
+                                if j < self.max_rank_size:
+                                    variable_data[0, i, j] = pos
+            else:
+                # Test variables - set basic info but no supervision
+                if var['type'] == 'rating':
+                    variable_types[0, i] = 0
+                    item_ids[0, i, 0] = var['item'] - 1
+                else:
+                    variable_types[0, i] = 1
+                    items = var['items']
+                    for j, item in enumerate(items):
+                        if j < self.max_rank_size:
+                            item_ids[0, i, j] = item - 1
 
         return {
             'variable_data': variable_data,
