@@ -106,8 +106,14 @@ class ImputerTrainer:
                         test_rating_vars.append(i)
                 elif var['type'] == 'ranking':
                     items = var['items']
-                    key = (var['attribute'], var['annotator'], tuple(items))
-                    if key in test_ranking_data:
+                    # Check if ranking exists in the list
+                    ranking_exists = any(
+                        ranking_entry['attribute'] == var['attribute'] and
+                        ranking_entry['annotator'] == var['annotator'] and
+                        ranking_entry['items'] == items
+                        for ranking_entry in test_ranking_data
+                    )
+                    if ranking_exists:
                         test_ranking_vars.append(i)
 
             import random
@@ -152,10 +158,18 @@ class ImputerTrainer:
             for i in masked_test_ranking_vars:
                 var = all_variables[i]
                 items = var['items']
-                key = (var['attribute'], var['annotator'], tuple(items))
-                if key in test_ranking_data:
+                # Find matching ranking in the list
+                matching_ranking = None
+                for ranking_entry in test_ranking_data:
+                    if (ranking_entry['attribute'] == var['attribute'] and
+                        ranking_entry['annotator'] == var['annotator'] and
+                        ranking_entry['items'] == items):
+                        matching_ranking = ranking_entry
+                        break
+                
+                if matching_ranking:
                     test_ranking_mask[0, i] = True
-                    order = test_ranking_data[key]['order']
+                    order = matching_ranking['order']
                     for j, pos in enumerate(order):
                         if j < converter.max_rank_size:
                             test_ranking_targets[0, i, j] = pos
