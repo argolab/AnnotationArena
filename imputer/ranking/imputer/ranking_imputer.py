@@ -152,16 +152,10 @@ class MultiVariableImputer(nn.Module):
         hiddens.append(features)
         return hiddens
 
-    def forward(self, variable_data, variable_types=None, attribute_ids=None, annotator_ids=None, item_ids=None, attn_mask: torch.Tensor | None = None, return_hidden: bool = False):
+    def forward(self, ranking_data_list, attn_mask: torch.Tensor | None = None, return_hidden: bool = False):
         # Support both structured list inputs and legacy tensor inputs
-        if isinstance(variable_data, list):
-            features = self.embedding_provider(variable_data)
-        else:
-            # Convert legacy tensor format to List[RankingData]
-            ranking_data_list = self._convert_legacy_tensors_to_ranking_data(
-                variable_data, variable_types, attribute_ids, annotator_ids, item_ids
-            )
-            features = self.embedding_provider(ranking_data_list)
+
+        features = self.embedding_provider(ranking_data_list)
 
         hidden_states = []
         for block in self.blocks:

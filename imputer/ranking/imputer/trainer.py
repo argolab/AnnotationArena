@@ -29,9 +29,11 @@ class ImputerTrainer:
         ranking_mask = batch['ranking_mask'].to(self.device)
         rating_masked = batch['rating_masked'].to(self.device)
         ranking_masked = batch['ranking_masked'].to(self.device)
-
+        ranking_data_list = self.model._convert_legacy_tensors_to_ranking_data(
+            variable_data, variable_types, attribute_ids, annotator_ids, item_ids
+        )
         # Forward pass
-        out = self.model(variable_data, variable_types, attribute_ids, annotator_ids, item_ids)
+        out = self.model(ranking_data_list)
         rating_logits = out['rating']
         ranking_logits = out['ranking']
 
