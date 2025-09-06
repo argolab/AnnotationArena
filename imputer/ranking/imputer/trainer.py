@@ -87,51 +87,19 @@ class ImputerTrainer:
         # Return only float metrics
         return {k: v for k, v in losses.items() if not k.startswith('_')}
 
-    def evaluate_with_test_data(self, batch, test_data, converter, mask_rate=0.5, verbose=True):
-        """Evaluate model on test data with proper imputation masking using structured losses."""
+    def evaluate_with_test_data(self, batch, test_data, converter, verbose=True):
+        """Pure imputation evaluation: predict ALL test variables from structure only."""
         self.model.eval()
 
         with torch.no_grad():
             # Process test data
             test_rating_data, test_ranking_data = converter.process_training_data(test_data)
-
-            # Create test variables and apply masking for imputation
             all_variables = batch['all_variables']
 
-            # Collect test variables that have data
-            test_rating_vars = []
-            test_ranking_vars = []
-            for i, var in enumerate(all_variables):
-                if var['type'] == 'rating':
-                    key = (var['attribute'], var['annotator'], var['item'])
-                    if key in test_rating_data:
-                        test_rating_vars.append(i)
-                elif var['type'] == 'ranking':
-                    items = var['items']
-                    # Check if ranking exists in the list
-                    ranking_exists = any(
-                        ranking_entry['attribute'] == var['attribute'] and
-                        ranking_entry['annotator'] == var['annotator'] and
-                        ranking_entry['items'] == items
-                        for ranking_entry in test_ranking_data
-                    )
-                    if ranking_exists:
-                        test_ranking_vars.append(i)
-
-            import random
-            random.seed(42)
-            num_rating_masked = int(len(test_rating_vars) * mask_rate)
-            num_ranking_masked = int(len(test_ranking_vars) * mask_rate)
-            masked_test_rating_vars = set(random.sample(test_rating_vars, num_rating_masked)) if test_rating_vars else set()
-            masked_test_ranking_vars = set(random.sample(test_ranking_vars, num_ranking_masked)) if test_ranking_vars else set()
-
-            # Create input data for imputer (with masked positions set to zero)
-            test_variable_data = batch['variable_data'].clone()
-            for i in masked_test_rating_vars:
-                test_variable_data[0, i, :] = 0.0
-            for i in masked_test_ranking_vars:
-                test_variable_data[0, i, :] = 0.0
-
+            # Create test input with NO supervision values (pure imputation)
+            # All test variables get zero supervision, only structural embeddings
+            test_variable_data = torch.zeros_like(batch['variable_data'])
+            
             # Move to device
             test_variable_data = test_variable_data.to(self.device)
             variable_types = batch['variable_types'].to(self.device)
@@ -147,73 +115,81 @@ class ImputerTrainer:
             rating_logits = out['rating']
             ranking_logits = out['ranking']
 
-            # Build targets/masks ONLY for the masked test variables
+            # Build targets for ALL test variables that have ground truth
             test_rating_mask = torch.zeros(1, len(all_variables), dtype=torch.bool)
             test_ranking_mask = torch.zeros(1, len(all_variables), dtype=torch.bool)
             test_rating_targets = torch.zeros(1, len(all_variables), converter.num_likert_classes)
             test_ranking_targets = torch.zeros(1, len(all_variables), converter.max_rank_size)
 
-            for i in masked_test_rating_vars:
-                var = all_variables[i]
-                key = (var['attribute'], var['annotator'], var['item'])
-                if key in test_rating_data:
-                    test_rating_mask[0, i] = True
-                    rating_value = test_rating_data[key] - 1
-                    test_rating_targets[0, i, rating_value] = 1.0
+            # Process all test variables (source == 'test')
+            for i, var in enumerate(all_variables):
+                if var.get('source') == 'test':
+                    if var['type'] == 'rating':
+                        key = (var['attribute'], var['annotator'], var['item'])
+                        if key in test_rating_data:
+                            test_rating_mask[0, i] = True
+                            rating_value = test_rating_data[key] - 1
+                            test_rating_targets[0, i, rating_value] = 1.0
+                    else:  # ranking
+                        items = var['items']
+                        # Find matching ranking in the list
+                        matching_ranking = None
+                        for ranking_entry in test_ranking_data:
+                            if (ranking_entry['attribute'] == var['attribute'] and
+                                ranking_entry['annotator'] == var['annotator'] and
+                                ranking_entry['items'] == items):
+                                matching_ranking = ranking_entry
+                                break
+                        
+                        if matching_ranking:
+                            test_ranking_mask[0, i] = True
+                            order = matching_ranking['order']
+                            for j, pos in enumerate(order):
+                                if j < converter.max_rank_size:
+                                    test_ranking_targets[0, i, j] = pos
 
-            for i in masked_test_ranking_vars:
-                var = all_variables[i]
-                items = var['items']
-                # Find matching ranking in the list
-                matching_ranking = None
-                for ranking_entry in test_ranking_data:
-                    if (ranking_entry['attribute'] == var['attribute'] and
-                        ranking_entry['annotator'] == var['annotator'] and
-                        ranking_entry['items'] == items):
-                        matching_ranking = ranking_entry
-                        break
-                
-                if matching_ranking:
-                    test_ranking_mask[0, i] = True
-                    order = matching_ranking['order']
-                    for j, pos in enumerate(order):
-                        if j < converter.max_rank_size:
-                            test_ranking_targets[0, i, j] = pos
-
-            # Structured loss on masked test entries
-            # Only create references for variables that have test supervision (test_mask = True)
+            # Structured loss on ALL test entries with ground truth
             predictions_full = adapt_batched_logits_to_predictions({'rating': rating_logits, 'ranking': ranking_logits})
             predictions: List["TopLayerPredictionResult"] = []
             references: List[RankingData] = []
             masked_flags: List[bool] = []
+            
             for i, var in enumerate(all_variables):
-                if var['type'] == 'rating' and test_rating_mask[0, i]:  # Only if has test supervision
-                    rating_val = int(torch.argmax(test_rating_targets[0, i]).item())
-                    predictions.append(predictions_full[i])
-                    references.append(RankingData(
-                        annotator_id=var['annotator'] - 1,
-                        attribute_id=var['attribute'] - 1,
-                        is_listwise=False,
-                        item_ids=[var['item'] - 1],
-                        rating_value=rating_val,
-                    ))
-                    masked_flags.append(True)  # All test evaluation entries are "masked" for loss computation
-                elif var['type'] == 'ranking' and test_ranking_mask[0, i]:  # Only if has test supervision
-                    scores_vec = test_ranking_targets[0, i]
-                    ranking_order = []
-                    for j in range(scores_vec.shape[0]):
-                        s = int(scores_vec[j].item())
-                        if s > 0:
-                            ranking_order.append(int(s))
-                    predictions.append(predictions_full[i])
-                    references.append(RankingData(
-                        annotator_id=var['annotator'] - 1,
-                        attribute_id=var['attribute'] - 1,
-                        is_listwise=True,
-                        item_ids=[it - 1 for it in var['items'][: converter.max_rank_size]],
-                        ranking_order=ranking_order,
-                    ))
-                    masked_flags.append(True)  # All test evaluation entries are "masked" for loss computation
+                if var.get('source') == 'test':
+                    if var['type'] == 'rating' and test_rating_mask[0, i]:
+                        rating_val = int(torch.argmax(test_rating_targets[0, i]).item())
+                        predictions.append(predictions_full[i])
+                        references.append(RankingData(
+                            annotator_id=var['annotator'] - 1,
+                            attribute_id=var['attribute'] - 1,
+                            is_listwise=False,
+                            item_ids=[var['item'] - 1],
+                            rating_value=rating_val,
+                        ))
+                        masked_flags.append(True)  # All test entries are treated as "masked" for loss computation
+                    elif var['type'] == 'ranking' and test_ranking_mask[0, i]:
+                        scores_vec = test_ranking_targets[0, i]
+                        ranking_order = []
+                        for j in range(scores_vec.shape[0]):
+                            s = int(scores_vec[j].item())
+                            if s > 0:
+                                ranking_order.append(int(s))
+                        predictions.append(predictions_full[i])
+                        references.append(RankingData(
+                            annotator_id=var['annotator'] - 1,
+                            attribute_id=var['attribute'] - 1,
+                            is_listwise=True,
+                            item_ids=[it - 1 for it in var['items'][: converter.max_rank_size]],
+                            ranking_order=ranking_order,
+                        ))
+                        masked_flags.append(True)  # All test entries are treated as "masked" for loss computation
+
+            if len(predictions) == 0:
+                return {
+                    'test_rating_loss': 0.0,
+                    'test_ranking_loss': 0.0,
+                    'total_test_loss': 0.0,
+                }
 
             losses_eval = self.loss_strategy.compute(predictions, references, masked_flags)
             test_rating_loss = losses_eval['rating_loss_masked']

@@ -156,7 +156,9 @@ generated quantities {
                     if (pos <= K) {
                         all_ranking_items[global_ranking_idx, r] = sorted_items[pos];
                     } else {
-                        all_ranking_items[global_ranking_idx, r] = sorted_items[K - ranking_size + r];
+                        // Wrap around to beginning: pos - K gives us how far past the end we are
+                        int wrapped_pos = pos - K;
+                        all_ranking_items[global_ranking_idx, r] = sorted_items[wrapped_pos];
                     }
                 }
                 

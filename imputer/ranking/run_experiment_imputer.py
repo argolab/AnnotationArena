@@ -152,7 +152,7 @@ def main():
             train_losses[key].append(losses[key])
         
         # Evaluate on test set every 10 epochs
-        if epoch % 10 == 0:
+        if epoch % 2 == 0:
             test_eval = trainer.evaluate_with_test_data(batch, test_data, converter, verbose=False)
             test_losses_over_time['epoch'].append(epoch)
             test_losses_over_time['test_rating_loss'].append(test_eval['test_rating_loss'])
