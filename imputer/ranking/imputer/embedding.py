@@ -49,14 +49,16 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         )
 
     # Abstract hook implementations
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int) -> torch.Tensor:
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value: int) -> torch.Tensor:
+        print("WARNING: not using rating values")
         attr_vec = self.attribute_embedding[attribute_id]
         annot_vec = self.annotator_embedding[annotator_id]
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
         return attr_vec + annot_vec + self.item_embedding[item_id]
 
     # Get embedding for ranking variables
-    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int]) -> torch.Tensor:
+    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order: List[int]) -> torch.Tensor:
+        print("WARNING: not using ranking order")
         attr_vec = self.attribute_embedding[attribute_id]
         annot_vec = self.annotator_embedding[annotator_id]
         valid = [i for i in item_ids if 0 <= i < self.num_items]

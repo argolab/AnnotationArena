@@ -15,8 +15,8 @@ Core Concepts
 
 - Embeddings (abstractions.py, embedding.py)
   - RankingEmbeddingProviderBase: Abstract base providing forward(List[RankingData]) -> [B,N,D]. Subclasses implement:
-    - get_rating_embedding(attr_id, annot_id, item_id)
-    - get_ranking_embedding(attr_id, annot_id, item_ids)
+    - get_rating_embedding(attr_id, annot_id, item_id, rating_value)
+    - get_ranking_embedding(attr_id, annot_id, item_ids, ranking_order)
   - OuterProductRankingEmbeddingProvider: Concrete provider using pairwise outer-product pooling for listwise items.
 
 - Transformer (transformer.py)

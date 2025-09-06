@@ -1,4 +1,4 @@
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 import torch
 import torch.nn as nn
 from .data import RankingData
@@ -26,10 +26,10 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         self.embedding_dim = int(embedding_dim) # word_embedding dim
 
     # Abstract hooks for subclasses
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int) -> torch.Tensor:
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value: Optional[int]) -> torch.Tensor:
         raise NotImplementedError
 
-    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int]) -> torch.Tensor:
+    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order: Optional[List[int]]) -> torch.Tensor:
         raise NotImplementedError
 
     @torch.no_grad()
@@ -53,11 +53,11 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
 
         for i, var in enumerate(variables):
             if var.is_listwise:
-                feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size])
+                feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order)
                 feature_embeddings[0, i] = feat
             else:
                 item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
-                feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id)
+                feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value)
                 feature_embeddings[0, i] = feat
 
         return feature_embeddings
