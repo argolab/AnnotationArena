@@ -75,13 +75,14 @@ class TransformerBlock(nn.Module):
     def forward(self, feature_x: torch.Tensor, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
         batch_size = feature_x.shape[0]
 
-        feature_x_norm = self.norm_1(feature_x)
+        feature_x_norm = self.norm_1(feature_x) # pre-norm before attention
         attn_out = self._multihead_attention(feature_x_norm, batch_size, attn_mask)
         if attn_mask is not None:
             attn_out = attn_out * attn_mask.unsqueeze(-1).to(attn_out.dtype)
         feature_x = feature_x + self.dropout_1(attn_out)
 
-        feature_x_ff = self.norm_2(feature_x)
+        # parallel Feed-Forward
+        feature_x_ff = self.norm_2(feature_x) # pre-norm before feed-forward
         ff_out = self.ff(feature_x_ff)
         if attn_mask is not None:
             ff_out = ff_out * attn_mask.unsqueeze(-1).to(ff_out.dtype)
