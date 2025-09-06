@@ -533,7 +533,7 @@ def extract_predictions(data_file: str, model_path: str, model_type: str,
 
 def main():
     """Main function with argument parsing."""
-    file_list = [f for f in os.listdir(".") if "map_model" in f or "mapinit_model" in f or ("neural_model" in f and ("tiny" in f or "small" in f or "large" in f))]
+    file_list = [f for f in os.listdir("models") if "map_model" in f or "mapinit_model" in f or ("neural_model" in f and ("tiny" in f or "small" in f or "large" in f))]
     file_list.sort()
     
     # Create predictions directory if it doesn't exist
@@ -571,7 +571,7 @@ def main():
         # Extract predictions
         predictions = extract_predictions(
             data_file=data_file,
-            model_path=file,
+            model_path=f"models/{file}",
             model_type=model_type,
             device=device,
             output_file=output_file
