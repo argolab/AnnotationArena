@@ -6,9 +6,8 @@ from pathlib import Path
 from tqdm import tqdm
 import torch
 
-# Add imputer directory to path
-sys.path.append(str(Path(__file__).parent / "imputer"))
-from ranking_imputer import (
+# Import from the refactored imputer package
+from imputer import (
     DataConverter, MultiVariableImputer, ImputerTrainer
 )
 from config import ExperimentConfig
