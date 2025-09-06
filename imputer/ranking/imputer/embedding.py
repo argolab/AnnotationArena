@@ -3,7 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Tuple
 
-from .abstractions import RankingEmbeddingProviderBase, RankingData
+from .abstractions import RankingEmbeddingProviderBase
+from .data import RankingData
 
 
 class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):

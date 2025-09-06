@@ -1,29 +1,7 @@
-from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 import torch
 import torch.nn as nn
-
-
-@dataclass
-class RankingData:
-    """Structured representation of a single variable for ranking/rating.
-
-    Fields are 0-indexed for model consumption.
-    - annotator_id: annotator index
-    - attribute_id: attribute index
-    - is_listwise: True if this variable is a listwise ranking, False if a rating
-    - item_ids: for rating, a list with a single item id; for ranking, the list of item ids
-    
-    Optional fields carry supervision when available (training/eval time):
-    - rating_value: class index [0..C-1] if rating observed
-    - ranking_order: list of positions in [1..R] of same length as item_ids when ranking observed
-    """
-    annotator_id: int
-    attribute_id: int
-    is_listwise: bool
-    item_ids: List[int]
-    rating_value: Optional[int] = None
-    ranking_order: Optional[List[int]] = None
+from .data import RankingData
 
 
 class EmbeddingProviderBase(nn.Module):
