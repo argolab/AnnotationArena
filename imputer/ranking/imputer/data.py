@@ -23,6 +23,7 @@ class RankingData:
     item_ids: List[int]
     rating_value: Optional[int] = None
     ranking_order: Optional[List[int]] = None
+    masked: bool = False
     # TODO: do we need a observed flag?
 
 
@@ -164,8 +165,83 @@ class DataConverter:
                 ranking_order=order,
             ))
         return variables
+    
+    def _convert_tensors_to_ranking_data(self, variable_data, variable_types, attribute_ids, annotator_ids, item_ids) -> List[RankingData]:
+        """Convert legacy tensor format to List[RankingData]."""
+        batch_size, num_variables = variable_types.shape
+        assert batch_size == 1, "Only batch size 1 supported for conversion"
+        
+        variables = []
+        for i in range(num_variables):
+            var_type = variable_types[0, i].item()
+            attr_id = attribute_ids[0, i].item()
+            annot_id = annotator_ids[0, i].item()
+            
+            if var_type == 0:  # Rating
+                item_id = item_ids[0, i, 0].item()
+                # Check if this rating has supervision (non-zero data)
+                rating_value = None
+                data_vec = variable_data[0, i]
+                rating_value = torch.argmax(data_vec[1:]).item()
+                if data_vec[0] == 0:
+                    variables.append(RankingData(
+                        annotator_id=annot_id,
+                        attribute_id=attr_id,
+                        is_listwise=False,
+                        item_ids=[item_id],
+                        rating_value=rating_value,
+                        masked=False
+                    ))
+                else:
+                    variables.append(RankingData(
+                        annotator_id=annot_id,
+                        attribute_id=attr_id,
+                        is_listwise=False,
+                        item_ids=[item_id],
+                        rating_value=rating_value,
+                        masked=True
+                    ))
+            else:  # Ranking
+                # Extract valid item IDs (non-negative)
+                item_list = []
+                for j in range(self.max_rank_size):
+                    item_id = item_ids[0, i, j].item()
+                    if item_id >= 0:
+                        item_list.append(item_id)
+                
+                # Check if this ranking has supervision (non-zero data)
+                ranking_order = None
+                data_vec = variable_data[0, i]
+                ranking_order = []
+                for j in range(len(item_list)):
+                    if j < data_vec.shape[0]:
+                        rank_pos = int(data_vec[j + 1].item())
+                        if rank_pos > 0:
+                            ranking_order.append(rank_pos)
+                if data_vec[0] == 0:
+                
+                    variables.append(RankingData(
+                        annotator_id=annot_id,
+                        attribute_id=attr_id,
+                        is_listwise=True,
+                        item_ids=item_list,
+                        ranking_order=ranking_order,
+                        masked=False
+                    ))
+                else:
+                    variables.append(RankingData(
+                        annotator_id=annot_id,
+                        attribute_id=attr_id,
+                        is_listwise=True,
+                        item_ids=item_list,
+                        ranking_order=ranking_order,
+                        masked=True
+                    ))
+                    
+        
+        return variables
 
-    def create_training_batch(
+    def create_ranking_data_list(
         self,
         rating_variables: List[Dict[str, Any]],
         ranking_variables: List[Dict[str, Any]],
@@ -173,15 +249,18 @@ class DataConverter:
         ranking_data: List[Dict[str, Any]],
         test_data: Optional[Dict[str, Any]] = None,
         mask_rate: float = 0.5,
+        mode: str="train"
     ) -> Dict[str, torch.Tensor]:
         """Create a single training batch (legacy tensor format with masking).
 
         Returns a dict of tensors including inputs, targets, and masks along with 'all_variables'.
         """
-        all_variables = rating_variables + ranking_variables
+
+
+        all_variables = [var for var in rating_variables + ranking_variables if var["source"] == mode]
         num_variables = len(all_variables)
 
-        variable_data = torch.zeros(1, num_variables, max(self.num_likert_classes, self.max_rank_size))
+        variable_data = torch.zeros(1, num_variables, max(self.num_likert_classes, self.max_rank_size) + 1)
         variable_types = torch.zeros(1, num_variables, dtype=torch.long)
         attribute_ids = torch.zeros(1, num_variables, dtype=torch.long)
         annotator_ids = torch.zeros(1, num_variables, dtype=torch.long)
@@ -198,23 +277,21 @@ class DataConverter:
         available_rating_vars = []
         available_ranking_vars = []
         for i, var in enumerate(all_variables):
-            # Only consider variables from training data
-            if var.get('source') == 'train':
-                if var['type'] == 'rating':
-                    key = (var['attribute'], var['annotator'], var['item'])
-                    if key in rating_data:
-                        available_rating_vars.append(i)
-                else:
-                    items = var['items']
-                    # Check if ranking exists in the training data list
-                    ranking_exists = any(
-                        ranking_entry['attribute'] == var['attribute'] and
-                        ranking_entry['annotator'] == var['annotator'] and
-                        ranking_entry['items'] == items
-                        for ranking_entry in ranking_data
-                    )
-                    if ranking_exists:
-                        available_ranking_vars.append(i)
+            if var['type'] == 'rating':
+                key = (var['attribute'], var['annotator'], var['item'])
+                if key in rating_data:
+                    available_rating_vars.append(i)
+            else:
+                items = var['items']
+                # Check if ranking exists in the training data list
+                ranking_exists = any(
+                    ranking_entry['attribute'] == var['attribute'] and
+                    ranking_entry['annotator'] == var['annotator'] and
+                    ranking_entry['items'] == items
+                    for ranking_entry in ranking_data
+                )
+                if ranking_exists:
+                    available_ranking_vars.append(i)
 
         import random
         num_rating_masked = int(len(available_rating_vars) * mask_rate)
@@ -226,70 +303,45 @@ class DataConverter:
             attribute_ids[0, i] = var['attribute'] - 1
             annotator_ids[0, i] = var['annotator'] - 1
 
-            # Only process training variables for supervision
-            if var.get('source') == 'train':
-                if var['type'] == 'rating':
-                    variable_types[0, i] = 0
-                    item_ids[0, i, 0] = var['item'] - 1
-                    key = (var['attribute'], var['annotator'], var['item'])
-                    if key in rating_data:
-                        rating_value = rating_data[key] - 1
-                        rating_targets[0, i, rating_value] = 1.0
-                        rating_mask[0, i] = True
-                        if i in masked_rating_indices:
-                            rating_masked[0, i] = True
-                        else:
-                            variable_data[0, i, rating_value] = 1.0
-                else:
-                    variable_types[0, i] = 1
-                    items = var['items']
-                    for j, item in enumerate(items):
-                        if j < self.max_rank_size:
-                            item_ids[0, i, j] = item - 1
-                    # Find matching ranking in the list
-                    matching_ranking = None
-                    for ranking_entry in ranking_data:
-                        if (ranking_entry['attribute'] == var['attribute'] and
-                            ranking_entry['annotator'] == var['annotator'] and
-                            ranking_entry['items'] == items):
-                            matching_ranking = ranking_entry
-                            break
-                    
-                    if matching_ranking:
-                        order = matching_ranking['order']
-                        for j, pos in enumerate(order):
-                            if j < self.max_rank_size:
-                                ranking_targets[0, i, j] = pos
-                        ranking_mask[0, i] = True
-                        if i in masked_ranking_indices:
-                            ranking_masked[0, i] = True
-                        else:
-                            for j, pos in enumerate(order):
-                                if j < self.max_rank_size:
-                                    variable_data[0, i, j] = pos
+            if var['type'] == 'rating':
+                variable_types[0, i] = 0
+                item_ids[0, i, 0] = var['item'] - 1
+                key = (var['attribute'], var['annotator'], var['item'])
+                if key in rating_data:
+                    rating_value = rating_data[key] - 1
+                    rating_targets[0, i, rating_value] = 1.0
+                    rating_mask[0, i] = True
+                    if i in masked_rating_indices:
+                        variable_data[0, i, 0] = 1 #the mask bit
+                    #for all variables set the value
+                    variable_data[0, i, 1 + rating_value] = 1.0
             else:
-                # Test variables - set basic info but no supervision
-                if var['type'] == 'rating':
-                    variable_types[0, i] = 0
-                    item_ids[0, i, 0] = var['item'] - 1
-                else:
-                    variable_types[0, i] = 1
-                    items = var['items']
-                    for j, item in enumerate(items):
+                variable_types[0, i] = 1
+                items = var['items']
+                for j, item in enumerate(items):
+                    if j < self.max_rank_size:
+                        item_ids[0, i, j] = item - 1
+                # Find matching ranking in the list
+                matching_ranking = None
+                for ranking_entry in ranking_data:
+                    if (ranking_entry['attribute'] == var['attribute'] and
+                        ranking_entry['annotator'] == var['annotator'] and
+                        ranking_entry['items'] == items):
+                        matching_ranking = ranking_entry
+                        break
+                
+                if matching_ranking:
+                    order = matching_ranking['order']
+                    for j, pos in enumerate(order):
                         if j < self.max_rank_size:
-                            item_ids[0, i, j] = item - 1
+                            ranking_targets[0, i, j] = pos
+                    ranking_mask[0, i] = True
+                    if i in masked_ranking_indices:
+                        variable_data[0, i, 0] = 1 #set the mask bit
 
-        return {
-            'variable_data': variable_data,
-            'variable_types': variable_types,
-            'attribute_ids': attribute_ids,
-            'annotator_ids': annotator_ids,
-            'item_ids': item_ids,
-            'rating_targets': rating_targets,
-            'ranking_targets': ranking_targets,
-            'rating_mask': rating_mask,
-            'ranking_mask': ranking_mask,
-            'rating_masked': rating_masked,
-            'ranking_masked': ranking_masked,
-            'all_variables': all_variables,
-        }
+                    #for all variables set the value
+                    for j, pos in enumerate(order):
+                        if j < self.max_rank_size:
+                            variable_data[0, i, j + 1] = pos
+
+        return self._convert_tensors_to_ranking_data(variable_data, variable_types, attribute_ids, annotator_ids, item_ids)

@@ -5,7 +5,8 @@ import sys
 from pathlib import Path
 from tqdm import tqdm
 import torch
-
+import os
+os.environ['KMP_DUPLICATE_LIB_OK'] = 'TRUE'
 # Import from the refactored imputer package
 from imputer import (
     DataConverter, MultiVariableImputer, ImputerTrainer
@@ -21,7 +22,7 @@ def main():
     parser.add_argument('--config_path', type=str, default=None, help='Path to config file')
     
     # Training parameters
-    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--learning_rate', type=float, default=1e-4)
     parser.add_argument('--mask_rate', type=float, default=0.5)
     parser.add_argument('--alpha', type=float, default=1.0, help='Weight for observed variables')
@@ -58,7 +59,6 @@ def main():
     script_dir = Path(__file__).parent
     train_path = script_dir / args.train_data
     test_path = script_dir / args.test_data
-    
     # Initialize components using config
     converter = DataConverter(
         num_attributes=config.I,
@@ -82,22 +82,43 @@ def main():
     
     # Process data
     rating_data, ranking_data = converter.process_training_data(train_data)
-    logger.info(f"Available data: {len(rating_data)} ratings, {len(ranking_data)} rankings")
+    logger.info(f"Available training data: {len(rating_data)} ratings, {len(ranking_data)} rankings")
+
+
     
     # Create batch with masking
-    batch = converter.create_training_batch(
+    ranking_data_list = converter.create_ranking_data_list(
         rating_variables, ranking_variables, rating_data, ranking_data,
-        test_data=test_data, mask_rate=args.mask_rate
+        test_data=test_data, mask_rate=args.mask_rate, mode="train"
     )
+
+
     
     # Count masked entries
-    train_rating_count = batch['rating_mask'].sum().item()
-    train_ranking_count = batch['ranking_mask'].sum().item()
-    masked_rating_count = batch['rating_masked'].sum().item()
-    masked_ranking_count = batch['ranking_masked'].sum().item()
+    train_rating_count = len([var for var in ranking_data_list if not var.is_listwise])
+    train_ranking_count = len([var for var in ranking_data_list if var.is_listwise])
+    masked_rating_count = len([var for var in ranking_data_list if not var.is_listwise and var.masked])
+    masked_ranking_count = len([var for var in ranking_data_list if var.is_listwise and var.masked])
     
     logger.info(f"Training data: {train_rating_count} ratings ({masked_rating_count} masked), "
                f"{train_ranking_count} rankings ({masked_ranking_count} masked)")
+    
+    rating_data, ranking_data = converter.process_training_data(test_data)
+    logger.info(f"Available test data: {len(rating_data)} ratings, {len(ranking_data)} rankings")
+
+    test_ranking_data_list = converter.create_ranking_data_list(
+        rating_variables, ranking_variables, rating_data, ranking_data,
+        test_data=test_data, mask_rate=args.mask_rate, mode="test"
+    )
+
+    train_rating_count = len([var for var in test_ranking_data_list if not var.is_listwise])
+    train_ranking_count = len([var for var in test_ranking_data_list if var.is_listwise])
+    masked_rating_count = len([var for var in test_ranking_data_list if not var.is_listwise and var.masked])
+    masked_ranking_count = len([var for var in test_ranking_data_list if var.is_listwise and var.masked])
+    
+    logger.info(f"Test data: {train_rating_count} ratings ({masked_rating_count} masked), "
+               f"{train_ranking_count} rankings ({masked_ranking_count} masked)")
+    
     
     # Initialize model using config
     model = MultiVariableImputer(
@@ -143,31 +164,27 @@ def main():
     
     # Training loop
     for epoch in tqdm(range(args.epochs), desc="Training"):
-        losses = trainer.train_step(batch)
+        losses = trainer.train_step(ranking_data_list)
         
         # Record training losses
         train_losses['epoch'].append(epoch)
-        for key in ['total_loss', 'observed_loss', 'masked_loss', 'rating_loss_observed', 
-                   'rating_loss_masked', 'ranking_loss_observed', 'ranking_loss_masked']:
-            train_losses[key].append(losses[key])
-        
         # Evaluate on test set every 10 epochs
         if epoch % 2 == 0:
-            test_eval = trainer.evaluate_with_test_data(batch, test_data, converter, verbose=False)
+            test_eval = trainer.evaluate_with_test_data(test_ranking_data_list)
             test_losses_over_time['epoch'].append(epoch)
             test_losses_over_time['test_rating_loss'].append(test_eval['test_rating_loss'])
             test_losses_over_time['test_ranking_loss'].append(test_eval['test_ranking_loss'])
             
             logger.info(f"Epoch {epoch}: Total={losses['total_loss']:.4f}, "
-                       f"Observed={losses['observed_loss']:.4f}, "
-                       f"Masked={losses['masked_loss']:.4f}")
+                       f"Rating={losses['rating_loss']:.4f}, "
+                       f"Ranking={losses['ranking_loss']:.4f}")
             logger.info(f"TEST LOSS & METRICS: {test_eval}")
     
     logger.info("Training completed!")
     
     # Final evaluation
     logger.info("Evaluating on test data...")
-    test_losses = trainer.evaluate_with_test_data(batch, test_data, converter)
+    test_losses = trainer.evaluate_with_test_data(test_ranking_data_list)
     
     logger.info("Final Results:")
     logger.info(f"Test Rating Loss: {test_losses['test_rating_loss']:.4f}")

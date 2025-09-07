@@ -53,11 +53,11 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
 
         for i, var in enumerate(variables):
             if var.is_listwise:
-                feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order)
+                feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, var.masked)
                 feature_embeddings[0, i] = feat
             else:
                 item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
-                feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value)
+                feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, var.masked) #Pass in value and masked, currently don't have effect
                 feature_embeddings[0, i] = feat
 
         return feature_embeddings
