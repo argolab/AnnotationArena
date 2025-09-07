@@ -23,7 +23,6 @@ def main():
     # Training parameters
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--learning_rate', type=float, default=1e-4)
-    parser.add_argument('--mask_rate', type=float, default=0.5)
     
     # Model parameters
     parser.add_argument('--encoder_layers', type=int, default=2)
@@ -85,7 +84,7 @@ def main():
     # Create batch with masking
     batch = converter.create_training_batch(
         rating_variables, ranking_variables, rating_data, ranking_data,
-        test_data=test_data, mask_rate=args.mask_rate
+        test_data=test_data
     )
     
     # Count masked entries

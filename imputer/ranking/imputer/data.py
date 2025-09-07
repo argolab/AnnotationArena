@@ -172,7 +172,6 @@ class DataConverter:
         rating_data: Dict[Tuple[int, int, int], int],
         ranking_data: List[Dict[str, Any]],
         test_data: Optional[Dict[str, Any]] = None,
-        mask_rate: float = 0.5,
     ) -> Dict[str, torch.Tensor]:
         """Create a single training batch (legacy tensor format with masking).
 
@@ -216,11 +215,9 @@ class DataConverter:
                     if ranking_exists:
                         available_ranking_vars.append(i)
 
-        import random
-        num_rating_masked = int(len(available_rating_vars) * mask_rate)
-        num_ranking_masked = int(len(available_ranking_vars) * mask_rate)
-        masked_rating_indices = set(random.sample(available_rating_vars, num_rating_masked)) if available_rating_vars else set()
-        masked_ranking_indices = set(random.sample(available_ranking_vars, num_ranking_masked)) if available_ranking_vars else set()
+        # No masking - pure imputation with structural embeddings only
+        masked_rating_indices = set()
+        masked_ranking_indices = set()
 
         for i, var in enumerate(all_variables):
             attribute_ids[0, i] = var['attribute'] - 1

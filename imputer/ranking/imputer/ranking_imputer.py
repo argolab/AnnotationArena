@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import json
-from typing import List
+from typing import List, Dict
 import numpy as np
 from itertools import combinations
 from collections import defaultdict
@@ -206,9 +206,9 @@ def main():
     print(f"Available training rating data points: {len(rating_data)}")
     print(f"Available training ranking data points: {len(ranking_data)}")
     
-    # Create training batch with masking
+    # Create training batch
     batch = converter.create_training_batch(rating_variables, ranking_variables,
-                                          rating_data, ranking_data, test_data=test_data, mask_rate=0.5)
+                                          rating_data, ranking_data, test_data=test_data)
     
     # Count masked and non-masked entries
     train_rating_count = batch['rating_mask'].sum().item()
