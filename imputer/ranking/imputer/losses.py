@@ -72,8 +72,8 @@ class PlackettLuceLoss(nn.Module):
 
                     valid_scores = scores[valid_positions]
                     valid_targets = target_ranks[valid_positions]
-                    # Sort by target rank (ascending: 1 is best)
-                    _, sort_indices = torch.sort(valid_targets, descending=True)
+                    # Sort by target rank (ascending: 1=best first, 2=second, etc.)
+                    _, sort_indices = torch.sort(valid_targets, descending=False)
                     sorted_scores = valid_scores[sort_indices]
 
                     pl_loss = 0.0
@@ -112,18 +112,11 @@ class LossStrategyBase:
 
 
 class DefaultLossStrategy(LossStrategyBase):
-    """Default loss strategy mirroring existing behavior (cross-entropy + PL)."""
+    """Default loss strategy with cross-entropy for ratings and Plackett-Luce for rankings."""
 
-    def __init__(self, alpha: float = 1.0, beta: float = 1.0):
-        """Initialize with loss weights.
-        
-        Args:
-            alpha: Weight for observed data loss
-            beta: Weight for masked data loss
-        """
+    def __init__(self):
+        """Initialize loss functions."""
         super().__init__()
-        self.alpha = alpha
-        self.beta = beta
         self.rating_loss_fn = nn.CrossEntropyLoss(reduction='none')
         self.ranking_loss_fn = PlackettLuceLoss()
 
@@ -133,10 +126,7 @@ class DefaultLossStrategy(LossStrategyBase):
         references: List[RankingData],
         masked_flags: Optional[List[bool]] = None,
     ) -> Dict[str, float]:
-        """Convert structured lists to tensors and compute vectorized losses (B=1).
-
-        This enables easy extension to batched cases and reuses the same CE/PL losses.
-        """
+        """Convert structured lists to tensors and compute vectorized losses (B=1)."""
         assert len(predictions) == len(references), "predictions and references length must match"
         N = len(predictions)
         device = predictions[0].device if predictions else torch.device('cpu')
@@ -171,16 +161,12 @@ class DefaultLossStrategy(LossStrategyBase):
         ranking_targets = torch.zeros(1, N, R, device=device)
         rating_mask = torch.zeros(1, N, dtype=torch.bool, device=device)
         ranking_mask = torch.zeros(1, N, dtype=torch.bool, device=device)
-        rating_masked = torch.zeros(1, N, dtype=torch.bool, device=device)
-        ranking_masked = torch.zeros(1, N, dtype=torch.bool, device=device)
 
         for i, ref in enumerate(references):
-            is_m = bool(masked_flags[i]) if masked_flags is not None else False  # for masked variables.
             if not ref.is_listwise:
-                if ref.rating_value is not None and 0 <= ref.rating_value < C:  # FIXME: 0-indexed rating value?
+                if ref.rating_value is not None and 0 <= ref.rating_value < C:
                     rating_targets[0, i, ref.rating_value] = 1.0  # one-hot distribution
                     rating_mask[0, i] = True
-                    rating_masked[0, i] = is_m
                 else:
                     raise ValueError(f"Rating value not found or out of range for voter {i}")
             else:
@@ -190,52 +176,33 @@ class DefaultLossStrategy(LossStrategyBase):
                     order_tensor = torch.tensor(ref.ranking_order, device=device, dtype=ranking_targets.dtype)
                     ranking_targets[0, i] = order_tensor
                     ranking_mask[0, i] = True
-                    ranking_masked[0, i] = is_m
                 else:
                     raise ValueError(f"Ranking order not found or empty for voter {i}")
 
         zero = torch.tensor(0.0, device=device)
-        # Rating losses via CE
-        rating_loss_observed = zero
-        rating_loss_masked = zero
+        
+        # Rating losses via CrossEntropy
+        rating_loss = zero
         if rating_mask.any():
             idx = rating_mask.nonzero(as_tuple=False)
             v_logits = rating_logits[idx[:, 0], idx[:, 1]]
             v_targets = rating_targets[idx[:, 0], idx[:, 1]]
-            v_masked = rating_masked[idx[:, 0], idx[:, 1]]
             target_classes = torch.argmax(v_targets, dim=1)
             losses = self.rating_loss_fn(v_logits, target_classes)
-            mi = v_masked.nonzero(as_tuple=False).squeeze(-1)  # all masked variables
-            oi = (~v_masked).nonzero(as_tuple=False).squeeze(-1)  # all observed variables
-            if mi.numel() > 0:
-                rating_loss_masked = losses[mi].mean()
-            if oi.numel() > 0:
-                rating_loss_observed = losses[oi].mean()
+            rating_loss = losses.mean()
 
-        # Ranking losses via PL
-        ranking_loss_observed = zero
-        ranking_loss_masked = zero
+        # Ranking losses via Plackett-Luce
+        ranking_loss = zero
         if ranking_mask.any():
-            obs_mask = ranking_mask & (~ranking_masked)
-            msk_mask = ranking_mask & ranking_masked
-            if obs_mask.any():
-                ranking_loss_observed = self.ranking_loss_fn(ranking_logits, ranking_targets, obs_mask)
-            if msk_mask.any():
-                ranking_loss_masked = self.ranking_loss_fn(ranking_logits, ranking_targets, msk_mask)
+            ranking_loss = self.ranking_loss_fn(ranking_logits, ranking_targets, ranking_mask)
 
-        observed_loss = rating_loss_observed + ranking_loss_observed
-        masked_loss = rating_loss_masked + ranking_loss_masked
-        total_loss = self.alpha * observed_loss + self.beta * masked_loss
+        total_loss = rating_loss + ranking_loss
 
         return {
             'total_loss': float(total_loss.item()),
-            'observed_loss': float(observed_loss.item()),
-            'masked_loss': float(masked_loss.item()),
-            'rating_loss_observed': float(rating_loss_observed.item()),
-            'rating_loss_masked': float(rating_loss_masked.item()),
-            'ranking_loss_observed': float(ranking_loss_observed.item()),
-            'ranking_loss_masked': float(ranking_loss_masked.item()),
-            # also return tensors for backprop in trainer
+            'rating_loss': float(rating_loss.item()),
+            'ranking_loss': float(ranking_loss.item()),
+            # Return tensors for backprop in trainer
             '_total_loss_tensor': total_loss,
         }
 

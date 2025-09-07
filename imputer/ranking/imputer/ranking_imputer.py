@@ -66,8 +66,18 @@ class MultiVariableImputer(nn.Module):
 
         # Output heads in a ModuleDict for extensibility
         self.heads = nn.ModuleDict({
-            'rating': nn.Linear(embedding_dim, num_likert_classes),
-            'ranking': nn.Linear(embedding_dim, max_rank_size),
+            'rating': nn.Sequential(
+                nn.Linear(embedding_dim, embedding_dim // 2),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(embedding_dim // 2, num_likert_classes)
+            ),
+            'ranking': nn.Sequential(
+                nn.Linear(embedding_dim, embedding_dim // 2),
+                nn.ReLU(),
+                nn.Dropout(dropout),
+                nn.Linear(embedding_dim // 2, max_rank_size)
+            ),
         })
 
     def apply_head(self, head_key: str, hidden: torch.Tensor) -> torch.Tensor:

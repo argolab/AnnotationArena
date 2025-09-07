@@ -9,11 +9,11 @@ from .data import RankingData
 
 
 class ImputerTrainer:
-    def __init__(self, model, learning_rate=1e-3, alpha=1.0, beta=1.0, device='cuda' if torch.cuda.is_available() else 'cpu'):
+    def __init__(self, model, learning_rate=1e-3, device='cuda' if torch.cuda.is_available() else 'cpu'):
         self.model = model.to(device)
         self.device = device
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-        self.loss_strategy = DefaultLossStrategy(alpha=alpha, beta=beta)
+        self.loss_strategy = DefaultLossStrategy()
 
     def train_step(self, batch):
         """Single training step using legacy tensor batch + structured losses."""
@@ -44,7 +44,6 @@ class ImputerTrainer:
         predictions_full = adapt_batched_logits_to_predictions({'rating': rating_logits, 'ranking': ranking_logits})
         predictions: List["TopLayerPredictionResult"] = []
         references: List[RankingData] = []
-        masked_flags: List[bool] = []
         all_vars = batch['all_variables']
 
         # Reconstruct references from batch tensors (0-indexed) - only for supervised variables
@@ -59,7 +58,6 @@ class ImputerTrainer:
                     item_ids=[var['item'] - 1],
                     rating_value=rating_val,
                 ))
-                masked_flags.append(bool(rating_masked[0, i].item()))
             elif var['type'] == 'ranking' and ranking_mask[0, i]:  # Only if has supervision
                 scores_vec = ranking_targets[0, i]
                 ranking_order = []
@@ -75,9 +73,8 @@ class ImputerTrainer:
                     item_ids=[it - 1 for it in var['items'][: self.model.max_rank_size]],
                     ranking_order=ranking_order,
                 ))
-                masked_flags.append(bool(ranking_masked[0, i].item()))
 
-        losses = self.loss_strategy.compute(predictions, references, masked_flags)
+        losses = self.loss_strategy.compute(predictions, references)
 
         # Backprop
         total_loss_tensor = losses.get('_total_loss_tensor', None)
@@ -154,16 +151,25 @@ class ImputerTrainer:
             predictions_full = adapt_batched_logits_to_predictions({'rating': rating_logits, 'ranking': ranking_logits})
             predictions: List["TopLayerPredictionResult"] = []
             references: List[RankingData] = []
-            masked_flags: List[bool] = []
             
             # Lists to store ranking predictions and ground truth for Spearman correlation
             ranking_predictions = []
             ranking_ground_truths = []
             
+            # Lists to store rating predictions and ground truth for accuracy
+            rating_predictions = []
+            rating_ground_truths = []
+            
             for i, var in enumerate(all_variables):
                 if var.get('source') == 'test':
                     if var['type'] == 'rating' and test_rating_mask[0, i]:
                         rating_val = int(torch.argmax(test_rating_targets[0, i]).item())
+                        
+                        # Store for accuracy calculation
+                        pred_rating = torch.argmax(rating_logits[0, i]).item()
+                        rating_predictions.append(pred_rating)
+                        rating_ground_truths.append(rating_val)
+                        
                         predictions.append(predictions_full[i])
                         references.append(RankingData(
                             annotator_id=var['annotator'] - 1,
@@ -172,7 +178,6 @@ class ImputerTrainer:
                             item_ids=[var['item'] - 1],
                             rating_value=rating_val,
                         ))
-                        masked_flags.append(True)  # All test entries are treated as "masked" for loss computation
                     elif var['type'] == 'ranking' and test_ranking_mask[0, i]:
                         scores_vec = test_ranking_targets[0, i]
                         ranking_order = []
@@ -187,7 +192,11 @@ class ImputerTrainer:
                         pred_scores = ranking_logits[0, i].cpu().numpy()
                         valid_positions = len([x for x in ranking_order if x > 0])
                         if valid_positions > 1:  # Need at least 2 items for correlation
-                            ranking_predictions.append(pred_scores[:valid_positions])
+                            # Convert predicted scores to predicted ranks (1=best, 2=second, etc)
+                            # Higher scores should get lower rank numbers  
+                            from scipy.stats import rankdata
+                            pred_ranks = rankdata(-pred_scores[:valid_positions])  # Negative to make higher scores = lower ranks
+                            ranking_predictions.append(pred_ranks)
                             ranking_ground_truths.append(ranking_order[:valid_positions])
                         
                         predictions.append(predictions_full[i])
@@ -198,13 +207,14 @@ class ImputerTrainer:
                             item_ids=[it - 1 for it in var['items'][: converter.max_rank_size]],
                             ranking_order=ranking_order,
                         ))
-                        masked_flags.append(True)  # All test entries are treated as "masked" for loss computation
 
             if len(predictions) == 0:
                 return {
                     'test_rating_loss': 0.0,
                     'test_ranking_loss': 0.0,
                     'total_test_loss': 0.0,
+                    'rating_accuracy': None,
+                    'num_rating_evaluations': 0,
                     'spearman_rho': None,
                     'spearman_pvalue': None,
                     'kendall_tau': None,
@@ -212,9 +222,15 @@ class ImputerTrainer:
                     'num_ranking_evaluations': 0,
                 }
 
-            losses_eval = self.loss_strategy.compute(predictions, references, masked_flags)
-            test_rating_loss = losses_eval['rating_loss_masked']
-            test_ranking_loss = losses_eval['ranking_loss_masked']
+            losses_eval = self.loss_strategy.compute(predictions, references)
+            test_rating_loss = losses_eval['rating_loss']
+            test_ranking_loss = losses_eval['ranking_loss']
+
+            # Calculate rating accuracy
+            rating_accuracy = None
+            if len(rating_predictions) > 0:
+                correct = sum(p == t for p, t in zip(rating_predictions, rating_ground_truths))
+                rating_accuracy = correct / len(rating_predictions)
 
             # Calculate Spearman and Kendall tau correlation for rankings
             spearman_rho = None
@@ -245,6 +261,14 @@ class ImputerTrainer:
                     all_variables, converter,
                 )
                 
+                # Print rating accuracy
+                print(f"\n=== Rating Evaluation Metrics ===")
+                print(f"Number of rating evaluations: {len(rating_predictions)}")
+                if rating_accuracy is not None:
+                    print(f"Rating accuracy: {rating_accuracy:.4f} ({rating_accuracy*100:.1f}%)")
+                else:
+                    print("Rating accuracy could not be calculated")
+                
                 # Print correlation results
                 print(f"\n=== Ranking Evaluation Metrics ===")
                 print(f"Number of ranking evaluations: {len(ranking_predictions)}")
@@ -260,6 +284,8 @@ class ImputerTrainer:
                 'test_rating_loss': float(test_rating_loss),
                 'test_ranking_loss': float(test_ranking_loss),
                 'total_test_loss': float(test_rating_loss + test_ranking_loss),
+                'rating_accuracy': float(rating_accuracy) if rating_accuracy is not None else None,
+                'num_rating_evaluations': len(rating_predictions),
                 'spearman_rho': float(spearman_rho) if spearman_rho is not None else None,
                 'spearman_pvalue': float(spearman_pvalue) if spearman_pvalue is not None else None,
                 'kendall_tau': float(kendall_tau) if kendall_tau is not None else None,
@@ -313,10 +339,14 @@ class ImputerTrainer:
                     pred_items = [var['items'][idx] for idx in pred_ranking_indices]
 
                     true_scores = test_ranking_targets[0, i, : converter.max_rank_size]
-                    true_ranking_indices = torch.argsort(true_scores, descending=False)
+                    # For ground truth display: sort by ascending rank (1st place first)
                     valid_positions = true_scores > 0
                     if valid_positions.any():
-                        true_items = [var['items'][idx] for idx in true_ranking_indices]
+                        valid_ranks = true_scores[valid_positions]
+                        valid_items = [var['items'][idx] for idx in torch.where(valid_positions)[0]]
+                        # Sort items by their rank values (ascending: 1st, 2nd, 3rd...)
+                        sorted_indices = torch.argsort(valid_ranks, descending=False)
+                        true_items = [valid_items[idx] for idx in sorted_indices]
                     else:
                         true_items = var['items']
                     print(

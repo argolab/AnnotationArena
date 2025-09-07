@@ -24,8 +24,6 @@ def main():
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--learning_rate', type=float, default=1e-4)
     parser.add_argument('--mask_rate', type=float, default=0.5)
-    parser.add_argument('--alpha', type=float, default=1.0, help='Weight for observed variables')
-    parser.add_argument('--beta', type=float, default=1.0, help='Weight for masked variables')
     
     # Model parameters
     parser.add_argument('--encoder_layers', type=int, default=2)
@@ -115,9 +113,7 @@ def main():
     # Initialize trainer
     trainer = ImputerTrainer(
         model, 
-        learning_rate=args.learning_rate,
-        alpha=args.alpha,
-        beta=args.beta
+        learning_rate=args.learning_rate
     )
     
     # Setup output directories
@@ -127,13 +123,11 @@ def main():
     models_dir.mkdir(parents=True, exist_ok=True)
     plots_dir.mkdir(parents=True, exist_ok=True)
     
-    logger.info(f"Training for {args.epochs} epochs with α={args.alpha}, β={args.beta}...")
+    logger.info(f"Training for {args.epochs} epochs...")
     
     # Track training losses for plotting
     train_losses = {
-        'epoch': [], 'total_loss': [], 'observed_loss': [], 'masked_loss': [],
-        'rating_loss_observed': [], 'rating_loss_masked': [],
-        'ranking_loss_observed': [], 'ranking_loss_masked': []
+        'epoch': [], 'total_loss': [], 'rating_loss': [], 'ranking_loss': []
     }
     
     # Track test losses for plotting
@@ -147,8 +141,7 @@ def main():
         
         # Record training losses
         train_losses['epoch'].append(epoch)
-        for key in ['total_loss', 'observed_loss', 'masked_loss', 'rating_loss_observed', 
-                   'rating_loss_masked', 'ranking_loss_observed', 'ranking_loss_masked']:
+        for key in ['total_loss', 'rating_loss', 'ranking_loss']:
             train_losses[key].append(losses[key])
         
         # Evaluate on test set every 10 epochs
@@ -159,8 +152,8 @@ def main():
             test_losses_over_time['test_ranking_loss'].append(test_eval['test_ranking_loss'])
             
             logger.info(f"Epoch {epoch}: Total={losses['total_loss']:.4f}, "
-                       f"Observed={losses['observed_loss']:.4f}, "
-                       f"Masked={losses['masked_loss']:.4f}")
+                       f"Rating={losses['rating_loss']:.4f}, "
+                       f"Ranking={losses['ranking_loss']:.4f}")
             logger.info(f"TEST LOSS & METRICS: {test_eval}")
     
     logger.info("Training completed!")
@@ -183,19 +176,17 @@ def main():
         
         # Top left: Training log loss (combined)
         ax1.plot(train_losses['epoch'], train_losses['total_loss'], 'b-', label='Total')
-        ax1.plot(train_losses['epoch'], train_losses['observed_loss'], 'g--', label='Observed')  
-        ax1.plot(train_losses['epoch'], train_losses['masked_loss'], 'r--', label='Masked')
+        ax1.plot(train_losses['epoch'], train_losses['rating_loss'], 'g--', label='Rating')  
+        ax1.plot(train_losses['epoch'], train_losses['ranking_loss'], 'r--', label='Ranking')
         ax1.set_title('Training Log Loss (Combined)')
         ax1.set_xlabel('Epoch')
         ax1.set_ylabel('Log Loss')
         ax1.legend()
         ax1.grid(True)
         
-        # Top right: Rating + Ranking losses (observed/masked)
-        ax2.plot(train_losses['epoch'], train_losses['rating_loss_observed'], 'g-', label='Rating (Observed)', alpha=0.7)
-        ax2.plot(train_losses['epoch'], train_losses['rating_loss_masked'], 'r-', label='Rating (Masked)', alpha=0.7)
-        ax2.plot(train_losses['epoch'], train_losses['ranking_loss_observed'], 'g--', label='Ranking (Observed)', alpha=0.7)
-        ax2.plot(train_losses['epoch'], train_losses['ranking_loss_masked'], 'r--', label='Ranking (Masked)', alpha=0.7)
+        # Top right: Rating + Ranking losses 
+        ax2.plot(train_losses['epoch'], train_losses['rating_loss'], 'g-', label='Rating Loss', alpha=0.7)
+        ax2.plot(train_losses['epoch'], train_losses['ranking_loss'], 'r-', label='Ranking Loss', alpha=0.7)
         ax2.set_title('Training Log Loss by Type')
         ax2.set_xlabel('Epoch') 
         ax2.set_ylabel('Log Loss')
@@ -227,7 +218,7 @@ def main():
             plt.close()
     
     # Save model
-    model_path = models_dir / f'imputer_e{args.epochs}_a{args.alpha}_b{args.beta}.pth'
+    model_path = models_dir / f'imputer_e{args.epochs}.pth'
     torch.save({
         'model_state_dict': model.state_dict(),
         'args': args,

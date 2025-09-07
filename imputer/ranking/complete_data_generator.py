@@ -21,15 +21,15 @@ except ImportError:
 class DatasetConfig:
     K: int = 30  # number of items
     I: int = 10  # number of attributes  
-    J: int = 10   # number of annotators
-    D: int = 16  # embedding dimension
+    J: int = 5   # number of annotators
+    D: int = 64  # embedding dimension
     C: int = 5   # number of rating categories
     ranking_size: int = 5  # size of ranking sets
-    rankings_per_annotator_attribute: int = 50  # rankings per (annotator, attribute) pair
+    rankings_per_annotator_attribute: int = 10  # rankings per (annotator, attribute) pair
     
     train_fraction: float = 0.80
     test_fraction: float = 0.20
-    
+
     sigma_annotator: float = 0.3
     sigma_measurement: float = 0.1
     alpha_dirichlet: float = 2.0

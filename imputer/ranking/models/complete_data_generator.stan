@@ -156,8 +156,8 @@ generated quantities {
                     if (pos <= K) {
                         all_ranking_items[global_ranking_idx, r] = sorted_items[pos];
                     } else {
-                        // Wrap around to beginning: pos - K gives us how far past the end we are
-                        int wrapped_pos = pos - K;
+                        // Wrap around with proper modular arithmetic to stay in [1, K]
+                        int wrapped_pos = ((pos - 1) % K) + 1;
                         all_ranking_items[global_ranking_idx, r] = sorted_items[wrapped_pos];
                     }
                 }
