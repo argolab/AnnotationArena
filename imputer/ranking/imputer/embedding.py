@@ -40,7 +40,7 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.annotator_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.item_embedding, mode='fan_out', nonlinearity='relu')
-
+        self.parameter_projection = nn.Linear(embedding_dim + self.num_likert_classes + self.max_rank_size + 1, embedding_dim)
         D = embedding_dim
         self.ranking_projection = nn.Sequential(
             nn.Linear(D * D, D * 2),
@@ -49,15 +49,20 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         )
 
     # Abstract hook implementations
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value: int) -> torch.Tensor:
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value) -> torch.Tensor:
         # print("WARNING: not using rating values")
         attr_vec = self.attribute_embedding[attribute_id]
         annot_vec = self.annotator_embedding[annotator_id]
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
-        return attr_vec + annot_vec + self.item_embedding[item_id]
+        parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to("cuda")
+        if rating_value is None:
+            parameter[0] = 1.0
+        else:
+            parameter[rating_value + 1] = 1.0
+        return self.parameter_projection(torch.cat((attr_vec + annot_vec + self.item_embedding[item_id], parameter), dim=-1))
 
     # Get embedding for ranking variables
-    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order: List[int]) -> torch.Tensor:
+    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order) -> torch.Tensor:
         # print("WARNING: not using ranking order")
         attr_vec = self.attribute_embedding[attribute_id]
         annot_vec = self.annotator_embedding[annotator_id]
@@ -68,4 +73,10 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         for i in range(len(item_attr_embeddings)):
             for j in range(i + 1, len(item_attr_embeddings)):
                 total_outer += torch.outer(item_attr_embeddings[i], item_attr_embeddings[j])
-        return self.ranking_projection(total_outer.flatten())
+
+        parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to("cuda")
+        if ranking_order is None:
+            parameter[0] = 1.0
+        else:
+            parameter[self.num_likert_classes + 1:] = torch.tensor(ranking_order)
+        return self.parameter_projection(torch.cat((self.ranking_projection(total_outer.flatten()), parameter), dim=-1))

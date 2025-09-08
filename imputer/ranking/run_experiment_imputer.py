@@ -11,6 +11,8 @@ from imputer import (
     DataConverter, MultiVariableImputer, ImputerTrainer
 )
 from config import ExperimentConfig
+import os
+os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
 
 def main():
     parser = argparse.ArgumentParser(description='Train ranking imputer with masking')
@@ -21,7 +23,7 @@ def main():
     parser.add_argument('--config_path', type=str, default=None, help='Path to config file')
     
     # Training parameters
-    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--learning_rate', type=float, default=1e-4)
     
     # Model parameters
@@ -79,12 +81,11 @@ def main():
     
     # Process data
     rating_data, ranking_data = converter.process_training_data(train_data)
-    logger.info(f"Available data: {len(rating_data)} ratings, {len(ranking_data)} rankings")
+    logger.info(f"Available training data: {len(rating_data)} ratings, {len(ranking_data)} rankings")
     
     # Create batch with masking
-    batch = converter.create_training_batch(
-        rating_variables, ranking_variables, rating_data, ranking_data,
-        test_data=test_data
+    batch = converter.create_batch(
+        rating_variables, ranking_variables, rating_data, ranking_data
     )
     
     # Count masked entries
@@ -133,6 +134,22 @@ def main():
     test_losses_over_time = {
         'epoch': [], 'test_rating_loss': [], 'test_ranking_loss': []
     }
+
+    test_rating_data, test_ranking_data = converter.process_training_data(test_data)
+    logger.info(f"Available test data: {len(test_rating_data)} ratings, {len(test_ranking_data)} rankings")
+
+    test_batch = converter.create_batch(
+        rating_variables, ranking_variables, test_rating_data, test_ranking_data, mode="test"
+    )
+
+    # Count masked entries
+    train_rating_count = test_batch['rating_mask'].sum().item()
+    train_ranking_count = test_batch['ranking_mask'].sum().item()
+    masked_rating_count = test_batch['rating_masked'].sum().item()
+    masked_ranking_count = test_batch['ranking_masked'].sum().item()
+    
+    logger.info(f"Testing data: {train_rating_count} ratings ({masked_rating_count} masked), "
+               f"{train_ranking_count} rankings ({masked_ranking_count} masked)")
     
     # Training loop
     for epoch in tqdm(range(args.epochs), desc="Training"):
@@ -145,7 +162,7 @@ def main():
         
         # Evaluate on test set every 10 epochs
         if epoch % 2 == 0:
-            test_eval = trainer.evaluate_with_test_data(batch, test_data, converter, verbose=False)
+            test_eval = trainer.evaluate_with_test_data(test_batch, test_data, converter, verbose=False)
             test_losses_over_time['epoch'].append(epoch)
             test_losses_over_time['test_rating_loss'].append(test_eval['test_rating_loss'])
             test_losses_over_time['test_ranking_loss'].append(test_eval['test_ranking_loss'])
@@ -193,8 +210,8 @@ def main():
         ax2.grid(True)
         
         plt.tight_layout()
-        plt.savefig(plots_dir / 'training_plots.png', dpi=300, bbox_inches='tight')
-        logger.info(f"Training plots saved to {plots_dir / 'training_plots.png'}")
+        plt.savefig(plots_dir / 'training_plots_conditional.png', dpi=300, bbox_inches='tight')
+        logger.info(f"Training plots saved to {plots_dir / 'training_plots_conditional.png'}")
         plt.close()
         
         # Test loss plot (separate PNG)
@@ -212,8 +229,8 @@ def main():
             ax.grid(True, alpha=0.3)
             
             plt.tight_layout()
-            plt.savefig(plots_dir / 'test_plots.png', dpi=300, bbox_inches='tight')
-            logger.info(f"Test loss plot saved to {plots_dir / 'test_plots.png'}")
+            plt.savefig(plots_dir / 'test_plots_conditional.png', dpi=300, bbox_inches='tight')
+            logger.info(f"Test loss plot saved to {plots_dir / 'test_plots_conditional.png'}")
             plt.close()
     
     # Save model

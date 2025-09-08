@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple, Dict, Any
 import json
 import torch
-
+import random
 
 @dataclass
 class RankingData:
@@ -165,13 +165,13 @@ class DataConverter:
             ))
         return variables
 
-    def create_training_batch(
+    def create_batch(
         self,
         rating_variables: List[Dict[str, Any]],
         ranking_variables: List[Dict[str, Any]],
         rating_data: Dict[Tuple[int, int, int], int],
         ranking_data: List[Dict[str, Any]],
-        test_data: Optional[Dict[str, Any]] = None,
+        mode="train",
     ) -> Dict[str, torch.Tensor]:
         """Create a single training batch (legacy tensor format with masking).
 
@@ -198,7 +198,7 @@ class DataConverter:
         available_ranking_vars = []
         for i, var in enumerate(all_variables):
             # Only consider variables from training data
-            if var.get('source') == 'train':
+            if var.get('source') == mode:
                 if var['type'] == 'rating':
                     key = (var['attribute'], var['annotator'], var['item'])
                     if key in rating_data:
@@ -214,17 +214,20 @@ class DataConverter:
                     )
                     if ranking_exists:
                         available_ranking_vars.append(i)
-
         # No masking - pure imputation with structural embeddings only
-        masked_rating_indices = set()
-        masked_ranking_indices = set()
+        masked_rating_indices = set(
+            random.sample(available_rating_vars, len(available_rating_vars) // 2)
+        )
+        masked_ranking_indices = set(
+            random.sample(available_ranking_vars, len(available_ranking_vars) // 2)
+        )
 
         for i, var in enumerate(all_variables):
             attribute_ids[0, i] = var['attribute'] - 1
             annotator_ids[0, i] = var['annotator'] - 1
 
             # Only process training variables for supervision
-            if var.get('source') == 'train':
+            if var.get('source') == mode:
                 if var['type'] == 'rating':
                     variable_types[0, i] = 0
                     item_ids[0, i, 0] = var['item'] - 1
