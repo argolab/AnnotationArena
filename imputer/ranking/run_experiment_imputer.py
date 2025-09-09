@@ -29,7 +29,7 @@ def main():
     # Model parameters
     parser.add_argument('--encoder_layers', type=int, default=4)
     parser.add_argument('--attention_heads', type=int, default=8)
-    parser.add_argument('--embedding_dim', type=int, default=128)
+    parser.add_argument('--embedding_dim', type=int, default=64)
     parser.add_argument('--dropout', type=float, default=0.1)
     
     # Output parameters

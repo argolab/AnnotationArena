@@ -10,7 +10,7 @@ class ExperimentConfig:
     
     K: int = 30  # number of items
     I: int = 10  # number of attributes  
-    J: int = 10  # number of annotators
+    J: int = 5  # number of annotators
     D: int = 64  # embedding dimension
     C: int = 5   # number of rating categories
     ranking_size: int = 5  # size of ranking sets

@@ -54,7 +54,7 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         attr_vec = self.attribute_embedding[attribute_id]
         annot_vec = self.annotator_embedding[annotator_id]
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
-        parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to("cuda")
+        parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to("cpu")
         if rating_value is None:
             parameter[0] = 1.0
         else:
@@ -74,7 +74,7 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
             for j in range(i + 1, len(item_attr_embeddings)):
                 total_outer += torch.outer(item_attr_embeddings[i], item_attr_embeddings[j])
 
-        parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to("cuda")
+        parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to("cpu")
         if ranking_order is None:
             parameter[0] = 1.0
         else:
