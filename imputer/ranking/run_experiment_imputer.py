@@ -35,6 +35,8 @@ def main():
     # Output parameters
     parser.add_argument('--output_dir', type=str, default='outputs')
     parser.add_argument('--save_plots', action='store_true', help='Save training loss plots')
+    parser.add_argument("--embedding_type", default="pairwise", help="Type of layer 0 representation to use")
+    parser.add_argument("--device", default="cuda", help="Device use for training and testing")
     
     args = parser.parse_args()
     
@@ -107,7 +109,9 @@ def main():
         encoder_layers_num=args.encoder_layers,
         attention_heads=args.attention_heads,
         embedding_dim=args.embedding_dim,
-        dropout=args.dropout
+        dropout=args.dropout,
+        embedding_type=args.embedding_type,
+        device=args.device
     )
     
     # Initialize trainer

@@ -17,7 +17,7 @@ import logging
 from tqdm import tqdm
 
 # New modular components (use relative imports only)
-from .embedding import OuterProductRankingEmbeddingProvider
+from .embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider
 from .transformer import TransformerBlock, NormLayer as _NormLayer
 from .data import RankingData, DataConverter
 from .trainer import ImputerTrainer
@@ -44,9 +44,11 @@ class MultiVariableImputer(nn.Module):
                  encoder_layers_num=2,
                  attention_heads=4,
                  embedding_dim=64,
-                 dropout=0.1):
+                 dropout=0.1,
+                 embedding_type="pairwise",
+                 device="cuda"):
         super().__init__()
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device(device)
         self.num_attributes = num_attributes
         self.num_annotators = num_annotators
         self.num_items = num_items
@@ -54,9 +56,17 @@ class MultiVariableImputer(nn.Module):
         self.max_rank_size = max_rank_size
         self.embedding_dim = embedding_dim
 
-        self.embedding_provider = OuterProductRankingEmbeddingProvider(
-            num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size
-        )
+        if embedding_type == "pairwise":
+            self.embedding_provider = PairwiseRankingProjectionEmbeddingProvider(
+                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
+            )
+        elif embedding_type == "outer_product":
+            self.embedding_provider = OuterProductRankingEmbeddingProvider(
+                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size
+            )
+        else:
+            #Probably have more
+            pass
         self.blocks = nn.ModuleList([
             TransformerBlock(embedding_dim, attention_heads, dropout)
             for _ in range(encoder_layers_num)
