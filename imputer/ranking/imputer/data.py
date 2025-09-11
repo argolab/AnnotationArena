@@ -39,7 +39,7 @@ class DataConverter:
             data = json.load(f)
         filtered_ratings = [r for r in data['ratings'] if r['item'] <= self.num_items]
         filtered_rankings = []
-        for ranking in data['rankings']:
+        for ranking in data.get('pairwise_rankings', []):
             items_to_check = ranking['items'][: self.max_rank_size]
             if all(item <= self.num_items for item in items_to_check):
                 filtered_rankings.append(ranking)
@@ -70,7 +70,7 @@ class DataConverter:
             })
 
         # Create ranking variables from training data
-        for ranking in train_data['rankings']:
+        for ranking in train_data.get('pairwise_rankings', []):
             ranking_variables.append({
                 'type': 'ranking',
                 'attribute': ranking['attribute'],
@@ -80,7 +80,7 @@ class DataConverter:
             })
         
         # Create ranking variables from test data
-        for ranking in test_data['rankings']:
+        for ranking in test_data.get('pairwise_rankings', []):
             ranking_variables.append({
                 'type': 'ranking',
                 'attribute': ranking['attribute'],
@@ -99,7 +99,7 @@ class DataConverter:
             key = (rating['attribute'], rating['annotator'], rating['item'])
             rating_data[key] = rating['value']
 
-        for ranking in data['rankings']:
+        for ranking in data.get('pairwise_rankings', []):
             items = ranking['items'][: self.max_rank_size]
             order = ranking['order'][: self.max_rank_size]
             ranking_data.append({

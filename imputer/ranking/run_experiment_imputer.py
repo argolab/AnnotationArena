@@ -18,8 +18,8 @@ def main():
     parser = argparse.ArgumentParser(description='Train ranking imputer with masking')
     
     # Data parameters (paths only - dimensions from config)
-    parser.add_argument('--train_data', type=str, default='generated_data/test_complete_train.json')
-    parser.add_argument('--test_data', type=str, default='generated_data/test_complete_test.json')
+    parser.add_argument('--train_data', type=str, default='generated_data/iclr_complete_train.json')
+    parser.add_argument('--test_data', type=str, default='generated_data/iclr_complete_test.json')
     parser.add_argument('--config_path', type=str, default=None, help='Path to config file')
     
     # Training parameters
