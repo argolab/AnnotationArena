@@ -10,11 +10,13 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
-    """Embedding provider using sum of outer products for rankings.
 
-    Implements get_rating_embedding/get_ranking_embedding and inherits the forward(List[RankingData])
-    from RankingEmbeddingProviderBase.
+class BaseRankingEmbeddingProvider(RankingEmbeddingProviderBase):
+    """Intermediate base class that manages common embedding initialization and utilities.
+    
+    This class handles the common functionality shared between different ranking embedding
+    providers, including embedding initialization, parameter projection, and the _from_true_embedding
+    factory method.
     """
 
     def __init__(
@@ -25,6 +27,7 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         embedding_dim: int,
         num_likert_classes: int,
         max_rank_size: int,
+        device: str = "cpu",
     ):
         super().__init__(
             num_likert_classes=num_likert_classes,
@@ -34,6 +37,7 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         self.num_attributes = num_attributes
         self.num_annotators = num_annotators
         self.num_items = num_items
+        self.device = device
 
         # Embeddings for each component (learned parameters)
         self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, embedding_dim))
@@ -43,13 +47,6 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.annotator_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.item_embedding, mode='fan_out', nonlinearity='relu')
-        self.parameter_projection = nn.Linear(embedding_dim + self.num_likert_classes + self.max_rank_size + 1, embedding_dim)
-        D = embedding_dim
-        self.ranking_projection = nn.Sequential(
-            nn.Linear(D * D, D * 2),
-            nn.ReLU(),
-            nn.Linear(D * 2, D),
-        )
 
     @classmethod
     def _from_true_embedding(
@@ -64,7 +61,8 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         num_likert_classes: int,
         max_rank_size: int,
         freeze: bool | dict = False,
-    ) -> "OuterProductRankingEmbeddingProvider":
+        device: str = "cpu",
+    ) -> "BaseRankingEmbeddingProvider":
         f"""Factory: build a provider from ground-truth embedding matrices.
 
         Accepts any subset of the three matrices. Shapes are [count, D]. For any
@@ -72,7 +70,7 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         All components must agree on D.
 
         Example:
-            provider = OuterProductRankingEmbeddingProvider._from_true_embedding(
+            provider = BaseRankingEmbeddingProvider._from_true_embedding(
                 attribute_embedding=attr_gt,            # [A, D]
                 annotator_embedding_size=(U, D),      # if embedding not provided, give sizes
                 item_embedding=item_gt,                 # [I, D]
@@ -86,7 +84,6 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
             if x is None:
                 return None
             return x if torch.is_tensor(x) else torch.as_tensor(x)
-
 
         # assert either size or embedding is provided
         assert attribute_embedding_size is not None or attribute_embedding is not None, "attribute_embedding_size must be provided when attribute_embedding is None"
@@ -128,6 +125,7 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
             embedding_dim=D,
             num_likert_classes=int(num_likert_classes),
             max_rank_size=int(max_rank_size),
+            device=device,
         )
 
         # Move tensors to provider device/dtype and copy (only if provided)
@@ -154,13 +152,47 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
 
         return provider
 
-    # Abstract hook implementations
+
+class OuterProductRankingEmbeddingProvider(BaseRankingEmbeddingProvider):
+    """Embedding provider using sum of outer products for rankings.
+
+    Implements get_rating_embedding/get_ranking_embedding and inherits the forward(List[RankingData])
+    from RankingEmbeddingProviderBase.
+    """
+
+    def __init__(
+        self,
+        num_attributes: int,
+        num_annotators: int,
+        num_items: int,
+        embedding_dim: int,
+        num_likert_classes: int,
+        max_rank_size: int,
+        device: str,
+    ):
+        super().__init__(
+            num_attributes=num_attributes,
+            num_annotators=num_annotators,
+            num_items=num_items,
+            embedding_dim=embedding_dim,
+            num_likert_classes=num_likert_classes,
+            max_rank_size=max_rank_size,
+            device=device,
+        )
+        self.parameter_projection = nn.Linear(embedding_dim + 1 + self.num_likert_classes + self.max_rank_size, embedding_dim)
+        D = embedding_dim
+        self.ranking_projection = nn.Sequential(
+            nn.Linear(D * D, D * 2),
+            nn.ReLU(),
+            nn.Linear(D * 2, D),
+        )
+
     def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value) -> torch.Tensor:
-        # print("WARNING: not using rating values")
+        """Implementation for rating embeddings."""
         attr_vec = self.attribute_embedding[attribute_id]
         annot_vec = self.annotator_embedding[annotator_id]
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
-        parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to("cpu")
+        parameter = torch.zeros(1 + self.num_likert_classes + self.max_rank_size).to(self.device)
         if rating_value is None:
             parameter[0] = 1.0
         else:
@@ -180,7 +212,7 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
             for j in range(i + 1, len(item_attr_embeddings)):
                 total_outer += torch.outer(item_attr_embeddings[i], item_attr_embeddings[j])
 
-        parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to("cpu")
+        parameter = torch.zeros(1 + self.num_likert_classes + self.max_rank_size).to(self.device)
         if ranking_order is None:
             parameter[0] = 1.0
         else:
@@ -188,8 +220,8 @@ class OuterProductRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         return self.parameter_projection(torch.cat((self.ranking_projection(total_outer.flatten()), parameter), dim=-1))
     
 
-class PairwiseRankingProjectionEmbeddingProvider(RankingEmbeddingProviderBase):
-    """Embedding provider using sum of outer products for rankings.
+class PairwiseRankingProjectionEmbeddingProvider(BaseRankingEmbeddingProvider):
+    """Embedding provider using pairwise relations for rankings.
 
     Implements get_rating_embedding/get_ranking_embedding and inherits the forward(List[RankingData])
     from RankingEmbeddingProviderBase.
@@ -206,34 +238,20 @@ class PairwiseRankingProjectionEmbeddingProvider(RankingEmbeddingProviderBase):
         device: str,
     ):
         super().__init__(
+            num_attributes=num_attributes,
+            num_annotators=num_annotators,
+            num_items=num_items,
+            embedding_dim=embedding_dim,
             num_likert_classes=num_likert_classes,
             max_rank_size=max_rank_size,
-            embedding_dim=embedding_dim,
+            device=device,
         )
-        self.num_attributes = num_attributes
-        self.num_annotators = num_annotators
-        self.num_items = num_items
-        self.device = device
-        # Embeddings for each component (learned parameters)
-        self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, embedding_dim))
-        self.annotator_embedding = nn.Parameter(torch.randn(num_annotators, embedding_dim))
-        self.item_embedding = nn.Parameter(torch.randn(num_items, embedding_dim))
-
-        torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
-        torch.nn.init.kaiming_normal_(self.annotator_embedding, mode='fan_out', nonlinearity='relu')
-        torch.nn.init.kaiming_normal_(self.item_embedding, mode='fan_out', nonlinearity='relu')
         self.parameter_projection = nn.Linear(embedding_dim + self.num_likert_classes + self.max_rank_size + 1, embedding_dim)
         self.pairwise_relation = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
-        D = embedding_dim
-        self.ranking_projection = nn.Sequential(
-            nn.Linear(D * D, D * 2),
-            nn.ReLU(),
-            nn.Linear(D * 2, D),
-        )
 
-    # Abstract hook implementations
+
     def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value) -> torch.Tensor:
-        # print("WARNING: not using rating values")
+        """Implementation for rating embeddings."""
         attr_vec = self.attribute_embedding[attribute_id]
         annot_vec = self.annotator_embedding[annotator_id]
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"

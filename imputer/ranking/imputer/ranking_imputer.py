@@ -64,7 +64,7 @@ class MultiVariableImputer(nn.Module):
         # Probably not needed for ICLR but will need this for later.
         elif embedding_type == "outer_product":
             self.embedding_provider = OuterProductRankingEmbeddingProvider(
-                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size
+                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
             )
             print("WARNING - You shouldn't be here!")
             sys.exit()
