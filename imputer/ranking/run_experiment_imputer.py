@@ -117,7 +117,8 @@ def main():
     # Initialize trainer
     trainer = ImputerTrainer(
         model, 
-        learning_rate=args.learning_rate
+        learning_rate=args.learning_rate,
+        device=args.device
     )
     
     # Setup output directories

@@ -143,12 +143,11 @@ class PairwiseRankingProjectionEmbeddingProvider(RankingEmbeddingProviderBase):
         # print("WARNING: not using ranking order")
         attr_vec = self.attribute_embedding[attribute_id]
         annot_vec = self.annotator_embedding[annotator_id]
-        print(len(item_ids))
-        assert len(item_ids) == 2, "Pairwise Ranking Embedding Provider only support two items ranking"
+        #assert len(item_ids) == 2, "Pairwise Ranking Embedding Provider only support two items ranking" should add this back when generated ranking with 2 items data
 
-        item_embedding_1 = item_ids[0]
-        item_embedding_2 = item_ids[1]
-        item_embedding = item_embedding_1[0] + item_embedding_2[1] @ self.pairwise_relation
+        item_embedding_1 = self.item_embedding[item_ids[0]]
+        item_embedding_2 = self.item_embedding[item_ids[1]]
+        item_embedding = item_embedding_1 + item_embedding_2 @ self.pairwise_relation
         total_embedding = attr_vec + annot_vec + item_embedding
         parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to(self.device)
         if ranking_order is None:

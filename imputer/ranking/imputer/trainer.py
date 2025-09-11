@@ -9,7 +9,7 @@ from .data import RankingData
 
 
 class ImputerTrainer:
-    def __init__(self, model, learning_rate=1e-3, device='cuda' if torch.cuda.is_available() else 'cpu'):
+    def __init__(self, model, learning_rate=1e-3, device="cuda"):
         self.model = model.to(device)
         self.device = device
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
