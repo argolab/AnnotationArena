@@ -43,6 +43,7 @@ Core Concepts
 
 - Trainer (trainer.py)
   - ImputerTrainer: Orchestrates forward, builds structured predictions/references, computes loss with DefaultLossStrategy, and steps the optimizer.
+    - Supports `embedding_anchor_reg` hyperparameter to regularize embedding parameters toward their random initialization. A large value effectively freezes embeddings.
   - Uses the legacy tensor batch format for now; can migrate to fully structured batching.
 
 Data & Rank Conventions

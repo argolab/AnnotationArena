@@ -9,11 +9,24 @@ from .data import RankingData
 
 
 class ImputerTrainer:
-    def __init__(self, model, learning_rate=1e-3, device='cuda' if torch.cuda.is_available() else 'cpu'):
+    def __init__(self, model, learning_rate=1e-3, device='cuda' if torch.cuda.is_available() else 'cpu', embedding_anchor_reg: float = 0.0):
         self.model = model.to(device)
         self.device = device
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         self.loss_strategy = DefaultLossStrategy()
+        # Regularize embedding parameters towards their random initialization
+        self.embedding_anchor_reg = float(embedding_anchor_reg)
+        self._embedding_initial_params = {}
+        if self.embedding_anchor_reg > 0.0:
+            # Snapshot initial embedding parameters after model is moved to device
+            for name, param in self.model.named_parameters():
+                if param.requires_grad and self._is_embedding_param_name(name):
+                    self._embedding_initial_params[name] = param.detach().clone()
+
+    def _is_embedding_param_name(self, name: str) -> bool:
+        # FIXME: this function seems not robust. Be careful.
+        n = name.lower()
+        return ("embedding" in n) or ("embed" in n)
 
     def train_step(self, batch):
         """Single training step using legacy tensor batch + structured losses."""
@@ -76,10 +89,28 @@ class ImputerTrainer:
 
         losses = self.loss_strategy.compute(predictions, references)
 
+        # Embedding anchor regularization: keep embeddings close to their random initialization
+        reg_scaled = torch.tensor(0.0, device=self.device)
+        if self.embedding_anchor_reg > 0.0 and self._embedding_initial_params:
+            reg = torch.tensor(0.0, device=self.device)
+            for name, p in self.model.named_parameters():
+                if p.requires_grad and self._is_embedding_param_name(name):
+                    init = self._embedding_initial_params.get(name)
+                    if init is not None:
+                        reg = reg + (p - init).pow(2).sum()
+            reg_scaled = self.embedding_anchor_reg * reg
+            # Log metric (float only in returned dict)
+            losses['embedding_reg'] = float(reg_scaled.detach().item())
+            # Ensure total_loss reflects the regularizer for logging
+            if 'total_loss' in losses:
+                losses['total_loss'] = float(losses['total_loss'] + losses['embedding_reg'])
+
         # Backprop
         total_loss_tensor = losses.get('_total_loss_tensor', None)
         if total_loss_tensor is None:
             total_loss_tensor = (rating_logits.sum() * 0.0) + (ranking_logits.sum() * 0.0) + torch.tensor(losses['total_loss'], device=self.device)
+        # Add regularization term to tensor used for backprop
+        total_loss_tensor = total_loss_tensor + reg_scaled
         total_loss_tensor.backward()
         self.optimizer.step()
 
