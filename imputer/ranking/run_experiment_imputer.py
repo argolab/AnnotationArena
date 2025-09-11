@@ -25,6 +25,7 @@ def main():
     # Training parameters
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--embedding_anchor_reg', type=float, default=0.0)
     
     # Model parameters
     parser.add_argument('--encoder_layers', type=int, default=4)
@@ -118,7 +119,8 @@ def main():
     trainer = ImputerTrainer(
         model, 
         learning_rate=args.learning_rate,
-        device=args.device
+        device=args.device,
+        embedding_anchor_reg=args.embedding_anchor_reg,
     )
     
     # Setup output directories
