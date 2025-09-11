@@ -9,6 +9,7 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import json
+import sys
 from typing import List, Dict
 import numpy as np
 from itertools import combinations
@@ -60,13 +61,18 @@ class MultiVariableImputer(nn.Module):
             self.embedding_provider = PairwiseRankingProjectionEmbeddingProvider(
                 num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
             )
+        # Probably not needed for ICLR but will need this for later.
         elif embedding_type == "outer_product":
             self.embedding_provider = OuterProductRankingEmbeddingProvider(
                 num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size
             )
+            print("WARNING - You shouldn't be here!")
+            sys.exit()
         else:
-            #Probably have more
+            print("WARNING - You shouldn't be here also!")
+            sys.exit()
             pass
+        
         self.blocks = nn.ModuleList([
             TransformerBlock(embedding_dim, attention_heads, dropout)
             for _ in range(encoder_layers_num)

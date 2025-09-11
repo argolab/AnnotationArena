@@ -142,6 +142,7 @@ generated quantities {
                 }
                 
                 // Generate pairwise rankings with limits
+                // TODO
                 if (num_tied >= min_group_size) {
                     int max_possible_pairs = num_tied * (num_tied - 1) / 2;
                     int pairs_to_generate;

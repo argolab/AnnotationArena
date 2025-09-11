@@ -249,7 +249,7 @@ class PairwiseRankingProjectionEmbeddingProvider(RankingEmbeddingProviderBase):
         # print("WARNING: not using ranking order")
         attr_vec = self.attribute_embedding[attribute_id]
         annot_vec = self.annotator_embedding[annotator_id]
-        #assert len(item_ids) == 2, "Pairwise Ranking Embedding Provider only support two items ranking" should add this back when generated ranking with 2 items data
+        assert len(item_ids) == 2, "Pairwise Ranking Embedding Provider only support two items ranking" 
 
         item_embedding_1 = self.item_embedding[item_ids[0]]
         item_embedding_2 = self.item_embedding[item_ids[1]]
