@@ -18,6 +18,7 @@ Core Concepts
     - get_rating_embedding(attr_id, annot_id, item_id, rating_value)
     - get_ranking_embedding(attr_id, annot_id, item_ids, ranking_order)
   - OuterProductRankingEmbeddingProvider: Concrete provider using pairwise outer-product pooling for listwise items.
+    - _from_true_embedding(attribute_embedding=None, annotator_embedding=None, item_embedding=None, *, attribute_embedding_size=(A,D)|None, annotator_embedding_size=(U,D)|None, item_embedding_size=(I,D)|None, num_likert_classes, max_rank_size, freeze=False): class factory to build provider from external embeddings, inferring sizes (requires size tuples when a matrix is omitted), optionally freezing components. Logs inferred sizes for debugging.
 
 - Transformer (transformer.py)
   - TransformerBlock: Single-stream encoder block with pre-norm, MHA, FFN.
@@ -32,6 +33,9 @@ Core Concepts
       - Inputs: List[RankingData] or legacy tensors; optional `attn_mask`
       - Returns: logits dict {'rating': [B,N,C], 'ranking': [B,N,R]}
       - Optionally returns intermediate hidden states (return_hidden=True)
+    - External embeddings should be provided at construction time via the provider classmethod noted above.
+  - MultiVariableImputerWithExternalEmbeddings: Subclass offering a convenience constructor for external embeddings.
+    - from_true_embedding(...): builds a model by creating an embedding provider via `_from_true_embedding`, injects it, and returns the ready-to-train model. Supports size tuples for missing components and optional freezing.
 
 - Losses (losses.py)
   - PlackettLuceLoss: Ranking loss over (masked) positions; expects ranks where 1 is best.
@@ -43,6 +47,7 @@ Core Concepts
 
 - Trainer (trainer.py)
   - ImputerTrainer: Orchestrates forward, builds structured predictions/references, computes loss with DefaultLossStrategy, and steps the optimizer.
+    - Supports `embedding_anchor_reg` hyperparameter to regularize embedding parameters toward their random initialization. A large value effectively freezes embeddings.
   - Uses the legacy tensor batch format for now; can migrate to fully structured batching.
 
 Data & Rank Conventions
