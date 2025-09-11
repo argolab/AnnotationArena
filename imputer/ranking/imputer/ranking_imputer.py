@@ -184,6 +184,60 @@ class MultiVariableImputer(nn.Module):
             return logits, hidden_states
         return logits
 
+
+class MultiVariableImputerWithExternalEmbeddings(MultiVariableImputer):
+    """Subclass that provides a convenient constructor for external/ground-truth embeddings.
+
+    Use this when you wish to initialize the model with known embeddings and optionally
+    freeze some or all of them while training the remaining modules.
+    """
+
+    @classmethod
+    def from_true_embedding(
+        cls,
+        *,
+        attribute_embedding=None,
+        annotator_embedding=None,
+        item_embedding=None,
+        attribute_embedding_size: tuple | None = None,
+        annotator_embedding_size: tuple | None = None,
+        item_embedding_size: tuple | None = None,
+        num_likert_classes: int,
+        max_rank_size: int,
+        encoder_layers_num: int = 2,
+        attention_heads: int = 4,
+        dropout: float = 0.1,
+        freeze: bool | dict = False,
+    ) -> "MultiVariableImputerWithExternalEmbeddings":
+        # Build provider from external embeddings (supports partial + size hints)
+        provider = OuterProductRankingEmbeddingProvider._from_true_embedding(
+            attribute_embedding=attribute_embedding,
+            annotator_embedding=annotator_embedding,
+            item_embedding=item_embedding,
+            attribute_embedding_size=attribute_embedding_size,
+            annotator_embedding_size=annotator_embedding_size,
+            item_embedding_size=item_embedding_size,
+            num_likert_classes=num_likert_classes,
+            max_rank_size=max_rank_size,
+            freeze=freeze,
+        )
+
+        # Construct model using inferred sizes from the provider
+        instance = cls(
+            num_attributes=provider.num_attributes,
+            num_annotators=provider.num_annotators,
+            num_items=provider.num_items,
+            num_likert_classes=num_likert_classes,
+            max_rank_size=max_rank_size,
+            encoder_layers_num=encoder_layers_num,
+            attention_heads=attention_heads,
+            embedding_dim=provider.embedding_dim,
+            dropout=dropout,
+        )
+        # Inject the prepared provider
+        instance.embedding_provider = provider
+        return instance
+
 def main():
     # Initialize components with smaller dataset
     converter = DataConverter(num_attributes=10, num_annotators=5, num_items=10)
