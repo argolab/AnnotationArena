@@ -24,8 +24,9 @@ def main():
     
     # Training parameters
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--learning_rate', type=float, default=1e-3)
+    parser.add_argument('--learning_rate', type=float, default=1e-4)
     parser.add_argument('--embedding_anchor_reg', type=float, default=0.0)
+    parser.add_argument('--masking_rate', type=float, default=0.5, help='Fraction of training variables to mask (0.0-1.0)')
     
     # Model parameters
     parser.add_argument('--encoder_layers', type=int, default=4)
@@ -37,7 +38,7 @@ def main():
     parser.add_argument('--output_dir', type=str, default='outputs')
     parser.add_argument('--save_plots', action='store_true', help='Save training loss plots')
     parser.add_argument("--embedding_type", default="pairwise", help="Type of layer 0 representation to use")
-    parser.add_argument("--device", default="cuda", help="Device use for training and testing")
+    parser.add_argument("--device", default="cpu", help="Device use for training and testing")
     
     args = parser.parse_args()
     
@@ -75,8 +76,8 @@ def main():
     train_data = converter.load_training_data(str(train_path))
     test_data = converter.load_training_data(str(test_path))
     
-    logger.info(f"Training data: {len(train_data['ratings'])} ratings, {len(train_data['rankings'])} rankings")
-    logger.info(f"Test data: {len(test_data['ratings'])} ratings, {len(test_data['rankings'])} rankings")
+    logger.info(f"Training data: {len(train_data['ratings'])} ratings, {len(train_data['pairwise_rankings'])} rankings")
+    logger.info(f"Test data: {len(test_data['ratings'])} ratings, {len(test_data['pairwise_rankings'])} rankings")
     
     # Create variables based on actual data
     rating_variables, ranking_variables = converter.create_variables_from_actual_data(train_data, test_data)
@@ -88,7 +89,7 @@ def main():
     
     # Create batch with masking
     batch = converter.create_batch(
-        rating_variables, ranking_variables, rating_data, ranking_data
+        rating_variables, ranking_variables, rating_data, ranking_data, masking_rate=args.masking_rate
     )
     
     # Count masked entries
@@ -146,7 +147,7 @@ def main():
     logger.info(f"Available test data: {len(test_rating_data)} ratings, {len(test_ranking_data)} rankings")
 
     test_batch = converter.create_batch(
-        rating_variables, ranking_variables, test_rating_data, test_ranking_data, mode="test"
+        rating_variables, ranking_variables, test_rating_data, test_ranking_data, mode="test", masking_rate=args.masking_rate
     )
 
     # Count masked entries
@@ -169,7 +170,7 @@ def main():
         
         # Evaluate on test set every 10 epochs
         if epoch % 2 == 0:
-            test_eval = trainer.evaluate_with_test_data(test_batch, test_data, converter, verbose=False)
+            test_eval = trainer.evaluate_with_test_data(test_batch, test_data, converter, masking_rate=args.masking_rate, verbose=False)
             test_losses_over_time['epoch'].append(epoch)
             test_losses_over_time['test_rating_loss'].append(test_eval['test_rating_loss'])
             test_losses_over_time['test_ranking_loss'].append(test_eval['test_ranking_loss'])
@@ -183,7 +184,7 @@ def main():
     
     # Final evaluation
     logger.info("Evaluating on test data...")
-    test_losses = trainer.evaluate_with_test_data(batch, test_data, converter)
+    test_losses = trainer.evaluate_with_test_data(test_batch, test_data, converter, masking_rate=args.masking_rate)
     
     logger.info("Final Results:")
     logger.info(f"Test Rating Loss: {test_losses['test_rating_loss']:.4f}")

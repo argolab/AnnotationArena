@@ -8,13 +8,19 @@ from typing import List, Optional
 class ExperimentConfig:
     """Master configuration for ranking annotation experiments."""
     
-    K: int = 30  # number of items
-    I: int = 10  # number of attributes  
-    J: int = 5  # number of annotators
-    D: int = 64  # embedding dimension
-    C: int = 5   # number of rating categories
-    ranking_size: int = 5  # size of ranking sets
+    # ICLR Pairwise Experiment Configuration (from iclr_data_generator.py)
+    K: int = 30   # number of items
+    I: int = 10   # number of attributes  
+    J: int = 5    # number of annotators
+    D: int = 64   # embedding dimension
+    C: int = 5    # number of rating categories
+    ranking_size: int = 2  # size of ranking sets (pairwise)
     rankings_per_annotator_attribute: int = 10  # rankings per (annotator, attribute) pair
+    
+    # Pairwise ranking limits (ICLR specific)
+    max_pairs_per_tied_group: int = 10  # Maximum pairwise comparisons per tied group
+    min_group_size: int = 2             # Minimum group size to generate pairs
+    max_group_size: int = 6             # Maximum group size for all pairs
     
     train_fraction: float = 0.80
     test_fraction: float = 0.20
@@ -49,6 +55,19 @@ class ExperimentConfig:
             K=self.K, I=self.I, J=self.J, D=self.D, C=self.C,
             ranking_size=self.ranking_size,
             rankings_per_annotator_attribute=self.rankings_per_annotator_attribute,
+            train_fraction=self.train_fraction, test_fraction=self.test_fraction,
+            sigma_annotator=self.sigma_annotator, sigma_measurement=self.sigma_measurement,
+            alpha_dirichlet=self.alpha_dirichlet, temperature=self.temperature
+        )
+    
+    def to_iclr_data_generation_config(self):
+        """Convert to ICLRDatasetConfig for ICLR pairwise data generation."""
+        from iclr_data_generator import ICLRDatasetConfig
+        return ICLRDatasetConfig(
+            K=self.K, I=self.I, J=self.J, D=self.D, C=self.C,
+            max_pairs_per_tied_group=self.max_pairs_per_tied_group,
+            min_group_size=self.min_group_size,
+            max_group_size=self.max_group_size,
             train_fraction=self.train_fraction, test_fraction=self.test_fraction,
             sigma_annotator=self.sigma_annotator, sigma_measurement=self.sigma_measurement,
             alpha_dirichlet=self.alpha_dirichlet, temperature=self.temperature

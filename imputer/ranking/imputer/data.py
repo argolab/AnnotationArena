@@ -43,7 +43,7 @@ class DataConverter:
             items_to_check = ranking['items'][: self.max_rank_size]
             if all(item <= self.num_items for item in items_to_check):
                 filtered_rankings.append(ranking)
-        return {'ratings': filtered_ratings, 'rankings': filtered_rankings}
+        return {'ratings': filtered_ratings, 'pairwise_rankings': filtered_rankings}
 
     def create_variables_from_actual_data(self, train_data: Dict[str, Any], test_data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         rating_variables: List[Dict[str, Any]] = []
@@ -172,6 +172,7 @@ class DataConverter:
         rating_data: Dict[Tuple[int, int, int], int],
         ranking_data: List[Dict[str, Any]],
         mode="train",
+        masking_rate: float = 0.5,
     ) -> Dict[str, torch.Tensor]:
         """Create a single training batch (legacy tensor format with masking).
 
@@ -214,12 +215,15 @@ class DataConverter:
                     )
                     if ranking_exists:
                         available_ranking_vars.append(i)
-        # No masking - pure imputation with structural embeddings only
+        # Apply configurable masking rate
+        num_rating_to_mask = int(len(available_rating_vars) * masking_rate)
+        num_ranking_to_mask = int(len(available_ranking_vars) * masking_rate)
+        
         masked_rating_indices = set(
-            random.sample(available_rating_vars, len(available_rating_vars) // 2)
+            random.sample(available_rating_vars, num_rating_to_mask)
         )
         masked_ranking_indices = set(
-            random.sample(available_ranking_vars, len(available_ranking_vars) // 2)
+            random.sample(available_ranking_vars, num_ranking_to_mask)
         )
 
         for i, var in enumerate(all_variables):

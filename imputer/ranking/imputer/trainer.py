@@ -1,6 +1,6 @@
 from typing import List
 import torch
-from scipy.stats import spearmanr, kendalltau
+# Removed scipy correlation imports - now using pairwise accuracy
 import numpy as np
 import torch.optim as optim
 
@@ -59,33 +59,34 @@ class ImputerTrainer:
         references: List[RankingData] = []
         all_vars = batch['all_variables']
 
-        # Reconstruct references from batch tensors (0-indexed) - only for supervised variables
+        # Reconstruct references from batch tensors (0-indexed) - for ALL training variables with ground truth
         for i, var in enumerate(all_vars):
-            if var['type'] == 'rating' and rating_mask[0, i]:  # Only if has supervision
-                rating_val = int(torch.argmax(rating_targets[0, i]).item())
-                predictions.append(predictions_full[i])
-                references.append(RankingData(
-                    annotator_id=var['annotator'] - 1,
-                    attribute_id=var['attribute'] - 1,
-                    is_listwise=False,
-                    item_ids=[var['item'] - 1],
-                    rating_value=rating_val,
-                ))
-            elif var['type'] == 'ranking' and ranking_mask[0, i]:  # Only if has supervision
-                scores_vec = ranking_targets[0, i]
-                ranking_order = []
-                for j in range(scores_vec.shape[0]):
-                    s = int(scores_vec[j].item())
-                    if s > 0:
-                        ranking_order.append(int(s))
-                predictions.append(predictions_full[i])
-                references.append(RankingData(
-                    annotator_id=var['annotator'] - 1,
-                    attribute_id=var['attribute'] - 1,
-                    is_listwise=True,
-                    item_ids=[it - 1 for it in var['items'][: self.model.max_rank_size]],
-                    ranking_order=ranking_order,
-                ))
+            if var.get('source') == 'train':  # All training variables (both masked and unmasked)
+                if var['type'] == 'rating' and rating_mask[0, i]:  # Has ground truth
+                    rating_val = int(torch.argmax(rating_targets[0, i]).item())
+                    predictions.append(predictions_full[i])
+                    references.append(RankingData(
+                        annotator_id=var['annotator'] - 1,
+                        attribute_id=var['attribute'] - 1,
+                        is_listwise=False,
+                        item_ids=[var['item'] - 1],
+                        rating_value=rating_val,
+                    ))
+                elif var['type'] == 'ranking' and ranking_mask[0, i]:  # Has ground truth
+                    scores_vec = ranking_targets[0, i]
+                    ranking_order = []
+                    for j in range(scores_vec.shape[0]):
+                        s = int(scores_vec[j].item())
+                        if s > 0:
+                            ranking_order.append(int(s))
+                    predictions.append(predictions_full[i])
+                    references.append(RankingData(
+                        annotator_id=var['annotator'] - 1,
+                        attribute_id=var['attribute'] - 1,
+                        is_listwise=True,
+                        item_ids=[it - 1 for it in var['items'][: self.model.max_rank_size]],
+                        ranking_order=ranking_order,
+                    ))
 
         losses = self.loss_strategy.compute(predictions, references)
 
@@ -117,28 +118,27 @@ class ImputerTrainer:
         # Return only float metrics
         return {k: v for k, v in losses.items() if not k.startswith('_')}
 
-    def evaluate_with_test_data(self, batch, test_data, converter, verbose=True):
-        """Pure imputation evaluation: predict ALL test variables from structure only."""
+    def evaluate_with_test_data(self, batch, test_data, converter, masking_rate=0.5, verbose=True):
+        """Conditional imputation evaluation: same masking rate as training."""
         self.model.eval()
 
         with torch.no_grad():
-            # Process test data
-            test_rating_data, test_ranking_data = converter.process_training_data(test_data)
+            # Use the test batch which already has the correct masking applied
             all_variables = batch['all_variables']
-
-            # Create test input with NO supervision values (pure imputation)
-            # All test variables get zero supervision, only structural embeddings
-            test_variable_data = torch.zeros_like(batch['variable_data'])
             
-            # Move to device
-            test_variable_data = test_variable_data.to(self.device)
+            # Move batch to device (test batch already has correct masking)
+            variable_data = batch['variable_data'].to(self.device)
             variable_types = batch['variable_types'].to(self.device)
             attribute_ids = batch['attribute_ids'].to(self.device)
             annotator_ids = batch['annotator_ids'].to(self.device)
             item_ids = batch['item_ids'].to(self.device)
+            rating_targets = batch['rating_targets'].to(self.device)
+            ranking_targets = batch['ranking_targets'].to(self.device)
+            rating_mask = batch['rating_mask'].to(self.device)
+            ranking_mask = batch['ranking_mask'].to(self.device)
 
             ranking_data_list = self.model._convert_legacy_tensors_to_ranking_data(
-                test_variable_data, variable_types, attribute_ids, annotator_ids, item_ids
+                variable_data, variable_types, attribute_ids, annotator_ids, item_ids
             )
 
             out = self.model(ranking_data_list)
@@ -150,6 +150,9 @@ class ImputerTrainer:
             test_ranking_mask = torch.zeros(1, len(all_variables), dtype=torch.bool)
             test_rating_targets = torch.zeros(1, len(all_variables), converter.num_likert_classes)
             test_ranking_targets = torch.zeros(1, len(all_variables), converter.max_rank_size)
+
+            # Extract test data for building targets
+            test_rating_data, test_ranking_data = converter.process_training_data(test_data)
 
             # Process all test variables (source == 'test')
             for i, var in enumerate(all_variables):
@@ -183,9 +186,9 @@ class ImputerTrainer:
             predictions: List["TopLayerPredictionResult"] = []
             references: List[RankingData] = []
             
-            # Lists to store ranking predictions and ground truth for Spearman correlation
-            ranking_predictions = []
-            ranking_ground_truths = []
+            # Lists to store pairwise ranking accuracy
+            pairwise_correct = []
+            pairwise_total = []
             
             # Lists to store rating predictions and ground truth for accuracy
             rating_predictions = []
@@ -217,18 +220,29 @@ class ImputerTrainer:
                             if s > 0:
                                 ranking_order.append(int(s))
                         
-                        # Store for Spearman/Kendall correlation calculation
+                        # Store for pairwise ranking accuracy calculation
                         pred_ranking = predictions_full[i]
                         # Get predicted ranking scores directly from ranking_logits
                         pred_scores = ranking_logits[0, i].cpu().numpy()
                         valid_positions = len([x for x in ranking_order if x > 0])
-                        if valid_positions > 1:  # Need at least 2 items for correlation
-                            # Convert predicted scores to predicted ranks (1=best, 2=second, etc)
-                            # Higher scores should get lower rank numbers  
-                            from scipy.stats import rankdata
-                            pred_ranks = rankdata(-pred_scores[:valid_positions])  # Negative to make higher scores = lower ranks
-                            ranking_predictions.append(pred_ranks)
-                            ranking_ground_truths.append(ranking_order[:valid_positions])
+                        if valid_positions == 2:  # Only evaluate pairwise rankings
+                            # For pairwise rankings: ranking_logits[i, j] = score for item j being in position j+1
+                            # Convert to predicted ranks using softmax probabilities
+                            from scipy.special import softmax
+                            position_probs = softmax(pred_scores[:valid_positions])
+                            
+                            # Predict: if prob[0] > prob[1], item 0 ranks first, otherwise item 1 ranks first
+                            pred_first_wins = position_probs[0] > position_probs[1]
+                            
+                            # Ground truth: ranking_order[0] is rank of item 0, ranking_order[1] is rank of item 1
+                            # If ranking_order = [1, 2], item 0 ranks first (rank 1 < rank 2)
+                            # If ranking_order = [2, 1], item 1 ranks first (rank 2 > rank 1)
+                            true_first_wins = ranking_order[0] < ranking_order[1]
+                            
+                            # Check if prediction matches ground truth
+                            is_correct = pred_first_wins == true_first_wins
+                            pairwise_correct.append(1 if is_correct else 0)
+                            pairwise_total.append(1)
                         
                         predictions.append(predictions_full[i])
                         references.append(RankingData(
@@ -246,11 +260,8 @@ class ImputerTrainer:
                     'total_test_loss': 0.0,
                     'rating_accuracy': None,
                     'num_rating_evaluations': 0,
-                    'spearman_rho': None,
-                    'spearman_pvalue': None,
-                    'kendall_tau': None,
-                    'kendall_pvalue': None,
-                    'num_ranking_evaluations': 0,
+                    'pairwise_accuracy': None,
+                    'num_pairwise_evaluations': 0,
                 }
 
             losses_eval = self.loss_strategy.compute(predictions, references)
@@ -263,26 +274,10 @@ class ImputerTrainer:
                 correct = sum(p == t for p, t in zip(rating_predictions, rating_ground_truths))
                 rating_accuracy = correct / len(rating_predictions)
 
-            # Calculate Spearman and Kendall tau correlation for rankings
-            spearman_rho = None
-            spearman_pvalue = None
-            kendall_tau = None
-            kendall_pvalue = None
-            if len(ranking_predictions) > 0:
-                # Flatten all predictions and ground truths for overall correlation
-                all_pred_flat = np.concatenate(ranking_predictions)
-                all_truth_flat = np.concatenate(ranking_ground_truths)
-                
-                if len(all_pred_flat) > 1:
-                    try:
-                        spearman_rho, spearman_pvalue = spearmanr(all_pred_flat, all_truth_flat)
-                        kendall_tau, kendall_pvalue = kendalltau(all_pred_flat, all_truth_flat)
-                    except Exception as e:
-                        print(f"Warning: Could not calculate rank correlations: {e}")
-                        spearman_rho = None
-                        spearman_pvalue = None
-                        kendall_tau = None
-                        kendall_pvalue = None
+            # Calculate pairwise ranking accuracy
+            pairwise_accuracy = None
+            if len(pairwise_total) > 0:
+                pairwise_accuracy = sum(pairwise_correct) / len(pairwise_total)
 
             if verbose:
                 self.print_predictions_by_attribute(
@@ -300,16 +295,13 @@ class ImputerTrainer:
                 else:
                     print("Rating accuracy could not be calculated")
                 
-                # Print correlation results
-                print(f"\n=== Ranking Evaluation Metrics ===")
-                print(f"Number of ranking evaluations: {len(ranking_predictions)}")
-                if spearman_rho is not None:
-                    print(f"Spearman's rho: {spearman_rho:.4f} (p={spearman_pvalue:.4f})")
-                    print(f"Kendall's tau: {kendall_tau:.4f} (p={kendall_pvalue:.4f})")
-                    avg_corr = (abs(spearman_rho) + abs(kendall_tau)) / 2
-                    print(f"Average correlation strength: {'Strong' if avg_corr > 0.7 else 'Moderate' if avg_corr > 0.3 else 'Weak'}")
+                # Print pairwise accuracy results
+                print(f"\n=== Pairwise Ranking Evaluation Metrics ===")
+                print(f"Number of pairwise evaluations: {len(pairwise_total)}")
+                if pairwise_accuracy is not None:
+                    print(f"Pairwise accuracy: {pairwise_accuracy:.4f} ({pairwise_accuracy*100:.1f}%)")
                 else:
-                    print("Rank correlations could not be calculated")
+                    print("Pairwise accuracy could not be calculated")
 
             return {
                 'test_rating_loss': float(test_rating_loss),
@@ -317,11 +309,8 @@ class ImputerTrainer:
                 'total_test_loss': float(test_rating_loss + test_ranking_loss),
                 'rating_accuracy': float(rating_accuracy) if rating_accuracy is not None else None,
                 'num_rating_evaluations': len(rating_predictions),
-                'spearman_rho': float(spearman_rho) if spearman_rho is not None else None,
-                'spearman_pvalue': float(spearman_pvalue) if spearman_pvalue is not None else None,
-                'kendall_tau': float(kendall_tau) if kendall_tau is not None else None,
-                'kendall_pvalue': float(kendall_pvalue) if kendall_pvalue is not None else None,
-                'num_ranking_evaluations': len(ranking_predictions),
+                'pairwise_accuracy': float(pairwise_accuracy) if pairwise_accuracy is not None else None,
+                'num_pairwise_evaluations': len(pairwise_total),
             }
 
     def print_predictions_by_attribute(
@@ -365,9 +354,25 @@ class ImputerTrainer:
                     if not ranking_found:
                         print("Rankings:")
                         ranking_found = True
-                    pred_scores = ranking_logits[0, i, : converter.max_rank_size]
-                    pred_ranking_indices = torch.argsort(pred_scores, descending=True)
-                    pred_items = [var['items'][idx] for idx in pred_ranking_indices]
+                    # For pairwise rankings: ranking_logits[0, i, j] represents the score that item j gets position (j+1)
+                    # So ranking_logits[0, i, 0] = score for item 0 being in 1st place
+                    #    ranking_logits[0, i, 1] = score for item 1 being in 2nd place
+                    pred_scores = ranking_logits[0, i, : len(var['items'])]
+                    # Convert scores to predicted ranking by assigning each item to most likely position
+                    pred_ranks = torch.argmax(pred_scores.unsqueeze(0), dim=1)  # This is wrong approach
+                    
+                    # Correct approach: use softmax to get position probabilities, then create ranking
+                    position_probs = torch.softmax(pred_scores, dim=0)
+                    # For pairwise: if position_probs[0] > position_probs[1], then item 0 ranks higher
+                    if len(var['items']) == 2:
+                        if position_probs[0] > position_probs[1]:
+                            pred_items = [var['items'][0], var['items'][1]]  # Item 0 first, Item 1 second
+                        else:
+                            pred_items = [var['items'][1], var['items'][0]]  # Item 1 first, Item 0 second
+                    else:
+                        # Fallback for non-pairwise (shouldn't happen in ICLR)
+                        pred_ranking_indices = torch.argsort(position_probs, descending=True)
+                        pred_items = [var['items'][idx] for idx in pred_ranking_indices]
 
                     true_scores = test_ranking_targets[0, i, : converter.max_rank_size]
                     # For ground truth display: sort by ascending rank (1st place first)

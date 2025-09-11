@@ -214,10 +214,10 @@ def main():
     """Test data generation."""
     logging.basicConfig(level=logging.INFO)
     
-    config = ICLRDatasetConfig(
-        K=30, I=10, J=5, D=64, C=5,  # Same as original config
-        train_fraction=0.8, test_fraction=0.2
-    )
+    # Use centralized configuration
+    from config import ExperimentConfig
+    experiment_config = ExperimentConfig()
+    config = experiment_config.to_iclr_data_generation_config()
     
     generator = ICLRDataGenerator()
     dataset = generator.generate_dataset(config, seed=12345)
