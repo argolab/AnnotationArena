@@ -111,7 +111,9 @@ class ImputerTrainer:
         if total_loss_tensor is None:
             total_loss_tensor = (rating_logits.sum() * 0.0) + (ranking_logits.sum() * 0.0) + torch.tensor(losses['total_loss'], device=self.device)
         # Add regularization term to tensor used for backprop
+        print(f'Old Loss {total_loss_tensor}')
         total_loss_tensor = total_loss_tensor + reg_scaled
+        print(f'New Loss {total_loss_tensor}')
         total_loss_tensor.backward()
         self.optimizer.step()
 

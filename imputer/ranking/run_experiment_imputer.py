@@ -202,7 +202,7 @@ def main():
         ax1.plot(train_losses['epoch'], train_losses['total_loss'], 'b-', label='Total')
         ax1.plot(train_losses['epoch'], train_losses['rating_loss'], 'g--', label='Rating')  
         ax1.plot(train_losses['epoch'], train_losses['ranking_loss'], 'r--', label='Ranking')
-        ax1.set_title('Training Log Loss (Combined)')
+        ax1.set_title(f'Training Log Loss (Masking Rate {args.masking_rate:.1f})')
         ax1.set_xlabel('Epoch')
         ax1.set_ylabel('Log Loss')
         ax1.legend()
@@ -211,7 +211,7 @@ def main():
         # Top right: Rating + Ranking losses 
         ax2.plot(train_losses['epoch'], train_losses['rating_loss'], 'g-', label='Rating Loss', alpha=0.7)
         ax2.plot(train_losses['epoch'], train_losses['ranking_loss'], 'r-', label='Ranking Loss', alpha=0.7)
-        ax2.set_title('Training Log Loss by Type')
+        ax2.set_title(f'Training Log Loss by Type (Masking Rate {args.masking_rate:.1f})')
         ax2.set_xlabel('Epoch') 
         ax2.set_ylabel('Log Loss')
         ax2.legend()
@@ -230,7 +230,7 @@ def main():
                    'b-o', label='Rating Test Log Loss', markersize=4)
             ax.plot(test_losses_over_time['epoch'], test_losses_over_time['test_ranking_loss'], 
                    'r-s', label='Ranking Test Log Loss', markersize=4)
-            ax.set_title('Test Set Imputation Log Loss (50% Masked)')
+            ax.set_title(f'Test Log Loss (Masking Rate {args.masking_rate:.1f})')
             ax.set_xlabel('Epoch')
             ax.set_ylabel('Log Loss')
             ax.legend()
