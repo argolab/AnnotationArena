@@ -375,7 +375,7 @@ class ExperimentRunner:
             json.dump(results, f, indent=2, default=str)
         
         # Save model
-        model_path = self.results_dir / "model.pth"
+        model_path = self.models_dir / "model.pth"
         torch.save(self.model.state_dict(), model_path)
         logger.info(f"Model saved to {model_path}")
         
@@ -396,7 +396,7 @@ class ExperimentRunner:
             json.dump(results, f, indent=2, default=str)
         
         # Save model
-        model_path = self.results_dir / "model.pth"
+        model_path = self.models_dir / "model.pth"
         torch.save(self.model.state_dict(), model_path)
         logger.info(f"Model saved to {model_path}")
         
