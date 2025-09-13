@@ -89,8 +89,8 @@
       "rankings_per_annotator_attribute": 9
     }
   ],
-  "train_instance_indices": [0, 1, 2],
-  "test_instance_indices": [3, 4],
+  "train_instance_indices": [0, 1, 2, 3],
+  "test_instance_indices": [4],
   "model_config": {
     "encoder_layers": 4,
     "attention_heads": 8,
@@ -99,11 +99,11 @@
     "embedding_type": "pairwise"
   },
   "training_config": {
-    "epochs": 25,
-    "learning_rate": 0.0001,
-    "embedding_anchor_reg": 0.0,
+    "epochs": 30,
+    "learning_rate": 1e-3,
+    "embedding_anchor_reg": 50.0,
     "masking_rate": 0.3,
-    "evaluation_frequency": 2
+    "evaluation_frequency": 1
   },
   "base_output_dir": "OUTPUT",
   "save_plots": true,

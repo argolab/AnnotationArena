@@ -206,15 +206,20 @@ class ExperimentRunner:
         test_instances = []
         for test_idx in self.config.test_instance_indices:
             test_train_data, test_test_data = self.load_instance_data(test_idx)
-            test_rating_variables, test_ranking_variables = converter.create_variables_from_actual_data(test_train_data, test_test_data)
-            test_rating_data, test_ranking_data = converter.process_training_data(test_test_data)
             
-            # For test instances, no train/test split - everything is test data
+            # For test instances: combine ALL data (train + test portions) since entire instance is held out
+            full_test_data = {'ratings': test_train_data['ratings'] + test_test_data['ratings'],
+                             'pairwise_rankings': test_train_data['pairwise_rankings'] + test_test_data['pairwise_rankings']}
+            
+            test_rating_variables, test_ranking_variables = converter.create_variables_from_actual_data(full_test_data, full_test_data)
+            test_rating_data, test_ranking_data = converter.process_training_data(full_test_data)
+            
+            # Use full test instance data for evaluation
             test_batch = converter.create_batch(
                 test_rating_variables, test_ranking_variables, test_rating_data, test_ranking_data,
                 mode="test", masking_rate=self.config.training_config.masking_rate
             )
-            test_instances.append((test_batch, test_test_data, test_idx))
+            test_instances.append((test_batch, full_test_data, test_idx))
         
         # Sequential training on train instances
         all_results = {
@@ -224,6 +229,9 @@ class ExperimentRunner:
             'train_instances': self.config.train_instance_indices,
             'test_instances': self.config.test_instance_indices
         }
+        
+        # Set up global test losses collection for plotting
+        self._global_test_losses = all_results['test_losses']
         
         global_epoch = 0
         
