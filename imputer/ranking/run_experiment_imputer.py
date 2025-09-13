@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+"""
+Legacy experiment runner for backwards compatibility.
+For new experiments, use experiment_runner.py with JSON configs.
+"""
 import argparse
 import logging
 import sys
@@ -10,32 +14,32 @@ import torch
 from imputer import (
     DataConverter, MultiVariableImputer, ImputerTrainer
 )
-from config import ExperimentConfig
+from config import ExperimentConfig, InstanceConfig, ModelConfig, TrainingConfig
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "True"
 
 def main():
-    parser = argparse.ArgumentParser(description='Train ranking imputer with masking')
+    parser = argparse.ArgumentParser(description='Train ranking imputer with masking (Legacy Mode)')
     
     # Data parameters (paths only - dimensions from config)
     parser.add_argument('--train_data', type=str, default='generated_data/iclr_complete_train.json')
     parser.add_argument('--test_data', type=str, default='generated_data/iclr_complete_test.json')
-    parser.add_argument('--config_path', type=str, default=None, help='Path to config file')
+    parser.add_argument('--config_path', type=str, default=None, help='Path to NEW JSON config file')
     
-    # Training parameters
+    # Training parameters (for backwards compatibility)
     parser.add_argument('--epochs', type=int, default=50)
     parser.add_argument('--learning_rate', type=float, default=1e-4)
     parser.add_argument('--embedding_anchor_reg', type=float, default=0.0)
     parser.add_argument('--masking_rate', type=float, default=0.5, help='Fraction of training variables to mask (0.0-1.0)')
     
-    # Model parameters
+    # Model parameters (for backwards compatibility)
     parser.add_argument('--encoder_layers', type=int, default=4)
     parser.add_argument('--attention_heads', type=int, default=8)
     parser.add_argument('--embedding_dim', type=int, default=64)
     parser.add_argument('--dropout', type=float, default=0.1)
     
     # Output parameters
-    parser.add_argument('--output_dir', type=str, default='outputs')
+    parser.add_argument('--output_dir', type=str, default='OUTPUT/IMPUTER/legacy')
     parser.add_argument('--save_plots', action='store_true', help='Save training loss plots')
     parser.add_argument("--embedding_type", default="pairwise", help="Type of layer 0 representation to use")
     parser.add_argument("--device", default="cpu", help="Device use for training and testing")
@@ -46,16 +50,50 @@ def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)
     
-    # Load configuration
+    # Load or create configuration
     if args.config_path:
-        # TODO: Add config loading from file
-        config = ExperimentConfig()
-        logger.info(f"Using config from {args.config_path}")
+        logger.info(f"Loading new JSON config from {args.config_path}")
+        config = ExperimentConfig.load_from_file(args.config_path)
+        
+        # Force single instance mode for legacy script
+        if config.experiment_type != "single_instance":
+            logger.warning("Legacy script only supports single_instance experiments. Use experiment_runner.py for multi-instance.")
+            config.experiment_type = "single_instance"
+            config.train_instance_indices = [0]
+            config.test_instance_indices = [0]
     else:
-        config = ExperimentConfig()
-        logger.info("Using default configuration")
+        logger.info("Creating configuration from command line arguments (Legacy Mode)")
+        
+        # Create config from args for backwards compatibility
+        instance_config = InstanceConfig()  # Use defaults, will be compatible with existing data
+        
+        model_config = ModelConfig(
+            encoder_layers=args.encoder_layers,
+            attention_heads=args.attention_heads,
+            embedding_dim=args.embedding_dim,
+            dropout=args.dropout,
+            embedding_type=args.embedding_type
+        )
+        
+        training_config = TrainingConfig(
+            epochs=args.epochs,
+            learning_rate=args.learning_rate,
+            embedding_anchor_reg=args.embedding_anchor_reg,
+            masking_rate=args.masking_rate,
+            evaluation_frequency=2
+        )
+        
+        config = ExperimentConfig.create_single_instance(
+            instance_config=instance_config,
+            model_config=model_config,
+            training_config=training_config,
+            base_output_dir=str(Path(args.output_dir).parent),
+            save_plots=args.save_plots,
+            device=args.device
+        )
     
-    logger.info(f"Config: K={config.K}, I={config.I}, J={config.J}, C={config.C}, ranking_size={config.ranking_size}")
+    legacy_props = config.get_legacy_properties()
+    logger.info(f"Config: K={legacy_props['K']}, I={legacy_props['I']}, J={legacy_props['J']}, C={legacy_props['C']}, ranking_size=2")
     
     # Convert relative paths to absolute
     script_dir = Path(__file__).parent
@@ -64,11 +102,11 @@ def main():
     
     # Initialize components using config
     converter = DataConverter(
-        num_attributes=config.I,
-        num_annotators=config.J,
-        num_items=config.K,
-        num_likert_classes=config.C,
-        max_rank_size=config.ranking_size
+        num_attributes=legacy_props['I'],
+        num_annotators=legacy_props['J'],
+        num_items=legacy_props['K'],
+        num_likert_classes=legacy_props['C'],
+        max_rank_size=2
     )
     
     # Load data
@@ -89,7 +127,7 @@ def main():
     
     # Create batch with masking
     batch = converter.create_batch(
-        rating_variables, ranking_variables, rating_data, ranking_data, masking_rate=args.masking_rate
+        rating_variables, ranking_variables, rating_data, ranking_data, masking_rate=config.training_config.masking_rate
     )
     
     # Count masked entries
@@ -103,25 +141,25 @@ def main():
     
     # Initialize model using config
     model = MultiVariableImputer(
-        num_attributes=config.I,
-        num_annotators=config.J,
-        num_items=config.K,
-        num_likert_classes=config.C,
-        max_rank_size=config.ranking_size,
-        encoder_layers_num=args.encoder_layers,
-        attention_heads=args.attention_heads,
-        embedding_dim=args.embedding_dim,
-        dropout=args.dropout,
-        embedding_type=args.embedding_type,
-        device=args.device
+        num_attributes=legacy_props['I'],
+        num_annotators=legacy_props['J'],
+        num_items=legacy_props['K'],
+        num_likert_classes=legacy_props['C'],
+        max_rank_size=2,
+        encoder_layers_num=config.model_config.encoder_layers,
+        attention_heads=config.model_config.attention_heads,
+        embedding_dim=config.model_config.embedding_dim,
+        dropout=config.model_config.dropout,
+        embedding_type=config.model_config.embedding_type,
+        device=config.device
     )
     
     # Initialize trainer
     trainer = ImputerTrainer(
         model, 
-        learning_rate=args.learning_rate,
-        device=args.device,
-        embedding_anchor_reg=args.embedding_anchor_reg,
+        learning_rate=config.training_config.learning_rate,
+        device=config.device,
+        embedding_anchor_reg=config.training_config.embedding_anchor_reg,
     )
     
     # Setup output directories
@@ -131,7 +169,7 @@ def main():
     models_dir.mkdir(parents=True, exist_ok=True)
     plots_dir.mkdir(parents=True, exist_ok=True)
     
-    logger.info(f"Training for {args.epochs} epochs...")
+    logger.info(f"Training for {config.training_config.epochs} epochs...")
     
     # Track training losses for plotting
     train_losses = {
@@ -147,7 +185,7 @@ def main():
     logger.info(f"Available test data: {len(test_rating_data)} ratings, {len(test_ranking_data)} rankings")
 
     test_batch = converter.create_batch(
-        rating_variables, ranking_variables, test_rating_data, test_ranking_data, mode="test", masking_rate=args.masking_rate
+        rating_variables, ranking_variables, test_rating_data, test_ranking_data, mode="test", masking_rate=config.training_config.masking_rate
     )
 
     # Count masked entries
@@ -160,7 +198,7 @@ def main():
                f"{train_ranking_count} rankings ({masked_ranking_count} masked)")
     
     # Training loop
-    for epoch in tqdm(range(args.epochs), desc="Training"):
+    for epoch in tqdm(range(config.training_config.epochs), desc="Training"):
         losses = trainer.train_step(batch)
         
         # Record training losses
@@ -168,9 +206,9 @@ def main():
         for key in ['total_loss', 'rating_loss', 'ranking_loss']:
             train_losses[key].append(losses[key])
         
-        # Evaluate on test set every 10 epochs
-        if epoch % 2 == 0:
-            test_eval = trainer.evaluate_with_test_data(test_batch, test_data, converter, masking_rate=args.masking_rate, verbose=False)
+        # Evaluate on test set every N epochs
+        if epoch % config.training_config.evaluation_frequency == 0:
+            test_eval = trainer.evaluate_with_test_data(test_batch, test_data, converter, masking_rate=config.training_config.masking_rate, verbose=False)
             test_losses_over_time['epoch'].append(epoch)
             test_losses_over_time['test_rating_loss'].append(test_eval['test_rating_loss'])
             test_losses_over_time['test_ranking_loss'].append(test_eval['test_ranking_loss'])
@@ -184,7 +222,7 @@ def main():
     
     # Final evaluation
     logger.info("Evaluating on test data...")
-    test_losses = trainer.evaluate_with_test_data(test_batch, test_data, converter, masking_rate=args.masking_rate)
+    test_losses = trainer.evaluate_with_test_data(test_batch, test_data, converter, masking_rate=config.training_config.masking_rate)
     
     logger.info("Final Results:")
     logger.info(f"Test Rating Loss: {test_losses['test_rating_loss']:.4f}")
@@ -192,60 +230,47 @@ def main():
     logger.info(f"Total Test Loss: {test_losses['total_test_loss']:.4f}")
     
     # Save plots
-    if args.save_plots:
+    if config.save_plots:
         import matplotlib.pyplot as plt
         
-        # Training plots
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-        
-        # Top left: Training log loss (combined)
-        ax1.plot(train_losses['epoch'], train_losses['total_loss'], 'b-', label='Total')
-        ax1.plot(train_losses['epoch'], train_losses['rating_loss'], 'g--', label='Rating')  
-        ax1.plot(train_losses['epoch'], train_losses['ranking_loss'], 'r--', label='Ranking')
-        ax1.set_title(f'Training Log Loss (Masking Rate {args.masking_rate:.1f})')
-        ax1.set_xlabel('Epoch')
-        ax1.set_ylabel('Log Loss')
-        ax1.legend()
-        ax1.grid(True)
-        
-        # Top right: Rating + Ranking losses 
-        ax2.plot(train_losses['epoch'], train_losses['rating_loss'], 'g-', label='Rating Loss', alpha=0.7)
-        ax2.plot(train_losses['epoch'], train_losses['ranking_loss'], 'r-', label='Ranking Loss', alpha=0.7)
-        ax2.set_title(f'Training Log Loss by Type (Masking Rate {args.masking_rate:.1f})')
-        ax2.set_xlabel('Epoch') 
-        ax2.set_ylabel('Log Loss')
-        ax2.legend()
-        ax2.grid(True)
-        
+        # Training plot - single comprehensive plot (removed redundancy)
+        plt.figure(figsize=(8, 6))
+        plt.plot(train_losses['epoch'], train_losses['total_loss'], 'b-', label='Total', linewidth=2)
+        plt.plot(train_losses['epoch'], train_losses['rating_loss'], 'g--', label='Rating', linewidth=2)  
+        plt.plot(train_losses['epoch'], train_losses['ranking_loss'], 'r--', label='Ranking', linewidth=2)
+        plt.title(f'Training Log Loss (Masking Rate {config.training_config.masking_rate:.1f})')
+        plt.xlabel('Epoch')
+        plt.ylabel('Log Loss')
+        plt.legend()
+        plt.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig(plots_dir / 'training_plots_conditional.png', dpi=300, bbox_inches='tight')
-        logger.info(f"Training plots saved to {plots_dir / 'training_plots_conditional.png'}")
+        plt.savefig(plots_dir / 'training_loss.png', dpi=300, bbox_inches='tight')
+        logger.info(f"Training plot saved to {plots_dir / 'training_loss.png'}")
         plt.close()
         
         # Test loss plot (separate PNG)
         if len(test_losses_over_time['epoch']) > 0:
             fig, ax = plt.subplots(1, 1, figsize=(8, 5))
             
-            ax.plot(test_losses_over_time['epoch'], test_losses_over_time['test_rating_loss'], 
-                   'b-o', label='Rating Test Log Loss', markersize=4)
-            ax.plot(test_losses_over_time['epoch'], test_losses_over_time['test_ranking_loss'], 
-                   'r-s', label='Ranking Test Log Loss', markersize=4)
-            ax.set_title(f'Test Log Loss (Masking Rate {args.masking_rate:.1f})')
-            ax.set_xlabel('Epoch')
-            ax.set_ylabel('Log Loss')
-            ax.legend()
-            ax.grid(True, alpha=0.3)
+            plt.plot(test_losses_over_time['epoch'], test_losses_over_time['test_rating_loss'], 
+                   'b-o', label='Rating Test Log Loss', markersize=4, linewidth=2)
+            plt.plot(test_losses_over_time['epoch'], test_losses_over_time['test_ranking_loss'], 
+                   'r-s', label='Ranking Test Log Loss', markersize=4, linewidth=2)
+            plt.title(f'Test Log Loss (Masking Rate {config.training_config.masking_rate:.1f})')
+            plt.xlabel('Epoch')
+            plt.ylabel('Log Loss')
+            plt.legend()
+            plt.grid(True, alpha=0.3)
             
             plt.tight_layout()
-            plt.savefig(plots_dir / 'test_plots_conditional.png', dpi=300, bbox_inches='tight')
-            logger.info(f"Test loss plot saved to {plots_dir / 'test_plots_conditional.png'}")
+            plt.savefig(plots_dir / 'test_loss.png', dpi=300, bbox_inches='tight')
+            logger.info(f"Test loss plot saved to {plots_dir / 'test_loss.png'}")
             plt.close()
     
     # Save model
-    model_path = models_dir / f'imputer_e{args.epochs}.pth'
+    model_path = models_dir / f'imputer_e{config.training_config.epochs}.pth'
     torch.save({
         'model_state_dict': model.state_dict(),
-        'args': args,
         'config': config,
         'train_losses': train_losses,
         'test_losses_over_time': test_losses_over_time,

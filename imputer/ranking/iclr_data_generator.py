@@ -63,7 +63,8 @@ class ICLRDataGenerator:
             model_path = Path(__file__).parent / "models" / "iclr_data_generation.stan"
         
         logger.info(f"Compiling Stan model: {model_path}")
-        self.model = stan.CmdStanModel(stan_file=str(model_path))
+        # Force recompilation to avoid cache issues with random data generation
+        self.model = stan.CmdStanModel(stan_file=str(model_path), force_compile=True)
         logger.info("Stan model compiled successfully")
     
     def generate_dataset(self, config: ICLRDatasetConfig, seed: Optional[int] = None) -> ICLRAnnotationDataset:
@@ -217,13 +218,31 @@ def main():
     # Use centralized configuration
     from config import ExperimentConfig
     experiment_config = ExperimentConfig()
-    config = experiment_config.to_iclr_data_generation_config()
+    
+    # Convert to ICLRDatasetConfig using first instance
+    instance_config = experiment_config.instances[0]
+    iclr_config = ICLRDatasetConfig(
+        K=instance_config.K,
+        I=instance_config.I,
+        J=instance_config.J,
+        D=instance_config.D,
+        C=instance_config.C,
+        max_pairs_per_tied_group=instance_config.max_pairs_per_tied_group,
+        min_group_size=instance_config.min_group_size,
+        max_group_size=instance_config.max_group_size,
+        train_fraction=experiment_config.train_fraction,
+        test_fraction=experiment_config.test_fraction,
+        sigma_annotator=instance_config.sigma_annotator,
+        sigma_measurement=instance_config.sigma_measurement,
+        alpha_dirichlet=instance_config.alpha_dirichlet,
+        temperature=instance_config.temperature
+    )
     
     generator = ICLRDataGenerator()
-    dataset = generator.generate_dataset(config, seed=12345)
+    dataset = generator.generate_dataset(iclr_config, seed=12345)
     
-    # Save to generated_data directory
-    output_dir = Path(__file__).parent / "generated_data"
+    # Save to proper subfolder structure
+    output_dir = experiment_config.get_instance_data_dir(0)
     generator.save_dataset(dataset, output_dir, "iclr_complete")
     
     # Print some statistics
