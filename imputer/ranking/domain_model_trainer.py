@@ -37,23 +37,17 @@ class DomainModelConfig:
     sigma_embedding_prior: float = 1.0   # embedding prior scale
     sigma_preference_prior: float = 1.0  # preference prior scale
     
-    budget_fractions: List[float] = None  # progressive training fractions
-    
-    def __post_init__(self):
-        if self.budget_fractions is None:
-            self.budget_fractions = [0.1, 0.2, 0.4, 0.6, 0.8, 1.0]
 
 @dataclass
-class ProgressiveResults:
-    """Results from progressive training."""
-    budget_fractions: List[float]
-    training_log_likelihoods: List[float]
-    test_log_likelihoods: List[float]
-    kl_divergences: List[float]
-    training_times: List[float]
-    n_observations: List[int]
-    ratings_log_lik: List[float]  # per-annotation-type metrics
-    rankings_log_lik: List[float]
+class DomainModelResults:
+    """Results from domain model training."""
+    training_log_likelihood: float
+    test_rating_accuracy: float
+    test_ranking_accuracy: float
+    test_rating_log_loss: float
+    test_ranking_log_loss: float
+    training_time: float
+    n_observations: int
 
 class DomainModelTrainer:
     """MCMC trainer for mixed annotation domain model following 'train on all' paradigm."""
@@ -73,31 +67,33 @@ class DomainModelTrainer:
     def load_data(self, data_path: Path) -> Dict[str, Any]:
         """Load train/test annotation data."""
         
-        with open(data_path / "test_complete_train.json", 'r') as f:
+        with open(data_path / "iclr_complete_train.json", 'r') as f:
             train_data = json.load(f)
         
-        with open(data_path / "test_complete_test.json", 'r') as f:
+        with open(data_path / "iclr_complete_test.json", 'r') as f:
             test_data = json.load(f)
             
-        with open(data_path / "test_complete_ground_truth.json", 'r') as f:
+        with open(data_path / "iclr_complete_ground_truth.json", 'r') as f:
             ground_truth = json.load(f)
         
-        with open(data_path / "test_complete_stats.json", 'r') as f:
+        with open(data_path / "iclr_complete_stats.json", 'r') as f:
             stats = json.load(f)
         
         # Need to infer I,J from data since ground truth doesn't store them directly
         ratings_sample = train_data['ratings'][0] if train_data['ratings'] else test_data['ratings'][0]
-        rankings_sample = train_data['rankings'][0] if train_data['rankings'] else test_data['rankings'][0]
+        pairwise_rankings_sample = train_data.get('pairwise_rankings', [])
+        if not pairwise_rankings_sample:
+            pairwise_rankings_sample = test_data.get('pairwise_rankings', [])
         
         data_config = {
             'K': len(ground_truth['embeddings']),
             'D': len(ground_truth['embeddings'][0]), 
             'I': max([r['attribute'] for r in train_data['ratings'] + test_data['ratings']] + 
-                    [r['attribute'] for r in train_data['rankings'] + test_data['rankings']]),
+                    [r['attribute'] for r in train_data.get('pairwise_rankings', []) + test_data.get('pairwise_rankings', [])]),
             'J': max([r['annotator'] for r in train_data['ratings'] + test_data['ratings']] + 
-                    [r['annotator'] for r in train_data['rankings'] + test_data['rankings']]),
+                    [r['annotator'] for r in train_data.get('pairwise_rankings', []) + test_data.get('pairwise_rankings', [])]),
             'C': max([r['value'] for r in train_data['ratings'] + test_data['ratings']]),
-            'ranking_size': len(rankings_sample['items']) if train_data['rankings'] or test_data['rankings'] else 5
+            'ranking_size': 2  # Hardcode to 2 for pairwise rankings
         }
         
         return {
@@ -119,7 +115,7 @@ class DomainModelTrainer:
         rating_items = [r['item'] for r in ratings]
         rating_values = [r['value'] for r in ratings]
         
-        rankings = observed_data['rankings']
+        rankings = observed_data.get('pairwise_rankings', [])
         N_rankings = len(rankings)
         
         ranking_attributes = [r['attribute'] for r in rankings]
@@ -190,15 +186,15 @@ class DomainModelTrainer:
         n_ratings = int(len(ratings) * fraction)
         sampled_ratings = np.random.choice(ratings, size=n_ratings, replace=False).tolist()
         
-        # Sample rankings
-        rankings = train_data['rankings']
-        n_rankings = max(1, int(len(rankings) * fraction))  # At least 1 ranking
-        sampled_rankings = np.random.choice(rankings, size=n_rankings, replace=False).tolist()
+        # Sample pairwise rankings
+        rankings = train_data.get('pairwise_rankings', [])
+        n_rankings = max(1, int(len(rankings) * fraction)) if rankings else 0
+        sampled_rankings = np.random.choice(rankings, size=n_rankings, replace=False).tolist() if rankings else []
         
         return {
             'ratings': sampled_ratings,
             # 'comparisons': removed
-            'rankings': sampled_rankings
+            'pairwise_rankings': sampled_rankings
         }
     
     def mask_test_data_for_evaluation(self, test_data: Dict[str, Any], mask_fraction: float = 0.5, seed: int = 42) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -206,8 +202,8 @@ class DomainModelTrainer:
         
         np.random.seed(seed)
         
-        observed_data = {'ratings': [], 'rankings': []}
-        missing_data = {'ratings': [], 'rankings': []}
+        observed_data = {'ratings': [], 'pairwise_rankings': []}
+        missing_data = {'ratings': [], 'pairwise_rankings': []}
         
         # Mask ratings
         for rating in test_data['ratings']:
@@ -216,12 +212,12 @@ class DomainModelTrainer:
             else:
                 observed_data['ratings'].append(rating)
         
-        # Mask rankings  
-        for ranking in test_data['rankings']:
+        # Mask pairwise rankings  
+        for ranking in test_data.get('pairwise_rankings', []):
             if np.random.random() < mask_fraction:
-                missing_data['rankings'].append(ranking)
+                missing_data['pairwise_rankings'].append(ranking)
             else:
-                observed_data['rankings'].append(ranking)
+                observed_data['pairwise_rankings'].append(ranking)
         
         return observed_data, missing_data
     
@@ -350,34 +346,37 @@ class DomainModelTrainer:
             results['ratings'] = rating_log_loss
             total_log_loss += rating_log_loss
         
-        # 2. RANKING LOG-LOSS (Plackett-Luce)
-        if missing_test['rankings']:
+        # 2. PAIRWISE RANKING LOG-LOSS (Simplified)
+        pairwise_rankings = missing_test.get('pairwise_rankings', [])
+        if pairwise_rankings:
             ranking_log_loss = 0.0
-            for r in missing_test['rankings']:
+            for r in pairwise_rankings:
                 i, j = r['attribute'], r['annotator']
-                items = r['items']
-                true_order = r['order']
+                items = r['items']  # [item1, item2]
+                true_order = r['order']  # [1, 2] or [2, 1]
                 ij_idx = (i-1)*J + (j-1)
                 
                 # Get item scores and apply temperature scaling
-                item_scores = np.array([base_scores[ij_idx, k-1] / temperature for k in items])
+                item1, item2 = items[0], items[1]
+                score1 = base_scores[ij_idx, item1-1] / temperature
+                score2 = base_scores[ij_idx, item2-1] / temperature
                 
-                # Compute Plackett-Luce log-likelihood
-                ranking_log_lik = 0.0
-                for pos in range(len(items)):
-                    chosen_idx = true_order[pos] - 1  # Convert to 0-indexed
-                    remaining_scores = item_scores[pos:]  # Remaining items
-                    
-                    log_sum_exp_remaining = np.logaddexp.reduce(remaining_scores)
-                    ranking_log_lik += item_scores[chosen_idx] - log_sum_exp_remaining
+                # Compute pairwise log-likelihood
+                if true_order[0] == 1:  # item1 ranks first
+                    # P(item1 > item2) = sigmoid(score1 - score2)
+                    prob = 1.0 / (1.0 + np.exp(-(score1 - score2)))
+                else:  # item2 ranks first
+                    # P(item2 > item1) = sigmoid(score2 - score1)
+                    prob = 1.0 / (1.0 + np.exp(-(score2 - score1)))
                 
-                ranking_log_loss += -ranking_log_lik
+                prob = max(prob, 1e-10)  # Numerical stability
+                ranking_log_loss += -np.log(prob)
             
-            ranking_log_loss /= len(missing_test['rankings'])
+            ranking_log_loss /= len(pairwise_rankings)
             results['rankings'] = ranking_log_loss
             total_log_loss += ranking_log_loss
         
-        results['total'] = total_log_loss / (len([k for k in ['ratings', 'rankings'] if missing_test[k]]))
+        results['total'] = total_log_loss / (len([k for k in ['ratings', 'pairwise_rankings'] if missing_test.get(k, [])]))
         return results
     
     def evaluate_imputation_accuracy(self, fit, visible_test: Dict[str, Any], masked_test: Dict[str, Any], stan_data: Dict[str, Any]) -> Dict[str, float]:
@@ -431,246 +430,266 @@ class DomainModelTrainer:
             
             results['rating_accuracy'] = correct_ratings / len(masked_test['ratings'])
         
-        # 2. RANKING ACCURACY (Kendall's tau correlation)
-        if masked_test['rankings']:
-            kendall_taus = []
-            for rank in masked_test['rankings']:
+        # 2. PAIRWISE RANKING ACCURACY (Binary prediction accuracy)
+        pairwise_rankings = masked_test.get('pairwise_rankings', [])
+        if pairwise_rankings:
+            correct_predictions = 0
+            for rank in pairwise_rankings:
                 i, j = rank['attribute'], rank['annotator']
                 ij_idx = (i-1)*J + (j-1)
-                items = rank['items']
-                true_order = rank['order']
+                items = rank['items']  # [item1, item2]
+                true_order = rank['order']  # [1, 2] or [2, 1]
                 
-                # Predict ranking based on scores
-                item_scores = [base_scores[ij_idx, k-1] for k in items]
-                pred_order = np.argsort(-np.array(item_scores)) + 1  # Convert to 1-indexed
+                # Predict preference based on scores
+                item1, item2 = items[0], items[1]
+                score1 = base_scores[ij_idx, item1-1]
+                score2 = base_scores[ij_idx, item2-1]
                 
-                # Compute Kendall's tau
-                from scipy.stats import kendalltau
-                tau, _ = kendalltau(true_order, pred_order)
-                kendall_taus.append(tau)
+                # Predict: item1 > item2 if score1 > score2
+                pred_first_wins = score1 > score2
+                true_first_wins = true_order[0] == 1  # item1 ranks first
+                
+                if pred_first_wins == true_first_wins:
+                    correct_predictions += 1
             
-            results['ranking_accuracy'] = np.mean(kendall_taus)
+            results['ranking_accuracy'] = correct_predictions / len(pairwise_rankings)
         
         return results
     
-    def progressive_training(self, data_path: Path, config: DomainModelConfig, 
-                           seed: int = 42, output_dir: Path = None) -> ProgressiveResults:
-        """Perform progressive training with increasing data budgets"""
+    def compute_test_accuracy(self, fit, test_data: Dict[str, Any], stan_data: Dict[str, Any]) -> Dict[str, float]:
+        """Compute simple accuracy metrics on ALL test data."""
+        J = stan_data['J']
+        sigma_measurement = stan_data['sigma_measurement']
+        temperature = stan_data['temperature']
         
-        # Setup output directory for logging
+        # Extract posterior means for prediction
+        embeddings = np.mean(fit.stan_variable('embeddings'), axis=0)  # [K, D]
+        preferences = np.mean(fit.stan_variable('annotator_preferences'), axis=0)  # [I*J, D]
+        threshold_samples = fit.stan_variable('rating_thresholds_raw')  # [samples, I*J, C-1]
+        thresholds_mean = np.mean(threshold_samples, axis=0)  # [I*J, C-1]
+        
+        # Compute base scores
+        base_scores = preferences @ embeddings.T  # [I*J, K]
+        
+        results = {'rating_accuracy': 0.0, 'ranking_accuracy': 0.0}
+        
+        # 1. RATING ACCURACY
+        test_ratings = test_data['ratings']
+        if test_ratings:
+            correct_ratings = 0
+            for r in test_ratings:
+                i, j, k, c_true = r['attribute'], r['annotator'], r['item'], r['value']
+                ij_idx = (i-1)*J + (j-1)
+                
+                # Base score z_ijk = v_ij · e_k
+                base_score = base_scores[ij_idx, k-1]
+                
+                # Predict rating using thresholds
+                from scipy.stats import norm
+                
+                # Create threshold boundaries: [-∞, Q_1, Q_2, ..., Q_{C-1}, +∞]
+                full_thresholds = np.concatenate([
+                    [-np.inf], 
+                    thresholds_mean[ij_idx], 
+                    [np.inf]
+                ])
+                
+                # Find most likely category
+                category_probs = []
+                for c in range(1, len(full_thresholds)):
+                    upper_thresh = full_thresholds[c]
+                    lower_thresh = full_thresholds[c-1]
+                    
+                    upper_prob = 1.0 if upper_thresh == np.inf else norm.cdf((upper_thresh - base_score) / sigma_measurement)
+                    lower_prob = 0.0 if lower_thresh == -np.inf else norm.cdf((lower_thresh - base_score) / sigma_measurement)
+                    
+                    prob = upper_prob - lower_prob
+                    category_probs.append(prob)
+                
+                c_pred = np.argmax(category_probs) + 1
+                if c_pred == c_true:
+                    correct_ratings += 1
+            
+            results['rating_accuracy'] = correct_ratings / len(test_ratings)
+        
+        # 2. PAIRWISE RANKING ACCURACY
+        pairwise_rankings = test_data.get('pairwise_rankings', [])
+        if pairwise_rankings:
+            correct_predictions = 0
+            for rank in pairwise_rankings:
+                i, j = rank['attribute'], rank['annotator']
+                ij_idx = (i-1)*J + (j-1)
+                items = rank['items']  # [item1, item2]
+                true_order = rank['order']  # [1, 2] or [2, 1]
+                
+                # Predict preference based on scores
+                item1, item2 = items[0], items[1]
+                score1 = base_scores[ij_idx, item1-1]
+                score2 = base_scores[ij_idx, item2-1]
+                
+                # Predict: item1 > item2 if score1 > score2
+                pred_first_wins = score1 > score2
+                true_first_wins = true_order[0] == 1  # item1 ranks first
+                
+                if pred_first_wins == true_first_wins:
+                    correct_predictions += 1
+            
+            results['ranking_accuracy'] = correct_predictions / len(pairwise_rankings)
+        
+        return results
+    
+    def train_and_evaluate(self, data_path: Path, config: DomainModelConfig, 
+                          seed: int = 42, output_dir: Path = None) -> DomainModelResults:
+        """Train domain model on ALL training data and evaluate on ALL test data."""
+        
+        # Setup output directory
         if output_dir is None:
             output_dir = Path("domain_results")
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        # Setup comprehensive logging
-        log_dir = output_dir / "stan_logs"
-        log_dir.mkdir(exist_ok=True)
-        
-        logger.info(f"Stan logs will be saved to: {log_dir}")
-        logger.info("Loading data for progressive training...")
+        logger.info("Loading ICLR pairwise data...")
         data = self.load_data(data_path)
         
-        results = ProgressiveResults(
-            budget_fractions=config.budget_fractions,
-            training_log_likelihoods=[],
-            test_log_likelihoods=[],
-            kl_divergences=[],
-            training_times=[],
-            n_observations=[],
-            ratings_log_lik=[],
-            # comparisons_log_lik=[],  # Removed
-            rankings_log_lik=[]
+        # Use ALL training data (no progressive sampling)
+        train_data = data['train']
+        test_data = data['test']
+        
+        logger.info(f"Training on {len(train_data['ratings'])} ratings + {len(train_data.get('pairwise_rankings', []))} pairwise rankings")
+        logger.info(f"Testing on {len(test_data['ratings'])} ratings + {len(test_data.get('pairwise_rankings', []))} pairwise rankings")
+        
+        # Prepare Stan data
+        stan_data = self.prepare_stan_data(train_data, config, data['config'])
+        
+        # Create initial values
+        init_values = self._create_initial_values(stan_data, seed, config)
+        
+        # Train model
+        import time
+        start_time = time.time()
+        
+        logger.info("Running MCMC training...")
+        fit = self.model.sample(
+            data=stan_data,
+            chains=config.chains,
+            iter_warmup=config.iter_warmup,
+            iter_sampling=config.iter_sampling,
+            adapt_delta=config.adapt_delta,
+            max_treedepth=config.max_treedepth,
+            seed=seed,
+            inits=init_values,
+            show_progress=True
         )
         
-        true_embeddings = np.array(data['ground_truth']['embeddings'])
+        training_time = time.time() - start_time
         
-        for i, fraction in enumerate(config.budget_fractions):
-            logger.info(f"Training with budget fraction {fraction:.1%} ({i+1}/{len(config.budget_fractions)})...")
-            
-            # Sample subset of COMPLETE training data (no masking during training)
-            subset_data = self.sample_training_subset(data['train'], fraction, seed + i)
-            
-            # Train on ALL available annotations in the subset
-            stan_data = self.prepare_stan_data(subset_data, config, data['config'])
-            
-            # Create reasonable initial values
-            init_values = self._create_initial_values(stan_data, seed + i, config)
-            
-            # Train model with comprehensive logging
-            import time
-            start_time = time.time()
-            
-            # Setup detailed Stan output files
-            stan_output_dir = log_dir / f"fraction_{fraction:.1f}"
-            stan_output_dir.mkdir(exist_ok=True)
-            
-            logger.info(f"Running MCMC for fraction {fraction:.1%}...")
-            logger.info(f"Stan files: {stan_output_dir}")
-            
-            fit = self.model.sample(
-                data=stan_data,
-                chains=config.chains,
-                iter_warmup=config.iter_warmup,
-                iter_sampling=config.iter_sampling,
-                adapt_delta=config.adapt_delta,
-                max_treedepth=config.max_treedepth,
-                seed=seed + i,
-                inits=init_values,
-                output_dir=str(stan_output_dir),
-                save_warmup=True,
-                show_progress=True
-            )
-            
-            # Save Stan diagnostics and summaries
-            try:
-                # Save fit summary
-                with open(stan_output_dir / "fit_summary.txt", 'w') as f:
-                    f.write(str(fit.summary()))
-                
-                # Save diagnostics
-                diagnostics = fit.diagnose()
-                with open(stan_output_dir / "diagnostics.txt", 'w') as f:
-                    f.write(str(diagnostics))
-                
-                # Save sample metadata
-                import json
-                sample_metadata = {
-                    'chains': config.chains,
-                    'iter_warmup': config.iter_warmup,
-                    'iter_sampling': config.iter_sampling,
-                    'adapt_delta': config.adapt_delta,
-                    'max_treedepth': config.max_treedepth,
-                    'seed': seed + i,
-                    'budget_fraction': fraction,
-                    'n_observations': len(subset_data['ratings']) + len(subset_data['rankings']),
-                    'stan_data_dims': {k: v for k, v in stan_data.items() if isinstance(v, (int, float))}
-                }
-                with open(stan_output_dir / "sample_metadata.json", 'w') as f:
-                    json.dump(sample_metadata, f, indent=2)
-                
-                logger.info(f"Stan output saved to {stan_output_dir}")
-                
-            except Exception as e:
-                logger.warning(f"Failed to save some Stan diagnostics: {e}")
-            
-            training_time = time.time() - start_time
-            
-            # Extract results
-            training_log_lik = np.mean(fit.stan_variable('total_log_lik'))
-            learned_embeddings = np.mean(fit.stan_variable('embeddings'), axis=0)
-            
-            # Compute KL divergence
-            kl_div = self.compute_kl_divergence(learned_embeddings, true_embeddings)
-            
-            # Evaluate imputation on test set: artificially mask 50% and predict them
-            observed_test, missing_test = self.mask_test_data_for_evaluation(data['test'], mask_fraction=0.5, seed=seed + i + 200)
-            
-            # Compute log-loss on missing test annotations
-            test_log_loss = self.compute_log_loss_on_missing(fit, observed_test, missing_test, stan_data)
-            
-            # Extract per-annotation-type log-losses
-            rating_log_loss = test_log_loss.get('ratings', 0.0)
-            ranking_log_loss = test_log_loss.get('rankings', 0.0)
-            total_test_log_loss = test_log_loss.get('total', 0.0)
-            
-            # Store results
-            results.training_log_likelihoods.append(training_log_lik)
-            results.test_log_likelihoods.append(total_test_log_loss)  # Log-loss on test set
-            results.kl_divergences.append(kl_div)
-            results.training_times.append(training_time)
-            results.n_observations.append(len(subset_data['ratings']) + len(subset_data['rankings']))
-            results.ratings_log_lik.append(rating_log_loss)
-            results.rankings_log_lik.append(ranking_log_loss)
-            
-            logger.info(f"  Training log-likelihood: {training_log_lik:.3f}")
-            logger.info(f"  Test log-loss: {total_test_log_loss:.3f}")
-            logger.info(f"  Rating log-loss: {rating_log_loss:.3f}")
-            logger.info(f"  Ranking log-loss: {ranking_log_loss:.3f}")
-            logger.info(f"  KL divergence: {kl_div:.3f}")
-            logger.info(f"  Training time: {training_time:.1f}s")
-            logger.info(f"  Observations used: {len(subset_data['ratings']) + len(subset_data['rankings'])}")
+        # Extract training log-likelihood
+        training_log_lik = np.mean(fit.stan_variable('total_log_lik'))
+        
+        # Compute test accuracies on ALL test data (pure imputation)
+        test_accuracy_results = self.compute_test_accuracy(fit, test_data, stan_data)
+        
+        # Compute test log-losses on ALL test data
+        test_log_loss_results = self.compute_log_loss_on_missing(
+            fit, {'ratings': [], 'pairwise_rankings': []}, test_data, stan_data
+        )
+        
+        # Create results
+        results = DomainModelResults(
+            training_log_likelihood=training_log_lik,
+            test_rating_accuracy=test_accuracy_results.get('rating_accuracy', 0.0),
+            test_ranking_accuracy=test_accuracy_results.get('ranking_accuracy', 0.0),
+            test_rating_log_loss=test_log_loss_results.get('ratings', 0.0),
+            test_ranking_log_loss=test_log_loss_results.get('rankings', 0.0),
+            training_time=training_time,
+            n_observations=len(train_data['ratings']) + len(train_data.get('pairwise_rankings', []))
+        )
+        
+        logger.info(f"Training completed in {training_time:.1f}s")
+        logger.info(f"Training log-likelihood: {results.training_log_likelihood:.3f}")
+        logger.info(f"Test rating accuracy: {results.test_rating_accuracy:.3f} ({results.test_rating_accuracy*100:.1f}%)")
+        logger.info(f"Test ranking accuracy: {results.test_ranking_accuracy:.3f} ({results.test_ranking_accuracy*100:.1f}%)")
+        logger.info(f"Test rating log-loss: {results.test_rating_log_loss:.3f}")
+        logger.info(f"Test ranking log-loss: {results.test_ranking_log_loss:.3f}")
         
         return results
     
-    def plot_results(self, results: ProgressiveResults, output_dir: Path):
-        """Create plots of progressive training results"""
+    def plot_results(self, results: DomainModelResults, output_dir: Path):
+        """Create simple summary plot of domain model results"""
         
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+        # Create a simple summary plot
+        fig, ax = plt.subplots(1, 1, figsize=(8, 6))
         
-        # 1. Training log-likelihood and test log-loss curves
-        ax = axes[0, 0]
-        ax.plot(results.budget_fractions, results.training_log_likelihoods, 'b-o', label='Training Log-Likelihood')
-        ax2 = ax.twinx()
-        ax2.plot(results.budget_fractions, results.test_log_likelihoods, 'r-o', label='Test Log-Loss')
-        ax.set_xlabel('Budget Fraction')
-        ax.set_ylabel('Training Log-Likelihood', color='b')
-        ax2.set_ylabel('Test Log-Loss (lower = better)', color='r')
-        ax.set_title('Domain Model Performance')
-        ax.grid(True)
+        # Bar plot of accuracy metrics
+        metrics = ['Rating Accuracy', 'Ranking Accuracy']
+        values = [results.test_rating_accuracy, results.test_ranking_accuracy]
         
-        # 2. KL divergence
-        ax = axes[0, 1]
-        ax.plot(results.budget_fractions, results.kl_divergences, 'g-o')
-        ax.set_xlabel('Budget Fraction')
-        ax.set_ylabel('KL Divergence')
-        ax.set_title('Embedding KL Divergence')
-        ax.grid(True)
+        bars = ax.bar(metrics, values, color=['blue', 'green'], alpha=0.7)
+        ax.set_ylabel('Accuracy')
+        ax.set_title('Domain Model Test Accuracy')
+        ax.set_ylim(0, 1)
         
-        # 3. Training time
-        ax = axes[1, 0]
-        ax.plot(results.budget_fractions, results.training_times, 'm-o')
-        ax.set_xlabel('Budget Fraction')
-        ax.set_ylabel('Training Time (s)')
-        ax.set_title('MCMC Training Time')
-        ax.grid(True)
+        # Add value labels on bars
+        for bar, value in zip(bars, values):
+            height = bar.get_height()
+            ax.text(bar.get_x() + bar.get_width()/2., height + 0.01,
+                   f'{value:.3f}', ha='center', va='bottom')
         
-        # 4. Per-annotation-type log-losses
-        ax = axes[1, 1]
-        ax.plot(results.budget_fractions, results.ratings_log_lik, 'b-o', label='Rating Log-Loss')
-        ax.plot(results.budget_fractions, results.rankings_log_lik, 'g-o', label='Ranking Log-Loss')
-        ax.set_xlabel('Budget Fraction')
-        ax.set_ylabel('Log-Loss (lower = better)')
-        ax.set_title('Per-Annotation-Type Log-Loss')
-        ax.legend()
-        ax.grid(True)
+        # Add training log-likelihood as text
+        ax.text(0.02, 0.98, f'Training Log-Likelihood: {results.training_log_likelihood:.2f}', 
+                transform=ax.transAxes, verticalalignment='top',
+                bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
         
+        ax.grid(True, alpha=0.3)
         plt.tight_layout()
-        plt.savefig(output_dir / 'domain_model_progressive_results.png', dpi=300, bbox_inches='tight')
+        plt.savefig(output_dir / 'domain_model_results.png', dpi=300, bbox_inches='tight')
         plt.close()
         
-        logger.info(f"Results plots saved to {output_dir}")
+        logger.info(f"Plot saved to {output_dir}/domain_model_results.png")
 
 def main():
-    """Test the domain model trainer"""
+    """Train and evaluate domain model on ICLR pairwise data."""
     
     logging.basicConfig(level=logging.INFO)
     
-    # Create configuration for testing
+    # Load centralized configuration for ICLR pairwise experiment
+    from config import ExperimentConfig
+    exp_config = ExperimentConfig()
+    
+    # Create domain model configuration
     config = DomainModelConfig(
-        chains=2,  # Reduced for testing
+        chains=2,
         iter_warmup=500,
-        iter_sampling=500,
-        budget_fractions=[0.2, 0.5, 1.0]  # Smaller set for testing
+        iter_sampling=2000,
+        sigma_annotator=exp_config.sigma_annotator,
+        sigma_measurement=exp_config.sigma_measurement,
+        alpha_dirichlet=exp_config.alpha_dirichlet,
+        temperature=exp_config.temperature
     )
     
-    # Train model
+    # Train model on ICLR data
     data_path = Path(__file__).parent / "generated_data"
     trainer = DomainModelTrainer()
     output_dir = Path(__file__).parent / "domain_results"
-    results = trainer.progressive_training(data_path, config, seed=12345, output_dir=output_dir)
+    results = trainer.train_and_evaluate(data_path, config, seed=12345, output_dir=output_dir)
     
-    # Create plots  
-    trainer.plot_results(results, output_dir)
-    
-    # Print summary
-    print("Domain Model Training Complete!")
-    print(f"Final test log-loss: {results.test_log_likelihoods[-1]:.3f}")
-    print(f"Final rating log-loss: {results.ratings_log_lik[-1]:.3f}")
-    print(f"Final ranking log-loss: {results.rankings_log_lik[-1]:.3f}")
-    print(f"Final KL divergence: {results.kl_divergences[-1]:.3f}")
-    print(f"Total training time: {sum(results.training_times):.1f}s")
+    # Print final summary
+    print("\n" + "="*50)
+    print("DOMAIN MODEL RESULTS")
+    print("="*50)
+    print(f"Training observations: {results.n_observations}")
+    print(f"Training time: {results.training_time:.1f}s")
+    print(f"Training log-likelihood: {results.training_log_likelihood:.3f}")
+    print(f"")
+    print(f"TEST ACCURACY (Pure Imputation):")
+    print(f"  Rating accuracy: {results.test_rating_accuracy:.3f} ({results.test_rating_accuracy*100:.1f}%)")
+    print(f"  Ranking accuracy: {results.test_ranking_accuracy:.3f} ({results.test_ranking_accuracy*100:.1f}%)")
+    print(f"")
+    print(f"TEST LOG-LOSS:")
+    print(f"  Rating log-loss: {results.test_rating_log_loss:.3f}")
+    print(f"  Ranking log-loss: {results.test_ranking_log_loss:.3f}")
+    print("="*50)
 
 if __name__ == "__main__":
     main()

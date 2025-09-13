@@ -49,9 +49,9 @@ parameters {
     // Annotator-specific preferences
     matrix[I*J, D] annotator_preferences;
     
-    // Rating thresholds (per annotator-attribute pair) as cumulative inverse CDF values
-    // TODO - Try with raw probabilities directly
-    array[I*J] ordered[C-1] rating_thresholds_raw;
+    // Rating thresholds (per annotator-attribute pair) as free parameters
+    // Use cutpoints parameterization instead of ordered
+    array[I*J, C-1] real rating_thresholds_raw;
 }
 
 transformed parameters {
@@ -71,12 +71,18 @@ transformed parameters {
         }
     }
     
-    // Construct full threshold vector with boundaries
+    // Construct ordered thresholds from raw parameters
     for (ij in 1:(I*J)) {
         rating_thresholds[ij][1] = negative_infinity();  // -∞ for category 1
-        for (c in 2:C) {
-            rating_thresholds[ij][c] = rating_thresholds_raw[ij][c-1];
+        
+        // First threshold
+        rating_thresholds[ij][2] = rating_thresholds_raw[ij, 1];
+        
+        // Subsequent thresholds using cumulative sum to ensure ordering
+        for (c in 3:C) {
+            rating_thresholds[ij][c] = rating_thresholds[ij][c-1] + exp(rating_thresholds_raw[ij, c-1]);
         }
+        
         rating_thresholds[ij][C+1] = positive_infinity();  // +∞ for category C
     }
 }
@@ -102,11 +108,11 @@ model {
         }
     }
     
-    // Rating threshold priors: ordered thresholds
-    // TODO: Why 2?
+    // Rating threshold priors: more reasonable priors
     for (ij in 1:(I*J)) {
-        for (c in 1:(C-1)) {
-            rating_thresholds_raw[ij][c] ~ normal(0, 2.0);  // Diffuse prior on thresholds
+        rating_thresholds_raw[ij, 1] ~ normal(0, 1.0);  // First threshold
+        for (c in 2:(C-1)) {
+            rating_thresholds_raw[ij, c] ~ normal(0, 0.5);  // Log-spacings
         }
     }
     
@@ -152,56 +158,24 @@ model {
         }
     }
     
-    // 2. RANKING LIKELIHOOD (Plackett-Luce with Gumbel noise)
+    // 2. PAIRWISE RANKING LIKELIHOOD (Simplified for binary preferences)
     for (n in 1:N_rankings) {
         int i = ranking_attributes[n];
         int j = ranking_annotators[n];
         int ij_idx = (i-1)*J + j;
         
-        // Extract base scores for ranked items
-        vector[ranking_size] item_scores;
-        for (r in 1:ranking_size) {
-            int k = ranking_items[n, r];
-            item_scores[r] = base_scores[ij_idx, k] / temperature;
-        }
+        // For pairwise: ranking_items[n] = [item1, item2], ranking_orders[n] = [1, 2] or [2, 1]
+        int item1 = ranking_items[n, 1];
+        int item2 = ranking_items[n, 2];
+        real score1 = base_scores[ij_idx, item1] / temperature;
+        real score2 = base_scores[ij_idx, item2] / temperature;
         
-        // Plackett-Luce likelihood - fixed version
-        // Convert ranking order to proper Plackett-Luce format
-        // TODO: What is it doing?
-        array[ranking_size] int item_order;
-        for (pos in 1:ranking_size) {
-            item_order[ranking_orders[n, pos]] = pos;  // Map item rank to position
-        }
-        
-        // Now compute Plackett-Luce likelihood
-        for (pos in 1:ranking_size) {
-            // Find which item is in position pos
-            int chosen_item = 0;
-            for (r in 1:ranking_size) {
-                if (item_order[r] == pos) {
-                    chosen_item = r;
-                    break;
-                }
-            }
-            
-            if (chosen_item > 0) {
-                // Compute log probability
-                real chosen_score = item_scores[chosen_item];
-                vector[ranking_size - pos + 1] remaining_scores;
-                int remaining_count = 0;
-                
-                for (r in 1:ranking_size) {
-                    if (item_order[r] >= pos) {  // Item still available
-                        remaining_count += 1;
-                        remaining_scores[remaining_count] = item_scores[r];
-                    }
-                }
-                
-                if (remaining_count > 0) {
-                    real log_sum_exp_remaining = log_sum_exp(remaining_scores[1:remaining_count]);
-                    target += chosen_score - log_sum_exp_remaining;
-                }
-            }
+        // If order = [1, 2], item1 > item2, so P(item1 > item2) = sigmoid(score1 - score2)
+        // If order = [2, 1], item2 > item1, so P(item2 > item1) = sigmoid(score2 - score1)
+        if (ranking_orders[n, 1] == 1) {  // item1 ranks first
+            target += log_inv_logit(score1 - score2);
+        } else {  // item2 ranks first
+            target += log_inv_logit(score2 - score1);
         }
     }
 }
@@ -247,44 +221,16 @@ generated quantities {
         int j = ranking_annotators[n];
         int ij_idx = (i-1)*J + j;
         
-        vector[ranking_size] item_scores;
-        for (r in 1:ranking_size) {
-            int k = ranking_items[n, r];
-            item_scores[r] = base_scores[ij_idx, k] / temperature;
-        }
+        // Same simplified pairwise logic as in model block
+        int item1 = ranking_items[n, 1];
+        int item2 = ranking_items[n, 2];
+        real score1 = base_scores[ij_idx, item1] / temperature;
+        real score2 = base_scores[ij_idx, item2] / temperature;
         
-        // Same fixed logic as in model block
-        array[ranking_size] int item_order;
-        for (pos in 1:ranking_size) {
-            item_order[ranking_orders[n, pos]] = pos;
-        }
-        
-        for (pos in 1:ranking_size) {
-            int chosen_item = 0;
-            for (r in 1:ranking_size) {
-                if (item_order[r] == pos) {
-                    chosen_item = r;
-                    break;
-                }
-            }
-            
-            if (chosen_item > 0) {
-                real chosen_score = item_scores[chosen_item];
-                vector[ranking_size - pos + 1] remaining_scores;
-                int remaining_count = 0;
-                
-                for (r in 1:ranking_size) {
-                    if (item_order[r] >= pos) {
-                        remaining_count += 1;
-                        remaining_scores[remaining_count] = item_scores[r];
-                    }
-                }
-                
-                if (remaining_count > 0) {
-                    real log_sum_exp_remaining = log_sum_exp(remaining_scores[1:remaining_count]);
-                    log_lik_rankings += chosen_score - log_sum_exp_remaining;
-                }
-            }
+        if (ranking_orders[n, 1] == 1) {  // item1 ranks first
+            log_lik_rankings += log_inv_logit(score1 - score2);
+        } else {  // item2 ranks first
+            log_lik_rankings += log_inv_logit(score2 - score1);
         }
     }
     
