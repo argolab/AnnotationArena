@@ -258,7 +258,7 @@ class DomainSpecificEvaluator:
                                metadata: dict, dev_patterns: List, dev_data: List[Dict],
                                pytorch_epochs: int = 500, save_path: str = None,
                                train_file: str = "", training_size: int = 0,
-                               init_with_metadata: bool = False, num_restart=5) -> Tuple[Dict, Dict]:
+                               init_with_metadata: bool = False, num_restart=3) -> Tuple[Dict, Dict]:
         """Train MAP model and evaluate with timing."""
         
         # Check if save path exists and skip training if so
@@ -373,7 +373,7 @@ class NeuralModelEvaluator:
         start_time = time.time()
         
         # Determine number of restarts based on model scale
-        num_restarts = 5 if model_scale == "tiny" else 1
+        num_restarts = 3 if model_scale == "tiny" else 1
         best_model = None
         best_loss = float('inf')
         best_training_metrics = None
