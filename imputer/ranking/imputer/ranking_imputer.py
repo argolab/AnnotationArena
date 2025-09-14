@@ -74,11 +74,11 @@ class MultiVariableImputer(nn.Module):
             pass
         
         self.blocks = nn.ModuleList([
-            TransformerBlock(embedding_dim, attention_heads, dropout)
+            TransformerBlock(embedding_dim + self.num_likert_classes + self.max_rank_size + 1, attention_heads, dropout)
             for _ in range(encoder_layers_num)
         ])
         # use transformer.NormLayer implementation
-        self.norm = _NormLayer(embedding_dim)
+        self.norm = _NormLayer(embedding_dim + self.num_likert_classes + self.max_rank_size + 1)
 
         # Output heads in a ModuleDict for extensibility
         self.heads = nn.ModuleDict({
@@ -191,10 +191,9 @@ class MultiVariableImputer(nn.Module):
         features = self.norm(features)
         if return_hidden:
             hidden_states.append(features)
-
         logits = {
-            'rating': self.apply_head('rating', features),
-            'ranking': self.apply_head('ranking', features),
+            'rating': features[:, :, self.embedding_dim + 1: self.embedding_dim + self.num_likert_classes + 1],
+            'ranking': features[:, :, -self.max_rank_size:],
         }
         if return_hidden:
             return logits, hidden_states

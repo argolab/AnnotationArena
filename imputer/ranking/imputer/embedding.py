@@ -260,7 +260,7 @@ class PairwiseRankingProjectionEmbeddingProvider(BaseRankingEmbeddingProvider):
             parameter[0] = 1.0
         else:
             parameter[rating_value + 1] = 1.0
-        return self.parameter_projection(torch.cat((attr_vec + annot_vec + self.item_embedding[item_id], parameter), dim=-1))
+        return torch.cat((attr_vec + annot_vec + self.item_embedding[item_id], parameter), dim=-1)
 
     # Get embedding for ranking variables
     def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order) -> torch.Tensor:
@@ -278,4 +278,4 @@ class PairwiseRankingProjectionEmbeddingProvider(BaseRankingEmbeddingProvider):
             parameter[0] = 1.0
         else:
             parameter[self.num_likert_classes + 1:] = torch.tensor(ranking_order)
-        return self.parameter_projection(torch.cat((total_embedding, parameter), dim=-1))
+        return torch.cat((total_embedding, parameter), dim=-1)

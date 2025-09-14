@@ -49,7 +49,7 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         D = self.embedding_dim
         device = self._ensure_device()
 
-        feature_embeddings = torch.zeros(1, V, D, device=device)
+        feature_embeddings = torch.zeros(1, V, D + self.num_likert_classes + self.max_rank_size + 1, device=device)
 
         for i, var in enumerate(variables):
             if var.is_listwise:
