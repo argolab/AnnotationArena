@@ -40,8 +40,8 @@ data {
 }
 
 parameters {
-    // Latent embeddings
-    matrix[K, D] embeddings;
+    // Latent embeddings (unit norm constraint for identification)
+    matrix[K, D] embeddings_raw;
     
     // Mean preferences per attribute
     matrix[I, D] mean_preferences;
@@ -49,19 +49,31 @@ parameters {
     // Annotator-specific preferences
     matrix[I*J, D] annotator_preferences;
     
-    // Rating thresholds (per annotator-attribute pair) as free parameters
-    // Use cutpoints parameterization instead of ordered
-    array[I*J, C-1] real rating_thresholds_raw;
+    // Rating thresholds - first threshold fixed at 0 for identification
+    array[I*J, C-2] real rating_thresholds_increments;
 }
 
 transformed parameters {
-    // Base utility scores
+    // Unit-normalized embeddings for identification
+    matrix[K, D] embeddings;
+    
+    // Base utility scores  
     matrix[I*J, K] base_scores;
     
     // Rating thresholds with -inf and +inf boundaries
     array[I*J] vector[C+1] rating_thresholds;
     
-    // Compute base scores: z_ij_k = v_ij · e_k
+    // Normalize embeddings to unit norm for identification
+    for (k in 1:K) {
+        real norm = sqrt(dot_self(embeddings_raw[k]));
+        if (norm > 1e-10) {
+            embeddings[k] = embeddings_raw[k] / norm;
+        } else {
+            embeddings[k] = embeddings_raw[k];
+        }
+    }
+    
+    // Compute base scores: z_ij_k = v_ij · e_k  
     for (i in 1:I) {
         for (j in 1:J) {
             int idx = (i-1)*J + j;
@@ -71,16 +83,16 @@ transformed parameters {
         }
     }
     
-    // Construct ordered thresholds from raw parameters
+    // Construct ordered thresholds with identification constraints
     for (ij in 1:(I*J)) {
         rating_thresholds[ij][1] = negative_infinity();  // -∞ for category 1
         
-        // First threshold
-        rating_thresholds[ij][2] = rating_thresholds_raw[ij, 1];
+        // First threshold FIXED at 0 for identification
+        rating_thresholds[ij][2] = 0.0;
         
-        // Subsequent thresholds using cumulative sum to ensure ordering
+        // Subsequent thresholds using positive increments
         for (c in 3:C) {
-            rating_thresholds[ij][c] = rating_thresholds[ij][c-1] + exp(rating_thresholds_raw[ij, c-1]);
+            rating_thresholds[ij][c] = rating_thresholds[ij][c-1] + abs(rating_thresholds_increments[ij, c-2]);
         }
         
         rating_thresholds[ij][C+1] = positive_infinity();  // +∞ for category C
@@ -90,9 +102,9 @@ transformed parameters {
 model {
     // ===== PRIORS =====
     
-    // Embeddings: e_k ~ N(0, σ_e²I)
+    // Raw embeddings: e_k ~ N(0, σ_e²I) (will be normalized)
     for (k in 1:K) {
-        embeddings[k] ~ normal(0, sigma_embedding_prior);
+        embeddings_raw[k] ~ normal(0, sigma_embedding_prior);
     }
     
     // Mean preferences: v_i ~ N(0, σ_v²I) 
@@ -108,11 +120,10 @@ model {
         }
     }
     
-    // Rating threshold priors: more reasonable priors
+    // Rating threshold increments (positive spacings)
     for (ij in 1:(I*J)) {
-        rating_thresholds_raw[ij, 1] ~ normal(0, 1.0);  // First threshold
-        for (c in 2:(C-1)) {
-            rating_thresholds_raw[ij, c] ~ normal(0, 0.5);  // Log-spacings
+        for (c in 1:(C-2)) {
+            rating_thresholds_increments[ij, c] ~ normal(0, 0.5);  // Moderate spacing
         }
     }
     

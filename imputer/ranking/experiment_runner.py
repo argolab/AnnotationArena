@@ -15,6 +15,7 @@ from dataclasses import asdict
 from config import ExperimentConfig, InstanceConfig, ModelConfig, TrainingConfig
 from iclr_data_generator import ICLRDataGenerator, ICLRDatasetConfig
 from imputer import DataConverter, MultiVariableImputer, ImputerTrainer
+from domain_model_trainer import DomainModelTrainer, DomainModelConfig
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -26,7 +27,24 @@ class ExperimentRunner:
         self.config = config
         self.model = None
         self.trainer = None
+        self.domain_trainer = None
         self.results = {}
+        
+        # Create domain model config from instance parameters
+        first_instance = config.instances[0]
+        self.domain_config = DomainModelConfig(
+            chains=4,
+            iter_warmup=1000,
+            iter_sampling=2000,
+            adapt_delta=0.8,
+            max_treedepth=10,
+            sigma_annotator=first_instance.sigma_annotator,
+            sigma_measurement=first_instance.sigma_measurement,
+            alpha_dirichlet=first_instance.alpha_dirichlet,
+            temperature=first_instance.temperature,
+            sigma_embedding_prior=first_instance.sigma_embedding_prior,
+            sigma_preference_prior=first_instance.sigma_preference_prior
+        )
         
         # Create output directories
         self.output_dir = config.output_dir

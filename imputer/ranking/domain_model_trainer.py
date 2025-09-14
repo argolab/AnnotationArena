@@ -41,7 +41,8 @@ class DomainModelConfig:
 @dataclass
 class DomainModelResults:
     """Results from domain model training."""
-    training_log_likelihood: float
+    training_rating_log_loss: float
+    training_ranking_log_loss: float
     test_rating_accuracy: float
     test_ranking_accuracy: float
     test_rating_log_loss: float
@@ -258,8 +259,8 @@ class DomainModelTrainer:
         K, I, J, D, C = stan_data['K'], stan_data['I'], stan_data['J'], stan_data['D'], stan_data['C']
         
         def create_init():
-            # Small random embeddings
-            embeddings = np.random.normal(0, 0.5, (K, D))
+            # Small random raw embeddings (will be normalized)
+            embeddings_raw = np.random.normal(0, 0.5, (K, D))
             
             # Small random mean preferences
             mean_preferences = np.random.normal(0, 0.5, (I, D))
@@ -271,27 +272,123 @@ class DomainModelTrainer:
                     idx = i*J + j
                     annotator_preferences[idx] = mean_preferences[i] + np.random.normal(0, 0.1, D)
             
-            # Initialize ordered rating thresholds
-            rating_thresholds_raw = []
+            # Initialize threshold increments (positive values)
+            rating_thresholds_increments = []
             for ij in range(I*J):
-                # Create ordered thresholds: Q_1 < Q_2 < ... < Q_{C-1}
-                thresholds = np.sort(np.random.normal(0, 1, C-1))
-                rating_thresholds_raw.append(thresholds.tolist())
+                # Create positive increments for thresholds (C-2 increments since first is fixed)
+                increments = np.abs(np.random.normal(0, 0.5, C-2))
+                rating_thresholds_increments.append(increments.tolist())
             
             return {
-                'embeddings': embeddings.tolist(),
+                'embeddings_raw': embeddings_raw.tolist(),
                 'mean_preferences': mean_preferences.tolist(),
                 'annotator_preferences': annotator_preferences.tolist(),
-                'rating_thresholds_raw': rating_thresholds_raw
+                'rating_thresholds_increments': rating_thresholds_increments
             }
         
         # Return list of initial values for each chain
         return [create_init() for _ in range(config.chains)]
     
+    def compute_training_log_loss(self, fit, train_data: Dict[str, Any], stan_data: Dict[str, Any]) -> Dict[str, float]:
+        """Compute training log loss using posterior mean parameters."""
+        
+        # Get dimensions and parameters
+        I = stan_data['I']
+        J = stan_data['J']
+        C = stan_data['C']
+        sigma_measurement = stan_data['sigma_measurement']
+        temperature = stan_data['temperature']
+        
+        # Extract posterior means for evaluation
+        embeddings = np.mean(fit.stan_variable('embeddings'), axis=0)  # [K, D] (normalized)
+        preferences = np.mean(fit.stan_variable('annotator_preferences'), axis=0)  # [I*J, D]
+        
+        # Extract threshold increments and reconstruct thresholds
+        threshold_increments = np.mean(fit.stan_variable('rating_thresholds_increments'), axis=0)  # [I*J, C-2]
+        
+        # Reconstruct full thresholds: first fixed at 0, then cumulative sums
+        thresholds_mean = np.zeros((I*J, C-1))
+        for ij in range(I*J):
+            thresholds_mean[ij, 0] = 0.0  # First threshold fixed at 0
+            for c in range(1, C-1):
+                thresholds_mean[ij, c] = thresholds_mean[ij, c-1] + np.abs(threshold_increments[ij, c-1])
+        
+        # Compute base scores
+        base_scores = preferences @ embeddings.T  # [I*J, K]
+        
+        results = {'ratings': 0.0, 'rankings': 0.0}
+        
+        # 1. RATING LOG LOSS
+        if train_data['ratings']:
+            rating_log_loss = 0.0
+            for r in train_data['ratings']:
+                i, j, k, c_true = r['attribute'], r['annotator'], r['item'], r['value'] 
+                ij_idx = (i-1)*J + (j-1)
+                
+                # Base score z_ijk = v_ij · e_k
+                base_score = base_scores[ij_idx, k-1]
+                
+                # Compute rating probabilities using corrected likelihood
+                from scipy.stats import norm
+                
+                # Create threshold boundaries: [-∞, Q_1, Q_2, ..., Q_{C-1}, +∞]
+                full_thresholds = np.concatenate([
+                    [-np.inf], 
+                    thresholds_mean[ij_idx], 
+                    [np.inf]
+                ])
+                
+                # Compute probability for true category c_true
+                upper_thresh = full_thresholds[c_true]  # c_true is 1-indexed
+                lower_thresh = full_thresholds[c_true-1]
+                
+                upper_prob = 1.0 if upper_thresh == np.inf else norm.cdf((upper_thresh - base_score) / sigma_measurement)
+                lower_prob = 0.0 if lower_thresh == -np.inf else norm.cdf((lower_thresh - base_score) / sigma_measurement)
+                
+                prob = upper_prob - lower_prob
+                prob = max(prob, 1e-10)  # Numerical stability
+                
+                rating_log_loss += -np.log(prob)
+            
+            rating_log_loss /= len(train_data['ratings'])
+            results['ratings'] = rating_log_loss
+        
+        # 2. PAIRWISE RANKING LOG LOSS
+        pairwise_rankings = train_data.get('pairwise_rankings', [])
+        if pairwise_rankings:
+            ranking_log_loss = 0.0
+            for r in pairwise_rankings:
+                i, j = r['attribute'], r['annotator']
+                items = r['items']  # [item1, item2]
+                true_order = r['order']  # [1, 2] or [2, 1]
+                ij_idx = (i-1)*J + (j-1)
+                
+                # Get item scores and apply temperature scaling
+                item1, item2 = items[0], items[1]
+                score1 = base_scores[ij_idx, item1-1] / temperature
+                score2 = base_scores[ij_idx, item2-1] / temperature
+                
+                # Compute pairwise log-likelihood
+                if true_order[0] == 1:  # item1 ranks first
+                    # P(item1 > item2) = sigmoid(score1 - score2)
+                    prob = 1.0 / (1.0 + np.exp(-(score1 - score2)))
+                else:  # item2 ranks first
+                    # P(item2 > item1) = sigmoid(score2 - score1)
+                    prob = 1.0 / (1.0 + np.exp(-(score2 - score1)))
+                
+                prob = max(prob, 1e-10)  # Numerical stability
+                ranking_log_loss += -np.log(prob)
+            
+            ranking_log_loss /= len(pairwise_rankings)
+            results['rankings'] = ranking_log_loss
+        
+        return results
+
     def compute_log_loss_on_missing(self, fit, observed_test: Dict[str, Any], missing_test: Dict[str, Any], stan_data: Dict[str, Any]) -> Dict[str, float]:
         """Compute log-loss on missing test annotations using posterior predictive distribution"""
         
         # Get dimensions and parameters
+        I = stan_data['I']
         J = stan_data['J']
         C = stan_data['C']
         sigma_measurement = stan_data['sigma_measurement']
@@ -300,8 +397,17 @@ class DomainModelTrainer:
         # Extract posterior means for prediction
         embeddings = np.mean(fit.stan_variable('embeddings'), axis=0)  # [K, D]
         preferences = np.mean(fit.stan_variable('annotator_preferences'), axis=0)  # [I*J, D]  
-        threshold_samples = fit.stan_variable('rating_thresholds_raw')  # [samples, I*J, C-1]
-        thresholds_mean = np.mean(threshold_samples, axis=0)  # [I*J, C-1]
+        
+        # Extract threshold increments and reconstruct thresholds
+        threshold_increments = np.mean(fit.stan_variable('rating_thresholds_increments'), axis=0)  # [I*J, C-2]
+        
+        # Reconstruct full thresholds: first fixed at 0, then cumulative sums
+        I = stan_data['I']
+        thresholds_mean = np.zeros((I*J, C-1))
+        for ij in range(I*J):
+            thresholds_mean[ij, 0] = 0.0  # First threshold fixed at 0
+            for c in range(1, C-1):
+                thresholds_mean[ij, c] = thresholds_mean[ij, c-1] + np.abs(threshold_increments[ij, c-1])
         
         # Compute base scores
         base_scores = preferences @ embeddings.T  # [I*J, K]
@@ -465,8 +571,18 @@ class DomainModelTrainer:
         # Extract posterior means for prediction
         embeddings = np.mean(fit.stan_variable('embeddings'), axis=0)  # [K, D]
         preferences = np.mean(fit.stan_variable('annotator_preferences'), axis=0)  # [I*J, D]
-        threshold_samples = fit.stan_variable('rating_thresholds_raw')  # [samples, I*J, C-1]
-        thresholds_mean = np.mean(threshold_samples, axis=0)  # [I*J, C-1]
+        
+        # Extract threshold increments and reconstruct thresholds
+        threshold_increments = np.mean(fit.stan_variable('rating_thresholds_increments'), axis=0)  # [I*J, C-2]
+        
+        # Reconstruct full thresholds: first fixed at 0, then cumulative sums
+        C = stan_data['C']
+        I = stan_data['I']
+        thresholds_mean = np.zeros((I*J, C-1))
+        for ij in range(I*J):
+            thresholds_mean[ij, 0] = 0.0  # First threshold fixed at 0
+            for c in range(1, C-1):
+                thresholds_mean[ij, c] = thresholds_mean[ij, c-1] + np.abs(threshold_increments[ij, c-1])
         
         # Compute base scores
         base_scores = preferences @ embeddings.T  # [I*J, K]
@@ -582,8 +698,8 @@ class DomainModelTrainer:
         
         training_time = time.time() - start_time
         
-        # Extract training log-likelihood
-        training_log_lik = np.mean(fit.stan_variable('total_log_lik'))
+        # Compute training log losses using posterior mean parameters
+        training_log_loss_results = self.compute_training_log_loss(fit, train_data, stan_data)
         
         # Compute test accuracies on ALL test data (pure imputation)
         test_accuracy_results = self.compute_test_accuracy(fit, test_data, stan_data)
@@ -595,7 +711,8 @@ class DomainModelTrainer:
         
         # Create results
         results = DomainModelResults(
-            training_log_likelihood=training_log_lik,
+            training_rating_log_loss=training_log_loss_results.get('ratings', 0.0),
+            training_ranking_log_loss=training_log_loss_results.get('rankings', 0.0),
             test_rating_accuracy=test_accuracy_results.get('rating_accuracy', 0.0),
             test_ranking_accuracy=test_accuracy_results.get('ranking_accuracy', 0.0),
             test_rating_log_loss=test_log_loss_results.get('ratings', 0.0),
@@ -605,7 +722,8 @@ class DomainModelTrainer:
         )
         
         logger.info(f"Training completed in {training_time:.1f}s")
-        logger.info(f"Training log-likelihood: {results.training_log_likelihood:.3f}")
+        logger.info(f"Training rating log-loss: {results.training_rating_log_loss:.3f}")
+        logger.info(f"Training ranking log-loss: {results.training_ranking_log_loss:.3f}")
         logger.info(f"Test rating accuracy: {results.test_rating_accuracy:.3f} ({results.test_rating_accuracy*100:.1f}%)")
         logger.info(f"Test ranking accuracy: {results.test_ranking_accuracy:.3f} ({results.test_ranking_accuracy*100:.1f}%)")
         logger.info(f"Test rating log-loss: {results.test_rating_log_loss:.3f}")
@@ -680,7 +798,10 @@ def main():
     print("="*50)
     print(f"Training observations: {results.n_observations}")
     print(f"Training time: {results.training_time:.1f}s")
-    print(f"Training log-likelihood: {results.training_log_likelihood:.3f}")
+    print(f"")
+    print(f"TRAINING LOG-LOSS:")
+    print(f"  Rating log-loss: {results.training_rating_log_loss:.3f}")
+    print(f"  Ranking log-loss: {results.training_ranking_log_loss:.3f}")
     print(f"")
     print(f"TEST ACCURACY (Pure Imputation):")
     print(f"  Rating accuracy: {results.test_rating_accuracy:.3f} ({results.test_rating_accuracy*100:.1f}%)")
