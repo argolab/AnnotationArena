@@ -36,7 +36,7 @@ class ModelConfig:
     attention_heads: int = 8
     embedding_dim: int = 64
     dropout: float = 0.1
-    embedding_type: str = "pairwise"
+    embedding_type: str = "combined_random"
 
 @dataclass
 class TrainingConfig:
