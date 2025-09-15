@@ -376,7 +376,7 @@ class ExperimentRunner:
         }
 
         # Initialize early stopping
-        early_stopping = EarlyStopping(patience=5, min_delta=1e-4)
+        early_stopping = EarlyStopping(patience=10, min_delta=1e-4)
         epochs_trained = 0
 
         # Training loop
@@ -391,11 +391,6 @@ class ExperimentRunner:
             for key in ['total_loss', 'rating_loss', 'ranking_loss']:
                 train_losses[key].append(losses[key])
 
-            # Check early stopping
-            if early_stopping.should_stop(losses['total_loss'], self.model):
-                logger.info(f"Early stopping triggered at epoch {epoch} for instance {instance_idx}")
-                break
-            
             # Evaluate periodically
             if epoch % self.config.training_config.evaluation_frequency == 0:
                 
@@ -407,6 +402,12 @@ class ExperimentRunner:
                 test_losses['epoch'].append(global_epoch_offset + epoch)
                 test_losses['test_rating_loss'].append(test_eval['test_rating_loss'])
                 test_losses['test_ranking_loss'].append(test_eval['test_ranking_loss'])
+
+                # Check early stopping based on test total loss
+                test_total_loss = test_eval['test_rating_loss'] + test_eval['test_ranking_loss']
+                if early_stopping.should_stop(test_total_loss, self.model):
+                    logger.info(f"Early stopping triggered at epoch {epoch} for instance {instance_idx} (test total loss: {test_total_loss:.4f})")
+                    break
                 
                 # For multi-instance, also evaluate on held-out test instances
                 if test_instances:
