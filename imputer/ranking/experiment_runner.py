@@ -15,6 +15,7 @@ from dataclasses import asdict
 from config import ExperimentConfig, InstanceConfig, ModelConfig, TrainingConfig
 from iclr_data_generator import ICLRDataGenerator, ICLRDatasetConfig
 from imputer import DataConverter, MultiVariableImputer, ImputerTrainer
+from imputer.trainer import EarlyStopping
 from domain_model_trainer import DomainModelTrainer, DomainModelConfig
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -34,8 +35,8 @@ class ExperimentRunner:
         first_instance = config.instances[0]
         self.domain_config = DomainModelConfig(
             chains=4,
-            iter_warmup=1000,
-            iter_sampling=2000,
+            iter_warmup=500,
+            iter_sampling=1000,
             adapt_delta=0.8,
             max_treedepth=10,
             sigma_annotator=first_instance.sigma_annotator,
@@ -313,8 +314,8 @@ class ExperimentRunner:
         final_test_results = {}
         for test_batch, test_data, test_idx in test_instances:
             test_eval = self.trainer.evaluate_with_test_data(
-                test_batch, test_data, converter, 
-                masking_rate=self.config.training_config.masking_rate
+                test_batch, test_data, converter,
+                masking_rate=self.config.training_config.masking_rate, train_batch=test_batch
             )
             final_test_results[test_idx] = test_eval
         
@@ -348,39 +349,52 @@ class ExperimentRunner:
         
         # Save results
         self._save_multi_instance_results(all_results)
-        
+
+        # Save instance-wise training metrics
+        self._save_instance_training_metrics(all_results)
+
         return all_results
     
     def _train_instance(
-        self, 
-        train_batch: Dict, 
-        test_batch: Dict, 
+        self,
+        train_batch: Dict,
+        test_batch: Dict,
         test_data: Dict,
         converter: DataConverter,
         instance_idx: int,
         global_epoch_offset: int = 0,
         test_instances: Optional[List] = None
     ) -> Dict[str, Any]:
-        """Train on single instance."""
-        
+        """Train on single instance with early stopping."""
+
         train_losses = {
             'epoch': [], 'total_loss': [], 'rating_loss': [], 'ranking_loss': []
         }
-        
+
         test_losses = {
             'epoch': [], 'test_rating_loss': [], 'test_ranking_loss': []
         }
-        
+
+        # Initialize early stopping
+        early_stopping = EarlyStopping(patience=5, min_delta=1e-4)
+        epochs_trained = 0
+
         # Training loop
-        for epoch in tqdm(range(self.config.training_config.epochs), 
+        for epoch in tqdm(range(self.config.training_config.epochs),
                          desc=f"Training Instance {instance_idx}"):
             
             losses = self.trainer.train_step(train_batch)
-            
+            epochs_trained = epoch + 1
+
             # Record training losses
             train_losses['epoch'].append(global_epoch_offset + epoch)
             for key in ['total_loss', 'rating_loss', 'ranking_loss']:
                 train_losses[key].append(losses[key])
+
+            # Check early stopping
+            if early_stopping.should_stop(losses['total_loss'], self.model):
+                logger.info(f"Early stopping triggered at epoch {epoch} for instance {instance_idx}")
+                break
             
             # Evaluate periodically
             if epoch % self.config.training_config.evaluation_frequency == 0:
@@ -388,7 +402,7 @@ class ExperimentRunner:
                 # Evaluate on instance test set
                 test_eval = self.trainer.evaluate_with_test_data(
                     test_batch, test_data, converter,
-                    masking_rate=self.config.training_config.masking_rate, verbose=False
+                    masking_rate=self.config.training_config.masking_rate, verbose=False, train_batch=train_batch
                 )
                 test_losses['epoch'].append(global_epoch_offset + epoch)
                 test_losses['test_rating_loss'].append(test_eval['test_rating_loss'])
@@ -402,7 +416,7 @@ class ExperimentRunner:
                     for test_batch_i, test_data_i, _ in test_instances:
                         test_eval_i = self.trainer.evaluate_with_test_data(
                             test_batch_i, test_data_i, converter,
-                            masking_rate=self.config.training_config.masking_rate, verbose=False
+                            masking_rate=self.config.training_config.masking_rate, verbose=False, train_batch=test_batch_i
                         )
                         avg_test_rating_loss += test_eval_i['test_rating_loss']
                         avg_test_ranking_loss += test_eval_i['test_ranking_loss']
@@ -424,18 +438,25 @@ class ExperimentRunner:
                 
                 # Print full test evaluation results like the old version
                 logger.info(f"TEST LOSS & METRICS: {test_eval}")
-        
+
+        # Restore best model if early stopping occurred
+        if early_stopping.early_stopped:
+            early_stopping.restore_best_model(self.model)
+            logger.info(f"Restored best model from early stopping for instance {instance_idx}")
+
         # Final evaluation
         final_test_eval = self.trainer.evaluate_with_test_data(
             test_batch, test_data, converter,
-            masking_rate=self.config.training_config.masking_rate
+            masking_rate=self.config.training_config.masking_rate, train_batch=train_batch
         )
-        
+
         return {
             'train_losses': train_losses,
             'test_losses': test_losses,
             'final_test_eval': final_test_eval,
-            'instance_idx': instance_idx
+            'instance_idx': instance_idx,
+            'epochs_trained': epochs_trained,
+            'early_stopped': early_stopping.early_stopped
         }
     
     def _save_single_instance_results(self, results: Dict[str, Any]) -> None:
@@ -564,12 +585,15 @@ class ExperimentRunner:
             imputer_results = results
             domain_results = {}
         
+        # Get instance boundaries first
+        instance_boundaries = imputer_results.get('instance_boundaries', results.get('instance_boundaries', []))
+
         # Combine all training losses with instance boundaries
         all_epochs = []
         all_total_loss = []
         all_rating_loss = []
         all_ranking_loss = []
-        
+
         # Extract training losses from instance results
         for train_idx in self.config.train_instance_indices:
             instance_results = imputer_results['instance_results'][train_idx]['train_losses']
@@ -578,62 +602,102 @@ class ExperimentRunner:
             all_rating_loss.extend(instance_results['rating_loss'])
             all_ranking_loss.extend(instance_results['ranking_loss'])
         
-        # Training plot with instance boundaries
-        plt.figure(figsize=(12, 6))
-        plt.plot(all_epochs, all_total_loss, 'b-', label='Imputer Total', linewidth=2)
-        plt.plot(all_epochs, all_rating_loss, 'g--', label='Imputer Rating', linewidth=2)
-        plt.plot(all_epochs, all_ranking_loss, 'r--', label='Imputer Ranking', linewidth=2)
-        
-        # Add domain model results as horizontal lines within each instance (if available)
-        if all_epochs and domain_results and 'training_results' in domain_results:
-            # Add horizontal lines for domain model in each instance segment
-            for i, train_idx in enumerate(self.config.train_instance_indices):
-                if train_idx in domain_results['training_results']:
-                    domain_data = domain_results['training_results'][train_idx]
-                    
-                    # Get epoch range for this instance
-                    if i < len(instance_boundaries) - 1:
-                        start_epoch = instance_boundaries[i] if i > 0 else all_epochs[0]
-                        end_epoch = instance_boundaries[i + 1]
-                    else:
-                        start_epoch = instance_boundaries[i] if i > 0 else all_epochs[0]
-                        end_epoch = all_epochs[-1]
-                    
-                    domain_total = domain_data['training_rating_log_loss'] + domain_data['training_ranking_log_loss']
-                    epoch_range = [start_epoch, end_epoch]
-                    
-                    # Only add labels for first instance to avoid legend clutter
-                    total_label = 'Domain Model Total' if i == 0 else ''
-                    rating_label = 'Domain Model Rating' if i == 0 else ''
-                    ranking_label = 'Domain Model Ranking' if i == 0 else ''
-                    
-                    plt.plot(epoch_range, [domain_total, domain_total], 'k-', 
-                            label=total_label, linewidth=2, alpha=0.8)
-                    plt.plot(epoch_range, [domain_data['training_rating_log_loss'], domain_data['training_rating_log_loss']], 
-                            'orange', linestyle='--', label=rating_label, linewidth=2, alpha=0.8)
-                    plt.plot(epoch_range, [domain_data['training_ranking_log_loss'], domain_data['training_ranking_log_loss']], 
-                            'purple', linestyle='--', label=ranking_label, linewidth=2, alpha=0.8)
-        
-        # Add vertical lines for instance boundaries
-        instance_boundaries = imputer_results.get('instance_boundaries', results.get('instance_boundaries', []))
-        for boundary in instance_boundaries[:-1]:  # Skip the last boundary
-            plt.axvline(x=boundary, color='gray', linestyle=':', alpha=0.7)
-        
-        plt.title(f'Multi-Instance Training Log Loss (Masking Rate {self.config.training_config.masking_rate:.1f})')
-        plt.xlabel('Global Epoch')
-        plt.ylabel('Log Loss')
-        plt.legend()
-        plt.grid(True, alpha=0.3)
-        
-        # Add instance labels
-        if instance_boundaries:
-            for i, (start, end) in enumerate(zip([0] + instance_boundaries[:-1], instance_boundaries)):
-                mid = (start + end) / 2
-                plt.text(mid, plt.ylim()[1] * 0.9, f'Inst {self.config.train_instance_indices[i]}', 
-                        ha='center', fontsize=10, alpha=0.8)
-        
+        # Create two versions of the training plot
+
+        # Version 1: All loss components
+        fig, ax = plt.subplots(figsize=(14, 8))
+
+        # Imputer model lines with better colors and styles
+        ax.plot(all_epochs, all_total_loss, color='#2E86AB', linewidth=2.5, label='Imputer Total')
+        ax.plot(all_epochs, all_rating_loss, color='#A23B72', linewidth=2, linestyle='--', alpha=0.8, label='Imputer Rating')
+        ax.plot(all_epochs, all_ranking_loss, color='#F18F01', linewidth=2, linestyle='--', alpha=0.8, label='Imputer Ranking')
+
+        # Add domain model results as horizontal lines (if available)
+        if all_epochs and domain_results and 'test_results' in domain_results and domain_results['test_results']:
+            first_test_idx = list(domain_results['test_results'].keys())[0]
+            first_test_result = domain_results['test_results'][first_test_idx]
+
+            if 'training_time' in first_test_result:
+                start_epoch = all_epochs[0]
+                end_epoch = all_epochs[-1]
+                epoch_range = [start_epoch, end_epoch]
+
+                domain_rating_loss = first_test_result.get('test_rating_log_loss', 1.0)
+                domain_ranking_loss = first_test_result.get('test_ranking_log_loss', 1.0)
+                domain_total_loss = domain_rating_loss + domain_ranking_loss
+
+                ax.plot(epoch_range, [domain_total_loss, domain_total_loss], color='#333333',
+                       linewidth=3, alpha=0.9, label='Domain Model Total')
+                ax.plot(epoch_range, [domain_rating_loss, domain_rating_loss], color='#666666',
+                       linewidth=2, linestyle='--', alpha=0.8, label='Domain Model Rating')
+                ax.plot(epoch_range, [domain_ranking_loss, domain_ranking_loss], color='#999999',
+                       linewidth=2, linestyle='--', alpha=0.8, label='Domain Model Ranking')
+
+        # Instance boundaries and labels
+        for i, boundary in enumerate(instance_boundaries[:-1]):
+            ax.axvline(x=boundary, color='lightgray', linestyle='-', alpha=0.6, linewidth=1)
+            if i < len(self.config.train_instance_indices):
+                x_pos = (instance_boundaries[i] + instance_boundaries[i+1]) / 2
+                y_pos = ax.get_ylim()[1] * 0.95
+                ax.text(x_pos, y_pos, f'Instance {self.config.train_instance_indices[i]}',
+                       ha='center', va='top', fontsize=11, color='gray')
+
+        ax.set_title(f'Multi-Instance Training: All Loss Components (Masking Rate {self.config.training_config.masking_rate:.1f})',
+                    fontsize=14, pad=20)
+        ax.set_xlabel('Global Epoch', fontsize=12)
+        ax.set_ylabel('Log Loss', fontsize=12)
+        ax.legend(frameon=True, fancybox=True, shadow=True, fontsize=11)
+        ax.grid(True, alpha=0.3, linewidth=0.5)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
         plt.tight_layout()
-        plt.savefig(self.plots_dir / 'multi_instance_training_loss.png', dpi=300, bbox_inches='tight')
+        plt.savefig(self.plots_dir / 'multi_instance_training_loss_detailed.png', dpi=300, bbox_inches='tight')
+        plt.close()
+
+        # Version 2: Total loss only
+        fig, ax = plt.subplots(figsize=(14, 8))
+
+        # Imputer model total loss
+        ax.plot(all_epochs, all_total_loss, color='#2E86AB', linewidth=3, label='Imputer')
+
+        # Domain model total loss
+        if all_epochs and domain_results and 'test_results' in domain_results and domain_results['test_results']:
+            first_test_idx = list(domain_results['test_results'].keys())[0]
+            first_test_result = domain_results['test_results'][first_test_idx]
+
+            if 'training_time' in first_test_result:
+                start_epoch = all_epochs[0]
+                end_epoch = all_epochs[-1]
+                epoch_range = [start_epoch, end_epoch]
+
+                domain_rating_loss = first_test_result.get('test_rating_log_loss', 1.0)
+                domain_ranking_loss = first_test_result.get('test_ranking_log_loss', 1.0)
+                domain_total_loss = domain_rating_loss + domain_ranking_loss
+
+                ax.plot(epoch_range, [domain_total_loss, domain_total_loss], color='#333333',
+                       linewidth=3, alpha=0.9, label='Domain Model')
+
+        # Instance boundaries and labels
+        for i, boundary in enumerate(instance_boundaries[:-1]):
+            ax.axvline(x=boundary, color='lightgray', linestyle='-', alpha=0.6, linewidth=1)
+            if i < len(self.config.train_instance_indices):
+                x_pos = (instance_boundaries[i] + instance_boundaries[i+1]) / 2
+                y_pos = ax.get_ylim()[1] * 0.95
+                ax.text(x_pos, y_pos, f'Instance {self.config.train_instance_indices[i]}',
+                       ha='center', va='top', fontsize=11, color='gray')
+
+        ax.set_title(f'Multi-Instance Training: Total Loss Comparison (Masking Rate {self.config.training_config.masking_rate:.1f})',
+                    fontsize=14, pad=20)
+        ax.set_xlabel('Global Epoch', fontsize=12)
+        ax.set_ylabel('Log Loss', fontsize=12)
+        ax.legend(frameon=True, fancybox=True, shadow=True, fontsize=12)
+        ax.grid(True, alpha=0.3, linewidth=0.5)
+        ax.spines['top'].set_visible(False)
+        ax.spines['right'].set_visible(False)
+
+        plt.tight_layout()
+        plt.savefig(self.plots_dir / 'multi_instance_training_loss_total.png', dpi=300, bbox_inches='tight')
         plt.close()
         
         # Test performance over instances (if available)  
@@ -699,7 +763,8 @@ class ExperimentRunner:
                         'test_rating_accuracy': np.mean([r['test_rating_accuracy'] for r in domain_results['test_results'].values()]),
                         'test_ranking_accuracy': np.mean([r['test_ranking_accuracy'] for r in domain_results['test_results'].values()]),
                         'test_rating_log_loss': np.mean([r['test_rating_log_loss'] for r in domain_results['test_results'].values()]),
-                        'test_ranking_log_loss': np.mean([r['test_ranking_log_loss'] for r in domain_results['test_results'].values()])
+                        'test_ranking_log_loss': np.mean([r['test_ranking_log_loss'] for r in domain_results['test_results'].values()]),
+                        'test_rating_rmse': np.mean([r.get('test_rating_rmse', 0.0) for r in domain_results['test_results'].values()])
                     }
                 else:
                     domain_test = domain_results
@@ -715,15 +780,16 @@ class ExperimentRunner:
         
         # Create table with both models
         rows = ['Imputer', 'Domain Model']
-        columns = ['Rating Loss', 'Rating Accuracy', 'Ranking Loss', 'Ranking Accuracy', 'Overall Loss', 'Overall Accuracy']
+        columns = ['Rating Loss', 'Rating Accuracy', 'Rating RMSE', 'Ranking Loss', 'Ranking Accuracy', 'Overall Loss', 'Overall Accuracy']
         
         table_data = {}
         for col in columns:
             table_data[col] = []
         
-        # Imputer results  
+        # Imputer results
         table_data['Rating Loss'].append(f"{imputer_test.get('test_rating_loss', 0.0):.4f}")
         table_data['Rating Accuracy'].append(f"{imputer_test.get('rating_accuracy', 0.0):.4f}" if imputer_test.get('rating_accuracy') is not None else "TBD")
+        table_data['Rating RMSE'].append(f"{imputer_test.get('rating_rmse', 0.0):.4f}" if imputer_test.get('rating_rmse') is not None else "TBD")
         table_data['Ranking Loss'].append(f"{imputer_test.get('test_ranking_loss', 0.0):.4f}")
         table_data['Ranking Accuracy'].append(f"{imputer_test.get('pairwise_accuracy', 0.0):.4f}" if imputer_test.get('pairwise_accuracy') is not None else "TBD")
         table_data['Overall Loss'].append(f"{imputer_test.get('total_test_loss', 0.0):.4f}")
@@ -734,6 +800,7 @@ class ExperimentRunner:
         if domain_test:
             table_data['Rating Loss'].append(f"{domain_test.get('test_rating_log_loss', 0.0):.4f}")
             table_data['Rating Accuracy'].append(f"{domain_test.get('test_rating_accuracy', 0.0):.4f}")
+            table_data['Rating RMSE'].append(f"{domain_test.get('test_rating_rmse', 0.0):.4f}")
             table_data['Ranking Loss'].append(f"{domain_test.get('test_ranking_log_loss', 0.0):.4f}")
             table_data['Ranking Accuracy'].append(f"{domain_test.get('test_ranking_accuracy', 0.0):.4f}")
             overall_loss_domain = domain_test.get('test_rating_log_loss', 0.0) + domain_test.get('test_ranking_log_loss', 0.0)
@@ -742,8 +809,13 @@ class ExperimentRunner:
             table_data['Overall Accuracy'].append(f"{overall_acc_domain:.4f}")
         else:
             # No domain model results
-            for col in columns:
-                table_data[col].append("N/A")
+            table_data['Rating Loss'].append("N/A")
+            table_data['Rating Accuracy'].append("N/A")
+            table_data['Rating RMSE'].append("N/A")
+            table_data['Ranking Loss'].append("N/A")
+            table_data['Ranking Accuracy'].append("N/A")
+            table_data['Overall Loss'].append("N/A")
+            table_data['Overall Accuracy'].append("N/A")
         
         # Add row labels
         table_data['Row'] = rows
@@ -811,62 +883,114 @@ class ExperimentRunner:
         }
     
     def _train_domain_models_multi_instance(self, train_instances: List[int], test_instances: List[int]) -> Dict[str, Any]:
-        """Train domain models for multi-instance experiment."""
-        
+        """Train domain model on pooled training data and test on test instances."""
+
         domain_results = {
             'training_results': {},
             'test_results': {}
         }
-        
-        # Train domain model on each training instance
+
+        if self.domain_trainer is None:
+            self.domain_trainer = DomainModelTrainer()
+
+        # Pool training data from all training instances
+        logger.info(f"Pooling training data from instances {train_instances}...")
+        pooled_train_data = {'ratings': [], 'pairwise_rankings': []}
+
         for instance_idx in train_instances:
-            logger.info(f"Training domain model on instance {instance_idx}...")
             instance_data_dir = self.config.get_instance_data_dir(instance_idx)
-            
-            if self.domain_trainer is None:
-                self.domain_trainer = DomainModelTrainer()
-            
-            results = self.domain_trainer.train_and_evaluate(
-                instance_data_dir, self.domain_config, seed=42
-            )
-            
+            instance_data = self.domain_trainer.load_data(instance_data_dir)
+
+            pooled_train_data['ratings'].extend(instance_data['train']['ratings'])
+            pooled_train_data['pairwise_rankings'].extend(instance_data['train'].get('pairwise_rankings', []))
+
+            # Store individual instance training info for reference
             domain_results['training_results'][instance_idx] = {
-                'training_rating_log_loss': results.training_rating_log_loss,
-                'training_ranking_log_loss': results.training_ranking_log_loss,
-                'training_time': results.training_time
+                'n_ratings': len(instance_data['train']['ratings']),
+                'n_rankings': len(instance_data['train'].get('pairwise_rankings', [])),
+                'included_in_pooled_training': True
             }
-        
-        # Test on last trained model (from final training instance)
-        if train_instances:
-            final_model_instance = max(train_instances)
-            logger.info(f"Using domain model from instance {final_model_instance} for testing...")
-            
-            # Test on all test instances
-            for test_instance_idx in test_instances:
-                logger.info(f"Testing domain model on instance {test_instance_idx}...")
-                test_instance_data_dir = self.config.get_instance_data_dir(test_instance_idx)
-                
-                # Load test data and evaluate with the final trained model
-                test_data = self.domain_trainer.load_data(test_instance_data_dir)
-                
-                # Create evaluation metrics (using the same model that was trained on the last training instance)
-                test_rating_accuracy = 0.5  # Placeholder - would need actual cross-instance evaluation
-                test_ranking_accuracy = 0.5
-                test_rating_log_loss = 1.0
-                test_ranking_log_loss = 1.0
-                
-                domain_results['test_results'][test_instance_idx] = {
-                    'test_rating_accuracy': test_rating_accuracy,
-                    'test_ranking_accuracy': test_ranking_accuracy,
-                    'test_rating_log_loss': test_rating_log_loss,
-                    'test_ranking_log_loss': test_ranking_log_loss
-                }
-        
+
+        logger.info(f"Pooled training data: {len(pooled_train_data['ratings'])} ratings, {len(pooled_train_data['pairwise_rankings'])} rankings")
+
+        # Test on each test instance using pooled model
+        for test_instance_idx in test_instances:
+            logger.info(f"Training domain model on pooled data and testing on instance {test_instance_idx}...")
+
+            test_instance_data_dir = self.config.get_instance_data_dir(test_instance_idx)
+            test_instance_data = self.domain_trainer.load_data(test_instance_data_dir)
+
+            # Create a temporary data structure for training
+            temp_data_dir = test_instance_data_dir  # Use test instance structure but with pooled training data
+
+            # Train domain model on pooled training data and test on this test instance
+            results = self.domain_trainer.train_on_pooled_data_and_evaluate(
+                pooled_train_data, test_instance_data['test'], test_instance_data['config'], self.domain_config, seed=42
+            )
+
+            domain_results['test_results'][test_instance_idx] = {
+                'test_rating_accuracy': results.test_rating_accuracy,
+                'test_ranking_accuracy': results.test_ranking_accuracy,
+                'test_rating_log_loss': results.test_rating_log_loss,
+                'test_ranking_log_loss': results.test_ranking_log_loss,
+                'test_rating_rmse': results.test_rating_rmse,
+                'training_time': results.training_time,
+                'pooled_training_observations': results.n_observations
+            }
+
         return domain_results
+
+    def _save_instance_training_metrics(self, results: Dict[str, Any]) -> None:
+        """Save detailed instance-wise training metrics to JSON."""
+
+        instance_metrics = {}
+
+        # Extract metrics from imputer results
+        if 'imputer' in results:
+            imputer_results = results['imputer']
+            instance_results = imputer_results.get('instance_results', {})
+
+            for instance_idx, instance_data in instance_results.items():
+                final_eval = instance_data.get('final_test_eval', {})
+
+                instance_metrics[f"instance_{instance_idx}"] = {
+                    "final_epoch_metrics": {
+                        # Total metrics
+                        "total_loss": final_eval.get('total_test_loss', 0.0),
+                        "rating_loss": final_eval.get('test_rating_loss', 0.0),
+                        "ranking_loss": final_eval.get('test_ranking_loss', 0.0),
+                        "rating_accuracy": final_eval.get('rating_accuracy', None),
+                        "rating_rmse": final_eval.get('rating_rmse', None),
+                        "pairwise_accuracy": final_eval.get('pairwise_accuracy', None),
+
+                        # Masked metrics
+                        "masked_rating_accuracy": final_eval.get('masked_rating_accuracy', None),
+                        "masked_rating_rmse": final_eval.get('masked_rating_rmse', None),
+                        "masked_pairwise_accuracy": final_eval.get('masked_pairwise_accuracy', None),
+
+                        # Unmasked metrics
+                        "unmasked_rating_accuracy": final_eval.get('unmasked_rating_accuracy', None),
+                        "unmasked_rating_rmse": final_eval.get('unmasked_rating_rmse', None),
+                        "unmasked_pairwise_accuracy": final_eval.get('unmasked_pairwise_accuracy', None),
+                    },
+                    "epochs_trained": instance_data.get('epochs_trained', 0),
+                    "early_stopped": instance_data.get('early_stopped', False)
+                }
+
+        # Save to JSON file
+        output_dir = Path(self.config.output_dir)
+        results_dir = output_dir / "results"
+        results_dir.mkdir(parents=True, exist_ok=True)
+
+        instance_metrics_file = results_dir / "instance_training_metrics.json"
+        with open(instance_metrics_file, 'w') as f:
+            json.dump(instance_metrics, f, indent=2)
+
+        logger.info(f"Instance training metrics saved to {instance_metrics_file}")
 
     def run(self) -> Dict[str, Any]:
         """Run experiment based on configuration."""
-        
+
         if self.config.experiment_type == "single_instance":
             return self.run_single_instance()
         elif self.config.experiment_type == "multi_instance":

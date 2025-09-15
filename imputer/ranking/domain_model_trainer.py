@@ -4,11 +4,21 @@
 import numpy as np
 import json
 import logging
+import time
 from pathlib import Path
 from dataclasses import dataclass
 from typing import Dict, List, Tuple, Any, Optional
 import matplotlib.pyplot as plt
 from scipy.stats import entropy
+
+
+def calculate_domain_rmse(predictions: List[int], targets: List[int]) -> float:
+    """Calculate RMSE for domain model rating predictions (on 1-5 scale)."""
+    if len(predictions) == 0:
+        return 0.0
+
+    mse = np.mean([(p - t)**2 for p, t in zip(predictions, targets)])
+    return np.sqrt(mse)
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +57,7 @@ class DomainModelResults:
     test_ranking_accuracy: float
     test_rating_log_loss: float
     test_ranking_log_loss: float
+    test_rating_rmse: float
     training_time: float
     n_observations: int
 
@@ -502,11 +513,13 @@ class DomainModelTrainer:
         # Compute base scores
         base_scores = preferences @ embeddings.T  # [I*J, K]
         
-        results = {'rating_accuracy': 0.0, 'ranking_accuracy': 0.0}
-        
-        # 1. RATING ACCURACY
+        results = {'rating_accuracy': 0.0, 'ranking_accuracy': 0.0, 'rating_rmse': 0.0}
+
+        # 1. RATING ACCURACY AND RMSE
         if masked_test['ratings']:
             correct_ratings = 0
+            rating_predictions = []
+            rating_targets = []
             for r in masked_test['ratings']:
                 i, j, k, c_true = r['attribute'], r['annotator'], r['item'], r['value']
                 ij_idx = (i-1)*J + (j-1)
@@ -533,8 +546,13 @@ class DomainModelTrainer:
                 c_pred = np.argmax(category_probs) + 1
                 if c_pred == c_true:
                     correct_ratings += 1
-            
+
+                # Store for RMSE calculation
+                rating_predictions.append(c_pred)
+                rating_targets.append(c_true)
+
             results['rating_accuracy'] = correct_ratings / len(masked_test['ratings'])
+            results['rating_rmse'] = calculate_domain_rmse(rating_predictions, rating_targets)
         
         # 2. PAIRWISE RANKING ACCURACY (Binary prediction accuracy)
         pairwise_rankings = masked_test.get('pairwise_rankings', [])
@@ -587,12 +605,14 @@ class DomainModelTrainer:
         # Compute base scores
         base_scores = preferences @ embeddings.T  # [I*J, K]
         
-        results = {'rating_accuracy': 0.0, 'ranking_accuracy': 0.0}
-        
-        # 1. RATING ACCURACY
+        results = {'rating_accuracy': 0.0, 'ranking_accuracy': 0.0, 'rating_rmse': 0.0}
+
+        # 1. RATING ACCURACY AND RMSE
         test_ratings = test_data['ratings']
         if test_ratings:
             correct_ratings = 0
+            rating_predictions = []
+            rating_targets = []
             for r in test_ratings:
                 i, j, k, c_true = r['attribute'], r['annotator'], r['item'], r['value']
                 ij_idx = (i-1)*J + (j-1)
@@ -625,8 +645,13 @@ class DomainModelTrainer:
                 c_pred = np.argmax(category_probs) + 1
                 if c_pred == c_true:
                     correct_ratings += 1
-            
+
+                # Store for RMSE calculation
+                rating_predictions.append(c_pred)
+                rating_targets.append(c_true)
+
             results['rating_accuracy'] = correct_ratings / len(test_ratings)
+            results['rating_rmse'] = calculate_domain_rmse(rating_predictions, rating_targets)
         
         # 2. PAIRWISE RANKING ACCURACY
         pairwise_rankings = test_data.get('pairwise_rankings', [])
@@ -717,6 +742,7 @@ class DomainModelTrainer:
             test_ranking_accuracy=test_accuracy_results.get('ranking_accuracy', 0.0),
             test_rating_log_loss=test_log_loss_results.get('ratings', 0.0),
             test_ranking_log_loss=test_log_loss_results.get('rankings', 0.0),
+            test_rating_rmse=test_accuracy_results.get('rating_rmse', 0.0),
             training_time=training_time,
             n_observations=len(train_data['ratings']) + len(train_data.get('pairwise_rankings', []))
         )
@@ -726,11 +752,74 @@ class DomainModelTrainer:
         logger.info(f"Training ranking log-loss: {results.training_ranking_log_loss:.3f}")
         logger.info(f"Test rating accuracy: {results.test_rating_accuracy:.3f} ({results.test_rating_accuracy*100:.1f}%)")
         logger.info(f"Test ranking accuracy: {results.test_ranking_accuracy:.3f} ({results.test_ranking_accuracy*100:.1f}%)")
+        logger.info(f"Test rating RMSE: {results.test_rating_rmse:.3f}")
         logger.info(f"Test rating log-loss: {results.test_rating_log_loss:.3f}")
         logger.info(f"Test ranking log-loss: {results.test_ranking_log_loss:.3f}")
         
         return results
-    
+
+    def train_on_pooled_data_and_evaluate(self, pooled_train_data: Dict[str, Any], test_data: Dict[str, Any],
+                                        data_config: Dict[str, Any], config: DomainModelConfig, seed: int = 42) -> DomainModelResults:
+        """Train domain model on pooled training data and evaluate on specific test data."""
+
+        logger.info(f"Training domain model on pooled data with {len(pooled_train_data['ratings'])} ratings and {len(pooled_train_data['pairwise_rankings'])} rankings")
+
+        start_time = time.time()
+
+        # Prepare Stan data using pooled training data
+        stan_data = self.prepare_stan_data(pooled_train_data, config, data_config)
+
+        # Create initial values
+        initial_values = self._create_initial_values(stan_data, seed, config)
+
+        # Fit the model
+        fit = self.model.sample(
+            data=stan_data,
+            chains=config.chains,
+            iter_warmup=config.iter_warmup,
+            iter_sampling=config.iter_sampling,
+            seed=seed,
+            adapt_delta=config.adapt_delta,
+            max_treedepth=config.max_treedepth,
+            inits=initial_values,
+            show_progress=True
+        )
+
+        training_time = time.time() - start_time
+
+        # Compute training metrics on pooled data
+        training_log_loss_results = self.compute_training_log_loss(fit, pooled_train_data, stan_data)
+
+        # Compute test metrics on specific test data
+        test_accuracy_results = self.compute_test_accuracy(fit, test_data, stan_data)
+        test_log_loss_results = self.compute_log_loss_on_missing(
+            fit, {'ratings': [], 'pairwise_rankings': []}, test_data, stan_data
+        )
+
+        # Create results
+        results = DomainModelResults(
+            training_rating_log_loss=training_log_loss_results.get('ratings', 0.0),
+            training_ranking_log_loss=training_log_loss_results.get('rankings', 0.0),
+            test_rating_accuracy=test_accuracy_results.get('rating_accuracy', 0.0),
+            test_ranking_accuracy=test_accuracy_results.get('ranking_accuracy', 0.0),
+            test_rating_log_loss=test_log_loss_results.get('ratings', 0.0),
+            test_ranking_log_loss=test_log_loss_results.get('rankings', 0.0),
+            test_rating_rmse=test_accuracy_results.get('rating_rmse', 0.0),
+            training_time=training_time,
+            n_observations=len(pooled_train_data['ratings']) + len(pooled_train_data.get('pairwise_rankings', []))
+        )
+
+        logger.info(f"Pooled training completed in {training_time:.1f}s")
+        logger.info(f"Training rating log-loss: {results.training_rating_log_loss:.3f}")
+        logger.info(f"Training ranking log-loss: {results.training_ranking_log_loss:.3f}")
+        logger.info(f"Test rating accuracy: {results.test_rating_accuracy:.3f} ({results.test_rating_accuracy*100:.1f}%)")
+        logger.info(f"Test ranking accuracy: {results.test_ranking_accuracy:.3f} ({results.test_ranking_accuracy*100:.1f}%)")
+        logger.info(f"Test rating RMSE: {results.test_rating_rmse:.3f}")
+        logger.info(f"Test rating log-loss: {results.test_rating_log_loss:.3f}")
+        logger.info(f"Test ranking log-loss: {results.test_ranking_log_loss:.3f}")
+
+        return results
+
     def plot_results(self, results: DomainModelResults, output_dir: Path):
         """Create simple summary plot of domain model results"""
         
