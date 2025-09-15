@@ -440,10 +440,13 @@ class ExperimentRunner:
                 # Print full test evaluation results like the old version
                 logger.info(f"TEST LOSS & METRICS: {test_eval}")
 
-        # Restore best model if early stopping occurred
-        if early_stopping.early_stopped:
+        # Always restore the best model encountered during training
+        if early_stopping.best_model_state is not None:
             early_stopping.restore_best_model(self.model)
-            logger.info(f"Restored best model from early stopping for instance {instance_idx}")
+            if early_stopping.early_stopped:
+                logger.info(f"Restored best model from early stopping for instance {instance_idx} (best test loss: {early_stopping.best_loss:.4f})")
+            else:
+                logger.info(f"Restored best model from training for instance {instance_idx} (best test loss: {early_stopping.best_loss:.4f})")
 
         # Final evaluation
         final_test_eval = self.trainer.evaluate_with_test_data(
