@@ -46,6 +46,7 @@ class TrainingConfig:
     embedding_anchor_reg: float = 0.0
     masking_rate: float = 0.5
     evaluation_frequency: int = 1
+    batch_size: int = 1  # Batch size for mixed training
     
 @dataclass
 class ExperimentConfig:
@@ -81,6 +82,8 @@ class ExperimentConfig:
     max_treedepth: int = 10
     budget_fractions: List[float] = field(default_factory=lambda: [0.1, 1.0])
     save_stan_output: bool = True
+    # MCMC sample points for runtime curves
+    mcmc_sample_points: List[int] = field(default_factory=lambda: [100, 200, 500, 1000])
     
     @property
     def num_instances(self) -> int:

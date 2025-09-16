@@ -113,36 +113,30 @@ def main():
         logger.info("Experiment completed successfully!")
 
         # Summary statistics
-        pretraining_time = results['pretraining_results']
+        pretraining_time = results.get('pretraining_time', 0.0)
         total_time = results['total_time']
 
-        logger.info(f"Pretraining time: {pretraining_time:.2f} seconds")
-        logger.info(f"Total experiment time: {total_time:.2f} seconds")
+        # logger.info(f"Pretraining time: {pretraining_time:.2f} seconds")
+        # logger.info(f"Total experiment time: {total_time:.2f} seconds")
 
         # Test instance results summary
         for test_idx in config.test_instance_indices:
-            test_results = results['method_results'][test_idx]
+            test_results = results['test_results'][test_idx]
 
             # Method 1: Pretrained only
             method1 = test_results['pretrained_only']
             logger.info(f"Test instance {test_idx} - Pretrained only: "
                        f"Total loss={method1['total_log_loss']:.4f}")
 
-            # Method 2: Pretrained + Finetuned (final epoch)
+            # Method 2: Pretrained + Finetuned
             method2 = test_results['pretrained_finetuned']
-            final_epoch_idx = len(method2['test_losses']['total']) - 1
-            if final_epoch_idx >= 0:
-                final_loss = method2['test_losses']['total'][final_epoch_idx]
-                logger.info(f"Test instance {test_idx} - Pretrained + Finetuned: "
-                           f"Total loss={final_loss:.4f}")
+            logger.info(f"Test instance {test_idx} - Pretrained + Finetuned: "
+                       f"Total loss={method2['total_log_loss']:.4f}")
 
-            # Method 3: No pretrain (final epoch)
+            # Method 3: No pretrain
             method3 = test_results['no_pretrain_finetuned']
-            final_epoch_idx = len(method3['test_losses']['total']) - 1
-            if final_epoch_idx >= 0:
-                final_loss = method3['test_losses']['total'][final_epoch_idx]
-                logger.info(f"Test instance {test_idx} - No pretrain: "
-                           f"Total loss={final_loss:.4f}")
+            logger.info(f"Test instance {test_idx} - No pretrain: "
+                       f"Total loss={method3['total_log_loss']:.4f}")
 
             # Method 4: Domain model (best samples)
             domain_results = test_results['domain_model']
@@ -159,7 +153,7 @@ def main():
             logger.info("Generating additional standalone plots...")
             try:
                 from iclr_visualization import ICLRResultsAnalyzer
-                results_file = config.output_dir / "iclr_results.json"
+                results_file = config.output_dir / "results" / "iclr_results.json"
                 standalone_viz_dir = config.output_dir / "standalone_visualizations"
 
                 analyzer = ICLRResultsAnalyzer(str(results_file))

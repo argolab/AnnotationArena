@@ -32,10 +32,18 @@ class ICLRResultsAnalyzer:
         table_data = []
 
         for test_idx, test_results in self.results['test_results'].items():
+            # Skip invalid entries
+            if not isinstance(test_results, dict):
+                continue
+
             instance_data = {'test_instance': int(test_idx)}
 
             # Method 1: Pretrained only
+            if 'pretrained_only' not in test_results:
+                continue
             pretrained = test_results['pretrained_only']
+            if not isinstance(pretrained, dict):
+                continue
             instance_data.update({
                 'pretrained_total_loss': pretrained['total_log_loss'],
                 'pretrained_rating_loss': pretrained['rating_log_loss'],
@@ -47,7 +55,11 @@ class ICLRResultsAnalyzer:
             })
 
             # Method 2: Pretrained + Finetuned
+            if 'pretrained_finetuned' not in test_results:
+                continue
             finetuned = test_results['pretrained_finetuned']
+            if not isinstance(finetuned, dict):
+                continue
             instance_data.update({
                 'finetuned_total_loss': finetuned['total_log_loss'],
                 'finetuned_rating_loss': finetuned['rating_log_loss'],
@@ -59,7 +71,11 @@ class ICLRResultsAnalyzer:
             })
 
             # Method 3: No pretrain
+            if 'no_pretrain_finetuned' not in test_results:
+                continue
             no_pretrain = test_results['no_pretrain_finetuned']
+            if not isinstance(no_pretrain, dict):
+                continue
             instance_data.update({
                 'no_pretrain_total_loss': no_pretrain['total_log_loss'],
                 'no_pretrain_rating_loss': no_pretrain['rating_log_loss'],
@@ -71,7 +87,11 @@ class ICLRResultsAnalyzer:
             })
 
             # Method 4: Domain model (best MCMC result)
+            if 'domain_model' not in test_results:
+                continue
             domain_results = test_results['domain_model']
+            if not isinstance(domain_results, dict) or not domain_results:
+                continue
             best_domain = max(domain_results.values(), key=lambda x: x['mcmc_samples'])
             instance_data.update({
                 'domain_total_loss': best_domain['total_log_loss'],
@@ -177,11 +197,11 @@ class ICLRResultsAnalyzer:
         plt.close()
 
     def plot_runtime_comparison(self, output_dir: Path) -> None:
-        """Create runtime vs performance comparison plot."""
+        """Create runtime vs performance comparison plot with averages and error bars."""
         logger.info("Creating runtime comparison plot...")
 
         fig, axes = plt.subplots(1, 3, figsize=(18, 6))
-        fig.suptitle('Runtime vs Performance Comparison', fontsize=16)
+        fig.suptitle('Runtime vs Performance Comparison (Mean ± Std across Test Instances)', fontsize=16)
 
         metrics = ['total_log_loss', 'rating_log_loss', 'ranking_log_loss']
         metric_names = ['Total Loss', 'Rating Loss', 'Ranking Loss']
@@ -189,40 +209,112 @@ class ICLRResultsAnalyzer:
         for idx, (metric, metric_name) in enumerate(zip(metrics, metric_names)):
             ax = axes[idx]
 
-            # Extract data for each method across test instances
+            # Aggregate data across test instances for each method
+
+            # Method 1: Pretrained only - collect data across test instances
+            pretrained_times = []
+            pretrained_losses = []
             for test_idx, test_results in self.results['test_results'].items():
-
-                # Method 1: Pretrained only (single point)
+                # Debug print to understand structure
+                if not isinstance(test_results, dict):
+                    logger.error(f"test_results for {test_idx} is not a dict: {type(test_results)}, value: {test_results}")
+                    continue
+                if 'pretrained_only' not in test_results:
+                    logger.error(f"pretrained_only not in test_results for {test_idx}, keys: {test_results.keys()}")
+                    continue
                 pretrained = test_results['pretrained_only']
-                ax.scatter(pretrained['wall_time'], pretrained[metric],
-                          color='blue', marker='o', s=100, alpha=0.7, label='Pretrained Only')
+                if not isinstance(pretrained, dict):
+                    logger.error(f"pretrained for {test_idx} is not a dict: {type(pretrained)}, value: {pretrained}")
+                    continue
+                pretrained_times.append(pretrained['wall_time'])
+                pretrained_losses.append(pretrained[metric])
 
-                # Method 2: Finetuned (single point)
-                finetuned = test_results['finetuned']
-                ax.scatter(finetuned['wall_time'], finetuned[metric],
-                          color='green', marker='s', s=100, alpha=0.7, label='Pretrained + Finetuned')
+            if pretrained_times:
+                mean_time = np.mean(pretrained_times)
+                mean_loss = np.mean(pretrained_losses)
+                std_loss = np.std(pretrained_losses)
+                ax.errorbar(mean_time, mean_loss, yerr=std_loss,
+                           color='blue', marker='o', markersize=8, capsize=5,
+                           label='Pretrained Only', fmt='o')
 
-                # Method 3: No pretrain (single point)
-                no_pretrain = test_results['no_pretrain']
-                ax.scatter(no_pretrain['wall_time'], no_pretrain[metric],
-                          color='orange', marker='^', s=100, alpha=0.7, label='No Pretrain')
+            # Method 2: Pretrained + Finetuned
+            finetuned_times = []
+            finetuned_losses = []
+            for test_idx, test_results in self.results['test_results'].items():
+                if not isinstance(test_results, dict) or 'pretrained_finetuned' not in test_results:
+                    continue
+                finetuned = test_results['pretrained_finetuned']
+                if not isinstance(finetuned, dict):
+                    continue
+                finetuned_times.append(finetuned['wall_time'])
+                finetuned_losses.append(finetuned[metric])
 
-                # Method 4: Domain model (curve with MCMC samples)
+            if finetuned_times:
+                mean_time = np.mean(finetuned_times)
+                mean_loss = np.mean(finetuned_losses)
+                std_loss = np.std(finetuned_losses)
+                ax.errorbar(mean_time, mean_loss, yerr=std_loss,
+                           color='green', marker='s', markersize=8, capsize=5,
+                           label='Pretrained + Finetuned', fmt='s')
+
+            # Method 3: No pretraining
+            no_pretrain_times = []
+            no_pretrain_losses = []
+            for test_idx, test_results in self.results['test_results'].items():
+                if not isinstance(test_results, dict) or 'no_pretrain_finetuned' not in test_results:
+                    continue
+                no_pretrain = test_results['no_pretrain_finetuned']
+                if not isinstance(no_pretrain, dict):
+                    continue
+                no_pretrain_times.append(no_pretrain['wall_time'])
+                no_pretrain_losses.append(no_pretrain[metric])
+
+            if no_pretrain_times:
+                mean_time = np.mean(no_pretrain_times)
+                mean_loss = np.mean(no_pretrain_losses)
+                std_loss = np.std(no_pretrain_losses)
+                ax.errorbar(mean_time, mean_loss, yerr=std_loss,
+                           color='orange', marker='^', markersize=8, capsize=5,
+                           label='No Pretrain', fmt='^')
+
+            # Method 4: Domain model - create curve with error bars at each MCMC sample point
+            # Collect domain results across test instances
+            domain_data = {}  # mcmc_samples -> {times: [], losses: []}
+
+            for test_idx, test_results in self.results['test_results'].items():
+                if not isinstance(test_results, dict) or 'domain_model' not in test_results:
+                    continue
                 domain_results = test_results['domain_model']
-                times = [result['wall_time'] for result in domain_results.values()]
-                losses = [result[metric] for result in domain_results.values()]
-                samples = [result['mcmc_samples'] for result in domain_results.values()]
+                if not isinstance(domain_results, dict):
+                    continue
+                for sample_count, result in domain_results.items():
+                    if not isinstance(result, dict):
+                        continue
+                    if sample_count not in domain_data:
+                        domain_data[sample_count] = {'times': [], 'losses': []}
+                    domain_data[sample_count]['times'].append(result['wall_time'])
+                    domain_data[sample_count]['losses'].append(result[metric])
 
-                # Sort by MCMC samples for proper curve
-                sorted_data = sorted(zip(times, losses, samples), key=lambda x: x[2])
-                sorted_times, sorted_losses, sorted_samples = zip(*sorted_data)
+            if domain_data:
+                # Sort by sample count and create curve
+                sorted_samples = sorted(domain_data.keys())
+                domain_times = []
+                domain_losses = []
+                domain_std = []
 
-                ax.plot(sorted_times, sorted_losses, 'r-', alpha=0.7, linewidth=2)
-                ax.scatter(sorted_times, sorted_losses, color='red', marker='d',
-                          s=60, alpha=0.7, label='Domain EM')
+                for sample_count in sorted_samples:
+                    data = domain_data[sample_count]
+                    domain_times.append(np.mean(data['times']))
+                    domain_losses.append(np.mean(data['losses']))
+                    domain_std.append(np.std(data['losses']))
 
-                # Annotate MCMC sample points
-                for time, loss, sample in zip(sorted_times[-2:], sorted_losses[-2:], sorted_samples[-2:]):
+                # Plot domain model as curve with error bars
+                ax.errorbar(domain_times, domain_losses, yerr=domain_std,
+                           color='red', marker='d', markersize=6, capsize=3,
+                           linewidth=2, label='Domain EM', fmt='d-')
+
+                # Annotate MCMC sample points (last 2)
+                for i, (time, loss, sample) in enumerate(zip(domain_times[-2:], domain_losses[-2:], sorted_samples[-2:])):
                     ax.annotate(f'{sample}', (time, loss), xytext=(5, 5),
                                textcoords='offset points', fontsize=8, alpha=0.8)
 
@@ -234,9 +326,7 @@ class ICLRResultsAnalyzer:
 
             # Only show legend on first subplot
             if idx == 0:
-                handles, labels = ax.get_legend_handles_labels()
-                by_label = dict(zip(labels, handles))
-                ax.legend(by_label.values(), by_label.keys(), loc='upper right')
+                ax.legend(loc='upper right')
 
         plt.tight_layout()
         plt.savefig(output_dir / 'runtime_comparison.png', dpi=300, bbox_inches='tight')
@@ -250,8 +340,16 @@ class ICLRResultsAnalyzer:
         plot_data = []
 
         for test_idx, test_results in self.results['test_results'].items():
+            # Skip invalid entries
+            if not isinstance(test_results, dict):
+                continue
+
             # Pretrained only
+            if 'pretrained_only' not in test_results:
+                continue
             pretrained = test_results['pretrained_only']
+            if not isinstance(pretrained, dict):
+                continue
             plot_data.extend([
                 {'Method': 'Pretrained Only', 'Metric': 'Total Loss', 'Value': pretrained['total_log_loss']},
                 {'Method': 'Pretrained Only', 'Metric': 'Rating Loss', 'Value': pretrained['rating_log_loss']},
@@ -262,7 +360,11 @@ class ICLRResultsAnalyzer:
             ])
 
             # Finetuned
-            finetuned = test_results['finetuned']
+            if 'pretrained_finetuned' not in test_results:
+                continue
+            finetuned = test_results['pretrained_finetuned']
+            if not isinstance(finetuned, dict):
+                continue
             plot_data.extend([
                 {'Method': 'Pretrained + Finetuned', 'Metric': 'Total Loss', 'Value': finetuned['total_log_loss']},
                 {'Method': 'Pretrained + Finetuned', 'Metric': 'Rating Loss', 'Value': finetuned['rating_log_loss']},
@@ -273,7 +375,11 @@ class ICLRResultsAnalyzer:
             ])
 
             # No pretrain
-            no_pretrain = test_results['no_pretrain']
+            if 'no_pretrain_finetuned' not in test_results:
+                continue
+            no_pretrain = test_results['no_pretrain_finetuned']
+            if not isinstance(no_pretrain, dict):
+                continue
             plot_data.extend([
                 {'Method': 'No Pretrain', 'Metric': 'Total Loss', 'Value': no_pretrain['total_log_loss']},
                 {'Method': 'No Pretrain', 'Metric': 'Rating Loss', 'Value': no_pretrain['rating_log_loss']},
@@ -284,7 +390,11 @@ class ICLRResultsAnalyzer:
             ])
 
             # Domain model (best result)
+            if 'domain_model' not in test_results:
+                continue
             domain_results = test_results['domain_model']
+            if not isinstance(domain_results, dict) or not domain_results:
+                continue
             best_domain = max(domain_results.values(), key=lambda x: x['mcmc_samples'])
             plot_data.extend([
                 {'Method': 'Domain EM', 'Metric': 'Total Loss', 'Value': best_domain['total_log_loss']},

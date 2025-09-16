@@ -245,13 +245,44 @@ class ExperimentRunnerICLR:
 
         return batch
 
+    def create_random_instance_batch(self, masking_rate: float, batch_size: int = 1) -> Dict:
+        """Create batch by randomly sampling from a random training instance."""
+        # Randomly select training instance
+        instance_idx = random.choice(self.config.train_instance_indices)
+
+        # Load instance data
+        train_data, heldout_data = self.load_instance_data(instance_idx)
+
+        # Use only train portion for training (heldout for evaluation)
+        filtered_data = self.converter.load_training_data_from_dict(train_data)
+        rating_vars, ranking_vars = self.converter.create_variables_from_actual_data(
+            filtered_data, filtered_data
+        )
+
+        all_variables = rating_vars + ranking_vars
+
+        # Apply random masking to this batch
+        available_vars = list(range(len(all_variables)))
+        num_to_mask = int(len(available_vars) * masking_rate)
+        masked_indices = set(random.sample(available_vars, num_to_mask))
+
+        # Process data for batch creation
+        rating_data, ranking_data = self.converter.process_training_data(filtered_data)
+
+        # Create batch with dynamic masking
+        batch = self.converter.create_batch_with_dynamic_masking(
+            all_variables, rating_data, ranking_data, masked_indices
+        )
+
+        return batch
+
     def run_pretraining(self, masking_rate: float = 0.5) -> Dict:
-        """Run mixed pretraining on all training instances."""
-        logger.info("Starting mixed pretraining...")
+        """Run mixed pretraining with random instance sampling."""
+        logger.info("Starting mixed pretraining with random instance sampling...")
         start_time = time.time()
 
-        # Prepare mixed training data
-        all_variables, all_data = self.create_mixed_training_data()
+        # Prepare heldout evaluation data (combined from all training instances)
+        heldout_variables, heldout_data, heldout_masked, heldout_observed = self.create_heldout_evaluation_data(masking_rate)
 
         # Prepare test instances for evaluation during pretraining
         test_data_cache = {}
@@ -277,12 +308,12 @@ class ExperimentRunnerICLR:
             'wall_times': []
         }
 
-        # Training loop
-        for epoch in tqdm(range(self.config.training_config.epochs), desc="Pretraining"):
+        # Training loop with random instance sampling
+        for epoch in tqdm(range(self.config.training_config.epochs), desc="Mixed Pretraining"):
             epoch_start = time.time()
 
-            # Create dynamic batch
-            batch = self.create_dynamic_batch(all_variables, all_data, masking_rate)
+            # Create batch from random instance with random masking
+            batch = self.create_random_instance_batch(masking_rate, self.config.training_config.batch_size)
 
             # Training step
             train_losses = self.trainer.train_step(batch)
@@ -295,8 +326,7 @@ class ExperimentRunnerICLR:
 
             # Evaluate on both training heldouts and test instances
             if epoch % self.config.training_config.evaluation_frequency == 0:
-                # Evaluate on training instance heldouts
-                heldout_variables, heldout_data, heldout_masked, heldout_observed = self.create_heldout_evaluation_data(masking_rate)
+                # Evaluate on training instance heldouts (use pre-computed data)
                 heldout_metrics = self.evaluate_conditional_imputation(
                     heldout_variables, heldout_data, heldout_masked, heldout_observed
                 )
@@ -626,9 +656,11 @@ class ExperimentRunnerICLR:
                 test_idx, masking_rate
             )
 
+            eval_start = time.time()
             method1_metrics = self.evaluate_conditional_imputation(
                 all_vars, data, masked_vars, observed_vars
             )
+            method1_metrics['wall_time'] = time.time() - eval_start
 
             # Method 2: Pretrained + Finetuning
             finetuning_results = self.run_finetuning(test_idx, masking_rate, pretrained_state)

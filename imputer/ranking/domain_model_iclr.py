@@ -44,6 +44,8 @@ class DomainModelICLR:
         self.adapt_delta = config.adapt_delta
         self.max_treedepth = config.max_treedepth
         self.evaluation_interval = config.evaluation_interval
+        # Use configurable MCMC sample points for runtime curves
+        self.sample_points = getattr(config, 'mcmc_sample_points', [100, 200, 500, 1000])
 
     def extract_final_state_as_init(self, fit):
         """Extract the final state from a fit to use as initial values for next iteration."""
@@ -92,25 +94,29 @@ class DomainModelICLR:
         # Setup Stan model and data
         stan_data = self._prepare_stan_data(observed_data, test_idx)
 
-        # Run MCMC with incremental evaluation
+        # Run MCMC with incremental evaluation at configurable sample points
         results = {}
         cumulative_time = 0.0
-        num_samples = self.num_samples
-        evaluate_interval = self.evaluation_interval
-        current_sample = 0
         fit = None
-        while current_sample < num_samples:
-            current_sample += evaluate_interval
+
+        for sample_point in self.sample_points:
+            if sample_point > self.num_samples:
+                break
+
             start_time = time.time()
 
             # Run MCMC for this sample count
-            logger.info(f"Running MCMC with {num_samples} samples...")
+            logger.info(f"Running MCMC with {sample_point} samples...")
 
             if fit is None:
-                stan_results, fit = self._run_mcmc_samples(stan_data, evaluate_interval)
+                # First run - run full sample_point samples
+                stan_results, fit = self._run_mcmc_samples(stan_data, sample_point)
             else:
+                # Incremental run - run additional samples
+                prev_sample = self.sample_points[self.sample_points.index(sample_point) - 1] if sample_point != self.sample_points[0] else 0
+                additional_samples = sample_point - prev_sample
                 init_values = self.extract_final_state_as_init(fit)
-                stan_results, fit = self._run_mcmc_samples(stan_data, evaluate_interval, init=True, init_values=init_values)
+                stan_results, fit = self._run_mcmc_samples(stan_data, additional_samples, init=True, init_values=init_values)
 
             sample_time = time.time() - start_time
             cumulative_time += sample_time
@@ -120,7 +126,7 @@ class DomainModelICLR:
                 stan_results, full_data, masked_vars, test_idx
             )
 
-            results[current_sample] = DomainModelResults(
+            results[sample_point] = DomainModelResults(
                 total_log_loss=metrics['total_log_loss'],
                 rating_log_loss=metrics['rating_log_loss'],
                 ranking_log_loss=metrics['ranking_log_loss'],
@@ -129,11 +135,11 @@ class DomainModelICLR:
                 rating_rmse=metrics['rating_rmse'],
                 num_rating_predictions=metrics['num_rating_predictions'],
                 num_ranking_predictions=metrics['num_ranking_predictions'],
-                mcmc_samples=current_sample,
+                mcmc_samples=sample_point,
                 wall_time=cumulative_time
             )
 
-            logger.info(f"Domain model {num_samples} samples: "
+            logger.info(f"Domain model {sample_point} samples: "
                        f"Total loss={metrics['total_log_loss']:.4f}, "
                        f"Time={cumulative_time:.2f}s")
         return results
