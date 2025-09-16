@@ -73,8 +73,9 @@ class ExperimentConfig:
     device: str = "cpu"
     
     # Domain model configuration (for backwards compatibility)
-    chains: int = 3
-    iter_warmup: int = 1000
+    evaluation_interval: int = 100
+    chains: int = 1
+    iter_warmup: int = 500
     iter_sampling: int = 1000
     adapt_delta: float = 0.8
     max_treedepth: int = 10

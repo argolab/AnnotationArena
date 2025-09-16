@@ -38,8 +38,33 @@ class DomainModelICLR:
 
     def __init__(self, config):
         self.config = config
-        # MCMC sample points for incremental evaluation
-        self.sample_points = [100, 200]
+        self.chains = config.chains
+        self.item_warmup = config.iter_warmup
+        self.num_samples = config.iter_sampling
+        self.adapt_delta = config.adapt_delta
+        self.max_treedepth = config.max_treedepth
+        self.evaluation_interval = config.evaluation_interval
+
+    def extract_final_state_as_init(self, fit):
+        """Extract the final state from a fit to use as initial values for next iteration."""
+        
+        final_inits = []
+
+        embeddings_raw_final = fit.stan_variable('embeddings_raw')[-1, :, :]  # [K, D]
+        mean_preferences_final = fit.stan_variable('mean_preferences')[-1, :, :]  # [I, D] 
+        annotator_preferences_final = fit.stan_variable('annotator_preferences')[-1, :, :]  # [I*J, D]
+        rating_thresholds_increments_final = fit.stan_variable('rating_thresholds_increments')[-1, :, :]  # [I*J, C-2]
+
+            
+        chain_init = {
+            'embeddings_raw': embeddings_raw_final.tolist(),
+            'mean_preferences': mean_preferences_final.tolist(),
+            'annotator_preferences': annotator_preferences_final.tolist(),
+            'rating_thresholds_increments': rating_thresholds_increments_final.tolist()
+        }
+        final_inits.append(chain_init)
+        
+        return final_inits
 
     def evaluate_test_instance(self, test_idx: int, observed_vars: List, masked_vars: List) -> Dict:
         """Evaluate domain model on test instance with incremental MCMC sampling."""
@@ -70,13 +95,22 @@ class DomainModelICLR:
         # Run MCMC with incremental evaluation
         results = {}
         cumulative_time = 0.0
-
-        for num_samples in self.sample_points:
+        num_samples = self.num_samples
+        evaluate_interval = self.evaluation_interval
+        current_sample = 0
+        fit = None
+        while current_sample < num_samples:
+            current_sample += evaluate_interval
             start_time = time.time()
 
             # Run MCMC for this sample count
             logger.info(f"Running MCMC with {num_samples} samples...")
-            stan_results = self._run_mcmc_samples(stan_data, num_samples)
+
+            if fit is None:
+                stan_results, fit = self._run_mcmc_samples(stan_data, evaluate_interval)
+            else:
+                init_values = self.extract_final_state_as_init(fit)
+                stan_results, fit = self._run_mcmc_samples(stan_data, evaluate_interval, init=True, init_values=init_values)
 
             sample_time = time.time() - start_time
             cumulative_time += sample_time
@@ -86,7 +120,7 @@ class DomainModelICLR:
                 stan_results, full_data, masked_vars, test_idx
             )
 
-            results[num_samples] = DomainModelResults(
+            results[current_sample] = DomainModelResults(
                 total_log_loss=metrics['total_log_loss'],
                 rating_log_loss=metrics['rating_log_loss'],
                 ranking_log_loss=metrics['ranking_log_loss'],
@@ -95,14 +129,13 @@ class DomainModelICLR:
                 rating_rmse=metrics['rating_rmse'],
                 num_rating_predictions=metrics['num_rating_predictions'],
                 num_ranking_predictions=metrics['num_ranking_predictions'],
-                mcmc_samples=num_samples,
+                mcmc_samples=current_sample,
                 wall_time=cumulative_time
             )
 
             logger.info(f"Domain model {num_samples} samples: "
                        f"Total loss={metrics['total_log_loss']:.4f}, "
                        f"Time={cumulative_time:.2f}s")
-
         return results
 
     def _extract_observed_data(self, full_data: Dict, observed_vars: List) -> Dict:
@@ -185,7 +218,7 @@ class DomainModelICLR:
 
         return stan_data
 
-    def _run_mcmc_samples(self, stan_data: Dict, num_samples: int) -> Dict:
+    def _run_mcmc_samples(self, stan_data: Dict, num_samples: int, init: bool=False, init_values=None) -> Dict:
         """Run MCMC sampling for specified number of samples using actual Stan model."""
         if not STAN_AVAILABLE:
             raise RuntimeError("cmdstanpy not available - cannot run domain model")
@@ -199,15 +232,27 @@ class DomainModelICLR:
         model = stan.CmdStanModel(stan_file=str(model_path))
 
         logger.info(f"Running Stan MCMC with {num_samples} samples...")
-        fit = model.sample(
-            data=stan_data,
-            chains=1,
-            iter_warmup=500,
-            iter_sampling=num_samples,
-            adapt_delta=0.95,
-            max_treedepth=10,
-            show_progress=False
-        )
+        if not init:
+            fit = model.sample(
+                data=stan_data,
+                chains=self.chains,
+                iter_warmup=self.item_warmup,
+                iter_sampling=num_samples,
+                adapt_delta=self.adapt_delta,
+                max_treedepth=self.max_treedepth,
+                show_progress=True
+            )
+        else:
+            fit = model.sample(
+                data=stan_data,
+                chains=self.chains,
+                iter_warmup=1,
+                iter_sampling=num_samples-1,
+                adapt_delta=self.adapt_delta,
+                inits=init_values,
+                max_treedepth=self.max_treedepth,
+                show_progress=True
+            )
 
         # Extract posterior samples
         results = {
@@ -226,7 +271,7 @@ class DomainModelICLR:
         except Exception as e:
             logger.warning(f"Failed to clean up Stan executable: {e}")
 
-        return results
+        return results, fit
 
     def _evaluate_predictions(self, stan_results: Dict, full_data: Dict,
                             masked_vars: List, instance_idx: int) -> Dict:

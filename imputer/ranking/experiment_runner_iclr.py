@@ -11,7 +11,7 @@ import torch
 import numpy as np
 from tqdm import tqdm
 import copy
-
+import os
 from config import ExperimentConfig
 from imputer.data import DataConverter
 from imputer.trainer import ImputerTrainer, EarlyStopping
@@ -87,6 +87,8 @@ class ExperimentRunnerICLR:
 
         for i, instance_config in enumerate(self.config.instances):
             instance_data_dir = self.config.get_instance_data_dir(i)
+            if os.path.exists(instance_data_dir):
+                continue
             instance_data_dir.mkdir(parents=True, exist_ok=True)
 
             logger.info(f"Generating data for instance {i}...")
@@ -605,7 +607,7 @@ class ExperimentRunnerICLR:
             # Method 4: Domain model (test first)
             domain_model = DomainModelICLR(self.config)
             domain_results = domain_model.evaluate_test_instance(test_idx, observed_vars, masked_vars)
-
+            raise Exception
             method_results[test_idx] = {'domain_model': domain_results}
             logger.info(f"Domain model completed for instance {test_idx}")
 
