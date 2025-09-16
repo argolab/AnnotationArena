@@ -45,6 +45,16 @@ class DataConverter:
                 filtered_rankings.append(ranking)
         return {'ratings': filtered_ratings, 'pairwise_rankings': filtered_rankings}
 
+    def load_training_data_from_dict(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Load training data from dictionary (for ICLR experiments)."""
+        filtered_ratings = [r for r in data['ratings'] if r['item'] <= self.num_items]
+        filtered_rankings = []
+        for ranking in data.get('pairwise_rankings', []):
+            items_to_check = ranking['items'][: self.max_rank_size]
+            if all(item <= self.num_items for item in items_to_check):
+                filtered_rankings.append(ranking)
+        return {'ratings': filtered_ratings, 'pairwise_rankings': filtered_rankings}
+
     def create_variables_from_actual_data(self, train_data: Dict[str, Any], test_data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
         rating_variables: List[Dict[str, Any]] = []
         ranking_variables: List[Dict[str, Any]] = []
@@ -296,4 +306,91 @@ class DataConverter:
             'rating_masked': rating_masked,
             'ranking_masked': ranking_masked,
             'all_variables': all_variables,
+        }
+
+    def create_batch_with_dynamic_masking(
+        self,
+        variables: List[Dict[str, Any]],
+        rating_data: Dict[Tuple[int, int, int], int],
+        ranking_data: List[Dict[str, Any]],
+        masked_indices: set
+    ) -> Dict[str, torch.Tensor]:
+        """Create batch with dynamic masking for ICLR experiments."""
+        num_variables = len(variables)
+
+        variable_data = torch.zeros(1, num_variables, max(self.num_likert_classes, self.max_rank_size))
+        variable_types = torch.zeros(1, num_variables, dtype=torch.long)
+        attribute_ids = torch.zeros(1, num_variables, dtype=torch.long)
+        annotator_ids = torch.zeros(1, num_variables, dtype=torch.long)
+        item_ids = torch.full((1, num_variables, self.max_rank_size), -1, dtype=torch.long)
+
+        rating_targets = torch.zeros(1, num_variables, self.num_likert_classes)
+        ranking_targets = torch.zeros(1, num_variables, self.max_rank_size)
+        rating_mask = torch.zeros(1, num_variables, dtype=torch.bool)
+        ranking_mask = torch.zeros(1, num_variables, dtype=torch.bool)
+        rating_masked = torch.zeros(1, num_variables, dtype=torch.bool)
+        ranking_masked = torch.zeros(1, num_variables, dtype=torch.bool)
+
+        for i, var in enumerate(variables):
+            attribute_ids[0, i] = var['attribute'] - 1
+            annotator_ids[0, i] = var['annotator'] - 1
+
+            if var['type'] == 'rating':
+                variable_types[0, i] = 0
+                item_ids[0, i, 0] = var['item'] - 1
+                key = (var['attribute'], var['annotator'], var['item'])
+
+                if key in rating_data:
+                    rating_value = rating_data[key] - 1
+                    rating_targets[0, i, rating_value] = 1.0
+                    rating_mask[0, i] = True
+
+                    if i in masked_indices:
+                        rating_masked[0, i] = True
+                    else:
+                        variable_data[0, i, rating_value] = 1.0
+
+            else:  # ranking
+                variable_types[0, i] = 1
+                items = var['items']
+                for j, item in enumerate(items):
+                    if j < self.max_rank_size:
+                        item_ids[0, i, j] = item - 1
+
+                # Find matching ranking
+                matching_ranking = None
+                for ranking_entry in ranking_data:
+                    if (ranking_entry['attribute'] == var['attribute'] and
+                        ranking_entry['annotator'] == var['annotator'] and
+                        ranking_entry['items'] == items):
+                        matching_ranking = ranking_entry
+                        break
+
+                if matching_ranking:
+                    order = matching_ranking['order']
+                    for j, pos in enumerate(order):
+                        if j < self.max_rank_size:
+                            ranking_targets[0, i, j] = pos
+                    ranking_mask[0, i] = True
+
+                    if i in masked_indices:
+                        ranking_masked[0, i] = True
+                    else:
+                        for j, pos in enumerate(order):
+                            if j < self.max_rank_size:
+                                variable_data[0, i, j] = pos
+
+        return {
+            'variable_data': variable_data,
+            'variable_types': variable_types,
+            'attribute_ids': attribute_ids,
+            'annotator_ids': annotator_ids,
+            'item_ids': item_ids,
+            'rating_targets': rating_targets,
+            'ranking_targets': ranking_targets,
+            'rating_mask': rating_mask,
+            'ranking_mask': ranking_mask,
+            'rating_masked': rating_masked,
+            'ranking_masked': ranking_masked,
+            'all_variables': variables,
         }

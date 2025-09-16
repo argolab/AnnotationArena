@@ -1,0 +1,77 @@
+{
+  "experiment_type": "multi_instance",
+  "train_fraction": 0.8,
+  "test_fraction": 0.2,
+  "instances": [
+    {
+      "K": 7,
+      "I": 5,
+      "J": 3,
+      "D": 64,
+      "C": 5,
+      "sigma_annotator": 0.3,
+      "sigma_measurement": 0.2,
+      "alpha_dirichlet": 2.0,
+      "temperature": 0.5,
+      "sigma_embedding_prior": 1.0,
+      "sigma_preference_prior": 1.0,
+      "max_pairs_per_tied_group": 10,
+      "min_group_size": 2,
+      "max_group_size": 4,
+      "rankings_per_annotator_attribute": 5
+    },
+    {
+      "K": 7,
+      "I": 5,
+      "J": 3,
+      "D": 64,
+      "C": 5,
+      "sigma_annotator": 0.25,
+      "sigma_measurement": 0.15,
+      "alpha_dirichlet": 1.8,
+      "temperature": 0.6,
+      "sigma_embedding_prior": 1.2,
+      "sigma_preference_prior": 0.9,
+      "max_pairs_per_tied_group": 8,
+      "min_group_size": 2,
+      "max_group_size": 5,
+      "rankings_per_annotator_attribute": 5
+    },
+    {
+      "K": 7,
+      "I": 5,
+      "J": 3,
+      "D": 64,
+      "C": 5,
+      "sigma_annotator": 0.35,
+      "sigma_measurement": 0.18,
+      "alpha_dirichlet": 2.2,
+      "temperature": 0.45,
+      "sigma_embedding_prior": 0.8,
+      "sigma_preference_prior": 1.1,
+      "max_pairs_per_tied_group": 12,
+      "min_group_size": 3,
+      "max_group_size": 6,
+      "rankings_per_annotator_attribute": 5
+    }
+  ],
+  "train_instance_indices": [0, 1],
+  "test_instance_indices": [2],
+  "model_config": {
+    "encoder_layers": 4,
+    "attention_heads": 8,
+    "embedding_dim": 64,
+    "dropout": 0.1,
+    "embedding_type": "pairwise"
+  },
+  "training_config": {
+    "epochs": 30,
+    "learning_rate": 1e-3,
+    "embedding_anchor_reg": 0.0,
+    "masking_rate": 0.5,
+    "evaluation_frequency": 1
+  },
+  "base_output_dir": "OUTPUT_ICLR",
+  "save_plots": true,
+  "device": "cpu"
+}
