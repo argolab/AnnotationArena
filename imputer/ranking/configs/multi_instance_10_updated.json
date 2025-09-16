@@ -186,10 +186,13 @@
   "training_config": {
     "epochs": 50,
     "learning_rate": 1e-3,
-    "embedding_anchor_reg": 100.0,
-    "masking_rate": 0.5,
+    "embedding_anchor_reg": 50.0,
+    "masking_rate": 0.35,
     "evaluation_frequency": 1,
-    "batch_size": 1
+    "batch_size": 8,
+    "early_stopping_patience": 20,
+    "early_stopping_min_delta": 1e-4,
+    "early_stopping_restore_best": true
   },
   "base_output_dir": "OUTPUT",
   "save_plots": true,

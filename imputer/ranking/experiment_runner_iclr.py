@@ -245,29 +245,21 @@ class ExperimentRunnerICLR:
 
         return batch
 
-    def create_random_instance_batch(self, masking_rate: float, batch_size: int = 1) -> Dict:
-        """Create batch by randomly sampling from a random training instance."""
-        # Randomly select training instance
-        instance_idx = random.choice(self.config.train_instance_indices)
+    def create_mixed_training_batch(self, masking_rate: float) -> Dict:
+        """Create batch from mixed training data with random masking."""
+        # Get or create mixed training data (combine all train parts)
+        if not hasattr(self, '_mixed_training_data'):
+            self._mixed_training_data = self._create_mixed_training_data()
 
-        # Load instance data
-        train_data, heldout_data = self.load_instance_data(instance_idx)
+        all_variables, all_data = self._mixed_training_data
 
-        # Use only train portion for training (heldout for evaluation)
-        filtered_data = self.converter.load_training_data_from_dict(train_data)
-        rating_vars, ranking_vars = self.converter.create_variables_from_actual_data(
-            filtered_data, filtered_data
-        )
-
-        all_variables = rating_vars + ranking_vars
-
-        # Apply random masking to this batch
+        # Apply random masking to entire mixed dataset
         available_vars = list(range(len(all_variables)))
         num_to_mask = int(len(available_vars) * masking_rate)
         masked_indices = set(random.sample(available_vars, num_to_mask))
 
         # Process data for batch creation
-        rating_data, ranking_data = self.converter.process_training_data(filtered_data)
+        rating_data, ranking_data = self.converter.process_training_data(all_data)
 
         # Create batch with dynamic masking
         batch = self.converter.create_batch_with_dynamic_masking(
@@ -275,6 +267,31 @@ class ExperimentRunnerICLR:
         )
 
         return batch
+
+    def _create_mixed_training_data(self) -> Tuple[List, Dict]:
+        """Create mixed training dataset from train portions of all training instances."""
+        all_variables = []
+        all_data = {'ratings': [], 'pairwise_rankings': []}
+
+        for train_idx in self.config.train_instance_indices:
+            train_data, heldout_data = self.load_instance_data(train_idx)
+
+            # Use only train portion (not heldout)
+            filtered_data = self.converter.load_training_data_from_dict(train_data)
+            rating_vars, ranking_vars = self.converter.create_variables_from_actual_data(
+                filtered_data, filtered_data
+            )
+
+            # Add instance info for debugging
+            for var in rating_vars + ranking_vars:
+                var['source_instance'] = train_idx
+
+            all_variables.extend(rating_vars + ranking_vars)
+            all_data['ratings'].extend(train_data['ratings'])
+            all_data['pairwise_rankings'].extend(train_data['pairwise_rankings'])
+
+        logger.info(f"Mixed training data: {len(all_variables)} variables from {len(self.config.train_instance_indices)} instances")
+        return all_variables, all_data
 
     def run_pretraining(self, masking_rate: float = 0.5) -> Dict:
         """Run mixed pretraining with random instance sampling."""
@@ -312,8 +329,8 @@ class ExperimentRunnerICLR:
         for epoch in tqdm(range(self.config.training_config.epochs), desc="Mixed Pretraining"):
             epoch_start = time.time()
 
-            # Create batch from random instance with random masking
-            batch = self.create_random_instance_batch(masking_rate, self.config.training_config.batch_size)
+            # Create batch from mixed training data with random masking
+            batch = self.create_mixed_training_batch(masking_rate)
 
             # Training step
             train_losses = self.trainer.train_step(batch)
@@ -326,14 +343,18 @@ class ExperimentRunnerICLR:
 
             # Evaluate on both training heldouts and test instances
             if epoch % self.config.training_config.evaluation_frequency == 0:
-                # Evaluate on training instance heldouts (use pre-computed data)
-                heldout_metrics = self.evaluate_conditional_imputation(
-                    heldout_variables, heldout_data, heldout_masked, heldout_observed
+                # Evaluate on training instance heldouts (ALL positions)
+                heldout_metrics = self.evaluate_all_positions(
+                    heldout_variables, heldout_data, masking_rate
                 )
 
                 training_results['heldout_losses']['total'].append(heldout_metrics['total_log_loss'])
                 training_results['heldout_losses']['rating'].append(heldout_metrics['rating_log_loss'])
                 training_results['heldout_losses']['ranking'].append(heldout_metrics['ranking_log_loss'])
+
+                # Log training progress with heldout metrics
+                logger.info(f"Epoch {epoch}: Train loss={train_losses['total_loss']:.4f}, "
+                           f"Heldout loss={heldout_metrics['total_log_loss']:.4f}")
 
                 # Evaluate on test instances
                 test_total_losses = []
@@ -488,6 +509,102 @@ class ExperimentRunnerICLR:
                 'masked_ranking_count': ranking_count
             }
 
+    def evaluate_all_positions(self, all_variables: List, data: Dict, masking_rate: float) -> Dict:
+        """Evaluate on ALL positions (both masked and observed) for heldout testing."""
+        self.model.eval()
+
+        with torch.no_grad():
+            # Create evaluation batch with all variables
+            rating_data, ranking_data = self.converter.process_training_data(data)
+
+            # Create batch with NO masking (all variables visible for prediction)
+            batch = self.converter.create_batch_with_dynamic_masking(
+                all_variables, rating_data, ranking_data, set()  # Empty set = no masking
+            )
+
+            # Get predictions
+            ranking_data_list = self.model._convert_legacy_tensors_to_ranking_data(
+                batch['variable_data'].to(self.device),
+                batch['variable_types'].to(self.device),
+                batch['attribute_ids'].to(self.device),
+                batch['annotator_ids'].to(self.device),
+                batch['item_ids'].to(self.device)
+            )
+
+            outputs = self.model(ranking_data_list)
+
+            # Calculate losses and accuracy metrics on ALL variables
+            total_rating_loss = 0.0
+            total_ranking_loss = 0.0
+            rating_count = 0
+            ranking_count = 0
+            rating_correct = 0
+            ranking_correct = 0
+            rating_mse = 0.0
+
+            for i, var in enumerate(all_variables):
+                if var['type'] == 'rating':
+                    # Get rating loss and accuracy
+                    rating_logits = outputs['rating'][0, i]
+                    rating_target = batch['rating_targets'][0, i].to(self.device)
+                    rating_loss = torch.nn.functional.cross_entropy(
+                        rating_logits.unsqueeze(0), rating_target.argmax().unsqueeze(0)
+                    )
+                    total_rating_loss += rating_loss.item()
+                    # Calculate accuracy and RMSE
+                    predicted_rating = torch.argmax(rating_logits).item()  # 0-indexed
+                    true_rating = torch.argmax(rating_target).item()       # 0-indexed
+                    if predicted_rating == true_rating:
+                        rating_correct += 1
+                    # Convert to 1-indexed for RMSE calculation
+                    rating_mse += (predicted_rating + 1 - (true_rating + 1)) ** 2
+                    rating_count += 1
+
+                elif var['type'] == 'ranking':
+                    # Get ranking loss and accuracy
+                    ranking_logits = outputs['ranking'][0, i]
+                    ranking_target = batch['ranking_targets'][0, i].to(self.device)
+                    ranking_loss = torch.nn.functional.mse_loss(
+                        ranking_logits, ranking_target
+                    )
+                    total_ranking_loss += ranking_loss.item()
+                    # Calculate ranking accuracy using pairwise comparison
+                    target_order = []
+                    for j in range(ranking_target.shape[0]):
+                        score = int(ranking_target[j].item())
+                        if score > 0:
+                            target_order.append(score)
+                    if len(target_order) >= 2:
+                        # Use predicted scores to determine preference
+                        pred_scores = ranking_logits.cpu().numpy()
+                        # Simple pairwise accuracy: do first two items have correct relative order?
+                        if len(pred_scores) >= 2:
+                            pred_first_better = pred_scores[0] > pred_scores[1]
+                            true_first_better = target_order[0] < target_order[1]  # Lower rank number = better
+                            if pred_first_better == true_first_better:
+                                ranking_correct += 1
+                    ranking_count += 1
+
+            # Average losses and calculate metrics
+            avg_rating_loss = total_rating_loss / max(rating_count, 1)
+            avg_ranking_loss = total_ranking_loss / max(ranking_count, 1)
+            total_loss = avg_rating_loss + avg_ranking_loss
+
+            rating_accuracy = rating_correct / max(rating_count, 1)
+            ranking_accuracy = ranking_correct / max(ranking_count, 1)
+            rating_rmse = (rating_mse / max(rating_count, 1)) ** 0.5
+
+            return {
+                'total_log_loss': total_loss,
+                'rating_log_loss': avg_rating_loss,
+                'ranking_log_loss': avg_ranking_loss,
+                'rating_accuracy': rating_accuracy,
+                'ranking_accuracy': ranking_accuracy,
+                'rating_rmse': rating_rmse,
+                'total_rating_count': rating_count,
+                'total_ranking_count': ranking_count
+            }
+
     def run_finetuning(self, test_idx: int, masking_rate: float,
                       pretrained_model_state: Optional[Dict] = None) -> Dict:
         """Run finetuning on test instance observed variables."""
@@ -519,7 +636,10 @@ class ExperimentRunnerICLR:
         }
 
         # Early stopping for finetuning
-        early_stopping = EarlyStopping(patience=10, min_delta=1e-4)
+        early_stopping = EarlyStopping(
+            patience=self.config.training_config.early_stopping_patience,
+            min_delta=self.config.training_config.early_stopping_min_delta
+        )
 
         # Finetuning loop with progress bar
         for epoch in tqdm(range(self.config.training_config.epochs), desc=f"Finetuning Instance {test_idx}"):
@@ -561,8 +681,8 @@ class ExperimentRunnerICLR:
                 logger.info(f"Early stopping at epoch {epoch} (test loss: {test_metrics['total_log_loss']:.4f})")
                 break
 
-            # Log progress every 5 epochs
-            if epoch % 5 == 0:
+            # Log progress according to evaluation frequency
+            if epoch % self.config.training_config.evaluation_frequency == 0:
                 logger.info(f"Epoch {epoch}: Train loss={train_losses['total_loss']:.4f}, "
                            f"Test loss={test_metrics['total_log_loss']:.4f}")
 

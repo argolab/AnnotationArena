@@ -47,6 +47,10 @@ class TrainingConfig:
     masking_rate: float = 0.5
     evaluation_frequency: int = 1
     batch_size: int = 1  # Batch size for mixed training
+    # Early stopping parameters
+    early_stopping_patience: int = 10
+    early_stopping_min_delta: float = 1e-4
+    early_stopping_restore_best: bool = True
     
 @dataclass
 class ExperimentConfig:

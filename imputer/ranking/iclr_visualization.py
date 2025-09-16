@@ -235,7 +235,7 @@ class ICLRResultsAnalyzer:
                 std_loss = np.std(pretrained_losses)
                 ax.errorbar(mean_time, mean_loss, yerr=std_loss,
                            color='blue', marker='o', markersize=8, capsize=5,
-                           label='Pretrained Only', fmt='o')
+                           label='Pretrained Only')
 
             # Method 2: Pretrained + Finetuned
             finetuned_times = []
@@ -255,7 +255,7 @@ class ICLRResultsAnalyzer:
                 std_loss = np.std(finetuned_losses)
                 ax.errorbar(mean_time, mean_loss, yerr=std_loss,
                            color='green', marker='s', markersize=8, capsize=5,
-                           label='Pretrained + Finetuned', fmt='s')
+                           label='Pretrained + Finetuned')
 
             # Method 3: No pretraining
             no_pretrain_times = []
@@ -275,7 +275,7 @@ class ICLRResultsAnalyzer:
                 std_loss = np.std(no_pretrain_losses)
                 ax.errorbar(mean_time, mean_loss, yerr=std_loss,
                            color='orange', marker='^', markersize=8, capsize=5,
-                           label='No Pretrain', fmt='^')
+                           label='No Pretrain')
 
             # Method 4: Domain model - create curve with error bars at each MCMC sample point
             # Collect domain results across test instances
@@ -311,7 +311,7 @@ class ICLRResultsAnalyzer:
                 # Plot domain model as curve with error bars
                 ax.errorbar(domain_times, domain_losses, yerr=domain_std,
                            color='red', marker='d', markersize=6, capsize=3,
-                           linewidth=2, label='Domain EM', fmt='d-')
+                           linewidth=2, label='Domain EM', linestyle='-')
 
                 # Annotate MCMC sample points (last 2)
                 for i, (time, loss, sample) in enumerate(zip(domain_times[-2:], domain_losses[-2:], sorted_samples[-2:])):
@@ -342,68 +342,73 @@ class ICLRResultsAnalyzer:
         for test_idx, test_results in self.results['test_results'].items():
             # Skip invalid entries
             if not isinstance(test_results, dict):
+                logger.warning(f"Skipping test_idx {test_idx}: test_results is not dict")
                 continue
 
             # Pretrained only
-            if 'pretrained_only' not in test_results:
-                continue
-            pretrained = test_results['pretrained_only']
-            if not isinstance(pretrained, dict):
-                continue
-            plot_data.extend([
-                {'Method': 'Pretrained Only', 'Metric': 'Total Loss', 'Value': pretrained['total_log_loss']},
-                {'Method': 'Pretrained Only', 'Metric': 'Rating Loss', 'Value': pretrained['rating_log_loss']},
-                {'Method': 'Pretrained Only', 'Metric': 'Ranking Loss', 'Value': pretrained['ranking_log_loss']},
-                {'Method': 'Pretrained Only', 'Metric': 'Rating Accuracy', 'Value': pretrained['rating_accuracy']},
-                {'Method': 'Pretrained Only', 'Metric': 'Ranking Accuracy', 'Value': pretrained['ranking_accuracy']},
-                {'Method': 'Pretrained Only', 'Metric': 'Rating RMSE', 'Value': pretrained['rating_rmse']}
-            ])
+            if 'pretrained_only' in test_results:
+                pretrained = test_results['pretrained_only']
+                if isinstance(pretrained, dict):
+                    try:
+                        plot_data.extend([
+                            {'Method': 'Pretrained Only', 'Metric': 'Total Loss', 'Value': pretrained['total_log_loss']},
+                            {'Method': 'Pretrained Only', 'Metric': 'Rating Loss', 'Value': pretrained['rating_log_loss']},
+                            {'Method': 'Pretrained Only', 'Metric': 'Ranking Loss', 'Value': pretrained['ranking_log_loss']},
+                            {'Method': 'Pretrained Only', 'Metric': 'Rating Accuracy', 'Value': pretrained['rating_accuracy']},
+                            {'Method': 'Pretrained Only', 'Metric': 'Ranking Accuracy', 'Value': pretrained['ranking_accuracy']},
+                            {'Method': 'Pretrained Only', 'Metric': 'Rating RMSE', 'Value': pretrained['rating_rmse']}
+                        ])
+                    except KeyError as e:
+                        logger.warning(f"Missing key in pretrained data for {test_idx}: {e}")
 
             # Finetuned
-            if 'pretrained_finetuned' not in test_results:
-                continue
-            finetuned = test_results['pretrained_finetuned']
-            if not isinstance(finetuned, dict):
-                continue
-            plot_data.extend([
-                {'Method': 'Pretrained + Finetuned', 'Metric': 'Total Loss', 'Value': finetuned['total_log_loss']},
-                {'Method': 'Pretrained + Finetuned', 'Metric': 'Rating Loss', 'Value': finetuned['rating_log_loss']},
-                {'Method': 'Pretrained + Finetuned', 'Metric': 'Ranking Loss', 'Value': finetuned['ranking_log_loss']},
-                {'Method': 'Pretrained + Finetuned', 'Metric': 'Rating Accuracy', 'Value': finetuned['rating_accuracy']},
-                {'Method': 'Pretrained + Finetuned', 'Metric': 'Ranking Accuracy', 'Value': finetuned['ranking_accuracy']},
-                {'Method': 'Pretrained + Finetuned', 'Metric': 'Rating RMSE', 'Value': finetuned['rating_rmse']}
-            ])
+            if 'pretrained_finetuned' in test_results:
+                finetuned = test_results['pretrained_finetuned']
+                if isinstance(finetuned, dict):
+                    try:
+                        plot_data.extend([
+                            {'Method': 'Pretrained + Finetuned', 'Metric': 'Total Loss', 'Value': finetuned['total_log_loss']},
+                            {'Method': 'Pretrained + Finetuned', 'Metric': 'Rating Loss', 'Value': finetuned['rating_log_loss']},
+                            {'Method': 'Pretrained + Finetuned', 'Metric': 'Ranking Loss', 'Value': finetuned['ranking_log_loss']},
+                            {'Method': 'Pretrained + Finetuned', 'Metric': 'Rating Accuracy', 'Value': finetuned['rating_accuracy']},
+                            {'Method': 'Pretrained + Finetuned', 'Metric': 'Ranking Accuracy', 'Value': finetuned['ranking_accuracy']},
+                            {'Method': 'Pretrained + Finetuned', 'Metric': 'Rating RMSE', 'Value': finetuned['rating_rmse']}
+                        ])
+                    except KeyError as e:
+                        logger.warning(f"Missing key in finetuned data for {test_idx}: {e}")
 
             # No pretrain
-            if 'no_pretrain_finetuned' not in test_results:
-                continue
-            no_pretrain = test_results['no_pretrain_finetuned']
-            if not isinstance(no_pretrain, dict):
-                continue
-            plot_data.extend([
-                {'Method': 'No Pretrain', 'Metric': 'Total Loss', 'Value': no_pretrain['total_log_loss']},
-                {'Method': 'No Pretrain', 'Metric': 'Rating Loss', 'Value': no_pretrain['rating_log_loss']},
-                {'Method': 'No Pretrain', 'Metric': 'Ranking Loss', 'Value': no_pretrain['ranking_log_loss']},
-                {'Method': 'No Pretrain', 'Metric': 'Rating Accuracy', 'Value': no_pretrain['rating_accuracy']},
-                {'Method': 'No Pretrain', 'Metric': 'Ranking Accuracy', 'Value': no_pretrain['ranking_accuracy']},
-                {'Method': 'No Pretrain', 'Metric': 'Rating RMSE', 'Value': no_pretrain['rating_rmse']}
-            ])
+            if 'no_pretrain_finetuned' in test_results:
+                no_pretrain = test_results['no_pretrain_finetuned']
+                if isinstance(no_pretrain, dict):
+                    try:
+                        plot_data.extend([
+                            {'Method': 'No Pretrain', 'Metric': 'Total Loss', 'Value': no_pretrain['total_log_loss']},
+                            {'Method': 'No Pretrain', 'Metric': 'Rating Loss', 'Value': no_pretrain['rating_log_loss']},
+                            {'Method': 'No Pretrain', 'Metric': 'Ranking Loss', 'Value': no_pretrain['ranking_log_loss']},
+                            {'Method': 'No Pretrain', 'Metric': 'Rating Accuracy', 'Value': no_pretrain['rating_accuracy']},
+                            {'Method': 'No Pretrain', 'Metric': 'Ranking Accuracy', 'Value': no_pretrain['ranking_accuracy']},
+                            {'Method': 'No Pretrain', 'Metric': 'Rating RMSE', 'Value': no_pretrain['rating_rmse']}
+                        ])
+                    except KeyError as e:
+                        logger.warning(f"Missing key in no_pretrain data for {test_idx}: {e}")
 
             # Domain model (best result)
-            if 'domain_model' not in test_results:
-                continue
-            domain_results = test_results['domain_model']
-            if not isinstance(domain_results, dict) or not domain_results:
-                continue
-            best_domain = max(domain_results.values(), key=lambda x: x['mcmc_samples'])
-            plot_data.extend([
-                {'Method': 'Domain EM', 'Metric': 'Total Loss', 'Value': best_domain['total_log_loss']},
-                {'Method': 'Domain EM', 'Metric': 'Rating Loss', 'Value': best_domain['rating_log_loss']},
-                {'Method': 'Domain EM', 'Metric': 'Ranking Loss', 'Value': best_domain['ranking_log_loss']},
-                {'Method': 'Domain EM', 'Metric': 'Rating Accuracy', 'Value': best_domain['rating_accuracy']},
-                {'Method': 'Domain EM', 'Metric': 'Ranking Accuracy', 'Value': best_domain['ranking_accuracy']},
-                {'Method': 'Domain EM', 'Metric': 'Rating RMSE', 'Value': best_domain['rating_rmse']}
-            ])
+            if 'domain_model' in test_results:
+                domain_results = test_results['domain_model']
+                if isinstance(domain_results, dict) and domain_results:
+                    try:
+                        best_domain = max(domain_results.values(), key=lambda x: x['mcmc_samples'])
+                        plot_data.extend([
+                            {'Method': 'Domain EM', 'Metric': 'Total Loss', 'Value': best_domain['total_log_loss']},
+                            {'Method': 'Domain EM', 'Metric': 'Rating Loss', 'Value': best_domain['rating_log_loss']},
+                            {'Method': 'Domain EM', 'Metric': 'Ranking Loss', 'Value': best_domain['ranking_log_loss']},
+                            {'Method': 'Domain EM', 'Metric': 'Rating Accuracy', 'Value': best_domain['rating_accuracy']},
+                            {'Method': 'Domain EM', 'Metric': 'Ranking Accuracy', 'Value': best_domain['ranking_accuracy']},
+                            {'Method': 'Domain EM', 'Metric': 'Rating RMSE', 'Value': best_domain['rating_rmse']}
+                        ])
+                    except (KeyError, ValueError) as e:
+                        logger.warning(f"Error processing domain data for {test_idx}: {e}")
 
         df = pd.DataFrame(plot_data)
 
