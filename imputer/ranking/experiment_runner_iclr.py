@@ -607,7 +607,6 @@ class ExperimentRunnerICLR:
             # Method 4: Domain model (test first)
             domain_model = DomainModelICLR(self.config)
             domain_results = domain_model.evaluate_test_instance(test_idx, observed_vars, masked_vars)
-            raise Exception
             method_results[test_idx] = {'domain_model': domain_results}
             logger.info(f"Domain model completed for instance {test_idx}")
 
