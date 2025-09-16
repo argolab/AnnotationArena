@@ -594,16 +594,30 @@ class ExperimentRunnerICLR:
         # 0. Generate data first
         self.generate_data()
 
-        # 1. Pretraining
+        # 1. Test domain model first (to catch errors early)
+        method_results = {}
+        for test_idx in self.config.test_instance_indices:
+            logger.info(f"Testing domain model on instance {test_idx} first...")
+            all_vars, data, masked_vars, observed_vars = self.create_test_instance_data(
+                test_idx, masking_rate
+            )
+
+            # Method 4: Domain model (test first)
+            domain_model = DomainModelICLR(self.config)
+            domain_results = domain_model.evaluate_test_instance(test_idx, observed_vars, masked_vars)
+
+            method_results[test_idx] = {'domain_model': domain_results}
+            logger.info(f"Domain model completed for instance {test_idx}")
+
+        # 2. Pretraining (after domain model works)
+        logger.info("Domain model tests passed, starting pretraining...")
         pretraining_results = self.run_pretraining(masking_rate)
         pretraining_time = pretraining_results['total_time']
         pretrained_state = copy.deepcopy(self.model.state_dict())
 
-        # 2. Test evaluation for all methods
-        method_results = {}
-
+        # 3. Imputer methods evaluation
         for test_idx in self.config.test_instance_indices:
-            logger.info(f"Evaluating test instance {test_idx}")
+            logger.info(f"Evaluating imputer methods on test instance {test_idx}")
 
             # Method 1: Pretrained only
             self.model.load_state_dict(pretrained_state)
@@ -621,16 +635,13 @@ class ExperimentRunnerICLR:
             # Method 3: No pretraining (finetuning only)
             no_pretrain_results = self.run_finetuning(test_idx, masking_rate, None)
 
-            # Method 4: Domain model
-            domain_model = DomainModelICLR(self.config)
-            domain_results = domain_model.evaluate_test_instance(test_idx, observed_vars, masked_vars)
-
-            method_results[test_idx] = {
+            # Update results (domain model already stored)
+            method_results[test_idx].update({
                 'pretrained_only': method1_metrics,
                 'pretrained_finetuned': finetuning_results,
-                'no_pretrain_finetuned': no_pretrain_results,
-                'domain_model': domain_results
-            }
+                'no_pretrain_finetuned': no_pretrain_results
+            })
+
 
         # Store all results
         self.results.update({

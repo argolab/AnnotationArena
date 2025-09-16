@@ -221,7 +221,21 @@ class DomainModelICLR:
 
     def _evaluate_predictions(self, stan_results: Dict, full_data: Dict,
                             masked_vars: List, instance_idx: int) -> Dict:
-        """Evaluate model predictions on masked variables."""
+        """Evaluate model predictions on masked variables (using legacy approach)."""
+        # Extract posterior means (like legacy code)
+        embeddings = np.mean(stan_results['item_embeddings'], axis=0)  # [K, D]
+        preferences = np.mean(stan_results['annotator_preferences'], axis=0)  # [I*J, D]
+        thresholds = np.mean(stan_results['thresholds'], axis=0)  # [I*J, C+1]
+
+        # Get config for dimensions
+        instance_config = self.config.instances[instance_idx]
+        J = instance_config.J
+        C = instance_config.C
+        sigma_measurement = instance_config.sigma_measurement
+
+        # Compute base scores
+        base_scores = preferences @ embeddings.T  # [I*J, K]
+
         total_rating_log_loss = 0.0
         total_ranking_log_loss = 0.0
         rating_correct = 0
@@ -230,8 +244,12 @@ class DomainModelICLR:
         num_rating_preds = 0
         num_ranking_preds = 0
 
-        for var in masked_vars:
-            if var['type'] == 'rating':
+        # Process masked ratings (following legacy code exactly)
+        masked_ratings = [var for var in masked_vars if var['type'] == 'rating']
+        if masked_ratings:
+            rating_predictions = []
+            rating_targets = []
+            for var in masked_ratings:
                 # Find true rating value
                 true_value = None
                 for rating in full_data['ratings']:
@@ -242,57 +260,79 @@ class DomainModelICLR:
                         break
 
                 if true_value is not None:
-                    # Predict rating using posterior samples
-                    pred_probs = self._predict_rating(
-                        stan_results, var['item'], var['attribute'], var['annotator']
-                    )
+                    i, j, k, c_true = var['attribute'], var['annotator'], var['item'], true_value
+                    ij_idx = (i-1)*J + (j-1)
 
-                    # Calculate log loss
-                    log_loss = -np.log(pred_probs[true_value - 1] + 1e-10)
-                    total_rating_log_loss += log_loss
+                    # Predict rating using posterior mean (like legacy)
+                    base_score = base_scores[ij_idx, k-1]
+                    pref_norm = np.linalg.norm(preferences[ij_idx])
+                    total_std = np.sqrt(pref_norm**2 + sigma_measurement**2)
+                    standardized_score = base_score / total_std
 
-                    # Calculate accuracy
-                    pred_rating = np.argmax(pred_probs) + 1
-                    if pred_rating == true_value:
+                    from scipy.stats import norm
+                    cdf_val = norm.cdf(standardized_score)
+
+                    # Find most likely category (using thresholds without -inf/+inf)
+                    category_probs = np.zeros(C)
+                    thresh_clean = thresholds[ij_idx, 1:-1]  # Remove -inf and +inf boundaries
+                    for c in range(C):
+                        if c == 0:
+                            category_probs[c] = thresh_clean[0] - cdf_val if len(thresh_clean) > 0 else 1.0 - cdf_val
+                        elif c == C-1:
+                            category_probs[c] = cdf_val - thresh_clean[c-1] if len(thresh_clean) > c-1 else cdf_val
+                        else:
+                            category_probs[c] = thresh_clean[c] - thresh_clean[c-1] if len(thresh_clean) > c else 0.0
+
+                    c_pred = np.argmax(category_probs) + 1
+                    if c_pred == c_true:
                         rating_correct += 1
 
-                    # Calculate MSE for RMSE
-                    rating_mse += (pred_rating - true_value) ** 2
+                    rating_predictions.append(c_pred)
+                    rating_targets.append(c_true)
+                    rating_mse += (c_pred - c_true) ** 2
 
+                    # Simple log loss approximation
+                    total_rating_log_loss += -np.log(max(category_probs[c_true-1], 1e-10))
                     num_rating_preds += 1
 
-            else:  # ranking
-                # Find true ranking
-                true_order = None
-                for ranking in full_data['pairwise_rankings']:
-                    if (ranking['attribute'] == var['attribute'] and
-                        ranking['annotator'] == var['annotator'] and
-                        ranking['items'] == var['items']):
-                        true_order = ranking['order']
-                        break
+        # Process masked rankings (following legacy approach)
+        masked_rankings = [var for var in masked_vars if var['type'] == 'ranking']
+        for var in masked_rankings:
+            # Find true ranking
+            true_order = None
+            for ranking in full_data['pairwise_rankings']:
+                if (ranking['attribute'] == var['attribute'] and
+                    ranking['annotator'] == var['annotator'] and
+                    ranking['items'] == var['items']):
+                    true_order = ranking['order']
+                    break
 
-                if true_order is not None:
-                    # Predict ranking using posterior samples
-                    pred_prob = self._predict_ranking(
-                        stan_results, var['items'], var['attribute'], var['annotator']
-                    )
+            if true_order is not None:
+                i, j = var['attribute'], var['annotator']
+                ij_idx = (i-1)*J + (j-1)
+                items = var['items']
 
-                    # Calculate log loss
-                    true_first_wins = true_order[0] < true_order[1]
-                    if true_first_wins:
-                        log_loss = -np.log(pred_prob + 1e-10)
-                    else:
-                        log_loss = -np.log(1 - pred_prob + 1e-10)
-                    total_ranking_log_loss += log_loss
+                # Predict preference based on scores (like legacy)
+                item1, item2 = items[0], items[1]
+                score1 = base_scores[ij_idx, item1-1]
+                score2 = base_scores[ij_idx, item2-1]
 
-                    # Calculate accuracy
-                    pred_first_wins = pred_prob > 0.5
-                    if pred_first_wins == true_first_wins:
-                        ranking_correct += 1
+                # Predict: item1 > item2 if score1 > score2
+                pred_first_wins = score1 > score2
+                true_first_wins = true_order[0] == 1  # item1 ranks first
 
-                    num_ranking_preds += 1
+                if pred_first_wins == true_first_wins:
+                    ranking_correct += 1
 
-        # Calculate averages
+                # Simple log loss approximation
+                score_diff = abs(score1 - score2)
+                prob = 1 / (1 + np.exp(-score_diff))  # Sigmoid approximation
+                if not true_first_wins:
+                    prob = 1 - prob
+                total_ranking_log_loss += -np.log(max(prob, 1e-10))
+                num_ranking_preds += 1
+
+        # Calculate final metrics
         avg_rating_log_loss = total_rating_log_loss / max(num_rating_preds, 1)
         avg_ranking_log_loss = total_ranking_log_loss / max(num_ranking_preds, 1)
         total_log_loss = avg_rating_log_loss + avg_ranking_log_loss
@@ -312,78 +352,3 @@ class DomainModelICLR:
             'num_ranking_predictions': num_ranking_preds
         }
 
-    def _predict_rating(self, stan_results: Dict, item: int, attribute: int, annotator: int) -> np.ndarray:
-        """Predict rating probabilities using posterior samples."""
-        num_samples = stan_results['item_embeddings'].shape[0]
-        C = stan_results['thresholds'].shape[3] + 1
-
-        # Get posterior samples for this prediction
-        item_emb = stan_results['item_embeddings'][:, item-1, :]  # [num_samples, D]
-        annotator_pref = stan_results['annotator_preferences'][:, annotator-1, attribute-1, :]  # [num_samples, D]
-        thresholds = stan_results['thresholds'][:, annotator-1, attribute-1, :]  # [num_samples, C-1]
-        measurement_noise = stan_results['measurement_noise']  # [num_samples]
-
-        # Calculate utility for each sample
-        utilities = np.sum(item_emb * annotator_pref, axis=1)  # [num_samples]
-
-        # Convert to probabilities using Gaussian CDF (like old code)
-        probs_per_sample = []
-        for s in range(num_samples):
-            base_score = utilities[s]
-            thresh = thresholds[s]
-            sigma_m = measurement_noise[s]
-
-            # Create full threshold boundaries: [-∞, Q_1, Q_2, ..., Q_{C-1}, +∞]
-            full_thresholds = np.concatenate([
-                [-np.inf],
-                thresh,
-                [np.inf]
-            ])
-
-            # Calculate probabilities for each category using Gaussian CDF
-            from scipy.stats import norm
-            probs = np.zeros(C)
-
-            for c in range(C):
-                # For category c (0-indexed), we want boundaries at indices c and c+1
-                upper_thresh = full_thresholds[c + 1]
-                lower_thresh = full_thresholds[c]
-
-                if upper_thresh == np.inf:
-                    upper_prob = 1.0
-                else:
-                    upper_prob = norm.cdf((upper_thresh - base_score) / sigma_m)
-
-                if lower_thresh == -np.inf:
-                    lower_prob = 0.0
-                else:
-                    lower_prob = norm.cdf((lower_thresh - base_score) / sigma_m)
-
-                probs[c] = max(upper_prob - lower_prob, 1e-10)  # Numerical stability
-
-            # Normalize
-            probs = probs / np.sum(probs)
-            probs_per_sample.append(probs)
-
-        # Average over samples
-        avg_probs = np.mean(probs_per_sample, axis=0)
-        return avg_probs
-
-    def _predict_ranking(self, stan_results: Dict, items: List[int], attribute: int, annotator: int) -> float:
-        """Predict ranking probability (first item wins) using posterior samples."""
-        num_samples = stan_results['item_embeddings'].shape[0]
-
-        item1_emb = stan_results['item_embeddings'][:, items[0]-1, :]  # [num_samples, D]
-        item2_emb = stan_results['item_embeddings'][:, items[1]-1, :]  # [num_samples, D]
-        annotator_pref = stan_results['annotator_preferences'][:, annotator-1, attribute-1, :]  # [num_samples, D]
-
-        # Calculate utilities
-        utility1 = np.sum(item1_emb * annotator_pref, axis=1)  # [num_samples]
-        utility2 = np.sum(item2_emb * annotator_pref, axis=1)  # [num_samples]
-
-        # Probability that item1 > item2
-        prob_per_sample = 1 / (1 + np.exp(utility2 - utility1))
-
-        # Average over samples
-        avg_prob = np.mean(prob_per_sample)
-        return avg_prob
