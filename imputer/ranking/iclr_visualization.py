@@ -80,7 +80,6 @@ class ICLRResultsAnalyzer:
                 'domain_rating_accuracy': best_domain['rating_accuracy'],
                 'domain_ranking_accuracy': best_domain['ranking_accuracy'],
                 'domain_rating_rmse': best_domain['rating_rmse'],
-                'domain_runtime': best_domain['wall_time'],
                 'domain_mcmc_samples': best_domain['mcmc_samples']
             })
 

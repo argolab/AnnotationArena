@@ -113,8 +113,8 @@ def main():
         logger.info("Experiment completed successfully!")
 
         # Summary statistics
-        pretraining_time = results['pretraining_results']['total_time']
-        total_time = results['total_experiment_time']
+        pretraining_time = results['pretraining_results']
+        total_time = results['total_time']
 
         logger.info(f"Pretraining time: {pretraining_time:.2f} seconds")
         logger.info(f"Total experiment time: {total_time:.2f} seconds")
