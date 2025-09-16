@@ -39,7 +39,7 @@ class DomainModelICLR:
     def __init__(self, config):
         self.config = config
         # MCMC sample points for incremental evaluation
-        self.sample_points = [100, 200, 500, 1000, 2000, 3000]
+        self.sample_points = [100, 200]
 
     def evaluate_test_instance(self, test_idx: int, observed_vars: List, masked_vars: List) -> Dict:
         """Evaluate domain model on test instance with incremental MCMC sampling."""
@@ -216,6 +216,15 @@ class DomainModelICLR:
             'thresholds': fit.stan_variable('rating_thresholds'),
             'measurement_noise': np.full(num_samples, stan_data['sigma_measurement'])  # Use fixed noise from input
         }
+
+        # Clean up compiled Stan executable
+        try:
+            exe_path = model.exe_file
+            if exe_path and Path(exe_path).exists():
+                Path(exe_path).unlink()
+                logger.debug(f"Cleaned up Stan executable: {exe_path}")
+        except Exception as e:
+            logger.warning(f"Failed to clean up Stan executable: {e}")
 
         return results
 
