@@ -11,6 +11,14 @@ from dataclasses import dataclass
 
 logger = logging.getLogger(__name__)
 
+try:
+    import cmdstanpy as stan
+    STAN_AVAILABLE = True
+    logger.info("Using cmdstanpy for Stan interface")
+except ImportError:
+    STAN_AVAILABLE = False
+    logger.error("cmdstanpy not available - please install: conda install -c conda-forge cmdstanpy")
+
 @dataclass
 class DomainModelResults:
     """Results from domain model evaluation."""
@@ -165,19 +173,35 @@ class DomainModelICLR:
         return stan_data
 
     def _run_mcmc_samples(self, stan_data: Dict, num_samples: int) -> Dict:
-        """Run MCMC sampling for specified number of samples."""
-        # This is a simplified version - in practice you'd use PyStan/CmdStanPy
-        # For now, simulate the results
+        """Run MCMC sampling for specified number of samples using actual Stan model."""
+        if not STAN_AVAILABLE:
+            raise RuntimeError("cmdstanpy not available - cannot run domain model")
 
-        # Simulate posterior samples
-        K, I, J, C, D = stan_data['K'], stan_data['I'], stan_data['J'], stan_data['C'], stan_data['D']
+        # Use the actual Stan model for domain inference
+        model_path = Path(__file__).parent / "models" / "domain_model.stan"
+        if not model_path.exists():
+            raise FileNotFoundError(f"Stan model not found at {model_path}")
 
+        # Compile and run Stan model
+        model = stan.CmdStanModel(stan_file=str(model_path))
+
+        logger.info(f"Running Stan MCMC with {num_samples} samples...")
+        fit = model.sample(
+            data=stan_data,
+            chains=1,
+            iter_warmup=500,
+            iter_sampling=num_samples,
+            adapt_delta=0.95,
+            max_treedepth=10,
+            show_progress=False
+        )
+
+        # Extract posterior samples
         results = {
-            'item_embeddings': np.random.normal(0, 1, (num_samples, K, D)),
-            'annotator_preferences': np.random.normal(0, 1, (num_samples, J, I, D)),
-            'thresholds': np.array([[[np.random.dirichlet([stan_data['alpha_dirichlet']] * (C-1))
-                                    for i in range(I)] for j in range(J)] for s in range(num_samples)]),
-            'measurement_noise': np.random.gamma(2, 1/stan_data['sigma_measurement'], num_samples)
+            'item_embeddings': fit.stan_variable('embeddings'),
+            'annotator_preferences': fit.stan_variable('annotator_preferences'),
+            'thresholds': fit.stan_variable('rating_thresholds'),
+            'measurement_noise': np.full(num_samples, stan_data['sigma_measurement'])  # Use fixed noise from input
         }
 
         return results

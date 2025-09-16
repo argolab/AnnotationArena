@@ -394,14 +394,15 @@ class ExperimentRunnerICLR:
                         )
                         total_rating_loss += rating_loss.item()
 
-                        # Calculate accuracy and RMSE
-                        predicted_rating = rating_logits.argmax().item() + 1  # Convert to 1-indexed
-                        true_rating = rating_target.argmax().item() + 1  # Convert to 1-indexed
+                        # Calculate accuracy and RMSE (following legacy code pattern)
+                        predicted_rating = torch.argmax(rating_logits).item()  # 0-indexed
+                        true_rating = torch.argmax(rating_target).item()       # 0-indexed
 
                         if predicted_rating == true_rating:
                             rating_correct += 1
 
-                        rating_mse += (predicted_rating - true_rating) ** 2
+                        # Convert to 1-indexed for RMSE calculation
+                        rating_mse += (predicted_rating + 1 - (true_rating + 1)) ** 2
                         rating_count += 1
 
                     elif var['type'] == 'ranking':
@@ -413,21 +414,25 @@ class ExperimentRunnerICLR:
                         )
                         total_ranking_loss += ranking_loss.item()
 
-                        # Calculate ranking accuracy
-                        # Handle both scalar and multi-element ranking outputs
-                        if ranking_logits.numel() == 1:
-                            predicted_preference = ranking_logits.item() > 0.5
-                        else:
-                            # If multi-element, use first element or argmax
-                            predicted_preference = ranking_logits[0].item() > 0.5
+                        # Calculate ranking accuracy using pairwise comparison (like legacy code)
+                        # Extract ranking order from target tensor
+                        target_order = []
+                        for j in range(ranking_target.shape[0]):
+                            score = int(ranking_target[j].item())
+                            if score > 0:
+                                target_order.append(score)
 
-                        if ranking_target.numel() == 1:
-                            true_preference = ranking_target.item() > 0.5
-                        else:
-                            true_preference = ranking_target[0].item() > 0.5
+                        if len(target_order) >= 2:
+                            # Use predicted scores to determine preference
+                            pred_scores = ranking_logits.cpu().numpy()
 
-                        if predicted_preference == true_preference:
-                            ranking_correct += 1
+                            # Simple pairwise accuracy: do first two items have correct relative order?
+                            if len(pred_scores) >= 2:
+                                pred_first_better = pred_scores[0] > pred_scores[1]
+                                true_first_better = target_order[0] < target_order[1]  # Lower rank number = better
+
+                                if pred_first_better == true_first_better:
+                                    ranking_correct += 1
 
                         ranking_count += 1
 
@@ -591,6 +596,7 @@ class ExperimentRunnerICLR:
 
         # 1. Pretraining
         pretraining_results = self.run_pretraining(masking_rate)
+        pretraining_time = pretraining_results['total_time']
         pretrained_state = copy.deepcopy(self.model.state_dict())
 
         # 2. Test evaluation for all methods
