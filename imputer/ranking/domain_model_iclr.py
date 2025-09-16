@@ -139,33 +139,46 @@ class DomainModelICLR:
         ratings = data['ratings']
         rankings = data['pairwise_rankings']
 
-        # Build Stan data structure
+        # Calculate ranking_size
+        ranking_size = len(rankings[0]['items']) if rankings else 2
+
+        # Build Stan data structure (following legacy format exactly)
         stan_data = {
+            # Dimensions
             'K': instance_config.K,
             'I': instance_config.I,
             'J': instance_config.J,
-            'C': instance_config.C,
             'D': instance_config.D,
+            'C': instance_config.C,
+            'ranking_size': ranking_size,
 
-            # Ratings data
+            # Ratings
             'N_ratings': len(ratings),
-            'rating_annotator': [r['annotator'] for r in ratings],
-            'rating_attribute': [r['attribute'] for r in ratings],
-            'rating_item': [r['item'] for r in ratings],
-            'rating_value': [r['value'] for r in ratings],
+            'rating_attributes': [r['attribute'] for r in ratings],
+            'rating_annotators': [r['annotator'] for r in ratings],
+            'rating_items': [r['item'] for r in ratings],
+            'rating_values': [r['value'] for r in ratings],
 
-            # Rankings data
+            # Comparisons (not used but required by Stan model)
+            'N_comparisons': 0,
+            'comparison_attributes': [],
+            'comparison_annotators': [],
+            'comparison_items_a': [],
+            'comparison_items_b': [],
+            'comparison_results': [],
+
+            # Rankings
             'N_rankings': len(rankings),
-            'ranking_annotator': [r['annotator'] for r in rankings],
-            'ranking_attribute': [r['attribute'] for r in rankings],
-            'ranking_item1': [r['items'][0] for r in rankings],
-            'ranking_item2': [r['items'][1] for r in rankings],
-            'ranking_winner': [1 if r['order'][0] < r['order'][1] else 2 for r in rankings],
+            'ranking_attributes': [r['attribute'] for r in rankings],
+            'ranking_annotators': [r['annotator'] for r in rankings],
+            'ranking_items': [r['items'] for r in rankings],
+            'ranking_orders': [r['order'] for r in rankings],
 
-            # Priors
+            # Hyperparameters
             'sigma_annotator': instance_config.sigma_annotator,
             'sigma_measurement': instance_config.sigma_measurement,
             'alpha_dirichlet': instance_config.alpha_dirichlet,
+            'temperature': instance_config.temperature,
             'sigma_embedding_prior': instance_config.sigma_embedding_prior,
             'sigma_preference_prior': instance_config.sigma_preference_prior
         }
