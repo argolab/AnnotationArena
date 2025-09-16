@@ -19,6 +19,9 @@ from imputer.ranking_imputer import MultiVariableImputer
 from domain_model_iclr import DomainModelICLR
 from iclr_data_generator import ICLRDataGenerator, ICLRDatasetConfig
 from dataclasses import asdict
+from imputer.losses import PlackettLuceLoss
+
+pl_loss = PlackettLuceLoss()
 
 logger = logging.getLogger(__name__)
 
@@ -462,9 +465,14 @@ class ExperimentRunnerICLR:
                         # Get ranking loss and accuracy
                         ranking_logits = outputs['ranking'][0, i]
                         ranking_target = batch['ranking_targets'][0, i].to(self.device)
-                        ranking_loss = torch.nn.functional.mse_loss(
-                            ranking_logits, ranking_target
-                        )
+                        
+                        # Get indices sorted by target (lowest rank = best)
+                        sorted_idx = torch.argsort(ranking_target)  # e.g. [1, 0] if target=[2,1]
+
+                        # Probability that the top-ranked item is chosen
+                        log_probs = torch.log_softmax(ranking_logits, dim=-1)
+                        ranking_loss = -log_probs[sorted_idx[0]]
+
                         total_ranking_loss += ranking_loss.item()
 
                         # Calculate ranking accuracy using pairwise comparison (like legacy code)
@@ -547,6 +555,7 @@ class ExperimentRunnerICLR:
                     # Get rating loss and accuracy
                     rating_logits = outputs['rating'][0, i]
                     rating_target = batch['rating_targets'][0, i].to(self.device)
+
                     rating_loss = torch.nn.functional.cross_entropy(
                         rating_logits.unsqueeze(0), rating_target.argmax().unsqueeze(0)
                     )
@@ -564,9 +573,14 @@ class ExperimentRunnerICLR:
                     # Get ranking loss and accuracy
                     ranking_logits = outputs['ranking'][0, i]
                     ranking_target = batch['ranking_targets'][0, i].to(self.device)
-                    ranking_loss = torch.nn.functional.mse_loss(
-                        ranking_logits, ranking_target
-                    )
+
+                    # Get indices sorted by target (lowest rank = best)
+                    sorted_idx = torch.argsort(ranking_target)  # e.g. [1, 0] if target=[2,1]
+
+                    # Probability that the top-ranked item is chosen
+                    log_probs = torch.log_softmax(ranking_logits, dim=-1)
+                    ranking_loss = -log_probs[sorted_idx[0]]
+
                     total_ranking_loss += ranking_loss.item()
                     # Calculate ranking accuracy using pairwise comparison
                     target_order = []
