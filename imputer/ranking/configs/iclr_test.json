@@ -65,13 +65,26 @@
     "embedding_type": "pairwise"
   },
   "training_config": {
-    "epochs": 30,
+    "epochs": 100,
     "learning_rate": 1e-3,
     "embedding_anchor_reg": 0.0,
-    "masking_rate": 0.5,
-    "evaluation_frequency": 1
+    "masking_rate": 0.35,
+    "evaluation_frequency": 1,
+    "batch_size": 16,
+    "early_stopping_patience": 20,
+    "early_stopping_min_delta": 1e-4,
+    "early_stopping_restore_best": true
   },
-  "base_output_dir": "OUTPUT_ICLR",
+  "base_output_dir": "OUTPUT",
   "save_plots": true,
-  "device": "cpu"
+  "device": "cpu",
+  "evaluation_interval": 100,
+  "chains": 1,
+  "iter_warmup": 100,
+  "iter_sampling": 2000,
+  "adapt_delta": 0.8,
+  "max_treedepth": 10,
+  "budget_fractions": [1.0],
+  "save_stan_output": true,
+  "mcmc_sample_points": [100, 200, 500, 1000, 2000]
 }
