@@ -47,6 +47,8 @@ class DataConverter:
             if all(item <= self.num_items for item in items_to_check):
                 filtered_rankings.append(ranking)
         return {'ratings': filtered_ratings, 'pairwise_rankings': filtered_rankings}
+    
+    
 
     def create_variables(self, data: Dict[str, Any]) -> List[RankingData]:
         """Convert raw data directly to List[RankingData]."""

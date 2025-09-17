@@ -523,7 +523,7 @@ def train_step(self, batch: List[RankingData]):
 
 ---
 
-## Phase 6: Main Experiment Runner
+## Phase 7: Main Experiment Runner
 
 **Key Functions & Flow:**
 
@@ -633,7 +633,7 @@ class ExperimentRunnerV2:
 
 ---
 
-## Phase 7: Integration and Testing
+## Phase 8: Integration and Testing
 
 ### Backwards Compatibility
 - Ensure existing `experiment_runner.py` still works

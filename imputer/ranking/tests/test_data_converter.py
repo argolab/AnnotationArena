@@ -227,12 +227,71 @@ def test_trainer_loss():
         result = trainer.train_step(batch)
         print(result)
 
+def test_multiInstance_trainer():
+    from imputer.data_v2 import DataConverter, RankingData
+    from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
+    from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
+    from imputer.trainer import ImputerTrainer
+    from imputer.ranking_imputer import MultiVariableImputer
+    from imputer.multi_instance_trainer import SequentialMIT, MixedMIT
+    from imputer.eval import EvaluationEngine
+    from config import ExperimentConfig
+
+    converter = DataConverter(
+        num_attributes=5, num_annotators=5, num_items=5,
+        num_likert_classes=5, max_rank_size=2
+    )
+    
+    data = converter.load_training_data("/home/stone/AnnotationArena/imputer/ranking/generated_data/multi_instance_3instances/instance_0/iclr_dataset_train.json")
+
+    model = MultiVariableImputer(
+        num_attributes=5,
+        num_annotators=5,
+        num_items=5,  # Updated for smaller dataset
+        num_likert_classes=5,
+        max_rank_size=2,
+        encoder_layers_num=2,
+        attention_heads=4,
+        embedding_dim=64,
+        dropout=0.1,
+        device="cuda"
+    ).to("cuda")
+
+    config = ExperimentConfig()
+    config.learning_rate = 1e-3
+    config.total_batches = 100
+    config.masking_rates = [0.5]
+    config.batch_size = 300
+    config.device = "cuda"
+    print("Testing sequential MIT")
+    sequential_base = SequentialMIT(model, EvaluationEngine(), config, converter)
+
+    sequential_base.train_on_instances([data], [data])
+    print("Testing Mixed MIT")
+
+    model = MultiVariableImputer(
+        num_attributes=5,
+        num_annotators=5,
+        num_items=5,  # Updated for smaller dataset
+        num_likert_classes=5,
+        max_rank_size=2,
+        encoder_layers_num=2,
+        attention_heads=4,
+        embedding_dim=64,
+        dropout=0.1,
+        device="cuda"
+    ).to("cuda")
+    sequential_base = MixedMIT(model, EvaluationEngine(), config, converter)
+
+    sequential_base.train_on_instances([data], [data])
+
 
 if __name__ == "__main__":
     test_create_batch()
     test_forward_pass()
     test_trainer_work()
-    test_trainer_loss()
+    #test_trainer_loss()
+    test_multiInstance_trainer()
 
 # def test_masking_behavior():
 #     """Test that masking works correctly."""

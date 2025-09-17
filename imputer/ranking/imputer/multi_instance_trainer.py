@@ -16,7 +16,7 @@ from .data import DataConverter
 class MultiInstanceTrainerBase:
     """Base class for multi-instance training with generator-based data generation."""
     
-    def __init__(self, model, eval_engine: EvaluationEngine, config, converter: DataConverter):
+    def __init__(self, model, eval_engine: EvaluationEngine, config, converter):
         self.model = model
         self.eval_engine = eval_engine
         self.config = config
@@ -32,10 +32,10 @@ class MultiInstanceTrainerBase:
         )
         
         for step, batch in enumerate(generator):
-            self.trainer.train_step(batch)
+            print(self.trainer.train_step(batch))
             
-            if self.should_evaluate(step):
-                self.evaluate_on_test_instances(test_instances)
+            # if self.should_evaluate(step):
+            #     self.evaluate_on_test_instances(test_instances)
     
     def create_training_generator(self, train_instances: List[Dict], total_batches: int, batch_size: int) -> Iterator[Dict]:
         """Override in subclasses - returns iterator of batches."""
@@ -47,23 +47,9 @@ class MultiInstanceTrainerBase:
     
     def create_masked_batch(self, instance_data: Dict, masking_rate: float, batch_size: int) -> Dict:
         """Create batch with specified masking rate and batch size for self-supervised learning."""
-        # Extract variables and data from instance (this should already be training data)
-        rating_variables, ranking_variables = self.converter.create_variables_from_actual_data(
-            instance_data, instance_data  # Using same data for train/test split
-        )
-        
-        # Process training data to get rating and ranking data dictionaries
-        rating_data, ranking_data = self.converter.process_training_data(instance_data)
-        
-        # Create batch with masking (self-supervised learning: M% masked, (1-M)% observed)
-        batch = self.converter.create_batch(
-            rating_variables=rating_variables,
-            ranking_variables=ranking_variables,
-            rating_data=rating_data,
-            ranking_data=ranking_data,
-            mode="train",
-            masking_rate=masking_rate
-        )
+        variables = self.converter.create_variables(instance_data)
+
+        batch = self.converter.create_masked_batch(variables, masking_rate, batch_size)
         
         return batch
     

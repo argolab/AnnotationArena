@@ -216,7 +216,6 @@ class ImputerTrainer:
             else:
                 raise ValueError("Shouldn't be here")
             
-        print(references)
 
         losses = self.loss_strategy.compute(predictions, references)
 
