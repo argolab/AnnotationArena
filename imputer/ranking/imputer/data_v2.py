@@ -79,8 +79,9 @@ class DataConverter:
         # Apply masking: M% of variables are masked, (1-M)% are observed
         # The model will use observed variables to predict masked variables
         masked_variables = []
-        for var in batch_variables:
-            if random.random() < masking_rate:
+        masked_indices = random.sample(list(range(len(variables))), int(len(variables) * masking_rate))
+        for i, var in enumerate(batch_variables):
+            if i in masked_indices:
                 # Create masked version (remove supervision)
                 masked_var = RankingData(
                     annotator_id=var.annotator_id,

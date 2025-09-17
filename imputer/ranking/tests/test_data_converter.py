@@ -9,7 +9,7 @@ import os
 # Add parent directory to path so we can import from imputer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from imputer.data import DataConverter, RankingData
+from imputer.data_v2 import DataConverter, RankingData
 
 def create_mock_data():
     """Create mock data for testing."""
@@ -82,87 +82,131 @@ def test_create_batch():
     )
     
     data = create_mock_data()
-    rating_variables, ranking_variables = converter.create_variables_from_actual_data(data, data)
-    rating_data, ranking_data = converter.process_training_data(data)
+    variables = converter.create_variables(data)
     
     # Test with different masking rates
     for masking_rate in [0.0, 0.5, 1.0]:
-        batch = converter.create_batch(
-            rating_variables=rating_variables,
-            ranking_variables=ranking_variables,
-            rating_data=rating_data,
-            ranking_data=ranking_data,
-            mode="train",
-            masking_rate=masking_rate
+        mask = 0
+        batch = converter.create_masked_batch(
+            variables, masking_rate, 10
         )
+        for data in batch:
+            if data.rating_value is None and data.ranking_order is None:
+                mask += 1
+                
+        print(mask)
+        assert mask == 6 * masking_rate
         
-        # Check that batch has the expected structure
-        assert 'all_variables' in batch, "Batch should have 'all_variables' key"
-        assert 'variable_data' in batch, "Batch should have 'variable_data' key"
-        assert 'rating_targets' in batch, "Batch should have 'rating_targets' key"
-        assert 'ranking_targets' in batch, "Batch should have 'ranking_targets' key"
-        assert 'rating_masked' in batch, "Batch should have 'rating_masked' key"
-        assert 'ranking_masked' in batch, "Batch should have 'ranking_masked' key"
+        print(batch)
 
-def test_masking_behavior():
-    """Test that masking works correctly."""
+def test_forward_pass():
+    from imputer.data_v2 import DataConverter, RankingData
+    from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
+    from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
+    from imputer.trainer import ImputerTrainer
+    from imputer.ranking_imputer import MultiVariableImputer
+
     converter = DataConverter(
         num_attributes=2, num_annotators=2, num_items=3,
         num_likert_classes=5, max_rank_size=2
     )
     
-    data = create_mock_data()
-    rating_variables, ranking_variables = converter.create_variables_from_actual_data(data, data)
-    rating_data, ranking_data = converter.process_training_data(data)
+    data = {
+        'ratings': [
+            {'annotator': 1, 'attribute': 1, 'item': 1, 'value': 2},
+            {'annotator': 2, 'attribute': 1, 'item': 2, 'value': 3},
+            {'annotator': 1, 'attribute': 2, 'item': 1, 'value': 1},
+            {'annotator': 2, 'attribute': 2, 'item': 2, 'value': 4},
+        ],
+        'pairwise_rankings': [
+            {'annotator': 1, 'attribute': 1, 'items': [1, 2], 'order': [1, 2]},
+            {'annotator': 2, 'attribute': 2, 'items': [1, 2], 'order': [2, 1]},
+        ]
+    }
+    variables = converter.create_variables(data)
     
-    # Test with 100% masking
-    batch = converter.create_batch(
-        rating_variables=rating_variables,
-        ranking_variables=ranking_variables,
-        rating_data=rating_data,
-        ranking_data=ranking_data,
-        mode="train",
-        masking_rate=1.0
-    )
+    batch = converter.create_masked_batch(variables, 0.5, 10)
     
-    # Check that masking is applied (some variables should be masked)
-    rating_masked = batch['rating_masked']
-    ranking_masked = batch['ranking_masked']
-    
-    # Check that at least some variables are masked (not all variables may be available for masking)
-    assert torch.any(rating_masked), "Some rating variables should be masked with 100% masking"
-    assert torch.any(ranking_masked), "Some ranking variables should be masked with 100% masking"
+    # Initialize model
+    model = MultiVariableImputer(
+        num_attributes=2,
+        num_annotators=2,
+        num_items=3,  # Updated for smaller dataset
+        num_likert_classes=5,
+        max_rank_size=2,
+        encoder_layers_num=2,
+        attention_heads=4,
+        embedding_dim=64,
+        dropout=0.1
+    ).to("cuda")
 
-def test_batch_consistency():
-    """Test that batches are consistent across runs."""
-    converter = DataConverter(
-        num_attributes=2, num_annotators=2, num_items=3,
-        num_likert_classes=5, max_rank_size=2
-    )
+    out = model(batch)
+
+    print("Forward pass is succssful")
+
+if __name__ == "__main__":
+    test_create_batch()
+    test_forward_pass()
+
+# def test_masking_behavior():
+#     """Test that masking works correctly."""
+#     converter = DataConverter(
+#         num_attributes=2, num_annotators=2, num_items=3,
+#         num_likert_classes=5, max_rank_size=2
+#     )
     
-    data = create_mock_data()
-    rating_variables, ranking_variables = converter.create_variables_from_actual_data(data, data)
-    rating_data, ranking_data = converter.process_training_data(data)
+#     data = create_mock_data()
+#     rating_variables, ranking_variables = converter.create_variables_from_actual_data(data, data)
+#     rating_data, ranking_data = converter.process_training_data(data)
     
-    # Create two batches with the same parameters
-    batch1 = converter.create_batch(
-        rating_variables=rating_variables,
-        ranking_variables=ranking_variables,
-        rating_data=rating_data,
-        ranking_data=ranking_data,
-        mode="train",
-        masking_rate=0.5
-    )
+#     # Test with 100% masking
+#     batch = converter.create_batch(
+#         rating_variables=rating_variables,
+#         ranking_variables=ranking_variables,
+#         rating_data=rating_data,
+#         ranking_data=ranking_data,
+#         mode="train",
+#         masking_rate=1.0
+#     )
     
-    batch2 = converter.create_batch(
-        rating_variables=rating_variables,
-        ranking_variables=ranking_variables,
-        rating_data=rating_data,
-        ranking_data=ranking_data,
-        mode="train",
-        masking_rate=0.5
-    )
+#     # Check that masking is applied (some variables should be masked)
+#     rating_masked = batch['rating_masked']
+#     ranking_masked = batch['ranking_masked']
     
-    # Check that basic structure is consistent
-    assert len(batch1['all_variables']) == len(batch2['all_variables']), "Batch sizes should be consistent"
-    assert batch1['variable_data'].shape == batch2['variable_data'].shape, "Variable data shapes should be consistent"
+#     # Check that at least some variables are masked (not all variables may be available for masking)
+#     assert torch.any(rating_masked), "Some rating variables should be masked with 100% masking"
+#     assert torch.any(ranking_masked), "Some ranking variables should be masked with 100% masking"
+
+# def test_batch_consistency():
+#     """Test that batches are consistent across runs."""
+#     converter = DataConverter(
+#         num_attributes=2, num_annotators=2, num_items=3,
+#         num_likert_classes=5, max_rank_size=2
+#     )
+    
+#     data = create_mock_data()
+#     rating_variables, ranking_variables = converter.create_variables_from_actual_data(data, data)
+#     rating_data, ranking_data = converter.process_training_data(data)
+    
+#     # Create two batches with the same parameters
+#     batch1 = converter.create_batch(
+#         rating_variables=rating_variables,
+#         ranking_variables=ranking_variables,
+#         rating_data=rating_data,
+#         ranking_data=ranking_data,
+#         mode="train",
+#         masking_rate=0.5
+#     )
+    
+#     batch2 = converter.create_batch(
+#         rating_variables=rating_variables,
+#         ranking_variables=ranking_variables,
+#         rating_data=rating_data,
+#         ranking_data=ranking_data,
+#         mode="train",
+#         masking_rate=0.5
+#     )
+    
+#     # Check that basic structure is consistent
+#     assert len(batch1['all_variables']) == len(batch2['all_variables']), "Batch sizes should be consistent"
+#     assert batch1['variable_data'].shape == batch2['variable_data'].shape, "Variable data shapes should be consistent"
