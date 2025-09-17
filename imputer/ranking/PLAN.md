@@ -183,17 +183,26 @@ model.forward(variables)
 
 ---
 
-## Phase 4: Multi-Instance Training
+## Phase 4: Multi-Instance Training ✅ COMPLETED
+
+### File: `imputer/multi_instance_trainer.py` ✅ IMPLEMENTED
+
+**Implemented Classes:**
+- `MultiInstanceTrainerBase` - Base class with generator-based training loop
+- `SequentialMIT` - Sequential multi-instance trainer (exhausts each instance)
+- `MixedMIT` - Mixed multi-instance trainer (IID sampling from all instances)
+- `GeneralMIT` - General multi-instance trainer (placeholder for finetuning)
 
 **Key Functions & Flow:**
 
 **File: `imputer/multi_instance_trainer.py`**
-- `MultiInstanceTrainerBase.__init__()` → initializes base trainer with eval_engine
+- `MultiInstanceTrainerBase.__init__()` → initializes base trainer with eval_engine, config, converter
 - `MultiInstanceTrainerBase.train_on_instances()` → unified training loop using generator
 - `MultiInstanceTrainerBase.create_training_generator()` → abstract method for data generation
+- `MultiInstanceTrainerBase.create_masked_batch()` → creates masked batches using DataConverter
 - `SequentialMIT.create_training_generator()` → exhausts each instance before next
 - `MixedMIT.create_training_generator()` → IID sampling from all instances
-- `GeneralMIT.finetune_on_instance()` → finetunes on single instance
+- `GeneralMIT.finetune_on_instance()` → placeholder for finetuning (not implemented)
 
 **Function Call Flow:**
 ```
@@ -222,74 +231,24 @@ GeneralMIT.finetune_on_instance(pretrained_model, instance_data)
 └── Evaluate on Test_O_Masked
 ```
 
-### File: `imputer/multi_instance_trainer.py`
+**Key Implementation Details:**
+- **Generator Pattern**: Clean separation of data generation and training logic
+- **DataConverter Integration**: Uses existing `DataConverter.create_batch()` for batch creation
+- **Flexible Control**: `total_batches` and `batch_size` parameters control training length
+- **Random Masking**: Random masking rate per batch from `config.masking_rates`
+- **Evaluation Hook**: `evaluate_on_test_instances()` placeholder for future evaluation integration
 
-```python
-class MultiInstanceTrainerBase:
-    def __init__(self, model, eval_engine, config):
-        self.model = model
-        self.eval_engine = eval_engine
-        self.config = config
-        self.trainer = ImputerTrainer(model, config.learning_rate)
-    
-    def train_on_instances(self, train_instances, test_instances):
-        """Unified training loop that uses generator from subclass"""
-        generator = self.create_training_generator(
-            train_instances, 
-            self.config.total_batches, 
-            self.config.batch_size
-        )
-        
-        for step, batch in enumerate(generator):
-            self.trainer.train_step(batch)
-            
-            if self.should_evaluate(step):
-                self.evaluate_on_test_instances(test_instances)
-    
-    def create_training_generator(self, train_instances, total_batches, batch_size):
-        """Override in subclasses - returns iterator of batches"""
-        raise NotImplementedError
-    
-    def should_evaluate(self, step):
-        """Override for evaluation frequency control"""
-        return step % self.config.eval_frequency == 0
-    
-    def create_masked_batch(self, instance, masking_rate, batch_size):
-        """Create batch with specified masking rate and batch size"""
-        # Implementation details for creating masked batches
+**Testing Completed:**
+- ✅ SequentialMIT: Generates batches per instance sequentially
+- ✅ MixedMIT: Generates exact number of batches with IID sampling
+- ✅ Both generators produce valid batches with proper structure
+- ✅ Integration with existing data pipeline works correctly
+- ✅ Batch creation with masking works properly
 
-class SequentialMIT(MultiInstanceTrainerBase):
-    def create_training_generator(self, train_instances, total_batches, batch_size):
-        """Generate batches per instance sequentially"""
-        batches_per_instance = total_batches // len(train_instances)
-        
-        for instance in train_instances:
-            for _ in range(batches_per_instance):
-                masking_rate = random.choice(self.config.masking_rates)
-                batch = self.create_masked_batch(instance, masking_rate, batch_size)
-                yield batch
-
-class MixedMIT(MultiInstanceTrainerBase):
-    def create_training_generator(self, train_instances, total_batches, batch_size):
-        """IID sampling from all instances"""
-        for _ in range(total_batches):
-            instance = random.choice(train_instances)
-            masking_rate = random.choice(self.config.masking_rates)
-            batch = self.create_masked_batch(instance, masking_rate, batch_size)
-            yield batch
-
-class GeneralMIT(MultiInstanceTrainerBase):
-    def finetune_on_instance(self, pretrained_model, instance_data):
-        """Finetune on single instance (for test instance finetuning)"""
-        # Split instance into Test_O_Masked and Test_O_Observed
-        # Train on observed, validate on masked
-```
-
-### Test Script: `test_multi_instance_trainers.py`
-- Test sequential training generator exhausts instances
-- Test mixed training generator provides IID sampling
-- Test training step control and evaluation frequency
-- Test finetuning logic
+**Not Yet Implemented:**
+- ❌ `MultiInstanceTrainerBase.evaluate_on_test_instances()` - placeholder only
+- ❌ `GeneralMIT.finetune_on_instance()` - placeholder only
+- ❌ Integration with EvaluationEngine for test instance evaluation
 
 ---
 
@@ -307,7 +266,7 @@ class GeneralMIT(MultiInstanceTrainerBase):
 - `ExperimentConfig.eval_frequency` → evaluation frequency during training
 - `ExperimentConfig.evaluation_types` → list of evaluation strategies
 
-### File: `config.py` (Modified)
+### File: `config.py` (To Be Modified)
 
 ```python
 @dataclass
@@ -473,12 +432,52 @@ class ExperimentRunnerV2:
 
 ---
 
-## Implementation Order
+## Implementation Status
 
-1. **Week 1**: Phase 1-2 (Evaluation infrastructure + trainer refactoring)
-2. **Week 1**: Phase 3 (Random embeddings)
-3. **Week 2**: Phase 4 (Mixed instance trainers)
-4. **Week 2**: Phase 5-6 (Configuration + main runner)
-5. **Week 3**: Phase 7 (Integration, testing, documentation)
+### ✅ COMPLETED PHASES
+1. **Phase 1**: Evaluation Infrastructure ✅ COMPLETED
+   - `EvaluationEngine` with comprehensive metrics
+   - `EvaluationResults` container
+   - Masking and splitting functionality
+   - Full testing completed
 
-Each phase includes immediate testing before proceeding to ensure functionality and catch issues early.
+2. **Phase 2**: Trainer Refactoring ✅ COMPLETED
+   - `EvaluationCallback` system
+   - Refactored `ImputerTrainer` with callbacks
+   - Clean separation of training and evaluation
+   - Full testing completed
+
+3. **Phase 3**: Random Embedding Provider ✅ COMPLETED
+   - `FullyRandomizedEmbeddingProvider` class
+   - `reset_embedding()` method in base class
+   - Non-trainable randomized embeddings
+   - Data validation assertions
+   - Full testing completed
+
+4. **Phase 4**: Multi-Instance Training ✅ COMPLETED
+   - `MultiInstanceTrainerBase` with generator pattern
+   - `SequentialMIT` and `MixedMIT` implementations
+   - `GeneralMIT` placeholder for finetuning
+   - Integration with `DataConverter`
+   - Full testing completed
+
+### ❌ REMAINING PHASES
+5. **Phase 5**: Configuration Updates ❌ NOT IMPLEMENTED
+   - Add new config parameters
+   - Update existing config files
+   - Backwards compatibility
+
+6. **Phase 6**: Main Experiment Runner ❌ NOT IMPLEMENTED
+   - `experiment_runner_v2.py`
+   - Integration with all components
+   - End-to-end testing
+
+7. **Phase 7**: Integration and Testing ❌ NOT IMPLEMENTED
+   - Backwards compatibility
+   - Comprehensive testing
+   - Documentation updates
+
+### NEXT STEPS
+- **Phase 5**: Configuration updates (add new parameters to config.py)
+- **Phase 6**: Main experiment runner (integrate all components)
+- **Phase 7**: Integration testing and documentation
