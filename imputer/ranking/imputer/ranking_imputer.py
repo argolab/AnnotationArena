@@ -18,7 +18,7 @@ import logging
 from tqdm import tqdm
 
 # New modular components (use relative imports only)
-from .embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
+from .embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider, FullyRandomizedEmbeddingProvider
 from .transformer import TransformerBlock, NormLayer as _NormLayer
 from .data import RankingData, DataConverter
 from .trainer import ImputerTrainer
@@ -70,6 +70,10 @@ class MultiVariableImputer(nn.Module):
             sys.exit()
         elif embedding_type == "combined_random":
             self.embedding_provider = CombineRandomTrainedEmbeddingProvider(
+                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
+            )
+        elif embedding_type == "fully_random":
+            self.embedding_provider = FullyRandomizedEmbeddingProvider(
                 num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
             )
         else:
