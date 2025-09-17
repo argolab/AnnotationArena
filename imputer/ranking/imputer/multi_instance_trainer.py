@@ -46,8 +46,8 @@ class MultiInstanceTrainerBase:
         return step % self.config.eval_frequency == 0
     
     def create_masked_batch(self, instance_data: Dict, masking_rate: float, batch_size: int) -> Dict:
-        """Create batch with specified masking rate and batch size."""
-        # Extract variables and data from instance
+        """Create batch with specified masking rate and batch size for self-supervised learning."""
+        # Extract variables and data from instance (this should already be training data)
         rating_variables, ranking_variables = self.converter.create_variables_from_actual_data(
             instance_data, instance_data  # Using same data for train/test split
         )
@@ -55,7 +55,7 @@ class MultiInstanceTrainerBase:
         # Process training data to get rating and ranking data dictionaries
         rating_data, ranking_data = self.converter.process_training_data(instance_data)
         
-        # Create batch with masking
+        # Create batch with masking (self-supervised learning: M% masked, (1-M)% observed)
         batch = self.converter.create_batch(
             rating_variables=rating_variables,
             ranking_variables=ranking_variables,
@@ -67,9 +67,34 @@ class MultiInstanceTrainerBase:
         
         return batch
     
+    def create_evaluation_batch(self, instance_data: Dict, masking_rate: float) -> Dict:
+        """Create evaluation batch with Test_M (masked) and Test_O (observed) split."""
+        # Extract variables and data from instance (this should be test data)
+        rating_variables, ranking_variables = self.converter.create_variables_from_actual_data(
+            instance_data, instance_data
+        )
+        
+        # Process test data to get rating and ranking data dictionaries
+        rating_data, ranking_data = self.converter.process_training_data(instance_data)
+        
+        # Create evaluation batch with masking (for evaluation: M% masked, (1-M)% observed)
+        batch = self.converter.create_batch(
+            rating_variables=rating_variables,
+            ranking_variables=ranking_variables,
+            rating_data=rating_data,
+            ranking_data=ranking_data,
+            mode="test",  # Use test mode for evaluation
+            masking_rate=masking_rate
+        )
+        
+        return batch
+    
     def evaluate_on_test_instances(self, test_instances: List[Dict]):
         """Evaluate model on all test instances."""
         for test_instance in test_instances:
+            # Create evaluation batch with masking
+            batch = self.create_evaluation_batch(test_instance, self.config.test_masking_rate)
+            
             # Use the evaluation engine to evaluate on this test instance
             # This will be implemented when we integrate with the evaluation engine
             raise NotImplementedError("MultiInstanceTrainerBase.evaluate_on_test_instances not yet implemented")
