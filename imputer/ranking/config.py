@@ -36,7 +36,7 @@ class ModelConfig:
     attention_heads: int = 8
     embedding_dim: int = 64
     dropout: float = 0.1
-    embedding_type: str = "combined_random"
+    embedding_type: str = "combined_random"  # "pairwise", "combined_random", "fully_random"
 
 @dataclass
 class TrainingConfig:
@@ -46,6 +46,15 @@ class TrainingConfig:
     embedding_anchor_reg: float = 0.0
     masking_rate: float = 0.5
     evaluation_frequency: int = 1
+
+    # Phase 5: New experimental parameters
+    test_masking_rate: float = 0.3  # M% for test instances
+    pretraining_mode: str = "sequential"  # "sequential" or "mixed"
+    total_batches: int = 1000  # total number of batches to generate
+    batch_size: int = 32  # size of each batch
+    masking_rates: List[float] = field(default_factory=lambda: [0.0, 0.2, 0.5, 0.8, 1.0])  # list of masking rates for training
+    eval_frequency: int = 100  # evaluation frequency during training
+    evaluation_types: List[str] = field(default_factory=lambda: ["pretrained", "pretrained_finetuned", "fresh", "domain"])  # list of evaluation strategies
     
 @dataclass
 class ExperimentConfig:
@@ -211,20 +220,41 @@ class ExperimentConfig:
         """Validate configuration consistency."""
         if self.experiment_type not in ["single_instance", "multi_instance"]:
             raise ValueError(f"Invalid experiment_type: {self.experiment_type}")
-        
+
         if not self.instances:
             raise ValueError("At least one instance configuration required")
-        
+
         max_idx = len(self.instances) - 1
         for idx in self.train_instance_indices + self.test_instance_indices:
             if idx > max_idx:
                 raise ValueError(f"Instance index {idx} exceeds available instances (0-{max_idx})")
-        
+
         if self.experiment_type == "single_instance":
             if len(self.instances) != 1:
                 raise ValueError("Single instance experiment requires exactly 1 instance")
             if self.train_instance_indices != [0] or self.test_instance_indices != [0]:
                 raise ValueError("Single instance experiment requires train and test indices to be [0]")
+
+        # Phase 5: Validate new configuration parameters
+        valid_embedding_types = ["pairwise", "combined_random", "fully_random"]
+        if self.model_config.embedding_type not in valid_embedding_types:
+            raise ValueError(f"embedding_type must be one of {valid_embedding_types}, got {self.model_config.embedding_type}")
+
+        valid_pretraining_modes = ["sequential", "mixed"]
+        if self.training_config.pretraining_mode not in valid_pretraining_modes:
+            raise ValueError(f"pretraining_mode must be one of {valid_pretraining_modes}, got {self.training_config.pretraining_mode}")
+
+        if not (0.0 <= self.training_config.test_masking_rate <= 1.0):
+            raise ValueError(f"test_masking_rate must be between 0.0 and 1.0, got {self.training_config.test_masking_rate}")
+
+        for rate in self.training_config.masking_rates:
+            if not (0.0 <= rate <= 1.0):
+                raise ValueError(f"masking_rates must be between 0.0 and 1.0, got {rate}")
+
+        valid_evaluation_types = ["pretrained", "pretrained_finetuned", "fresh", "domain"]
+        for eval_type in self.training_config.evaluation_types:
+            if eval_type not in valid_evaluation_types:
+                raise ValueError(f"evaluation_types must contain only {valid_evaluation_types}, got {eval_type}")
     
     def get_legacy_properties(self) -> dict:
         """Get legacy properties for backwards compatibility."""

@@ -264,19 +264,38 @@ intended behavior:
 
 ---
 
-## Phase 5: Configuration Updates (TODO)
+## Phase 5: Configuration Updates ✅ COMPLETED
 
-**Key Functions & Flow:**
+### Implementation Summary ✅
 
-**File: `config.py`**
-- `ModelConfig.embedding_type` → add "random" option
-- `ExperimentConfig.test_masking_rate` → M% for test instances
-- `ExperimentConfig.pretraining_mode` → "sequential" or "mixed"
-- `ExperimentConfig.total_batches` → total number of batches to generate
-- `ExperimentConfig.batch_size` → size of each batch
-- `ExperimentConfig.masking_rates` → list of masking rates for training
-- `ExperimentConfig.eval_frequency` → evaluation frequency during training
-- `ExperimentConfig.evaluation_types` → list of evaluation strategies
+**File: `config.py` - Added Phase 5 Parameters:**
+- `ModelConfig.embedding_type` → now supports "pairwise", "combined_random", "fully_random"
+- `TrainingConfig.test_masking_rate` → M% for test instances (default: 0.3)
+- `TrainingConfig.pretraining_mode` → "sequential" or "mixed" (default: "sequential")
+- `TrainingConfig.total_batches` → total number of batches to generate (default: 1000)
+- `TrainingConfig.batch_size` → size of each batch (default: 32)
+- `TrainingConfig.masking_rates` → list of masking rates for training (default: [0.0, 0.2, 0.5, 0.8, 1.0])
+- `TrainingConfig.eval_frequency` → evaluation frequency during training (default: 100)
+- `TrainingConfig.evaluation_types` → list of evaluation strategies (default: ["pretrained", "pretrained_finetuned", "fresh", "domain"])
+
+**File: `configs/*.json` - Updated All Config Files:**
+- `configs/single_instance.json` → added Phase 5 parameters
+- `configs/multi_instance_demo.json` → added Phase 5 parameters
+- `configs/multi_instance_10.json` → added Phase 5 parameters
+
+**File: `tests/test_config_phase5.py` - Comprehensive Testing:**
+- ✅ Parameter existence and type validation
+- ✅ Range validation (masking rates [0,1], positive integers)
+- ✅ Enum validation (embedding types, pretraining modes, evaluation types)
+- ✅ Multi-instance configuration support
+- ✅ Backwards compatibility with existing configs
+- ✅ Validation error handling
+
+**Validation Added:**
+- Embedding type validation: ["pairwise", "combined_random", "fully_random"]
+- Pretraining mode validation: ["sequential", "mixed"]
+- Range validation: test_masking_rate and masking_rates in [0.0, 1.0]
+- Evaluation type validation: ["pretrained", "pretrained_finetuned", "fresh", "domain"]
 
 ### File: `config.py` (To Be Modified)
 
@@ -682,7 +701,7 @@ class ExperimentRunnerV2:
    - Full testing completed
 
 ### ❌ REMAINING PHASES
-5. **Phase 5**: Configuration Updates ❌ NOT IMPLEMENTED
+5. **Phase 5**: Configuration Updates ✅ COMPLETED
    - Add new config parameters
    - Update existing config files
    - Backwards compatibility
