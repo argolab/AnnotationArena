@@ -89,39 +89,74 @@ class EvaluationEngine:
 
 ---
 
-## Phase 2: Trainer Refactoring
+## Phase 2: Trainer Refactoring ✅ COMPLETED
 
-### File: `imputer/trainer.py` (Modified)
+### File: `imputer/trainer.py` ✅ IMPLEMENTED
 
+**Implemented Classes:**
+- `EvaluationCallback` - Callback for evaluation during training using EvaluationEngine
+- `ImputerTrainer` (Refactored) - Clean trainer with callback system, no evaluation logic
+- `EarlyStopping` - Utility for early stopping (unchanged)
+- `calculate_rmse` - Utility function (unchanged)
+
+**Key Changes Made:**
 ```python
 class EvaluationCallback:
-    def __init__(self, eval_engine, test_data, masking_rate):
-        self.eval_engine = eval_engine
-        self.test_data = test_data
-        self.masking_rate = masking_rate
+    def __init__(self, eval_engine, test_variables, test_data, converter, masking_rate, device):
+        """Initialize with EvaluationEngine and test data - IMPLEMENTED"""
+        # Stores all necessary components for evaluation
 
     def on_epoch_end(self, model, epoch):
-        return self.eval_engine.evaluate_model(
-            model, self.test_data, self.masking_rate
-        )
+        """Called at end of each epoch - IMPLEMENTED"""
+        # Uses EvaluationEngine.evaluate_model() for consistent evaluation
+        # Returns structured results with epoch info
 
 class ImputerTrainer:
-    def __init__(self, model, learning_rate, callbacks=None):
-        # Remove all evaluation logic
-        # Add callback system
-
-    def train_step(self, batch):
-        # Keep existing training logic
-        # Remove evaluation calls
+    def __init__(self, model, learning_rate, device, embedding_anchor_reg, callbacks):
+        """Constructor with callback support - IMPLEMENTED"""
+        # Added callbacks parameter and callback list
 
     def register_callback(self, callback):
-        """Register evaluation callback"""
+        """Register evaluation callback - IMPLEMENTED"""
+
+    def _call_epoch_end_callbacks(self, epoch):
+        """Call all registered callbacks at epoch end - IMPLEMENTED"""
+        # Handles exceptions gracefully
+
+    def train(self, train_batches, epochs, call_callbacks_every, verbose):
+        """Training loop with callback support - NEW IMPLEMENTATION"""
+        # Handles single batch or list of batches
+        # Configurable callback frequency
+        # Returns training history + callback history
+
+    def train_step(self, batch):
+        """Single training step - UNCHANGED"""
+        # Existing training logic preserved
+        # No evaluation code removed
 ```
 
-### Test Script: `test_trainer_callbacks.py`
-- Verify callbacks called at epoch end
-- Check evaluation removed from trainer
-- Test training still works correctly
+**Old Evaluation Methods:**
+- ✅ `evaluate_with_test_data()` - REMOVED (replaced with EvaluationEngine + callbacks)
+- ✅ `print_predictions_by_attribute()` - REMOVED (functionality moved to EvaluationEngine)
+
+**Testing Completed:**
+- ✅ Callback registration and storage works correctly
+- ✅ EvaluationCallback creation and on_epoch_end functionality verified
+- ✅ Training loop with callbacks works (epochs=3, different frequencies tested)
+- ✅ Callback frequency control works (every 1, 2, 3 epochs)
+- ✅ Training step functionality unchanged (loss computation verified)
+- ✅ Integration with EvaluationEngine works correctly
+
+**Backwards Compatibility:**
+- ImputerTrainer constructor accepts callbacks parameter (optional)
+- train_step() method unchanged - existing code will work
+- New train() method provides modern training loop with callbacks
+- EvaluationCallback integrates seamlessly with EvaluationEngine from Phase 1
+
+**Integration Points Ready:**
+- Ready for mixed instance trainers (Phase 4) - callback system is extensible
+- Ready for configuration updates (Phase 5) - masking rates configurable in callbacks
+- Clean separation of concerns - training logic vs evaluation logic
 
 ---
 

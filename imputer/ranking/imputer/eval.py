@@ -179,8 +179,42 @@ class EvaluationEngine:
                 ).item()
 
         if 'ranking' in model_output and 'ranking_targets' in targets:
-            # Simplified ranking loss computation
-            ranking_loss = 0.0  # TODO: Implement proper ranking loss
+            ranking_logits = model_output['ranking']
+            ranking_targets = targets['ranking_targets']
+            ranking_mask = targets.get('ranking_mask', torch.ones_like(ranking_targets[:, :, 0]))
+
+            # Apply evaluation mask
+            eval_mask = mask & ranking_mask
+            if eval_mask.any():
+                total_ranking_loss = 0.0
+                count = 0
+
+                for i in torch.nonzero(eval_mask).flatten():
+                    batch_idx = i // eval_mask.size(1)
+                    var_idx = i % eval_mask.size(1)
+
+                    # Get logits and target for this ranking
+                    logits = ranking_logits[batch_idx, var_idx]
+                    target = ranking_targets[batch_idx, var_idx]
+
+                    # Find valid positions (non-zero targets)
+                    valid_positions = target > 0
+                    if valid_positions.any():
+                        valid_target = target[valid_positions]
+                        valid_logits = logits[valid_positions]
+
+                        # Get indices sorted by target (lowest rank = best)
+                        # E.g., if target=[2,1], sorted_idx=[1,0] (item at pos 1 ranks first)
+                        sorted_idx = torch.argsort(valid_target)
+
+                        # Plackett-Luce loss: probability that the top-ranked item is chosen
+                        log_probs = torch.log_softmax(valid_logits, dim=-1)
+                        ranking_loss_item = -log_probs[sorted_idx[0]]
+
+                        total_ranking_loss += ranking_loss_item.item()
+                        count += 1
+
+                ranking_loss = total_ranking_loss / count if count > 0 else 0.0
 
         return {
             'total_loss': rating_loss + ranking_loss,
