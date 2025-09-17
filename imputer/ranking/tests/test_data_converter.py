@@ -84,16 +84,12 @@ def test_create_batch():
     data = create_mock_data()
     variables = converter.create_variables(data)
     
-    # Test with different masking rates
-    for masking_rate in [0.0, 0.5, 1.0]:
-        mask = 0
-        batch = converter.create_masked_batch(
-            variables, masking_rate, 10
-        )
-        for data in batch:
-            if data.rating_value is None and data.ranking_order is None:
-                mask += 1
-        assert mask == 6 * masking_rate
+    batch = converter.create_training_batch(
+        variables, 10
+    )
+    for data in batch:
+        assert not(data.ranking_order is None and data.rating_value is None)
+    print(batch)
         
 
 def test_forward_pass():
@@ -122,7 +118,7 @@ def test_forward_pass():
     }
     variables = converter.create_variables(data)
     
-    batch = converter.create_masked_batch(variables, 0.5, 10)
+    batch = converter.create_training_batch(variables, 10)
     
     # Initialize model
     model = MultiVariableImputer(
@@ -167,7 +163,7 @@ def test_trainer_work():
     }
     variables = converter.create_variables(data)
     
-    batch = converter.create_masked_batch(variables, 0.5, 10)
+    batch = converter.create_training_batch(variables, 10)
     
     # Initialize model
     model = MultiVariableImputer(

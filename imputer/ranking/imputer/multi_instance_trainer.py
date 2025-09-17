@@ -21,7 +21,7 @@ class MultiInstanceTrainerBase:
         self.eval_engine = eval_engine
         self.config = config
         self.converter = converter
-        self.trainer = ImputerTrainer(model, config.learning_rate, device=config.device)
+        self.trainer = ImputerTrainer(model, config.learning_rate, device=config.device, masking_rate=config.masking_rates[0])
     
     def train_on_instances(self, train_instances: List[Dict], test_instances: List[Dict]):
         """Unified training loop that uses generator from subclass."""
@@ -49,7 +49,7 @@ class MultiInstanceTrainerBase:
         """Create batch with specified masking rate and batch size for self-supervised learning."""
         variables = self.converter.create_variables(instance_data)
 
-        batch = self.converter.create_masked_batch(variables, masking_rate, batch_size)
+        batch = self.converter.create_training_batch(variables, batch_size)
         
         return batch
     
@@ -79,7 +79,9 @@ class MultiInstanceTrainerBase:
         """Evaluate model on all test instances."""
         for test_instance in test_instances:
             # Create evaluation batch with masking
-            batch = self.create_evaluation_batch(test_instance, self.config.test_masking_rate)
+            test_variables = self.converter.create_variables(test_instance)
+
+            self.eval_engine.evaluate_model(self.model, test_variables, self.config.test_masking_rate)
             
             # Use the evaluation engine to evaluate on this test instance
             # This will be implemented when we integrate with the evaluation engine

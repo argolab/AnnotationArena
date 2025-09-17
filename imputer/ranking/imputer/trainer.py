@@ -6,6 +6,7 @@ import copy
 
 from .losses import DefaultLossStrategy, adapt_batched_logits_to_predictions
 from .data import RankingData
+import random
 
 
 class EvaluationCallback:
@@ -113,12 +114,12 @@ def calculate_rmse(predictions: List[int], targets: List[int]) -> float:
 
 
 class ImputerTrainer:
-    def __init__(self, model, learning_rate=1e-3, device='cuda' if torch.cuda.is_available() else 'cpu', embedding_anchor_reg: float = 0.0, callbacks=None):
+    def __init__(self, model, learning_rate=1e-3, masking_rate=0.5, device='cuda' if torch.cuda.is_available() else 'cpu', embedding_anchor_reg: float = 0.0, callbacks=None):
         self.model = model.to(device)
         self.device = device
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         self.loss_strategy = DefaultLossStrategy()
-
+        self.masking_rate = masking_rate
         # Callback system
         self.callbacks = callbacks or []
 
@@ -152,6 +153,31 @@ class ImputerTrainer:
                     print(f"Warning: Callback failed at epoch {epoch}: {e}")
                     callback_results.append({'epoch': epoch, 'error': str(e)})
         return callback_results
+    
+    def apply_masking(self, variables, masking_rate):
+        
+        # Apply masking: M% of variables are masked, (1-M)% are observed
+        # The model will use observed variables to predict masked variables
+        masked_variables = []
+        masked_indices = random.sample(list(range(len(variables))), int(len(variables) * masking_rate))
+        for i, var in enumerate(variables):
+            if i in masked_indices:
+                # Create masked version (remove supervision)
+                masked_var = RankingData(
+                    annotator_id=var.annotator_id,
+                    attribute_id=var.attribute_id,
+                    is_listwise=var.is_listwise,
+                    item_ids=var.item_ids,
+                    rating_value=None,  # Mask the rating value
+                    ranking_order=None  # Mask the ranking order
+                )
+                masked_variables.append(masked_var)
+            else:
+                # Keep original (observed) for conditioning
+                masked_variables.append(var)
+        
+        return masked_variables
+
 
     def train_step(self, batch):
         """Single training step using legacy tensor batch + structured losses."""
@@ -173,8 +199,9 @@ class ImputerTrainer:
         #     variable_data, variable_types, attribute_ids, annotator_ids, item_ids
         # )
         # # Forward pass
-        ranking_data_list = batch
-        out = self.model(ranking_data_list)
+        reference_data_list = copy.deepcopy(batch)
+        input_data_list = self.apply_masking(batch, self.masking_rate)
+        out = self.model(input_data_list)
         rating_logits = out['rating']
         ranking_logits = out['ranking']
 
@@ -183,35 +210,27 @@ class ImputerTrainer:
         predictions_full = adapt_batched_logits_to_predictions({'rating': rating_logits, 'ranking': ranking_logits})
         predictions: List["TopLayerPredictionResult"] = []
         references: List[RankingData] = []
-        all_vars = batch
 
 
         # Reconstruct references from batch tensors (0-indexed) - for ALL training variables with ground truth
-        for i, var in enumerate(all_vars):
+        for i, var in enumerate(reference_data_list):
             if not var.is_listwise:
-                rating_val = int(torch.argmax(var.rating_target).item())
                 predictions.append(predictions_full[i])
                 references.append(RankingData(
                     annotator_id=var.annotator_id,
                     attribute_id=var.attribute_id,
                     is_listwise=False,
-                    item_ids=[var.item_ids[0]],
-                    rating_value=rating_val,
+                    item_ids=var.item_ids,
+                    rating_value=var.rating_value,
                 ))
             elif var.is_listwise:
-                scores_vec = var.ranking_target
-                ranking_order = []
-                for j in range(scores_vec.shape[0]):
-                    s = int(scores_vec[j].item())
-                    if s > 0:
-                        ranking_order.append(int(s))
                 predictions.append(predictions_full[i])
                 references.append(RankingData(
                     annotator_id=var.annotator_id,
                     attribute_id=var.attribute_id,
                     is_listwise=True,
                     item_ids=[it for it in var.item_ids[: self.model.max_rank_size]],
-                    ranking_order=ranking_order,
+                    ranking_order=var.ranking_order,
                 ))
             else:
                 raise ValueError("Shouldn't be here")
