@@ -26,53 +26,29 @@ Implement a new experimental framework supporting different imputer types with p
 - `EvaluationResults` - Container for evaluation metrics with masked/observed breakdown
 - `EvaluationEngine` - Main evaluation engine with comprehensive functionality
 
-**Key Features Implemented:**
-```python
-class EvaluationEngine:
-    def __init__(self, config):
-        self.config = config
-        self.loss_strategy = DefaultLossStrategy()
+**Key Functions & Flow:**
 
-    def evaluate_model(self, model, variables, data, masking_rate, converter, device):
-        """Main evaluation with M% masking - FULLY IMPLEMENTED"""
-        # - Creates M% evaluation mask across all variables
-        # - Builds evaluation batch with proper masking
-        # - Runs model forward pass
-        # - Computes comprehensive metrics with masked/observed breakdown
+**File: `imputer/eval.py`**
+- `EvaluationEngine.evaluate_model()` → main entry point for evaluation
+- `EvaluationEngine.create_evaluation_mask()` → creates M% random mask
+- `EvaluationEngine.split_variables()` → splits into Test_M/Test_O
+- `EvaluationEngine._create_evaluation_batch()` → builds evaluation batch with masking
+- `EvaluationEngine._compute_comprehensive_metrics()` → computes all metrics
 
-    def create_evaluation_mask(self, variables, masking_rate):
-        """Create M% random mask across all variables - IMPLEMENTED"""
-        # Randomly selects M% of variables to mask for evaluation
-
-    def split_variables(self, variables, mask):
-        """Split into Test_M (masked) and Test_O (observed) - IMPLEMENTED"""
-        # Returns tuple of (masked_variables, observed_variables)
-
-    def compute_losses(self, model_output, targets, mask):
-        """Total, rating, ranking log losses - IMPLEMENTED"""
-        # Uses structured loss strategy for accurate loss computation
-
-    def compute_accuracies(self, predictions, targets, variable_types):
-        """Rating and ranking accuracies - IMPLEMENTED"""
-        # Separate accuracy computation for each annotation type
-
-    def compute_rmse(self, rating_predictions, rating_targets):
-        """RMSE for ratings - IMPLEMENTED"""
-        # Converts 0-indexed to 1-5 scale for proper RMSE calculation
-
-    def evaluate_by_type(self, predictions, targets, masks):
-        """Separate metrics for ratings vs rankings - IMPLEMENTED"""
-        # Provides nested breakdown by annotation type and mask status
-
-    def _create_evaluation_batch(self, variables, rating_data, ranking_data, evaluation_mask, converter):
-        """Creates evaluation batch with masking applied - IMPLEMENTED"""
-        # Key feature: Masked variables get no supervision in variable_data
-        # Unmasked variables get normal supervision for model input
-
-    def _compute_comprehensive_metrics(self, model_output, batch, variables, evaluation_mask, converter):
-        """End-to-end metric computation - IMPLEMENTED"""
-        # Structured approach using existing loss strategy
-        # Separate tracking for masked vs observed performance
+**Function Call Flow:**
+```
+EvaluationEngine.evaluate_model(model, variables, data, masking_rate, converter, device)
+├── create_evaluation_mask(variables, masking_rate)
+├── split_variables(variables, mask) → (masked_vars, observed_vars)
+├── _create_evaluation_batch(variables, rating_data, ranking_data, mask, converter)
+│   ├── Apply masking to supervision
+│   └── Return evaluation batch
+├── model.forward(evaluation_batch)
+└── _compute_comprehensive_metrics(model_output, batch, variables, mask, converter)
+    ├── compute_losses() → total, rating, ranking losses
+    ├── compute_accuracies() → rating/ranking accuracies
+    ├── compute_rmse() → RMSE for ratings
+    └── evaluate_by_type() → breakdown by type and mask status
 ```
 
 **Testing Completed:**
@@ -99,40 +75,25 @@ class EvaluationEngine:
 - `EarlyStopping` - Utility for early stopping (unchanged)
 - `calculate_rmse` - Utility function (unchanged)
 
-**Key Changes Made:**
-```python
-class EvaluationCallback:
-    def __init__(self, eval_engine, test_variables, test_data, converter, masking_rate, device):
-        """Initialize with EvaluationEngine and test data - IMPLEMENTED"""
-        # Stores all necessary components for evaluation
+**Key Functions & Flow:**
 
-    def on_epoch_end(self, model, epoch):
-        """Called at end of each epoch - IMPLEMENTED"""
-        # Uses EvaluationEngine.evaluate_model() for consistent evaluation
-        # Returns structured results with epoch info
+**File: `imputer/trainer.py`**
+- `EvaluationCallback.__init__()` → stores evaluation components
+- `EvaluationCallback.on_epoch_end()` → calls `EvaluationEngine.evaluate_model()`
+- `ImputerTrainer.register_callback()` → adds callback to list
+- `ImputerTrainer.train()` → training loop with callback support
+- `ImputerTrainer._call_epoch_end_callbacks()` → calls all registered callbacks
 
-class ImputerTrainer:
-    def __init__(self, model, learning_rate, device, embedding_anchor_reg, callbacks):
-        """Constructor with callback support - IMPLEMENTED"""
-        # Added callbacks parameter and callback list
-
-    def register_callback(self, callback):
-        """Register evaluation callback - IMPLEMENTED"""
-
-    def _call_epoch_end_callbacks(self, epoch):
-        """Call all registered callbacks at epoch end - IMPLEMENTED"""
-        # Handles exceptions gracefully
-
-    def train(self, train_batches, epochs, call_callbacks_every, verbose):
-        """Training loop with callback support - NEW IMPLEMENTATION"""
-        # Handles single batch or list of batches
-        # Configurable callback frequency
-        # Returns training history + callback history
-
-    def train_step(self, batch):
-        """Single training step - UNCHANGED"""
-        # Existing training logic preserved
-        # No evaluation code removed
+**Function Call Flow:**
+```
+ImputerTrainer.train(train_batches, epochs, call_callbacks_every, verbose)
+├── For each epoch:
+│   ├── For each batch:
+│   │   └── train_step(batch) → forward/backward pass
+│   └── _call_epoch_end_callbacks(epoch)
+│       └── EvaluationCallback.on_epoch_end(model, epoch)
+│           └── EvaluationEngine.evaluate_model(model, test_variables, test_data, masking_rate, converter, device)
+└── Return training_history + callback_history
 ```
 
 **Old Evaluation Methods:**
@@ -160,64 +121,99 @@ class ImputerTrainer:
 
 ---
 
-## Phase 3: Random Embedding Provider
+## Phase 3: Random Embedding Provider ✅ COMPLETED
 
-### File: `imputer/embedding.py` (Add class)
+### File: `imputer/embedding.py` ✅ IMPLEMENTED
 
-```python
-class RandomEmbeddingProvider(RankingEmbeddingProviderBase):
-    def __init__(self, embedding_dim, num_likert_classes, max_rank_size, device):
-        super().__init__(embedding_dim, num_likert_classes, max_rank_size, device)
-        self.projection = nn.Linear(embedding_dim, embedding_dim)
+**Implemented Classes:**
+- `FullyRandomizedEmbeddingProvider` - Fully randomized embedding provider that generates new random embeddings for each forward pass
+- `BaseRankingEmbeddingProvider.reset_embedding()` - Method to reset embeddings with new random values
 
-    def forward(self, ranking_data_list):
-        """Generate fresh random embeddings each forward pass"""
-        batch_size = len(ranking_data_list)
-        embeddings = []
+**Key Functions & Flow:**
 
-        for data in ranking_data_list:
-            # Generate fresh random embeddings for this data point
-            attr_emb = torch.randn(1, self.embedding_dim, device=self.device)
-            annot_emb = torch.randn(1, self.embedding_dim, device=self.device)
+**File: `imputer/embedding.py`**
+- `FullyRandomizedEmbeddingProvider.on_forward_start()` → calculates required dimensions → calls `reset_embedding()`
+- `BaseRankingEmbeddingProvider.reset_embedding()` → creates new random embeddings → sets `requires_grad=False`
+- Inherits: `get_rating_embedding()`, `get_ranking_embedding()` from `PairwiseRankingProjectionEmbeddingProvider`
 
-            if data.is_listwise:
-                # Random embeddings for each item in ranking
-                item_embs = [torch.randn(1, self.embedding_dim, device=self.device)
-                           for _ in data.item_ids]
-                # Composition logic like PairwiseRankingProjectionEmbeddingProvider
-            else:
-                # Single item embedding for rating
-                item_emb = torch.randn(1, self.embedding_dim, device=self.device)
+**File: `imputer/abstractions.py`**
+- `RankingEmbeddingProviderBase.forward()` → calls `on_forward_start()` → processes variables → returns embeddings
 
-            # Add and project (same composition as existing providers)
-            combined = attr_emb + annot_emb + item_representation
-            projected = self.projection(combined)
-            embeddings.append(projected)
-
-        return torch.cat(embeddings, dim=0)
-
-    def parameters(self):
-        """Only projection layer is trainable"""
-        return self.projection.parameters()
+**Function Call Flow:**
+```
+model.forward(variables)
+├── RankingEmbeddingProviderBase.forward()
+│   ├── on_forward_start(variables)  # Hook for randomization
+│   │   └── FullyRandomizedEmbeddingProvider.on_forward_start()
+│   │       ├── Calculate max IDs from variables
+│   │       └── reset_embedding(required_dims)
+│   │           ├── Create new random embeddings
+│   │           ├── Apply kaiming initialization
+│   │           └── Set requires_grad=False
+│   └── Process each variable
+│       ├── get_rating_embedding() or get_ranking_embedding()
+│       └── Return feature embeddings
 ```
 
-### File: `ranking_imputer.py` (Add option)
-```python
-elif embedding_type == "random":
-    self.embedding_provider = RandomEmbeddingProvider(
-        embedding_dim, num_likert_classes, max_rank_size, device
-    )
-```
+**Key Differences from Original Plan:**
+- **Inheritance Approach**: Extends `PairwiseRankingProjectionEmbeddingProvider` instead of `RankingEmbeddingProviderBase` directly
+- **Dynamic Sizing**: Calculates required dimensions based on actual IDs in the batch
+- **Hook Integration**: Uses `on_forward_start()` hook called by the base `forward()` method
+- **Same Composition Logic**: Reuses existing `get_rating_embedding` and `get_ranking_embedding` methods
+- **Data Validation**: Added assertions for `max_rank_size` and `num_likert_classes` consistency
 
-### Test Script: `test_random_embeddings.py`
-- Test embeddings different each forward pass
-- Test no shared embeddings between data points
-- Verify composition logic works
-- Check only projection trainable
+**Testing Completed:**
+- ✅ Different embeddings generated for each forward pass
+- ✅ Dynamic sizing based on batch content works correctly
+- ✅ Same interface and behavior as parent class maintained
+- ✅ Data validation assertions work (max_rank_size, num_likert_classes)
+- ✅ Integration with existing forward() method verified
+- ✅ Randomized embeddings correctly set as non-trainable (requires_grad=False)
+- ✅ Only projection layers remain trainable (parameter_projection, pairwise_relation)
+
+**Integration Points Ready:**
+- Ready for use in `ranking_imputer.py` (can be added as embedding_type option)
+- Compatible with existing trainer and evaluation infrastructure
+- Maintains same API as other embedding providers
+
+**Code Simplifications Applied:**
+- ✅ `max_rank_size` assertion: Ensures `len(ranking_order) == max_rank_size`
+- ✅ `num_likert_classes` assertion: Ensures `0 <= rating_value < num_likert_classes`
+- ✅ Cleaner, more robust code with early data validation
 
 ---
 
 ## Phase 4: Mixed Instance Training
+
+**Key Functions & Flow:**
+
+**File: `imputer/mixed_instance_trainer.py`**
+- `MixedInstanceTrainerBase.__init__()` → initializes base trainer with eval_engine
+- `MixedInstanceTrainerBase.setup_evaluation_callback()` → creates callback for test instances
+- `SequentialMIT.train_on_instances()` → trains instance by instance
+- `MixedMIT.train_on_instances()` → combines instances, samples IID
+- `MixedMIT.combine_instances()` → merges all instance variables
+- `GeneralMIT.finetune_on_instance()` → finetunes on single instance
+
+**Function Call Flow:**
+```
+SequentialMIT.train_on_instances(train_instances, test_instances)
+├── For each train_instance:
+│   ├── train_single_instance(instance)
+│   └── evaluate_on_test_instances(test_instances)
+
+MixedMIT.train_on_instances(train_instances, test_instances)
+├── combine_instances(train_instances) → combined_variables
+├── For each epoch:
+│   ├── sample_iid_batch(combined_variables)
+│   ├── trainer.train_step(batch)
+│   └── evaluate_on_test_instances(test_instances)
+
+GeneralMIT.finetune_on_instance(pretrained_model, instance_data)
+├── Split instance → Test_O_Observed, Test_O_Masked
+├── Train on Test_O_Observed
+└── Evaluate on Test_O_Masked
+```
 
 ### File: `imputer/mixed_instance_trainer.py`
 
@@ -273,6 +269,14 @@ class GeneralMIT(MixedInstanceTrainerBase):
 
 ## Phase 5: Configuration Updates
 
+**Key Functions & Flow:**
+
+**File: `config.py`**
+- `ModelConfig.embedding_type` → add "random" option
+- `ExperimentConfig.test_masking_rate` → M% for test instances
+- `ExperimentConfig.pretraining_mode` → "sequential" or "mixed"
+- `ExperimentConfig.evaluation_types` → list of evaluation strategies
+
 ### File: `config.py` (Modified)
 
 ```python
@@ -307,6 +311,36 @@ class ExperimentConfig:
 ---
 
 ## Phase 6: Main Experiment Runner
+
+**Key Functions & Flow:**
+
+**File: `experiment_runner_v2.py`**
+- `ExperimentRunnerV2.__init__()` → initializes with config and eval_engine
+- `ExperimentRunnerV2.run_experiment()` → main entry point
+- `ExperimentRunnerV2.run_pretrained_evaluation()` → trains on train_instances
+- `ExperimentRunnerV2.run_finetuned_evaluation()` → pretrain + finetune on Test_O
+- `ExperimentRunnerV2.run_fresh_evaluation()` → train fresh on Test_O
+- `ExperimentRunnerV2.run_domain_evaluation()` → domain model evaluation
+- `ExperimentRunnerV2.evaluate_all_test_instances()` → evaluate on all test instances
+
+**Function Call Flow:**
+```
+ExperimentRunnerV2.run_experiment()
+├── load_instances() → train_instances, test_instances
+├── For each evaluation_type in config.evaluation_types:
+│   ├── "pretrained" → run_pretrained_evaluation()
+│   │   ├── Choose trainer (SequentialMIT or MixedMIT)
+│   │   ├── trainer.train_on_instances(train_instances, test_instances)
+│   │   └── evaluate_all_test_instances(pretrained_model, test_instances)
+│   ├── "pretrained_finetuned" → run_finetuned_evaluation()
+│   │   ├── get_pretrained_model(train_instances)
+│   │   └── For each test_instance:
+│   │       ├── GeneralMIT.finetune_on_instance(pretrained_model, test_instance)
+│   │       └── eval_engine.evaluate_model(finetuned_model, test_instance, masking_rate)
+│   ├── "fresh" → run_fresh_evaluation(test_instances)
+│   └── "domain" → run_domain_evaluation(test_instances)
+└── Return results dictionary
+```
 
 ### File: `experiment_runner_v2.py`
 
