@@ -226,9 +226,12 @@ MixedMIT.create_training_generator(train_instances, total_batches, batch_size)
 │   └── yield create_masked_batch(instance, masking_rate, batch_size)
 
 GeneralMIT.finetune_on_instance(pretrained_model, instance_data)
+└── raise NotImplementedError("GeneralMIT.finetune_on_instance not yet implemented")
+intended behavior:
 ├── Split instance → Test_O_Observed, Test_O_Masked
 ├── Train on Test_O_Observed
 └── Evaluate on Test_O_Masked
+
 ```
 
 **Key Implementation Details:**
@@ -252,7 +255,7 @@ GeneralMIT.finetune_on_instance(pretrained_model, instance_data)
 
 ---
 
-## Phase 5: Configuration Updates
+## Phase 5: Configuration Updates (TODO)
 
 **Key Functions & Flow:**
 
@@ -300,6 +303,203 @@ class ExperimentConfig:
 ### Update config files:
 - `configs/single_instance.json`
 - `configs/multi_instance_demo.json`
+
+
+## Phase 6: Data Preprocessing and Storage Revamp
+
+### Problem Analysis
+
+**Current Issues with `DataConverter`:**
+1. **Multiple Data Formats**: Returns dicts, tensors, and `RankingData` objects inconsistently
+2. **Confusing API**: Methods like `create_variables_from_actual_data()` return dicts, but model expects `List[RankingData]`
+3. **Complex Batching**: `create_batch()` creates legacy tensor format, then converts back to `RankingData`
+4. **No Standardization**: Different parts of code expect different data formats
+5. **Poor Separation of Concerns**: Data loading, preprocessing, and batching all mixed together
+
+**Current Data Flow Problems:**
+```
+JSON → DataConverter.load_training_data() → Dict[str, Any]
+     → DataConverter.create_variables_from_actual_data() → Tuple[List[Dict], List[Dict]]
+     → DataConverter.process_training_data() → Tuple[Dict, List[Dict]]
+     → DataConverter.create_batch() → Dict[str, torch.Tensor]
+     → model._convert_legacy_tensors_to_ranking_data() → List[RankingData]
+     → model.forward() → predictions
+```
+
+**Proposed Solution: Minimal DataConverter Refactor**
+
+### File: `imputer/data_converter_v2.py` (New)
+
+```python
+from typing import List, Dict, Any, Tuple
+import json
+import random
+from .data import RankingData
+
+class DataConverterV2:
+    """Simplified data converter that always returns List[RankingData]."""
+    
+    def __init__(self, num_attributes=10, num_annotators=5, num_items=10, num_likert_classes=5, max_rank_size=3):
+        self.num_attributes = num_attributes
+        self.num_annotators = num_annotators
+        self.num_items = num_items
+        self.num_likert_classes = num_likert_classes
+        self.max_rank_size = max_rank_size
+
+    def load_training_data(self, json_file: str) -> Dict[str, Any]:
+        """Load and filter data from JSON file."""
+        with open(json_file, 'r') as f:
+            data = json.load(f)
+        filtered_ratings = [r for r in data['ratings'] if r['item'] <= self.num_items] #instead of filtering, raise error.
+        filtered_rankings = []
+        for ranking in data.get('pairwise_rankings', []):
+            items_to_check = ranking['items'][: self.max_rank_size]
+            if all(item <= self.num_items for item in items_to_check):
+                filtered_rankings.append(ranking)
+        return {'ratings': filtered_ratings, 'pairwise_rankings': filtered_rankings}
+
+    def create_variables(self, data: Dict[str, Any]) -> List[RankingData]:
+        """Convert raw data directly to List[RankingData]."""
+        variables = []
+        
+        # Process ratings
+        for rating in data['ratings']:
+            variables.append(RankingData(
+                annotator_id=rating['annotator'] - 1,
+                attribute_id=rating['attribute'] - 1,
+                is_listwise=False,
+                item_ids=[rating['item'] - 1],
+                rating_value=rating['value'] - 1
+            ))
+        
+        # Process rankings
+        for ranking in data['pairwise_rankings']:
+            variables.append(RankingData(
+                annotator_id=ranking['annotator'] - 1,
+                attribute_id=ranking['attribute'] - 1,
+                is_listwise=True,
+                item_ids=[i - 1 for i in ranking['items'][:self.max_rank_size]],
+                ranking_order=ranking['order'][:self.max_rank_size]
+            ))
+        
+        return variables
+
+    def create_masked_batch(self, variables: List[RankingData], masking_rate: float, batch_size: int) -> List[RankingData]:
+        """Create a batch with random masking applied."""
+        # Sample variables for the batch
+        batch_variables = random.sample(variables, min(batch_size, len(variables)))
+        
+        # Apply masking
+        masked_variables = []
+        for var in batch_variables:
+            if random.random() < masking_rate:
+                # Create masked version
+                masked_var = RankingData(
+                    annotator_id=var.annotator_id,
+                    attribute_id=var.attribute_id,
+                    is_listwise=var.is_listwise,
+                    item_ids=var.item_ids,
+                    rating_value=None if not var.is_listwise else var.rating_value,
+                    ranking_order=None if var.is_listwise else var.ranking_order
+                )
+                masked_variables.append(masked_var)
+            else:
+                masked_variables.append(var)
+        
+        return masked_variables
+
+    def create_evaluation_batch(self, variables: List[RankingData], masking_rate: float) -> Tuple[List[RankingData], List[RankingData]]:
+        """Create evaluation batch with Test_M (masked) and Test_O (observed) split."""
+        # Randomly select variables to mask
+        num_to_mask = int(len(variables) * masking_rate)
+        masked_indices = set(random.sample(range(len(variables)), num_to_mask))
+        
+        test_m_vars = []  # Masked variables
+        test_o_vars = []  # Observed variables
+        
+        for i, var in enumerate(variables):
+            if i in masked_indices:
+                # Create masked version
+                masked_var = RankingData(
+                    annotator_id=var.annotator_id,
+                    attribute_id=var.attribute_id,
+                    is_listwise=var.is_listwise,
+                    item_ids=var.item_ids,
+                    rating_value=None if not var.is_listwise else var.rating_value,
+                    ranking_order=None if var.is_listwise else var.ranking_order
+                )
+                test_m_vars.append(masked_var)
+                test_o_vars.append(var)  # Keep original for reference
+            else:
+                test_o_vars.append(var)
+        
+        return test_m_vars, test_o_vars
+```
+
+### Updated Multi-Instance Trainer
+
+```python
+# In multi_instance_trainer.py
+class MultiInstanceTrainerBase:
+    def __init__(self, model, eval_engine: EvaluationEngine, config, converter: DataConverterV2):
+        self.model = model
+        self.eval_engine = eval_engine
+        self.config = config
+        self.converter = converter
+        self.trainer = ImputerTrainer(model, config.learning_rate, device=config.device)
+    
+    def create_masked_batch(self, instance_data: Dict, masking_rate: float, batch_size: int) -> List[RankingData]:
+        """Create batch with specified masking rate and batch size."""
+        # Convert raw data to RankingData
+        variables = self.converter.create_variables(instance_data)
+        
+        # Create masked batch
+        return self.converter.create_masked_batch(variables, masking_rate, batch_size)
+```
+
+### Updated Model Interface
+
+```python
+# Model now accepts List[RankingData] directly
+def forward(self, variables: List[RankingData]) -> Dict[str, torch.Tensor]:
+    features = self.embedding_provider(variables)
+    # ... rest of forward pass
+    return logits
+```
+
+### Updated Trainer
+
+```python
+# Trainer works with List[RankingData] batches
+def train_step(self, batch: List[RankingData]):
+    # Forward pass
+    out = self.model(batch)
+    
+    # Compute loss using structured predictions and references
+    predictions = adapt_batched_logits_to_predictions(out)
+    references = batch  # batch is already List[RankingData]
+    
+    losses = self.loss_strategy.compute(predictions, references)
+    # ... rest of training step
+```
+
+### Benefits of Minimal Approach
+
+1. **Consistent Data Format**: Always `List[RankingData]` throughout the pipeline
+2. **Simple API**: One method to convert raw data to `List[RankingData]`
+3. **Flexible Masking**: Easy to apply different masking strategies
+4. **No DataLoader Complexity**: Works perfectly with generator pattern
+5. **Easy Testing**: Simple to test each component
+6. **Minimal Changes**: Only need to update a few key methods
+
+### Migration Strategy
+
+1. **Phase 6a**: Create `DataConverterV2` alongside existing `DataConverter`
+2. **Phase 6b**: Update model to accept `List[RankingData]` directly
+3. **Phase 6c**: Update trainer to work with `List[RankingData]` batches
+4. **Phase 6d**: Update multi-instance trainer to use `DataConverterV2`
+5. **Phase 6e**: Update evaluation engine
+6. **Phase 6f**: Remove legacy `DataConverter` methods
 
 ---
 
@@ -467,17 +667,24 @@ class ExperimentRunnerV2:
    - Update existing config files
    - Backwards compatibility
 
-6. **Phase 6**: Main Experiment Runner ❌ NOT IMPLEMENTED
+6. **Phase 6**: Data Preprocessing and Storage Revamp ❌ NOT IMPLEMENTED
+   - PyTorch Dataset + DataLoader pattern
+   - Consistent `List[RankingData]` format
+   - Clean separation of concerns
+   - Better masking strategies
+
+7. **Phase 7**: Main Experiment Runner ❌ NOT IMPLEMENTED
    - `experiment_runner_v2.py`
    - Integration with all components
    - End-to-end testing
 
-7. **Phase 7**: Integration and Testing ❌ NOT IMPLEMENTED
+8. **Phase 8**: Integration and Testing ❌ NOT IMPLEMENTED
    - Backwards compatibility
    - Comprehensive testing
    - Documentation updates
 
 ### NEXT STEPS
 - **Phase 5**: Configuration updates (add new parameters to config.py)
-- **Phase 6**: Main experiment runner (integrate all components)
-- **Phase 7**: Integration testing and documentation
+- **Phase 6**: Data preprocessing revamp (PyTorch Dataset pattern)
+- **Phase 7**: Main experiment runner (integrate all components)
+- **Phase 8**: Integration testing and documentation
