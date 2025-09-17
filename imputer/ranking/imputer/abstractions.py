@@ -45,6 +45,9 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         self,
         variables: List[RankingData],
     ) -> torch.Tensor:
+        # Call on_forward_start hook for subclasses to perform initialization
+        self.on_forward_start(variables)
+        
         V = len(variables)  # this will be the input token length for transformer
         D = self.embedding_dim
         device = self._ensure_device()
@@ -61,3 +64,6 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
                 feature_embeddings[0, i] = feat
 
         return feature_embeddings
+
+    def on_forward_start(self, variables: List[RankingData]):
+        pass

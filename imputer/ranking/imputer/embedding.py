@@ -48,6 +48,28 @@ class BaseRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         torch.nn.init.kaiming_normal_(self.annotator_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.item_embedding, mode='fan_out', nonlinearity='relu')
 
+    def reset_embedding(self, num_attributes: int, num_annotators: int, num_items: int, embedding_dim: int):
+        """Reset embeddings to random values with specified dimensions."""
+        self.num_attributes = num_attributes
+        self.num_annotators = num_annotators
+        self.num_items = num_items
+        self.embedding_dim = embedding_dim
+        
+        # Reinitialize embeddings with new random values
+        self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, embedding_dim))
+        self.annotator_embedding = nn.Parameter(torch.randn(num_annotators, embedding_dim))
+        self.item_embedding = nn.Parameter(torch.randn(num_items, embedding_dim))
+        
+        # Apply kaiming initialization
+        torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
+        torch.nn.init.kaiming_normal_(self.annotator_embedding, mode='fan_out', nonlinearity='relu')
+        torch.nn.init.kaiming_normal_(self.item_embedding, mode='fan_out', nonlinearity='relu')
+        
+        # Set embeddings as non-trainable for randomized providers
+        self.attribute_embedding.requires_grad = False
+        self.annotator_embedding.requires_grad = False
+        self.item_embedding.requires_grad = False
+
     @classmethod
     def _from_true_embedding(
         cls,
@@ -196,6 +218,7 @@ class OuterProductRankingEmbeddingProvider(BaseRankingEmbeddingProvider):
         if rating_value is None:
             parameter[0] = 1.0
         else:
+            assert 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
             parameter[rating_value + 1] = 1.0
         return self.parameter_projection(torch.cat((attr_vec + annot_vec + self.item_embedding[item_id], parameter), dim=-1))
 
@@ -216,7 +239,9 @@ class OuterProductRankingEmbeddingProvider(BaseRankingEmbeddingProvider):
         if ranking_order is None:
             parameter[0] = 1.0
         else:
-            parameter[self.num_likert_classes + 1:] = torch.tensor(ranking_order)
+            ranking_tensor = torch.tensor(ranking_order)
+            assert len(ranking_order) == self.max_rank_size, f"ranking_order length {len(ranking_order)} must equal max_rank_size {self.max_rank_size}"
+            parameter[self.num_likert_classes + 1:] = ranking_tensor
         return self.parameter_projection(torch.cat((self.ranking_projection(total_outer.flatten()), parameter), dim=-1))
     
 
@@ -259,6 +284,7 @@ class CombineRandomTrainedEmbeddingProvider(BaseRankingEmbeddingProvider):
         if rating_value is None:
             parameter[0] = 1.0
         else:
+            assert 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
             parameter[rating_value + 1] = 1.0
         item_embedding =torch.cat((torch.randn(self.embedding_dim // 2), self.item_embedding[item_id][self.embedding_dim // 2:]), dim=-1)
         return self.parameter_projection(torch.cat((attr_vec + annot_vec + item_embedding, parameter), dim=-1))
@@ -278,7 +304,9 @@ class CombineRandomTrainedEmbeddingProvider(BaseRankingEmbeddingProvider):
         if ranking_order is None:
             parameter[0] = 1.0
         else:
-            parameter[self.num_likert_classes + 1:] = torch.tensor(ranking_order)
+            ranking_tensor = torch.tensor(ranking_order)
+            assert len(ranking_order) == self.max_rank_size, f"ranking_order length {len(ranking_order)} must equal max_rank_size {self.max_rank_size}"
+            parameter[self.num_likert_classes + 1:] = ranking_tensor
         return self.parameter_projection(torch.cat((total_embedding, parameter), dim=-1))
 
 class PairwiseRankingProjectionEmbeddingProvider(BaseRankingEmbeddingProvider):
@@ -320,6 +348,7 @@ class PairwiseRankingProjectionEmbeddingProvider(BaseRankingEmbeddingProvider):
         if rating_value is None:
             parameter[0] = 1.0
         else:
+            assert 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
             parameter[rating_value + 1] = 1.0
         return self.parameter_projection(torch.cat((attr_vec + annot_vec + self.item_embedding[item_id], parameter), dim=-1))
 
@@ -338,5 +367,57 @@ class PairwiseRankingProjectionEmbeddingProvider(BaseRankingEmbeddingProvider):
         if ranking_order is None:
             parameter[0] = 1.0
         else:
-            parameter[self.num_likert_classes + 1:] = torch.tensor(ranking_order)
+            ranking_tensor = torch.tensor(ranking_order)
+            assert len(ranking_order) == self.max_rank_size, f"ranking_order length {len(ranking_order)} must equal max_rank_size {self.max_rank_size}"
+            parameter[self.num_likert_classes + 1:] = ranking_tensor
         return self.parameter_projection(torch.cat((total_embedding, parameter), dim=-1))
+
+
+class FullyRandomizedEmbeddingProvider(PairwiseRankingProjectionEmbeddingProvider):
+    """Fully randomized embedding provider that generates new random embeddings for each forward pass.
+    
+    This class extends PairwiseRankingProjectionEmbeddingProvider but overrides on_forward_start
+    to generate completely random embeddings for all attributes, annotators, and items at the
+    beginning of each forward pass. The get_rating_embedding and get_ranking_embedding methods
+    remain the same as the parent class.
+    """
+
+    def __init__(
+        self,
+        num_attributes: int,
+        num_annotators: int,
+        num_items: int,
+        embedding_dim: int,
+        num_likert_classes: int,
+        max_rank_size: int,
+        device: str,
+    ):
+        super().__init__(
+            num_attributes=num_attributes,
+            num_annotators=num_annotators,
+            num_items=num_items,
+            embedding_dim=embedding_dim,
+            num_likert_classes=num_likert_classes,
+            max_rank_size=max_rank_size,
+            device=device,
+        )
+
+    def on_forward_start(self, variables: List[RankingData]):
+        """Generate new random embeddings for all components at the start of each forward pass."""
+        # Calculate the required dimensions based on the variables in this batch
+        max_attribute_id = max(var.attribute_id for var in variables) if variables else 0
+        max_annotator_id = max(var.annotator_id for var in variables) if variables else 0
+        max_item_id = max(max(var.item_ids) if var.item_ids else 0 for var in variables) if variables else 0
+        
+        # Add 1 to convert from 0-based indexing to count
+        required_attributes = max_attribute_id + 1
+        required_annotators = max_annotator_id + 1
+        required_items = max_item_id + 1
+        
+        # Reset embeddings with the required dimensions
+        self.reset_embedding(
+            num_attributes=required_attributes,
+            num_annotators=required_annotators,
+            num_items=required_items,
+            embedding_dim=self.embedding_dim
+        )
