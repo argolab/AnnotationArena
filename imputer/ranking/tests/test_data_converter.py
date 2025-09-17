@@ -9,7 +9,7 @@ import os
 # Add parent directory to path so we can import from imputer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from imputer.data_v2 import DataConverter, RankingData
+from imputer.data import DataConverter, RankingData
 
 def create_mock_data():
     """Create mock data for testing."""
@@ -93,7 +93,7 @@ def test_create_batch():
         
 
 def test_forward_pass():
-    from imputer.data_v2 import DataConverter, RankingData
+    from imputer.data import DataConverter, RankingData
     from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
     from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
     from imputer.trainer import ImputerTrainer
@@ -138,7 +138,7 @@ def test_forward_pass():
     print("Forward pass is succssful")
 
 def test_trainer_work():
-    from imputer.data_v2 import DataConverter, RankingData
+    from imputer.data import DataConverter, RankingData
     from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
     from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
     from imputer.trainer import ImputerTrainer
@@ -187,7 +187,7 @@ def test_trainer_work():
         print(result)
 
 def test_trainer_loss():
-    from imputer.data_v2 import DataConverter, RankingData
+    from imputer.data import DataConverter, RankingData
     from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
     from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
     from imputer.trainer import ImputerTrainer
@@ -224,7 +224,7 @@ def test_trainer_loss():
         print(result)
 
 def test_multiInstance_trainer():
-    from imputer.data_v2 import DataConverter, RankingData
+    from imputer.data import DataConverter, RankingData
     from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
     from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
     from imputer.trainer import ImputerTrainer

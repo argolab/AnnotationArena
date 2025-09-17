@@ -108,75 +108,13 @@ class MultiVariableImputer(nn.Module):
         """Apply a named head to hidden states [B, N, D] -> logits [B, N, *]."""
         return self.heads[head_key](hidden)
 
-    def _convert_legacy_tensors_to_ranking_data(self, variable_data, variable_types, attribute_ids, annotator_ids, item_ids) -> List[RankingData]:
-        """Convert legacy tensor format to List[RankingData]."""
-        batch_size, num_variables = variable_types.shape
-        assert batch_size == 1, "Only batch size 1 supported for conversion"
-        
-        variables = []
-        for i in range(num_variables):
-            var_type = variable_types[0, i].item()
-            attr_id = attribute_ids[0, i].item()
-            annot_id = annotator_ids[0, i].item()
-            
-            if var_type == 0:  # Rating
-                item_id = item_ids[0, i, 0].item()
-                # Check if this rating has supervision (non-zero data)
-                rating_value = None
-                data_vec = variable_data[0, i]
-                if data_vec.sum() > 0:
-                    rating_value = torch.argmax(data_vec).item()
-                
-                variables.append(RankingData(
-                    annotator_id=annot_id,
-                    attribute_id=attr_id,
-                    is_listwise=False,
-                    item_ids=[item_id],
-                    rating_value=rating_value
-                ))
-            else:  # Ranking
-                # Extract valid item IDs (non-negative)
-                item_list = []
-                for j in range(self.max_rank_size):
-                    item_id = item_ids[0, i, j].item()
-                    if item_id >= 0:
-                        item_list.append(item_id)
-                
-                # Check if this ranking has supervision (non-zero data)
-                ranking_order = None
-                data_vec = variable_data[0, i]
-                if data_vec.sum() > 0:
-                    ranking_order = []
-                    for j in range(len(item_list)):
-                        if j < data_vec.shape[0]:
-                            rank_pos = int(data_vec[j].item())
-                            if rank_pos > 0:
-                                ranking_order.append(rank_pos)
-                
-                variables.append(RankingData(
-                    annotator_id=annot_id,
-                    attribute_id=attr_id,
-                    is_listwise=True,
-                    item_ids=item_list,
-                    ranking_order=ranking_order
-                ))
-        
-        return variables
 
-    def forward_hidden(self, variable_data, variable_types=None, attribute_ids=None, annotator_ids=None, item_ids=None, attn_mask: torch.Tensor | None = None):
+    def forward_hidden(self, ranking_data_list, attn_mask: torch.Tensor | None = None):
         """Return intermediate hidden states from each transformer block and the final normalized features.
 
         Returns list[Tensor] of length = num_blocks + 1, where the last is post-norm features.
         """
-        # Support both structured list inputs and legacy tensor inputs
-        if isinstance(variable_data, list):
-            features = self.embedding_provider(variable_data)
-        else:
-            # Convert legacy tensor format to List[RankingData]
-            ranking_data_list = self._convert_legacy_tensors_to_ranking_data(
-                variable_data, variable_types, attribute_ids, annotator_ids, item_ids
-            )
-            features = self.embedding_provider(ranking_data_list)
+        features = self.embedding_provider(ranking_data_list)
 
         hiddens = []
         for block in self.blocks:
@@ -264,7 +202,7 @@ class MultiVariableImputerWithExternalEmbeddings(MultiVariableImputer):
 
 def main():
     # Initialize components with smaller dataset
-    from data_v2 import DataConverter, RankingData
+    from data import DataConverter, RankingData
     from embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
     from transformer import TransformerBlock, NormLayer as _NormLayer
     from trainer import ImputerTrainer

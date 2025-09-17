@@ -3,6 +3,7 @@ from typing import List, Optional, Tuple, Dict, Any
 import json
 import torch
 import random
+import torch.nn.functional as F
 
 @dataclass
 class RankingData:
@@ -23,7 +24,6 @@ class RankingData:
     item_ids: List[int]
     rating_value: Optional[int] = None
     ranking_order: Optional[List[int]] = None
-    # TODO: do we need a observed flag?
 
 
 class DataConverter:
@@ -44,256 +44,42 @@ class DataConverter:
             if all(item <= self.num_items for item in items_to_check):
                 filtered_rankings.append(ranking)
         return {'ratings': filtered_ratings, 'pairwise_rankings': filtered_rankings}
+    
 
-    def create_variables_from_actual_data(self, train_data: Dict[str, Any], test_data: Dict[str, Any]) -> Tuple[List[Dict[str, Any]], List[Dict[str, Any]]]:
-        rating_variables: List[Dict[str, Any]] = []
-        ranking_variables: List[Dict[str, Any]] = []
 
-        # Create rating variables from training data
-        for rating in train_data['ratings']:
-            rating_variables.append({
-                'type': 'rating', 
-                'attribute': rating['attribute'], 
-                'annotator': rating['annotator'], 
-                'item': rating['item'],
-                'source': 'train'
-            })
+    def create_variables(self, data: Dict[str, Any]) -> List[RankingData]:
+        """Convert raw data directly to List[RankingData]."""
+        variables = []
         
-        # Create rating variables from test data
-        for rating in test_data['ratings']:
-            rating_variables.append({
-                'type': 'rating', 
-                'attribute': rating['attribute'], 
-                'annotator': rating['annotator'], 
-                'item': rating['item'],
-                'source': 'test'
-            })
-
-        # Create ranking variables from training data
-        for ranking in train_data.get('pairwise_rankings', []):
-            ranking_variables.append({
-                'type': 'ranking',
-                'attribute': ranking['attribute'],
-                'annotator': ranking['annotator'], 
-                'items': ranking['items'][: self.max_rank_size],
-                'source': 'train'
-            })
-        
-        # Create ranking variables from test data
-        for ranking in test_data.get('pairwise_rankings', []):
-            ranking_variables.append({
-                'type': 'ranking',
-                'attribute': ranking['attribute'],
-                'annotator': ranking['annotator'], 
-                'items': ranking['items'][: self.max_rank_size],
-                'source': 'test'
-            })
-
-        return rating_variables, ranking_variables
-
-    def process_training_data(self, data: Dict[str, Any]) -> Tuple[Dict[Tuple[int, int, int], int], List[Dict[str, Any]]]:
-        rating_data: Dict[Tuple[int, int, int], int] = {}
-        ranking_data: List[Dict[str, Any]] = []
-
+        # Process ratings
         for rating in data['ratings']:
-            key = (rating['attribute'], rating['annotator'], rating['item'])
-            rating_data[key] = rating['value']
-
-        for ranking in data.get('pairwise_rankings', []):
-            items = ranking['items'][: self.max_rank_size]
-            order = ranking['order'][: self.max_rank_size]
-            ranking_data.append({
-                'attribute': ranking['attribute'],
-                'annotator': ranking['annotator'],
-                'items': items,
-                'order': order
-            })
-        return rating_data, ranking_data
-
-    def build_structured_variables(self, rating_variables: List[Dict[str, Any]], ranking_variables: List[Dict[str, Any]]) -> List[RankingData]:
-        variables: List[RankingData] = []
-        for var in rating_variables:
             variables.append(RankingData(
-                annotator_id=var['annotator'] - 1,
-                attribute_id=var['attribute'] - 1,
+                annotator_id=rating['annotator'] - 1,
+                attribute_id=rating['attribute'] - 1,
                 is_listwise=False,
-                item_ids=[var['item'] - 1],
+                item_ids=[rating['item'] - 1],
+                rating_value=rating['value'] - 1
             ))
-        for var in ranking_variables:
-            variables.append(RankingData(
-                annotator_id=var['annotator'] - 1,
-                attribute_id=var['attribute'] - 1,
-                is_listwise=True,
-                item_ids=[i - 1 for i in var['items'][: self.max_rank_size]],
-            ))
-        return variables
-
-    def build_structured_with_targets(
-        self,
-        rating_variables: List[Dict[str, Any]],
-        ranking_variables: List[Dict[str, Any]],
-        rating_data: Dict[Tuple[int, int, int], int],
-        ranking_data: List[Dict[str, Any]],
-    ) -> List[RankingData]:
-        variables: List[RankingData] = []
-        for var in rating_variables:
-            key = (var['attribute'], var['annotator'], var['item'])
-            rating_value = rating_data.get(key, None)
-            variables.append(RankingData(
-                annotator_id=var['annotator'] - 1,
-                attribute_id=var['attribute'] - 1,
-                is_listwise=False,
-                item_ids=[var['item'] - 1],
-                rating_value=(rating_value - 1) if rating_value is not None else None,
-            ))
-        for var in ranking_variables:
-            items = var['items'][: self.max_rank_size]
-            order = None
-            # Find matching ranking in the list
-            for ranking_entry in ranking_data:
-                if (ranking_entry['attribute'] == var['attribute'] and 
-                    ranking_entry['annotator'] == var['annotator'] and 
-                    ranking_entry['items'] == items):
-                    order = ranking_entry['order'][: self.max_rank_size]
-                    break  # Take the first match
-            variables.append(RankingData(
-                annotator_id=var['annotator'] - 1,
-                attribute_id=var['attribute'] - 1,
-                is_listwise=True,
-                item_ids=[i - 1 for i in items],
-                ranking_order=order,
-            ))
-        return variables
-
-    def create_batch(
-        self,
-        rating_variables: List[Dict[str, Any]],
-        ranking_variables: List[Dict[str, Any]],
-        rating_data: Dict[Tuple[int, int, int], int],
-        ranking_data: List[Dict[str, Any]],
-        mode="train",
-        masking_rate: float = 0.5,
-    ) -> Dict[str, torch.Tensor]:
-        """Create a single training batch (legacy tensor format with masking).
-
-        Returns a dict of tensors including inputs, targets, and masks along with 'all_variables'.
-        """
-        all_variables = rating_variables + ranking_variables
-        num_variables = len(all_variables)
-
-        variable_data = torch.zeros(1, num_variables, max(self.num_likert_classes, self.max_rank_size))
-        variable_types = torch.zeros(1, num_variables, dtype=torch.long)
-        attribute_ids = torch.zeros(1, num_variables, dtype=torch.long)
-        annotator_ids = torch.zeros(1, num_variables, dtype=torch.long)
-        item_ids = torch.full((1, num_variables, self.max_rank_size), -1, dtype=torch.long)
-
-        rating_targets = torch.zeros(1, num_variables, self.num_likert_classes)
-        ranking_targets = torch.zeros(1, num_variables, self.max_rank_size)
-        rating_mask = torch.zeros(1, num_variables, dtype=torch.bool)
-        ranking_mask = torch.zeros(1, num_variables, dtype=torch.bool)
-        rating_masked = torch.zeros(1, num_variables, dtype=torch.bool)
-        ranking_masked = torch.zeros(1, num_variables, dtype=torch.bool)
-
-        # Collect available for masking - only training variables with data
-        available_rating_vars = []
-        available_ranking_vars = []
-        for i, var in enumerate(all_variables):
-            # Only consider variables from training data
-            if var.get('source') == mode:
-                if var['type'] == 'rating':
-                    key = (var['attribute'], var['annotator'], var['item'])
-                    if key in rating_data:
-                        available_rating_vars.append(i)
-                else:
-                    items = var['items']
-                    # Check if ranking exists in the training data list
-                    ranking_exists = any(
-                        ranking_entry['attribute'] == var['attribute'] and
-                        ranking_entry['annotator'] == var['annotator'] and
-                        ranking_entry['items'] == items
-                        for ranking_entry in ranking_data
-                    )
-                    if ranking_exists:
-                        available_ranking_vars.append(i)
-        # Apply configurable masking rate
-        num_rating_to_mask = int(len(available_rating_vars) * masking_rate)
-        num_ranking_to_mask = int(len(available_ranking_vars) * masking_rate)
         
-        masked_rating_indices = set(
-            random.sample(available_rating_vars, num_rating_to_mask)
-        )
-        masked_ranking_indices = set(
-            random.sample(available_ranking_vars, num_ranking_to_mask)
-        )
+        # Process rankings
+        for ranking in data['pairwise_rankings']:
+            variables.append(RankingData(
+                annotator_id=ranking['annotator'] - 1,
+                attribute_id=ranking['attribute'] - 1,
+                is_listwise=True,
+                item_ids=[i - 1 for i in ranking['items'][:self.max_rank_size]],
+                ranking_order=ranking['order'][:self.max_rank_size]
+            ))
+        
+        return variables
 
-        for i, var in enumerate(all_variables):
-            attribute_ids[0, i] = var['attribute'] - 1
-            annotator_ids[0, i] = var['annotator'] - 1
+    def create_training_batch(self, variables: List[RankingData], batch_size: int) -> List[RankingData]:
+        """Create a batch with random masking applied for self-supervised learning."""
+        # Sample variables for the batch
+        
+        batch_variables = random.sample(variables, min(batch_size, len(variables)))
+        return batch_variables
 
-            # Only process training variables for supervision
-            if var.get('source') == mode:
-                if var['type'] == 'rating':
-                    variable_types[0, i] = 0
-                    item_ids[0, i, 0] = var['item'] - 1
-                    key = (var['attribute'], var['annotator'], var['item'])
-                    if key in rating_data:
-                        rating_value = rating_data[key] - 1
-                        rating_targets[0, i, rating_value] = 1.0
-                        rating_mask[0, i] = True
-                        if i in masked_rating_indices:
-                            rating_masked[0, i] = True
-                        else:
-                            variable_data[0, i, rating_value] = 1.0
-                else:
-                    variable_types[0, i] = 1
-                    items = var['items']
-                    for j, item in enumerate(items):
-                        if j < self.max_rank_size:
-                            item_ids[0, i, j] = item - 1
-                    # Find matching ranking in the list
-                    matching_ranking = None
-                    for ranking_entry in ranking_data:
-                        if (ranking_entry['attribute'] == var['attribute'] and
-                            ranking_entry['annotator'] == var['annotator'] and
-                            ranking_entry['items'] == items):
-                            matching_ranking = ranking_entry
-                            break
-                    
-                    if matching_ranking:
-                        order = matching_ranking['order']
-                        for j, pos in enumerate(order):
-                            if j < self.max_rank_size:
-                                ranking_targets[0, i, j] = pos
-                        ranking_mask[0, i] = True
-                        if i in masked_ranking_indices:
-                            ranking_masked[0, i] = True
-                        else:
-                            for j, pos in enumerate(order):
-                                if j < self.max_rank_size:
-                                    variable_data[0, i, j] = pos
-            else:
-                # Test variables - set basic info but no supervision
-                if var['type'] == 'rating':
-                    variable_types[0, i] = 0
-                    item_ids[0, i, 0] = var['item'] - 1
-                else:
-                    variable_types[0, i] = 1
-                    items = var['items']
-                    for j, item in enumerate(items):
-                        if j < self.max_rank_size:
-                            item_ids[0, i, j] = item - 1
-
-        return {
-            'variable_data': variable_data,
-            'variable_types': variable_types,
-            'attribute_ids': attribute_ids,
-            'annotator_ids': annotator_ids,
-            'item_ids': item_ids,
-            'rating_targets': rating_targets,
-            'ranking_targets': ranking_targets,
-            'rating_mask': rating_mask,
-            'ranking_mask': ranking_mask,
-            'rating_masked': rating_masked,
-            'ranking_masked': ranking_masked,
-            'all_variables': all_variables,
-        }
+    def create_evaluation_batch(self, variables: List[RankingData]):
+        """Create evaluation batch with Test_M (masked) and Test_O (observed) split."""
+        return variables

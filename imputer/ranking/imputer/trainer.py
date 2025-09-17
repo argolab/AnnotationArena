@@ -183,22 +183,7 @@ class ImputerTrainer:
         """Single training step using legacy tensor batch + structured losses."""
         self.optimizer.zero_grad()
 
-        # # Move batch to device
-        # variable_data = batch['variable_data'].to(self.device)
-        # variable_types = batch['variable_types'].to(self.device)
-        # attribute_ids = batch['attribute_ids'].to(self.device)
-        # annotator_ids = batch['annotator_ids'].to(self.device)
-        # item_ids = batch['item_ids'].to(self.device)
-        # rating_targets = batch['rating_targets'].to(self.device)
-        # ranking_targets = batch['ranking_targets'].to(self.device)
-        # rating_mask = batch['rating_mask'].to(self.device)
-        # ranking_mask = batch['ranking_mask'].to(self.device)
-        # rating_masked = batch['rating_masked'].to(self.device)
-        # ranking_masked = batch['ranking_masked'].to(self.device)
-        # ranking_data_list = self.model._convert_legacy_tensors_to_ranking_data(
-        #     variable_data, variable_types, attribute_ids, annotator_ids, item_ids
-        # )
-        # # Forward pass
+        # Forward pass
         reference_data_list = copy.deepcopy(batch)
         input_data_list = self.apply_masking(batch, self.masking_rate)
         out = self.model(input_data_list)

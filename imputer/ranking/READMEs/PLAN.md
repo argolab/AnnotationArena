@@ -693,24 +693,25 @@ class ExperimentRunnerV2:
    - Data validation assertions
    - Full testing completed
 
-4. **Phase 4**: Multi-Instance Training ✅ COMPLETED
-   - `MultiInstanceTrainerBase` with generator pattern
-   - `SequentialMIT` and `MixedMIT` implementations
-   - `GeneralMIT` placeholder for finetuning
-   - Integration with `DataConverter`
-   - Full testing completed
+4. **Phase 4**: Multi-Instance Training ⚠️ PARTIALLY IMPLEMENTED
+   - ✅ `MultiInstanceTrainerBase` with generator pattern
+   - ✅ `SequentialMIT` and `MixedMIT` implementations
+   - ⚠️ `GeneralMIT` placeholder for finetuning (NotImplementedError)
+   - ⚠️ Integration with `DataConverter` (mixed legacy/new formats)
+   - ⚠️ TODO comments still present (line 41: saving results)
 
-### ❌ REMAINING PHASES
 5. **Phase 5**: Configuration Updates ✅ COMPLETED
-   - Add new config parameters
-   - Update existing config files
-   - Backwards compatibility
+   - ✅ Add new config parameters
+   - ✅ Update existing config files
+   - ✅ Backwards compatibility
+   - ✅ Comprehensive testing
 
-6. **Phase 6**: Data Preprocessing and Storage Revamp ❌ NOT IMPLEMENTED
-   - PyTorch Dataset + DataLoader pattern
-   - Consistent `List[RankingData]` format
-   - Clean separation of concerns
-   - Better masking strategies
+6. **Phase 6**: Data Preprocessing and Storage Revamp ⚠️ PARTIALLY IMPLEMENTED
+   - ⚠️ Dual data systems: both `data.py` (legacy) and `data_v2.py` (new) exist
+   - ⚠️ Incomplete migration: `data_v2.py` methods are minimal stubs
+   - ⚠️ Mixed data formats throughout codebase
+   - ❌ PyTorch Dataset + DataLoader pattern not implemented
+   - ❌ Clean separation of concerns incomplete
 
 7. **Phase 7**: Main Experiment Runner ❌ NOT IMPLEMENTED
    - `experiment_runner_v2.py`
@@ -722,8 +723,82 @@ class ExperimentRunnerV2:
    - Comprehensive testing
    - Documentation updates
 
-### NEXT STEPS
-- **Phase 5**: Configuration updates (add new parameters to config.py)
-- **Phase 6**: Data preprocessing revamp (PyTorch Dataset pattern)
-- **Phase 7**: Main experiment runner (integrate all components)
-- **Phase 8**: Integration testing and documentation
+---
+
+## 🔍 CODEBASE ANALYSIS: INCONSISTENCIES AND MISSING IMPLEMENTATIONS
+
+### Phase 1: Evaluation Infrastructure ✅ IMPLEMENTED CORRECTLY
+**No major issues found.**
+
+### Phase 2: Trainer Refactoring ⚠️ MINOR ISSUES
+**Issues Found:**
+1. **Legacy Code Remnants**: `trainer.py:186-200` - Commented legacy tensor code should be removed
+2. **Data Format Mixing**: Some tests still expect legacy tensor format
+
+### Phase 3: Random Embedding Provider ✅ IMPLEMENTED CORRECTLY
+**No issues found.**
+
+### Phase 4: Multi-Instance Training ⚠️ SIGNIFICANT ISSUES
+**Issues Found:**
+1. **NotImplementedError**: `multi_instance_trainer.py:125` - `GeneralMIT.finetune_on_instance()` raises NotImplementedError
+2. **TODO Comments**: `multi_instance_trainer.py:41` - "TODO: handle the logic of saving results"
+3. **Mixed Data Formats**:
+   - Line 85: Uses new `converter.create_variables()` format
+   - Lines 62-77: Uses legacy `create_variables_from_actual_data()` and `create_batch()`
+4. **Inconsistent Evaluation Calls**: Line 87 evaluation call signature may not match EvaluationEngine
+
+### Phase 5: Configuration Updates ✅ IMPLEMENTED CORRECTLY
+**No issues found.**
+
+### Phase 6: Data Preprocessing ⚠️ MAJOR ISSUES
+**Critical Problems:**
+1. **Dual Data Systems**:
+   - `imputer/data.py` (legacy) - Full tensor-based system
+   - `imputer/data_v2.py` (new) - Minimal stub implementation
+
+2. **Incomplete Implementation in data_v2.py:**
+   - `create_masked_batch()` (line 77-81) - Just random sampling, no actual masking
+   - `create_evaluation_batch()` (line 84-86) - Just returns variables, no evaluation logic
+   - `create_training_batch()` (line 76-82) - No masking implementation
+
+3. **Mixed Usage Throughout Codebase:**
+   - `ranking_imputer.py:267` imports from `data_v2` but calls minimal methods
+   - `ranking_imputer.py:291` calls `create_masked_batch()` but it doesn't actually mask
+   - Legacy `_convert_legacy_tensors_to_ranking_data()` still exists (line 107)
+   - Test files import from both systems
+
+4. **Trainer Integration Issues:**
+   - `trainer.py:202-204` expects `List[RankingData]` but `apply_masking()` is done in trainer, not data converter
+   - Data converter methods don't align with trainer expectations
+
+### Critical Data Flow Inconsistencies:
+```python
+# Current problematic flow:
+ranking_imputer.py:289 → converter.create_variables(data)  # Returns List[RankingData]
+ranking_imputer.py:291 → converter.create_masked_batch(variables, 0.5, 10)  # Just returns variables, no masking!
+ranking_imputer.py:306 → model(batch)  # Expects List[RankingData] with proper masking
+
+# Trainer flow:
+trainer.py:203 → input_data_list = self.apply_masking(batch, self.masking_rate)  # Trainer does masking
+trainer.py:204 → out = self.model(input_data_list)  # Model gets masked data
+
+# Multi-instance trainer flow:
+multi_instance_trainer.py:85 → converter.create_variables(test_instance)  # New format
+multi_instance_trainer.py:62-77 → Legacy methods create_variables_from_actual_data(), create_batch()  # Old format
+```
+
+### NEXT STEPS - PRIORITY ORDER
+1. **Phase 6 Completion**: Fix data preprocessing inconsistencies
+   - Complete `data_v2.py` implementation with proper masking
+   - Remove legacy `data.py` or clearly separate usage
+   - Fix trainer/data converter integration
+   - Standardize data format across all components
+
+2. **Phase 4 Completion**: Fix multi-instance training issues
+   - Implement `GeneralMIT.finetune_on_instance()`
+   - Remove TODO comments
+   - Standardize data format usage
+   - Fix evaluation integration
+
+3. **Phase 7**: Main experiment runner (once data issues resolved)
+4. **Phase 8**: Integration testing and cleanup
