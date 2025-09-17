@@ -36,6 +36,9 @@ class MultiInstanceTrainerBase:
             
             # if self.should_evaluate(step):
             #     self.evaluate_on_test_instances(test_instances)
+
+            self.evaluate_on_test_instances(test_instances)
+            #TODO: handle the logic of saving results
     
     def create_training_generator(self, train_instances: List[Dict], total_batches: int, batch_size: int) -> Iterator[Dict]:
         """Override in subclasses - returns iterator of batches."""
@@ -81,11 +84,8 @@ class MultiInstanceTrainerBase:
             # Create evaluation batch with masking
             test_variables = self.converter.create_variables(test_instance)
 
-            self.eval_engine.evaluate_model(self.model, test_variables, self.config.test_masking_rate)
+            print(self.eval_engine.evaluate_model(self.model, test_variables, self.config.test_masking_rate, converter=self.converter))
             
-            # Use the evaluation engine to evaluate on this test instance
-            # This will be implemented when we integrate with the evaluation engine
-            raise NotImplementedError("MultiInstanceTrainerBase.evaluate_on_test_instances not yet implemented")
 
 
 class SequentialMIT(MultiInstanceTrainerBase):

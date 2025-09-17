@@ -80,29 +80,6 @@ class DataConverter:
         batch_variables = random.sample(variables, min(batch_size, len(variables)))
         return batch_variables
 
-    def create_evaluation_batch(self, variables: List[RankingData], masking_rate: float) -> Tuple[List[RankingData], List[RankingData]]:
+    def create_evaluation_batch(self, variables: List[RankingData]):
         """Create evaluation batch with Test_M (masked) and Test_O (observed) split."""
-        # Randomly select variables to mask
-        num_to_mask = int(len(variables) * masking_rate)
-        masked_indices = set(random.sample(range(len(variables)), num_to_mask))
-        
-        test_m_vars = []  # Masked variables
-        test_o_vars = []  # Observed variables
-        
-        for i, var in enumerate(variables):
-            if i in masked_indices:
-                # Create masked version
-                masked_var = RankingData(
-                    annotator_id=var.annotator_id,
-                    attribute_id=var.attribute_id,
-                    is_listwise=var.is_listwise,
-                    item_ids=var.item_ids,
-                    rating_value=None if not var.is_listwise else var.rating_value,
-                    ranking_order=None if var.is_listwise else var.ranking_order
-                )
-                test_m_vars.append(masked_var)
-                test_o_vars.append(var)  # Keep original for reference
-            else:
-                test_o_vars.append(var)
-        
-        return test_m_vars, test_o_vars
+        return variables

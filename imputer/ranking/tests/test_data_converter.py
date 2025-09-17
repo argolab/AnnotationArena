@@ -255,10 +255,12 @@ def test_multiInstance_trainer():
 
     config = ExperimentConfig()
     config.learning_rate = 1e-3
-    config.total_batches = 100
+    config.total_batches = 50
     config.masking_rates = [0.5]
     config.batch_size = 300
     config.device = "cuda"
+    config.eval_frequency=0.1
+    config.test_masking_rate=0.5
     print("Testing sequential MIT")
     sequential_base = SequentialMIT(model, EvaluationEngine(), config, converter)
 

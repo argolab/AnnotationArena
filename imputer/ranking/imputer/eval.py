@@ -6,6 +6,7 @@ import random
 from typing import Dict, List, Tuple, Any, Optional
 from dataclasses import dataclass
 from scipy.special import softmax
+import copy
 
 from .data import RankingData
 from .losses import DefaultLossStrategy, adapt_batched_logits_to_predictions
@@ -40,8 +41,7 @@ class EvaluationEngine:
         self.config = config
         self.loss_strategy = DefaultLossStrategy()
 
-    def evaluate_model(self, model, variables: List[Dict], data: Dict,
-                      masking_rate: float, converter=None, device='cpu') -> EvaluationResults:
+    def evaluate_model(self, model, variables: List[RankingData], masking_rate: float, converter=None, device='cpu') -> EvaluationResults:
         """
         Main evaluation function with M% masking.
 
@@ -58,42 +58,26 @@ class EvaluationEngine:
         """
         model.eval()
 
-        with torch.no_grad():
-            # Create evaluation mask (M% of all variables)
-            evaluation_mask = self.create_evaluation_mask(variables, masking_rate)
+        ref_variables = copy.deepcopy(variables)
 
-            # Split variables into Test_M (masked) and Test_O (observed)
-            test_m_vars, test_o_vars = self.split_variables(variables, evaluation_mask)
+        with torch.no_grad():
 
             # Create batch for evaluation (all variables, but with masking applied)
             if converter is None:
                 raise ValueError("DataConverter required for evaluation")
 
-            # Extract rating and ranking data
-            rating_data = data.get('rating_data', {})
-            ranking_data = data.get('ranking_data', [])
+            evaluation_mask = self.create_evaluation_mask(variables, masking_rate)
 
             # Create batch with evaluation masking
-            batch = self._create_evaluation_batch(
-                variables, rating_data, ranking_data, evaluation_mask, converter
-            )
-
-            # Move to device
-            for key in batch:
-                if isinstance(batch[key], torch.Tensor):
-                    batch[key] = batch[key].to(device)
-
-            # Forward pass
-            ranking_data_list = model._convert_legacy_tensors_to_ranking_data(
-                batch['variable_data'], batch['variable_types'],
-                batch['attribute_ids'], batch['annotator_ids'], batch['item_ids']
+            ranking_data_list = self._create_evaluation_batch(
+                variables, evaluation_mask
             )
 
             model_output = model(ranking_data_list)
 
             # Compute metrics
             results = self._compute_comprehensive_metrics(
-                model_output, batch, variables, evaluation_mask, converter
+                model_output, ref_variables, evaluation_mask, converter
             )
 
         model.train()
@@ -327,100 +311,38 @@ class EvaluationEngine:
 
         return results
 
-    def _create_evaluation_batch(self, variables, rating_data, ranking_data,
-                               evaluation_mask, converter):
+    def _create_evaluation_batch(self, variables, evaluation_mask):
         """Create batch with evaluation masking applied."""
         # Similar to converter.create_batch but with evaluation masking
         # This applies the evaluation mask to determine which variables have supervision
 
         all_variables = variables
-        num_variables = len(all_variables)
 
-        # Initialize tensors (similar to DataConverter.create_batch)
-        variable_data = torch.zeros(1, num_variables, max(converter.num_likert_classes, converter.max_rank_size))
-        variable_types = torch.zeros(1, num_variables, dtype=torch.long)
-        attribute_ids = torch.zeros(1, num_variables, dtype=torch.long)
-        annotator_ids = torch.zeros(1, num_variables, dtype=torch.long)
-        item_ids = torch.full((1, num_variables, converter.max_rank_size), -1, dtype=torch.long)
+        masked_variables = []
 
-        rating_targets = torch.zeros(1, num_variables, converter.num_likert_classes)
-        ranking_targets = torch.zeros(1, num_variables, converter.max_rank_size)
-        rating_mask = torch.zeros(1, num_variables, dtype=torch.bool)
-        ranking_mask = torch.zeros(1, num_variables, dtype=torch.bool)
+        for i, var in enumerate(all_variables):
+            if evaluation_mask[i]:
+                # Create masked version (remove supervision)
+                masked_var = RankingData(
+                    annotator_id=var.annotator_id,
+                    attribute_id=var.attribute_id,
+                    is_listwise=var.is_listwise,
+                    item_ids=var.item_ids,
+                    rating_value=None,  # Mask the rating value
+                    ranking_order=None  # Mask the ranking order
+                )
+                masked_variables.append(masked_var)
+            else:
+                # Keep original (observed) for conditioning
+                masked_variables.append(var)
+        
+        return masked_variables
 
-        # Process each variable
-        for i, (var, is_masked) in enumerate(zip(all_variables, evaluation_mask)):
-            attribute_ids[0, i] = var['attribute'] - 1
-            annotator_ids[0, i] = var['annotator'] - 1
-
-            if var['type'] == 'rating':
-                variable_types[0, i] = 0
-                item_ids[0, i, 0] = var['item'] - 1
-
-                # Check if this rating exists in data
-                key = (var['attribute'], var['annotator'], var['item'])
-                if key in rating_data:
-                    rating_value = rating_data[key] - 1  # Convert to 0-indexed
-                    rating_targets[0, i, rating_value] = 1.0
-                    rating_mask[0, i] = True
-
-                    # Only provide supervision if NOT masked for evaluation
-                    if not is_masked:
-                        variable_data[0, i, rating_value] = 1.0
-
-            elif var['type'] == 'ranking':
-                variable_types[0, i] = 1
-                items = var['items']
-                for j, item in enumerate(items):
-                    if j < converter.max_rank_size:
-                        item_ids[0, i, j] = item - 1
-
-                # Find matching ranking
-                matching_ranking = None
-                for ranking_entry in ranking_data:
-                    if (ranking_entry['attribute'] == var['attribute'] and
-                        ranking_entry['annotator'] == var['annotator'] and
-                        ranking_entry['items'] == items):
-                        matching_ranking = ranking_entry
-                        break
-
-                if matching_ranking:
-                    order = matching_ranking['order']
-                    for j, pos in enumerate(order):
-                        if j < converter.max_rank_size:
-                            ranking_targets[0, i, j] = pos
-                    ranking_mask[0, i] = True
-
-                    # Only provide supervision if NOT masked for evaluation
-                    if not is_masked:
-                        for j, pos in enumerate(order):
-                            if j < converter.max_rank_size:
-                                variable_data[0, i, j] = pos
-
-        return {
-            'variable_data': variable_data,
-            'variable_types': variable_types,
-            'attribute_ids': attribute_ids,
-            'annotator_ids': annotator_ids,
-            'item_ids': item_ids,
-            'rating_targets': rating_targets,
-            'ranking_targets': ranking_targets,
-            'rating_mask': rating_mask,
-            'ranking_mask': ranking_mask,
-            'evaluation_mask': evaluation_mask,
-            'all_variables': all_variables
-        }
-
-    def _compute_comprehensive_metrics(self, model_output, batch, variables,
+    def _compute_comprehensive_metrics(self, model_output, variables,
                                      evaluation_mask, converter):
         """Compute comprehensive evaluation metrics."""
         rating_logits = model_output['rating']
         ranking_logits = model_output['ranking']
-
-        rating_targets = batch['rating_targets']
-        ranking_targets = batch['ranking_targets']
-        rating_mask = batch['rating_mask']
-        ranking_mask = batch['ranking_mask']
 
         # Convert to structured format for loss computation
         predictions_full = adapt_batched_logits_to_predictions(model_output)
@@ -438,16 +360,16 @@ class EvaluationEngine:
 
         # Process each variable
         for i, (var, is_masked) in enumerate(zip(variables, evaluation_mask)):
-            if var['type'] == 'rating' and rating_mask[0, i]:
-                rating_val = int(torch.argmax(rating_targets[0, i]).item())
+            if not var.is_listwise:
+                rating_val = var.rating_value
                 pred_rating = torch.argmax(rating_logits[0, i]).item()
 
                 # Create structured prediction/reference
                 pred_ref_pair = (predictions_full[i], RankingData(
-                    annotator_id=var['annotator'] - 1,
-                    attribute_id=var['attribute'] - 1,
+                    annotator_id=var.annotator_id,
+                    attribute_id=var.attribute_id,
                     is_listwise=False,
-                    item_ids=[var['item'] - 1],
+                    item_ids=var.item_ids,
                     rating_value=rating_val,
                 ))
 
@@ -464,13 +386,8 @@ class EvaluationEngine:
                 target_metrics['rating_preds'].append(pred_rating)
                 target_metrics['rating_targets'].append(rating_val)
 
-            elif var['type'] == 'ranking' and ranking_mask[0, i]:
-                scores_vec = ranking_targets[0, i]
-                ranking_order = []
-                for j in range(scores_vec.shape[0]):
-                    s = int(scores_vec[j].item())
-                    if s > 0:
-                        ranking_order.append(s)
+            else:
+                ranking_order = var.ranking_order
 
                 # Simplified ranking prediction
                 pred_scores = ranking_logits[0, i].cpu().numpy()
@@ -484,10 +401,10 @@ class EvaluationEngine:
 
                 # Create structured prediction/reference
                 pred_ref_pair = (predictions_full[i], RankingData(
-                    annotator_id=var['annotator'] - 1,
-                    attribute_id=var['attribute'] - 1,
+                    annotator_id=var.annotator_id,
+                    attribute_id=var.attribute_id,
                     is_listwise=True,
-                    item_ids=[it - 1 for it in var['items'][:converter.max_rank_size]],
+                    item_ids=var.item_ids,
                     ranking_order=ranking_order,
                 ))
 
