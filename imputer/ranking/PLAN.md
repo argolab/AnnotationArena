@@ -183,31 +183,38 @@ model.forward(variables)
 
 ---
 
-## Phase 4: Mixed Instance Training
+## Phase 4: Multi-Instance Training
 
 **Key Functions & Flow:**
 
-**File: `imputer/mixed_instance_trainer.py`**
-- `MixedInstanceTrainerBase.__init__()` → initializes base trainer with eval_engine
-- `MixedInstanceTrainerBase.setup_evaluation_callback()` → creates callback for test instances
-- `SequentialMIT.train_on_instances()` → trains instance by instance
-- `MixedMIT.train_on_instances()` → combines instances, samples IID
-- `MixedMIT.combine_instances()` → merges all instance variables
+**File: `imputer/multi_instance_trainer.py`**
+- `MultiInstanceTrainerBase.__init__()` → initializes base trainer with eval_engine
+- `MultiInstanceTrainerBase.train_on_instances()` → unified training loop using generator
+- `MultiInstanceTrainerBase.create_training_generator()` → abstract method for data generation
+- `SequentialMIT.create_training_generator()` → exhausts each instance before next
+- `MixedMIT.create_training_generator()` → IID sampling from all instances
 - `GeneralMIT.finetune_on_instance()` → finetunes on single instance
 
 **Function Call Flow:**
 ```
-SequentialMIT.train_on_instances(train_instances, test_instances)
-├── For each train_instance:
-│   ├── train_single_instance(instance)
-│   └── evaluate_on_test_instances(test_instances)
-
-MixedMIT.train_on_instances(train_instances, test_instances)
-├── combine_instances(train_instances) → combined_variables
-├── For each epoch:
-│   ├── sample_iid_batch(combined_variables)
+MultiInstanceTrainerBase.train_on_instances(train_instances, test_instances)
+├── create_training_generator(train_instances, total_batches, batch_size) → generator
+├── For each batch in generator:
 │   ├── trainer.train_step(batch)
-│   └── evaluate_on_test_instances(test_instances)
+│   └── evaluate_on_test_instances(test_instances) if should_evaluate(step)
+
+SequentialMIT.create_training_generator(train_instances, total_batches, batch_size)
+├── batches_per_instance = total_batches // len(train_instances)
+├── For each instance:
+│   └── For each batch in range(batches_per_instance):
+│       ├── masking_rate = random.choice(config.masking_rates)
+│       └── yield create_masked_batch(instance, masking_rate, batch_size)
+
+MixedMIT.create_training_generator(train_instances, total_batches, batch_size)
+├── For each batch in range(total_batches):
+│   ├── instance = random.choice(train_instances)
+│   ├── masking_rate = random.choice(config.masking_rates)
+│   └── yield create_masked_batch(instance, masking_rate, batch_size)
 
 GeneralMIT.finetune_on_instance(pretrained_model, instance_data)
 ├── Split instance → Test_O_Observed, Test_O_Masked
@@ -215,54 +222,73 @@ GeneralMIT.finetune_on_instance(pretrained_model, instance_data)
 └── Evaluate on Test_O_Masked
 ```
 
-### File: `imputer/mixed_instance_trainer.py`
+### File: `imputer/multi_instance_trainer.py`
 
 ```python
-class MixedInstanceTrainerBase:
+class MultiInstanceTrainerBase:
     def __init__(self, model, eval_engine, config):
         self.model = model
         self.eval_engine = eval_engine
         self.config = config
         self.trainer = ImputerTrainer(model, config.learning_rate)
-
-    def setup_evaluation_callback(self, test_instances):
-        """Setup callback for test instance evaluation"""
-
-class SequentialMIT(MixedInstanceTrainerBase):
+    
     def train_on_instances(self, train_instances, test_instances):
-        """Train instance by instance, evaluate on test instances after each"""
-        for i, instance in enumerate(train_instances):
-            # Train on instance with M% masking
-            self.train_single_instance(instance)
-            # Evaluate on all test instances
-            results = self.evaluate_on_test_instances(test_instances)
-
-class MixedMIT(MixedInstanceTrainerBase):
-    def train_on_instances(self, train_instances, test_instances):
-        """Create big combined instance, sample IID"""
-        combined_variables = self.combine_instances(train_instances)
-
-        for epoch in range(self.config.epochs):
-            # Sample IID batch from combined variables
-            batch = self.sample_iid_batch(combined_variables)
-            # Train with M% masking
+        """Unified training loop that uses generator from subclass"""
+        generator = self.create_training_generator(
+            train_instances, 
+            self.config.total_batches, 
+            self.config.batch_size
+        )
+        
+        for step, batch in enumerate(generator):
             self.trainer.train_step(batch)
-            # Evaluate on test instances
+            
+            if self.should_evaluate(step):
+                self.evaluate_on_test_instances(test_instances)
+    
+    def create_training_generator(self, train_instances, total_batches, batch_size):
+        """Override in subclasses - returns iterator of batches"""
+        raise NotImplementedError
+    
+    def should_evaluate(self, step):
+        """Override for evaluation frequency control"""
+        return step % self.config.eval_frequency == 0
+    
+    def create_masked_batch(self, instance, masking_rate, batch_size):
+        """Create batch with specified masking rate and batch size"""
+        # Implementation details for creating masked batches
 
-    def combine_instances(self, instances):
-        """Combine all instance variables (keep distinct IDs)"""
+class SequentialMIT(MultiInstanceTrainerBase):
+    def create_training_generator(self, train_instances, total_batches, batch_size):
+        """Generate batches per instance sequentially"""
+        batches_per_instance = total_batches // len(train_instances)
+        
+        for instance in train_instances:
+            for _ in range(batches_per_instance):
+                masking_rate = random.choice(self.config.masking_rates)
+                batch = self.create_masked_batch(instance, masking_rate, batch_size)
+                yield batch
 
-class GeneralMIT(MixedInstanceTrainerBase):
+class MixedMIT(MultiInstanceTrainerBase):
+    def create_training_generator(self, train_instances, total_batches, batch_size):
+        """IID sampling from all instances"""
+        for _ in range(total_batches):
+            instance = random.choice(train_instances)
+            masking_rate = random.choice(self.config.masking_rates)
+            batch = self.create_masked_batch(instance, masking_rate, batch_size)
+            yield batch
+
+class GeneralMIT(MultiInstanceTrainerBase):
     def finetune_on_instance(self, pretrained_model, instance_data):
         """Finetune on single instance (for test instance finetuning)"""
         # Split instance into Test_O_Masked and Test_O_Observed
         # Train on observed, validate on masked
 ```
 
-### Test Script: `test_mixed_trainers.py`
-- Test sequential training
-- Test mixed instance combination preserves IDs
-- Test IID sampling from combined pool
+### Test Script: `test_multi_instance_trainers.py`
+- Test sequential training generator exhausts instances
+- Test mixed training generator provides IID sampling
+- Test training step control and evaluation frequency
 - Test finetuning logic
 
 ---
@@ -275,6 +301,10 @@ class GeneralMIT(MixedInstanceTrainerBase):
 - `ModelConfig.embedding_type` → add "random" option
 - `ExperimentConfig.test_masking_rate` → M% for test instances
 - `ExperimentConfig.pretraining_mode` → "sequential" or "mixed"
+- `ExperimentConfig.total_batches` → total number of batches to generate
+- `ExperimentConfig.batch_size` → size of each batch
+- `ExperimentConfig.masking_rates` → list of masking rates for training
+- `ExperimentConfig.eval_frequency` → evaluation frequency during training
 - `ExperimentConfig.evaluation_types` → list of evaluation strategies
 
 ### File: `config.py` (Modified)
@@ -295,6 +325,10 @@ class ExperimentConfig:
     # New fields
     test_masking_rate: float = 0.3  # M% for test instances
     pretraining_mode: str = "sequential"  # "sequential" or "mixed"
+    total_batches: int = 1000  # Total number of batches to generate
+    batch_size: int = 32  # Size of each batch
+    masking_rates: List[float] = field(default_factory=lambda: [0.0, 0.2, 0.5, 0.8, 1.0])  # Training masking rates
+    eval_frequency: int = 100  # Evaluate every N steps
 
     evaluation_types: List[str] = field(default_factory=lambda: [
         "pretrained",           # Direct evaluation
