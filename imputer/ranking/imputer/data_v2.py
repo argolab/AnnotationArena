@@ -3,6 +3,7 @@ from typing import List, Optional, Tuple, Dict, Any
 import json
 import torch
 import random
+import torch.nn.functional as F
 
 @dataclass
 class RankingData:
@@ -23,6 +24,8 @@ class RankingData:
     item_ids: List[int]
     rating_value: Optional[int] = None
     ranking_order: Optional[List[int]] = None
+    rating_target: Optional[torch.tensor] = None
+    ranking_target: Optional[torch.tensor] = None
     # TODO: do we need a observed flag?
 
 
@@ -74,8 +77,8 @@ class DataConverter:
     def create_masked_batch(self, variables: List[RankingData], masking_rate: float, batch_size: int) -> List[RankingData]:
         """Create a batch with random masking applied for self-supervised learning."""
         # Sample variables for the batch
-        batch_variables = random.sample(variables, min(batch_size, len(variables)))
         
+        batch_variables = random.sample(variables, min(batch_size, len(variables)))
         # Apply masking: M% of variables are masked, (1-M)% are observed
         # The model will use observed variables to predict masked variables
         masked_variables = []
@@ -89,12 +92,23 @@ class DataConverter:
                     is_listwise=var.is_listwise,
                     item_ids=var.item_ids,
                     rating_value=None,  # Mask the rating value
-                    ranking_order=None  # Mask the ranking order
+                    ranking_order=None,  # Mask the ranking order
+                    rating_target=F.one_hot(torch.tensor(var.rating_value), num_classes=self.num_likert_classes).float() if var.rating_value is not None else None,
+                    ranking_target=torch.tensor(var.ranking_order) if var.ranking_order is not None else None
                 )
                 masked_variables.append(masked_var)
             else:
                 # Keep original (observed) for conditioning
-                masked_variables.append(var)
+                masked_variables.append(RankingData(
+                    annotator_id=var.annotator_id,
+                    attribute_id=var.attribute_id,
+                    is_listwise=var.is_listwise,
+                    item_ids=var.item_ids,
+                    rating_value=var.rating_value if var.rating_value is not None else None,  # Mask the rating value
+                    ranking_order=var.ranking_order if var.ranking_order is not None else None,  # Mask the ranking order
+                    rating_target=F.one_hot(torch.tensor(var.rating_value), num_classes=self.num_likert_classes).float() if var.rating_value is not None else None,
+                    ranking_target=torch.tensor(var.ranking_order) if var.ranking_order is not None else None
+                ))
         
         return masked_variables
 

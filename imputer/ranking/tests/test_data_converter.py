@@ -93,11 +93,8 @@ def test_create_batch():
         for data in batch:
             if data.rating_value is None and data.ranking_order is None:
                 mask += 1
-                
-        print(mask)
         assert mask == 6 * masking_rate
         
-        print(batch)
 
 def test_forward_pass():
     from imputer.data_v2 import DataConverter, RankingData
@@ -144,9 +141,98 @@ def test_forward_pass():
 
     print("Forward pass is succssful")
 
+def test_trainer_work():
+    from imputer.data_v2 import DataConverter, RankingData
+    from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
+    from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
+    from imputer.trainer import ImputerTrainer
+    from imputer.ranking_imputer import MultiVariableImputer
+
+    converter = DataConverter(
+        num_attributes=2, num_annotators=2, num_items=3,
+        num_likert_classes=5, max_rank_size=2
+    )
+    
+    data = {
+        'ratings': [
+            {'annotator': 1, 'attribute': 1, 'item': 1, 'value': 2},
+            {'annotator': 2, 'attribute': 1, 'item': 2, 'value': 3},
+            {'annotator': 1, 'attribute': 2, 'item': 1, 'value': 1},
+            {'annotator': 2, 'attribute': 2, 'item': 2, 'value': 4},
+        ],
+        'pairwise_rankings': [
+            {'annotator': 1, 'attribute': 1, 'items': [1, 2], 'order': [1, 2]},
+            {'annotator': 2, 'attribute': 2, 'items': [1, 2], 'order': [2, 1]},
+        ]
+    }
+    variables = converter.create_variables(data)
+    
+    batch = converter.create_masked_batch(variables, 0.5, 10)
+    
+    # Initialize model
+    model = MultiVariableImputer(
+        num_attributes=2,
+        num_annotators=2,
+        num_items=3,  # Updated for smaller dataset
+        num_likert_classes=5,
+        max_rank_size=2,
+        encoder_layers_num=2,
+        attention_heads=4,
+        embedding_dim=64,
+        dropout=0.1
+    ).to("cuda")
+
+    print(batch)
+
+    trainer = ImputerTrainer(model, 1e-3)
+
+    for i in range(3):
+        result = trainer.train_step(batch)
+        print(result)
+
+def test_trainer_loss():
+    from imputer.data_v2 import DataConverter, RankingData
+    from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
+    from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
+    from imputer.trainer import ImputerTrainer
+    from imputer.ranking_imputer import MultiVariableImputer
+
+    converter = DataConverter(
+        num_attributes=5, num_annotators=5, num_items=5,
+        num_likert_classes=5, max_rank_size=2
+    )
+    
+    data = converter.load_training_data("/home/stone/AnnotationArena/imputer/ranking/generated_data/multi_instance_3instances/instance_0/iclr_dataset_train.json")
+    variables = converter.create_variables(data)
+    
+    batch = converter.create_masked_batch(variables, 0.5, 10)
+    
+    # Initialize model
+    model = MultiVariableImputer(
+        num_attributes=5,
+        num_annotators=5,
+        num_items=5,  # Updated for smaller dataset
+        num_likert_classes=5,
+        max_rank_size=2,
+        encoder_layers_num=2,
+        attention_heads=4,
+        embedding_dim=64,
+        dropout=0.1
+    ).to("cuda")
+
+
+    trainer = ImputerTrainer(model, 1e-3)
+
+    for i in range(60):
+        result = trainer.train_step(batch)
+        print(result)
+
+
 if __name__ == "__main__":
     test_create_batch()
     test_forward_pass()
+    test_trainer_work()
+    test_trainer_loss()
 
 # def test_masking_behavior():
 #     """Test that masking works correctly."""

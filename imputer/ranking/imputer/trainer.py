@@ -157,22 +157,23 @@ class ImputerTrainer:
         """Single training step using legacy tensor batch + structured losses."""
         self.optimizer.zero_grad()
 
-        # Move batch to device
-        variable_data = batch['variable_data'].to(self.device)
-        variable_types = batch['variable_types'].to(self.device)
-        attribute_ids = batch['attribute_ids'].to(self.device)
-        annotator_ids = batch['annotator_ids'].to(self.device)
-        item_ids = batch['item_ids'].to(self.device)
-        rating_targets = batch['rating_targets'].to(self.device)
-        ranking_targets = batch['ranking_targets'].to(self.device)
-        rating_mask = batch['rating_mask'].to(self.device)
-        ranking_mask = batch['ranking_mask'].to(self.device)
-        rating_masked = batch['rating_masked'].to(self.device)
-        ranking_masked = batch['ranking_masked'].to(self.device)
-        ranking_data_list = self.model._convert_legacy_tensors_to_ranking_data(
-            variable_data, variable_types, attribute_ids, annotator_ids, item_ids
-        )
-        # Forward pass
+        # # Move batch to device
+        # variable_data = batch['variable_data'].to(self.device)
+        # variable_types = batch['variable_types'].to(self.device)
+        # attribute_ids = batch['attribute_ids'].to(self.device)
+        # annotator_ids = batch['annotator_ids'].to(self.device)
+        # item_ids = batch['item_ids'].to(self.device)
+        # rating_targets = batch['rating_targets'].to(self.device)
+        # ranking_targets = batch['ranking_targets'].to(self.device)
+        # rating_mask = batch['rating_mask'].to(self.device)
+        # ranking_mask = batch['ranking_mask'].to(self.device)
+        # rating_masked = batch['rating_masked'].to(self.device)
+        # ranking_masked = batch['ranking_masked'].to(self.device)
+        # ranking_data_list = self.model._convert_legacy_tensors_to_ranking_data(
+        #     variable_data, variable_types, attribute_ids, annotator_ids, item_ids
+        # )
+        # # Forward pass
+        ranking_data_list = batch
         out = self.model(ranking_data_list)
         rating_logits = out['rating']
         ranking_logits = out['ranking']
@@ -182,36 +183,40 @@ class ImputerTrainer:
         predictions_full = adapt_batched_logits_to_predictions({'rating': rating_logits, 'ranking': ranking_logits})
         predictions: List["TopLayerPredictionResult"] = []
         references: List[RankingData] = []
-        all_vars = batch['all_variables']
+        all_vars = batch
+
 
         # Reconstruct references from batch tensors (0-indexed) - for ALL training variables with ground truth
         for i, var in enumerate(all_vars):
-            if var.get('source') == 'train':  # All training variables (both masked and unmasked)
-                if var['type'] == 'rating' and rating_mask[0, i]:  # Has ground truth
-                    rating_val = int(torch.argmax(rating_targets[0, i]).item())
-                    predictions.append(predictions_full[i])
-                    references.append(RankingData(
-                        annotator_id=var['annotator'] - 1,
-                        attribute_id=var['attribute'] - 1,
-                        is_listwise=False,
-                        item_ids=[var['item'] - 1],
-                        rating_value=rating_val,
-                    ))
-                elif var['type'] == 'ranking' and ranking_mask[0, i]:  # Has ground truth
-                    scores_vec = ranking_targets[0, i]
-                    ranking_order = []
-                    for j in range(scores_vec.shape[0]):
-                        s = int(scores_vec[j].item())
-                        if s > 0:
-                            ranking_order.append(int(s))
-                    predictions.append(predictions_full[i])
-                    references.append(RankingData(
-                        annotator_id=var['annotator'] - 1,
-                        attribute_id=var['attribute'] - 1,
-                        is_listwise=True,
-                        item_ids=[it - 1 for it in var['items'][: self.model.max_rank_size]],
-                        ranking_order=ranking_order,
-                    ))
+            if not var.is_listwise:
+                rating_val = int(torch.argmax(var.rating_target).item())
+                predictions.append(predictions_full[i])
+                references.append(RankingData(
+                    annotator_id=var.annotator_id,
+                    attribute_id=var.attribute_id,
+                    is_listwise=False,
+                    item_ids=[var.item_ids[0]],
+                    rating_value=rating_val,
+                ))
+            elif var.is_listwise:
+                scores_vec = var.ranking_target
+                ranking_order = []
+                for j in range(scores_vec.shape[0]):
+                    s = int(scores_vec[j].item())
+                    if s > 0:
+                        ranking_order.append(int(s))
+                predictions.append(predictions_full[i])
+                references.append(RankingData(
+                    annotator_id=var.annotator_id,
+                    attribute_id=var.attribute_id,
+                    is_listwise=True,
+                    item_ids=[it for it in var.item_ids[: self.model.max_rank_size]],
+                    ranking_order=ranking_order,
+                ))
+            else:
+                raise ValueError("Shouldn't be here")
+            
+        print(references)
 
         losses = self.loss_strategy.compute(predictions, references)
 

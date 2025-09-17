@@ -260,88 +260,86 @@ class MultiVariableImputerWithExternalEmbeddings(MultiVariableImputer):
 
 def main():
     # Initialize components with smaller dataset
-    converter = DataConverter(num_attributes=10, num_annotators=5, num_items=10)
+    from data_v2 import DataConverter, RankingData
+    from embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
+    from transformer import TransformerBlock, NormLayer as _NormLayer
+    from trainer import ImputerTrainer
     
-    # Load training and test data
-    train_data = converter.load_training_data('test_complete_train.json')
-    test_data = converter.load_training_data('test_complete_test.json')
+    converter = DataConverter(
+        num_attributes=2, num_annotators=2, num_items=3,
+        num_likert_classes=5, max_rank_size=2
+    )
     
-    print(f"Filtered training data: {len(train_data['ratings'])} ratings, {len(train_data['rankings'])} rankings")
-    print(f"Filtered test data: {len(test_data['ratings'])} ratings, {len(test_data['rankings'])} rankings")
+    data = {
+        'ratings': [
+            {'annotator': 1, 'attribute': 1, 'item': 1, 'value': 2},
+            {'annotator': 2, 'attribute': 1, 'item': 2, 'value': 3},
+            {'annotator': 1, 'attribute': 2, 'item': 1, 'value': 1},
+            {'annotator': 2, 'attribute': 2, 'item': 2, 'value': 4},
+        ],
+        'pairwise_rankings': [
+            {'annotator': 1, 'attribute': 1, 'items': [1, 2], 'order': [1, 2]},
+            {'annotator': 2, 'attribute': 2, 'items': [1, 2], 'order': [2, 1]},
+        ]
+    }
+    variables = converter.create_variables(data)
     
-    # Create variables from actual data
-    rating_variables, ranking_variables = converter.create_variables_from_actual_data(train_data, test_data)
-    print(f"Total rating variables: {len(rating_variables)}")
-    print(f"Total ranking variables: {len(ranking_variables)}")
-    print(f"Total variables: {len(rating_variables) + len(ranking_variables)}")
-    
-    # Process training data
-    rating_data, ranking_data = converter.process_training_data(train_data)
-    print(f"Available training rating data points: {len(rating_data)}")
-    print(f"Available training ranking data points: {len(ranking_data)}")
-    
-    # Create training batch
-    batch = converter.create_training_batch(rating_variables, ranking_variables,
-                                          rating_data, ranking_data, test_data=test_data)
-    
-    # Count masked and non-masked entries
-    train_rating_count = batch['rating_mask'].sum().item()
-    train_ranking_count = batch['ranking_mask'].sum().item()
-    masked_rating_count = batch['rating_masked'].sum().item()
-    masked_ranking_count = batch['ranking_masked'].sum().item()
-    print(f"Training data: {train_rating_count} ratings ({masked_rating_count} masked), "
-          f"{train_ranking_count} rankings ({masked_ranking_count} masked)")
+    batch = converter.create_masked_batch(variables, 0.5, 10)
     
     # Initialize model
     model = MultiVariableImputer(
-        num_attributes=10,
-        num_annotators=5,
-        num_items=10,  # Updated for smaller dataset
+        num_attributes=2,
+        num_annotators=2,
+        num_items=3,  # Updated for smaller dataset
         num_likert_classes=5,
-        max_rank_size=3,
+        max_rank_size=2,
         encoder_layers_num=2,
         attention_heads=4,
         embedding_dim=64,
         dropout=0.1
     )
+
+    out = model(batch)
+
+    print("Forward pass is succssful")
     
-    # Initialize trainer
-    trainer = ImputerTrainer(model, learning_rate=1e-3)
+    # # Initialize trainer
+    # trainer = ImputerTrainer(model, learning_rate=1e-3)
     
-    # Training loop
-    num_epochs = 10
-    print(f"\nStarting training for {num_epochs} epochs...")
+    # # Training loop
+    # num_epochs = 10
+    # print(f"\nStarting training for {num_epochs} epochs...")
     
-    for epoch in tqdm(range(num_epochs)):
-        losses = trainer.train_step(batch)
+    # for epoch in tqdm(range(num_epochs)):
+    #     losses = trainer.train_step(batch)
         
-        if epoch % 1 == 0:
-            print(f"Epoch {epoch}: Total Loss: {losses['total_loss']:.4f}, "
-                  f"Rating Loss: {losses['rating_loss']:.4f}, "
-                  f"Ranking Loss: {losses['ranking_loss']:.4f}")
+    #     if epoch % 1 == 0:
+    #         print(f"Epoch {epoch}: Total Loss: {losses['total_loss']:.4f}, "
+    #               f"Rating Loss: {losses['rating_loss']:.4f}, "
+    #               f"Ranking Loss: {losses['ranking_loss']:.4f}")
     
-    print("Training completed!")
+    # print("Training completed!")
     
-    # Evaluation on test data
-    print("\nEvaluating on test data...")
-    test_losses = trainer.evaluate_with_test_data(batch, test_data, converter)
+    # # Evaluation on test data
+    # print("\nEvaluating on test data...")
+    # test_losses = trainer.evaluate_with_test_data(batch, test_data, converter)
     
-    print(f"\nTest Results:")
-    print(f"Test Rating Loss: {test_losses['test_rating_loss']:.4f}")
-    print(f"Test Ranking Loss: {test_losses['test_ranking_loss']:.4f}")
-    print(f"Total Test Loss: {test_losses['total_test_loss']:.4f}")
+    # print(f"\nTest Results:")
+    # print(f"Test Rating Loss: {test_losses['test_rating_loss']:.4f}")
+    # print(f"Test Ranking Loss: {test_losses['test_ranking_loss']:.4f}")
+    # print(f"Total Test Loss: {test_losses['total_test_loss']:.4f}")
     
-    # Save model
-    torch.save({
-        'model_state_dict': model.state_dict(),
-        'num_attributes': 10,
-        'num_annotators': 5,
-        'num_items': 10,
-        'num_likert_classes': 5,
-        'max_rank_size': 3
-    }, 'trained_imputer_small.pth')
+    # # Save model
+    # torch.save({
+    #     'model_state_dict': model.state_dict(),
+    #     'num_attributes': 10,
+    #     'num_annotators': 5,
+    #     'num_items': 10,
+    #     'num_likert_classes': 5,
+    #     'max_rank_size': 3
+    # }, 'trained_imputer_small.pth')
     
-    print("\nModel saved as 'trained_imputer_small.pth'")
+    # print("\nModel saved as 'trained_imputer_small.pth'")
 
 if __name__ == "__main__":
     main()
