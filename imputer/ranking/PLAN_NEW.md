@@ -355,20 +355,16 @@
 - Configuration-driven experiments
 - Structured results and comprehensive metrics
 
-
-
-
-EXPERIMENT RUNNER
-
-- Read Config.
-- Generate Data.
-- Sequential/Mixed Pretraining -> Save the Results on Heldout Training Instances + Training History + Imputer Model
-- Domain MCMC -> On Each of the Test Instance -> Save Results for each
-- Finetune Imputer Only -> Finetune on EACH test Instance -> Evaluate on each. -> Save Results for each + Training History + Model.
-- Pretrained Imputer Finetuning -> Finetune on EACH test Instance -> Evaluate on each. -> Save Results for each + Training History + Model.
-  
+# FINAL TODO
 
 VISUALIZATION 
 
 - Take JSONs
 - Generate Plots whatever plots we need.
+
+
+Fixes:
+
+1. Masked Metrics Missing.
+2. Evaluate on each step not just at end for test instances.
+3. Ensure we have different parameters for each instance.

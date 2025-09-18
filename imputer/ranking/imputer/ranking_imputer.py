@@ -73,6 +73,7 @@ class MultiVariableImputer(nn.Module):
                 num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
             )
         elif embedding_type == "fully_random":
+            print('I AM HERE')
             self.embedding_provider = FullyRandomizedEmbeddingProvider(
                 num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
             )

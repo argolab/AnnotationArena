@@ -106,9 +106,6 @@ class MultiInstanceTrainerBase:
         """Create generator that yields batches of masked versions - override in subclasses."""
         raise NotImplementedError("Subclasses must implement create_training_batch_generator")
 
-    def get_current_training_vars(self, train_instances: List[Dict]) -> List[RankingData]:
-        """Get training variables for current batch - strategy-specific implementation."""
-        raise NotImplementedError("Subclasses must implement get_current_training_vars")
 
     def setup_heldout_evaluation_callback(self, train_instances: List[Dict]) -> List[RankingData]:
         """Set up evaluation callback on heldout data - override in subclasses."""
@@ -167,11 +164,6 @@ class SequentialMIT(MultiInstanceTrainerBase):
 
                 yield batch_of_masked_versions
 
-    def get_current_training_vars(self, train_instances: List[Dict]) -> List[RankingData]:
-        """Get current instance's training variables."""
-        current_instance = self.instance_train_sets[self.current_instance_idx % len(self.instance_train_sets)]
-        self.current_instance_idx += 1
-        return current_instance
 
 
 class MixedMIT(MultiInstanceTrainerBase):
@@ -233,9 +225,6 @@ class MixedMIT(MultiInstanceTrainerBase):
 
             yield batch_of_masked_versions
 
-    def get_current_training_vars(self, train_instances: List[Dict]) -> List[RankingData]:
-        """Get randomly selected instance's training variables."""
-        return random.choice([train_set for train_set in self.instance_train_sets if len(train_set) > 0])
 
 
 class GeneralMIT(MultiInstanceTrainerBase):
@@ -353,6 +342,3 @@ class GeneralMIT(MultiInstanceTrainerBase):
 
             yield batch_of_masked_versions
 
-    def get_current_training_vars(self, train_instances: List[Dict]) -> List[RankingData]:
-        """Get T_O training variables for GeneralMIT."""
-        return self.t_o_train_vars
