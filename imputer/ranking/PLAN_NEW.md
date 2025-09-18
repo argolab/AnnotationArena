@@ -188,13 +188,43 @@
 - **✅ All Tests Passing**: Evaluation engine and embedding provider tests pass with new system
 - **✅ Backward Compatibility**: Original values preserved when masked for reference
 
-**Current Issues in multi_instance_trainer.py**:
-- ❌ Line 41: TODO comment for saving results
-- ❌ Line 125: NotImplementedError for GeneralMIT.finetune_on_instance
-- ❌ Lines 62-78: Uses old tensor-based batch creation instead of List[RankingData]
-- ❌ Creates own batches instead of using trainer's masking capabilities
-- ❌ Calls eval_engine directly instead of using trainer callbacks
-- ❌ Mixes data conversion, training, and evaluation logic
+**✅ PHASE 4 COMPLETED - CLEAN SEPARATION ACHIEVED**:
+
+**✅ Trainer.py Refactoring**:
+- **✅ Removed Masking Logic**: Deleted `apply_masking()` method and `masking_rate` parameter
+- **✅ Pre-masked Data Input**: `train_step()` now accepts pre-masked `List[RankingData]`
+- **✅ Pure Training Responsibility**: Only handles model training, optimization, and callbacks
+- **✅ Clean Interface**: No data conversion or masking concerns
+
+**✅ MultiInstanceTrainer.py Complete Rewrite**:
+- **✅ Added Masking Responsibility**: Moved masking logic from trainer to MIT
+- **✅ Train/Heldout Splitting**: 80/20 configurable split with proper data flow
+- **✅ Evaluation Callbacks**: MIT sets up callbacks, trainer calls them during training
+- **✅ No Direct Evaluation**: Removed direct `eval_engine.evaluate_model()` calls
+
+**✅ SequentialMIT Implementation**:
+- **✅ Instance-wise Processing**: Each instance split into train/heldout separately
+- **✅ Sequential Batch Generation**: Process instances in order with masking
+- **✅ Callback Integration**: Evaluation on combined heldout data via trainer callbacks
+
+**✅ MixedMIT Implementation**:
+- **✅ Global Instance Combination**: All instances combined then split train/heldout
+- **✅ IID Batch Sampling**: Random sampling from combined training pool
+- **✅ Unified Evaluation**: Single heldout set from all instances
+
+**✅ GeneralMIT Implementation**:
+- **✅ Test Instance Finetuning**: Complete flow for Strategy 2 (Pretrained + Finetuning)
+- **✅ T_O/T_M Splitting**: Test instance split into observed/masked portions
+- **✅ T_O Secondary Split**: T_O split into training/heldout for finetuning
+- **✅ Dual Evaluation**: Training monitoring + final evaluation on full test instance
+- **✅ No NotImplementedError**: Complete `finetune_on_instance()` method
+
+**REMOVED ISSUES**:
+- ✅ No TODO comments
+- ✅ No NotImplementedError exceptions
+- ✅ Uses proper `List[RankingData]` format throughout
+- ✅ Clean separation of concerns respected
+- ✅ Evaluation only through trainer callback system
 
 **Tasks**:
 1. **Rewrite MIT for Clean Separation**:
@@ -226,11 +256,13 @@
 - **NO TODO COMMENTS OR NOTIMPLEMENTEDERROR**
 - Complete implementation of all methods
 
-**Deliverables**:
-- Rewritten `MultiInstanceTrainerBase` with clean separation
-- Complete `GeneralMIT.finetune_on_instance()`
-- Fixed `SequentialMIT` and `MixedMIT` using proper architecture
-- Full integration with evaluation strategies through callbacks
+**✅ DELIVERABLES COMPLETED**:
+- ✅ Rewritten `MultiInstanceTrainerBase` with clean separation of concerns
+- ✅ Complete `GeneralMIT.finetune_on_instance()` with full test instance finetuning flow
+- ✅ Fixed `SequentialMIT` and `MixedMIT` using proper data flow and callback architecture
+- ✅ Full integration with all 4 evaluation strategies through trainer callback system
+- ✅ Trainer refactored to pure training responsibility (no masking)
+- ✅ MIT handles all data coordination, masking, and evaluation setup
 
 ---
 
@@ -304,8 +336,8 @@
 1. **✅ Phase 1** (Data Cleanup) - Critical foundation **COMPLETED**
 2. **✅ Phase 2** (Evaluation Engine) - Minor fixes to complete metrics **COMPLETED**
 3. **✅ Phase 3** (Domain Model Integration) - Connect existing domain trainer **COMPLETED**
-4. **⏳ Phase 4** (Complete MIT) - Major rewrite for separation of concerns **NEXT**
-5. **Phase 5** (Experiment Runner) - End-to-end experiments
+4. **✅ Phase 4** (Complete MIT) - Major rewrite for separation of concerns **COMPLETED**
+5. **⏳ Phase 5** (Experiment Runner) - End-to-end experiments **NEXT**
 6. **Phase 6** (Visualization) - Results analysis
 
 **Rationale for Reordering**:

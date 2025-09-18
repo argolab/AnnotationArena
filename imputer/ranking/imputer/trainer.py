@@ -113,12 +113,11 @@ def calculate_rmse(predictions: List[int], targets: List[int]) -> float:
 
 
 class ImputerTrainer:
-    def __init__(self, model, learning_rate=1e-3, masking_rate=0.5, device='cuda' if torch.cuda.is_available() else 'cpu', embedding_anchor_reg: float = 0.0, callbacks=None):
+    def __init__(self, model, learning_rate=1e-3, device='cuda' if torch.cuda.is_available() else 'cpu', embedding_anchor_reg: float = 0.0, callbacks=None):
         self.model = model.to(device)
         self.device = device
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
         self.loss_strategy = DefaultLossStrategy()
-        self.masking_rate = masking_rate
         # Callback system
         self.callbacks = callbacks or []
 
@@ -153,58 +152,74 @@ class ImputerTrainer:
                     callback_results.append({'epoch': epoch, 'error': str(e)})
         return callback_results
     
-    def apply_masking(self, variables, masking_rate):
-        
-        # Apply masking: M% of variables are masked, (1-M)% are observed
-        # The model will use observed variables to predict masked variables
-        masked_variables = []
-        masked_indices = random.sample(list(range(len(variables))), int(len(variables) * masking_rate))
-        for i, var in enumerate(variables):
-            if i in masked_indices:
-                # Create masked version (remove supervision)
-                masked_var = RankingData(
-                    annotator_id=var.annotator_id,
-                    attribute_id=var.attribute_id,
-                    is_listwise=var.is_listwise,
-                    item_ids=var.item_ids,
-                    is_masked=True,  # Mark as masked
-                    rating_value=var.rating_value,  # Keep original value for reference
-                    ranking_order=var.ranking_order  # Keep original order for reference
-                )
-                masked_variables.append(masked_var)
-            else:
-                # Keep original (observed) for conditioning
-                observed_var = RankingData(
-                    annotator_id=var.annotator_id,
-                    attribute_id=var.attribute_id,
-                    is_listwise=var.is_listwise,
-                    item_ids=var.item_ids,
-                    is_masked=False,  # Mark as observed
-                    rating_value=var.rating_value,
-                    ranking_order=var.ranking_order
-                )
-                masked_variables.append(observed_var)
-        
-        return masked_variables
 
 
-    def train_step(self, batch):
-        """Single training step using legacy tensor batch + structured losses."""
+    def train_step(self, batch_of_masked_versions):
+        """Single training step with batch of multiple masked versions."""
         self.optimizer.zero_grad()
 
-        # Forward pass
-        reference_data_list = copy.deepcopy(batch)
-        input_data_list = self.apply_masking(batch, self.masking_rate)
-        out = self.model(input_data_list)
-        rating_logits = out['rating']
-        ranking_logits = out['ranking']
+        # Handle both old format (List[RankingData]) and new format (List[List[RankingData]])
+        if len(batch_of_masked_versions) > 0 and isinstance(batch_of_masked_versions[0], list):
+            # New format: List[List[RankingData]] - batch of masked versions
+            # For now, process each masked version separately and accumulate gradients
+            total_loss_tensor = None
+            total_losses = {}
+
+            for masked_version in batch_of_masked_versions:
+                if len(masked_version) == 0:
+                    continue
+
+                # Forward pass on this masked version
+                reference_data_list = copy.deepcopy(masked_version)
+                out = self.model(masked_version)
+
+                # Compute loss for this version
+                version_losses = self._compute_loss_for_version(out, reference_data_list)
+
+                # Accumulate losses
+                if total_loss_tensor is None:
+                    total_loss_tensor = version_losses.get('_total_loss_tensor')
+                    total_losses = {k: v for k, v in version_losses.items()}
+                else:
+                    if version_losses.get('_total_loss_tensor') is not None:
+                        total_loss_tensor = total_loss_tensor + version_losses.get('_total_loss_tensor')
+                    for k, v in version_losses.items():
+                        if not k.startswith('_'):
+                            total_losses[k] = total_losses.get(k, 0.0) + v
+
+            # Average losses by number of versions
+            num_versions = len([v for v in batch_of_masked_versions if len(v) > 0])
+            if num_versions > 0:
+                if total_loss_tensor is not None:
+                    total_loss_tensor = total_loss_tensor / num_versions
+                for k in total_losses:
+                    if not k.startswith('_'):
+                        total_losses[k] = total_losses[k] / num_versions
+
+        else:
+            # Old format: List[RankingData] - single masked version
+            reference_data_list = copy.deepcopy(batch_of_masked_versions)
+            out = self.model(batch_of_masked_versions)
+            total_losses = self._compute_loss_for_version(out, reference_data_list)
+            total_loss_tensor = total_losses.get('_total_loss_tensor')
+
+        # Backprop and step
+        if total_loss_tensor is not None:
+            total_loss_tensor.backward()
+            self.optimizer.step()
+
+        # Return only float metrics
+        return {k: v for k, v in total_losses.items() if not k.startswith('_')}
+
+    def _compute_loss_for_version(self, model_output, reference_data_list):
+        """Compute loss for a single masked version."""
+        rating_logits = model_output['rating']
+        ranking_logits = model_output['ranking']
 
         # Structured predictions and references for loss computation
-        # Only create references for variables that have supervision (mask = True)
         predictions_full = adapt_batched_logits_to_predictions({'rating': rating_logits, 'ranking': ranking_logits})
         predictions: List["TopLayerPredictionResult"] = []
         references: List[RankingData] = []
-
 
         # Reconstruct references from batch tensors (0-indexed) - for ALL training variables with ground truth
         for i, var in enumerate(reference_data_list):
@@ -228,7 +243,6 @@ class ImputerTrainer:
                 ))
             else:
                 raise ValueError("Shouldn't be here")
-            
 
         losses = self.loss_strategy.compute(predictions, references)
 
@@ -248,17 +262,17 @@ class ImputerTrainer:
             if 'total_loss' in losses:
                 losses['total_loss'] = float(losses['total_loss'] + losses['embedding_reg'])
 
-        # Backprop
+        # Create total loss tensor for backprop
         total_loss_tensor = losses.get('_total_loss_tensor', None)
         if total_loss_tensor is None:
             total_loss_tensor = (rating_logits.sum() * 0.0) + (ranking_logits.sum() * 0.0) + torch.tensor(losses['total_loss'], device=self.device)
         # Add regularization term to tensor used for backprop
         total_loss_tensor = total_loss_tensor + reg_scaled
-        total_loss_tensor.backward()
-        self.optimizer.step()
 
-        # Return only float metrics
-        return {k: v for k, v in losses.items() if not k.startswith('_')}
+        # Store tensor for backward pass
+        losses['_total_loss_tensor'] = total_loss_tensor
+
+        return losses
 
     def train(self, train_batches, epochs=10, call_callbacks_every=1, verbose=True):
         """
