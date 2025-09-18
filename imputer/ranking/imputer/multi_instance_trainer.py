@@ -282,7 +282,7 @@ class GeneralMIT(MultiInstanceTrainerBase):
         self.t_o_train_vars = []
         self.t_o_heldout_vars = []
 
-    def finetune_on_instance(self, pretrained_model, test_instance: Dict):
+    def finetune_on_instance(self, pretrained_model, test_instance: Dict, full_test_instances=None, eval_config=None):
         """
         Finetune pretrained model on test instance.
 
@@ -291,6 +291,12 @@ class GeneralMIT(MultiInstanceTrainerBase):
         2. T_O -> T_O_train + T_O_heldout
         3. Train on T_O_train, eval on T_O_heldout during training
         4. Final eval on full test instance (T_O + T_M)
+
+        Args:
+            pretrained_model: Model to finetune
+            test_instance: Single test instance to finetune on
+            full_test_instances: All test instances for evaluation during training (optional)
+            eval_config: Evaluation configuration for test evaluation (optional)
         """
         # Step 1: Split test instance into T_O and T_M
         self.test_instance_variables = self.converter.create_variables(test_instance)
@@ -318,9 +324,10 @@ class GeneralMIT(MultiInstanceTrainerBase):
         # Step 2: Split T_O into training and heldout
         self.t_o_train_vars, self.t_o_heldout_vars = self.split_train_heldout(t_o_variables)
 
-        # Step 3: Set up evaluation callback on T_O_heldout for training monitoring
+        # Step 3: Set up evaluation callbacks for training monitoring
         if self.t_o_heldout_vars:
-            callback = EvaluationCallback(
+            # T_O heldout evaluation callback
+            heldout_callback = EvaluationCallback(
                 eval_engine=self.eval_engine,
                 test_variables=self.t_o_heldout_vars,
                 test_data={},
@@ -328,7 +335,30 @@ class GeneralMIT(MultiInstanceTrainerBase):
                 masking_rate=random.choice(self.config.masking_rates),
                 device=self.config.device
             )
-            self.trainer.register_callback(callback)
+            self.trainer.register_callback(heldout_callback)
+
+        # Set up test instance evaluation callback if enabled and test instances provided
+        if (full_test_instances is not None and eval_config is not None and
+            getattr(eval_config, 'eval_on_test_during_finetuning', False)):
+
+            # Convert all test instances to variables for evaluation
+            test_eval_variables = []
+            for test_inst in full_test_instances:
+                test_vars = self.converter.create_variables(test_inst)
+                test_eval_variables.extend(test_vars)
+
+            if test_eval_variables:
+                test_callback = EvaluationCallback(
+                    eval_engine=self.eval_engine,
+                    test_variables=test_eval_variables,
+                    test_data={},
+                    converter=self.converter,
+                    masking_rate=eval_config.test_masking_rate,
+                    device=self.config.device
+                )
+                # Add identifier to distinguish test vs heldout results
+                test_callback.callback_type = "test_evaluation"
+                self.trainer.register_callback(test_callback)
 
         # Step 4: Finetune on T_O_train using batch generator with progress tracking
         from tqdm import tqdm
@@ -355,26 +385,49 @@ class GeneralMIT(MultiInstanceTrainerBase):
             pbar.set_postfix({'loss': f"{result.get('total_loss', 0):.4f}"})
             pbar.update(1)
 
-            # Evaluate at regular intervals
+            # Evaluate heldout at regular intervals
             eval_freq = getattr(self.config, 'eval_frequency', finetuning_steps // 10)
-            if step % max(1, eval_freq) == 0:
+            test_eval_freq = getattr(eval_config, 'test_eval_frequency', finetuning_steps // 10) if eval_config else eval_freq
+
+            should_eval_heldout = step % max(1, eval_freq) == 0
+            should_eval_test = step % max(1, test_eval_freq) == 0
+
+            if should_eval_heldout or should_eval_test:
                 # Call callbacks and collect results
                 step_callback_results = self.trainer._call_epoch_end_callbacks(step)
                 if step_callback_results:
                     callback_results.extend(step_callback_results)
 
-                # Print finetuning progress
+                # Enhanced progress printing with separate test and heldout metrics
                 print(f"\nFinetuning Step {step+1}/{finetuning_steps}")
-                print(f"Train - Loss: {result.get('total_loss', 0):.4f}, "
+                print(f"Train   - Loss: {result.get('total_loss', 0):.4f}, "
                       f"Rating: {result.get('rating_loss', 0):.4f}, "
                       f"Ranking: {result.get('ranking_loss', 0):.4f}")
 
                 if step_callback_results:
+                    # Separate heldout and test results
+                    heldout_results = []
+                    test_results = []
+
                     for cb_result in step_callback_results:
                         if 'total_loss' in cb_result:
-                            print(f"Heldout - Loss: {cb_result.get('total_loss', 0):.4f}, "
-                                  f"Rating Acc: {cb_result.get('rating_accuracy', 0):.3f}, "
-                                  f"Ranking Acc: {cb_result.get('ranking_accuracy', 0):.3f}")
+                            callback_type = getattr(cb_result, 'callback_type', 'heldout')
+                            if callback_type == 'test_evaluation':
+                                test_results.append(cb_result)
+                            else:
+                                heldout_results.append(cb_result)
+
+                    # Print heldout results
+                    for cb_result in heldout_results:
+                        print(f"Heldout - Loss: {cb_result.get('total_loss', 0):.4f}, "
+                              f"Rating Acc: {cb_result.get('rating_accuracy', 0):.3f}, "
+                              f"Ranking Acc: {cb_result.get('ranking_accuracy', 0):.3f}")
+
+                    # Print test results
+                    for cb_result in test_results:
+                        print(f"Test    - Loss: {cb_result.get('total_loss', 0):.4f}, "
+                              f"Rating Acc: {cb_result.get('rating_accuracy', 0):.3f}, "
+                              f"Ranking Acc: {cb_result.get('ranking_accuracy', 0):.3f}")
 
         pbar.close()
 

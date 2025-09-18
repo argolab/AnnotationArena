@@ -95,6 +95,8 @@ class EvaluationConfig:
     """Evaluation configuration."""
     test_masking_rate: float = 0.5
     device: str = "cuda"
+    eval_on_test_during_finetuning: bool = True  # Enable test evaluation during finetuning
+    test_eval_frequency: int = 10  # Evaluate test set every N steps during finetuning
 
 
 @dataclass

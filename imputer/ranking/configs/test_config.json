@@ -1,6 +1,6 @@
 {
   "data_config": {
-    "num_instances": 10,
+    "num_instances": 5,
     "train_test_split": 0.8,
     "K": 30,
     "I": 7,

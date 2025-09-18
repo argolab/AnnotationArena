@@ -110,6 +110,9 @@ class ExperimentRunner:
             # 1. Generate data and split train/test instances
             train_instances, test_instances = self.generate_data()
 
+            # Store test instances for use in strategy evaluation
+            self.test_instances = test_instances
+
             # 2. Run pretraining (for strategies 1 & 2)
             pretrained_model = None
             if self._strategy_needs_pretraining():
@@ -299,7 +302,11 @@ class ExperimentRunner:
 
             # Finetune using GeneralMIT
             mit = GeneralMIT(model, self.eval_engine, self.config.finetuning_config, self.converter)
-            finetuning_results = mit.finetune_on_instance(model, test_instance)
+            finetuning_results = mit.finetune_on_instance(
+                model, test_instance,
+                full_test_instances=getattr(self, 'test_instances', None),
+                eval_config=self.config.evaluation_config
+            )
 
             # Save finetuned model if requested
             model_path = None
@@ -335,7 +342,11 @@ class ExperimentRunner:
 
             # Train from scratch using GeneralMIT
             mit = GeneralMIT(model, self.eval_engine, self.config.finetuning_config, self.converter)
-            training_results = mit.finetune_on_instance(model, test_instance)
+            training_results = mit.finetune_on_instance(
+                model, test_instance,
+                full_test_instances=getattr(self, 'test_instances', None),
+                eval_config=self.config.evaluation_config
+            )
 
             # Save fresh model if requested
             model_path = None
