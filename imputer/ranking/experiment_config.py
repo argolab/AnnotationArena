@@ -60,7 +60,7 @@ class PretrainingConfig:
     train_heldout_split: float = 0.8
     eval_frequency: int = 100
     masking_rates: List[float] = field(default_factory=lambda: [0.3, 0.5, 0.7])
-    device: str = "cpu"
+    device: str = field(default="cpu", init=False)  # Set from main config, not user-configurable
 
 
 @dataclass
@@ -73,7 +73,7 @@ class FinetuningConfig:
     eval_frequency: int = 20  # Evaluate every N steps during finetuning
     test_masking_rate: float = 0.5  # Test instance masking rate for T_O/T_M split
     masking_rates: List[float] = field(default_factory=lambda: [0.3, 0.5, 0.7])
-    device: str = "cpu"
+    device: str = field(default="cpu", init=False)  # Set from main config, not user-configurable
 
 
 @dataclass
@@ -94,7 +94,6 @@ class DomainConfig:
 class EvaluationConfig:
     """Evaluation configuration."""
     test_masking_rate: float = 0.5
-    device: str = "cuda"
     eval_on_test_during_finetuning: bool = True  # Enable test evaluation during finetuning
     test_eval_frequency: int = 10  # Evaluate test set every N steps during finetuning
 
@@ -128,6 +127,14 @@ class ExperimentConfig:
     experiment_name: str = "ranking_imputation_experiment"
     random_seed: int = 42
 
+    # Device configuration (centralized)
+    device: str = "cpu"  # "cpu" or "cuda" - applied to all components
+
+    def __post_init__(self):
+        """Set device in sub-configurations from main device setting."""
+        self.pretraining_config.device = self.device
+        self.finetuning_config.device = self.device
+
     def save(self, filepath: str):
         """Save configuration to JSON file."""
         config_dict = self._to_dict()
@@ -150,7 +157,8 @@ class ExperimentConfig:
             'save_training_histories': self.save_training_histories,
             'log_wall_times': self.log_wall_times,
             'experiment_name': self.experiment_name,
-            'random_seed': self.random_seed
+            'random_seed': self.random_seed,
+            'device': self.device
         }
 
     @classmethod
@@ -172,7 +180,8 @@ class ExperimentConfig:
             save_training_histories=config_dict['save_training_histories'],
             log_wall_times=config_dict['log_wall_times'],
             experiment_name=config_dict['experiment_name'],
-            random_seed=config_dict['random_seed']
+            random_seed=config_dict['random_seed'],
+            device=config_dict.get('device', 'cpu')  # Default to 'cpu' for backward compatibility
         )
 
 
@@ -207,5 +216,6 @@ def create_test_config() -> ExperimentConfig:
             iter_sampling=200,
             sample_counts=[50, 100]  # Smaller for testing
         ),
-        experiment_name="test_experiment"
+        experiment_name="test_experiment",
+        device="cpu"  # Explicitly set to CPU for testing
     )

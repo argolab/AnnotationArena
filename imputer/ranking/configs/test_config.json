@@ -38,12 +38,12 @@
     ]
   },
   "finetuning_config": {
-    "finetuning_steps": 100,
+    "finetuning_steps": 70,
     "batch_size": 32,
     "learning_rate": 1e-3,
     "train_heldout_split": 0.8,
-    "eval_frequency": 20,
-    "test_masking_rate": 0.3,
+    "eval_frequency": 1,
+    "test_masking_rate": 0.5,
     "masking_rates": [
       0.5
     ]
@@ -59,8 +59,7 @@
     ]
   },
   "evaluation_config": {
-    "test_masking_rate": 0.5,
-    "device": "cpu"
+    "test_masking_rate": 0.5
   },
   "enabled_strategies": [
     "Pretrained_Imputer",
@@ -73,5 +72,6 @@
   "save_training_histories": true,
   "log_wall_times": true,
   "experiment_name": "test_experiment",
-  "random_seed": 42
+  "random_seed": 42,
+  "device": "cuda"
 }

@@ -47,7 +47,7 @@ class MultiVariableImputer(nn.Module):
                  embedding_dim=64,
                  dropout=0.1,
                  embedding_type="pairwise",
-                 device="cuda"):
+                 device="cpu"):
         super().__init__()
         self.device = torch.device(device)
         self.num_attributes = num_attributes

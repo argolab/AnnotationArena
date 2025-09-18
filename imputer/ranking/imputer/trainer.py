@@ -113,7 +113,7 @@ def calculate_rmse(predictions: List[int], targets: List[int]) -> float:
 
 
 class ImputerTrainer:
-    def __init__(self, model, learning_rate=1e-3, device='cuda' if torch.cuda.is_available() else 'cpu', embedding_anchor_reg: float = 0.0, callbacks=None):
+    def __init__(self, model, learning_rate=1e-3, device='cpu', embedding_anchor_reg: float = 0.0, callbacks=None):
         self.model = model.to(device)
         self.device = device
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)

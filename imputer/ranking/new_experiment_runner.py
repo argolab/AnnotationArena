@@ -210,7 +210,7 @@ class ExperimentRunner:
                 embedding_dim=self.config.model_config.embedding_dim,
                 dropout=self.config.model_config.dropout,
                 embedding_type=self.config.model_config.embedding_type,
-                device=self.config.evaluation_config.device
+                device=self.config.device
             )
 
             # Create MIT trainer
@@ -273,7 +273,7 @@ class ExperimentRunner:
                 variables=test_variables,
                 masking_rate=self.config.evaluation_config.test_masking_rate,
                 converter=self.converter,
-                device=self.config.evaluation_config.device
+                device=self.config.device
             )
 
         return {
@@ -296,7 +296,7 @@ class ExperimentRunner:
                 embedding_dim=self.config.model_config.embedding_dim,
                 dropout=self.config.model_config.dropout,
                 embedding_type=self.config.model_config.embedding_type,
-                device=self.config.evaluation_config.device
+                device=self.config.device
             )
             model.load_state_dict(pretrained_model.state_dict())
 
@@ -337,7 +337,7 @@ class ExperimentRunner:
                 embedding_dim=self.config.model_config.embedding_dim,
                 dropout=self.config.model_config.dropout,
                 embedding_type=self.config.model_config.embedding_type,
-                device=self.config.evaluation_config.device
+                device=self.config.device
             )
 
             # Train from scratch using GeneralMIT

@@ -133,7 +133,7 @@ def test_forward_pass():
         attention_heads=4,
         embedding_dim=64,
         dropout=0.1
-    ).to("cuda")
+    ).to("cpu")
 
     out = model(batch)
 
@@ -178,7 +178,7 @@ def test_trainer_work():
         attention_heads=4,
         embedding_dim=64,
         dropout=0.1
-    ).to("cuda")
+    ).to("cpu")
 
     print(batch)
 
@@ -216,7 +216,7 @@ def test_trainer_loss():
         attention_heads=4,
         embedding_dim=64,
         dropout=0.1
-    ).to("cuda")
+    ).to("cpu")
 
 
     trainer = ImputerTrainer(model, 1e-3)
@@ -252,15 +252,15 @@ def test_multiInstance_trainer():
         attention_heads=4,
         embedding_dim=64,
         dropout=0.1,
-        device="cuda"
-    ).to("cuda")
+        device="cpu"
+    ).to("cpu")
 
     config = ExperimentConfig()
     config.learning_rate = 1e-3
     config.total_batches = 50
     config.masking_rates = [0.5]
     config.batch_size = 300
-    config.device = "cuda"
+    config.device = "cpu"
     config.eval_frequency=0.1
     config.test_masking_rate=0.5
     print("Testing sequential MIT")
@@ -279,8 +279,8 @@ def test_multiInstance_trainer():
         attention_heads=4,
         embedding_dim=64,
         dropout=0.1,
-        device="cuda"
-    ).to("cuda")
+        device="cpu"
+    ).to("cpu")
     sequential_base = MixedMIT(model, EvaluationEngine(), config, converter)
 
     sequential_base.train_on_instances([data], [data])
