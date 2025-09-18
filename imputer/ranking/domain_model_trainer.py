@@ -11,6 +11,13 @@ from typing import Dict, List, Tuple, Any, Optional
 import matplotlib.pyplot as plt
 from scipy.stats import entropy
 
+# Import EvaluationResults for consistent format
+try:
+    from .eval import EvaluationResults
+except ImportError:
+    # For standalone usage
+    from imputer.eval import EvaluationResults
+
 
 def calculate_domain_rmse(predictions: List[int], targets: List[int]) -> float:
     """Calculate RMSE for domain model rating predictions (on 1-5 scale)."""
@@ -232,8 +239,156 @@ class DomainModelTrainer:
                 observed_data['pairwise_rankings'].append(ranking)
         
         return observed_data, missing_data
-    
-    def compute_kl_divergence(self, learned_embeddings: np.ndarray, 
+
+    def evaluate_test_instance(self,
+                             test_instance_data: Dict[str, Any],
+                             data_config: Dict[str, Any],
+                             masking_rate: float = 0.5,
+                             chains: int = 2,
+                             iter_warmup: int = 1000,
+                             iter_sampling: int = 2000,
+                             adapt_delta: float = 0.8,
+                             max_treedepth: int = 15,
+                             seed: int = 42) -> EvaluationResults:
+        """
+        Simple entrypoint for domain model evaluation on test instance.
+
+        Workflow:
+        1. Split test instance into observed (training) and masked (evaluation) parts
+        2. Train MCMC on observed data with specified sample counts
+        3. Compute training metrics on observed data
+        4. Compute evaluation metrics on masked data
+        5. Return results in EvaluationResults format (same as neural models)
+
+        Args:
+            test_instance_data: Dict with 'ratings' and 'pairwise_rankings'
+            data_config: Data configuration (dimensions K, I, J, D, C, etc.)
+            masking_rate: Fraction to mask for evaluation (0.5 = 50%)
+            chains: MCMC chains for training
+            iter_warmup: MCMC warmup iterations
+            iter_sampling: MCMC sampling iterations (controls training sample count)
+            adapt_delta: MCMC adaptation parameter
+            max_treedepth: MCMC tree depth limit
+            seed: Random seed for reproducibility
+
+        Returns:
+            EvaluationResults object with same format as neural model evaluation:
+            - total_loss, rating_loss, ranking_loss (on masked data)
+            - rating_accuracy, ranking_accuracy, rating_rmse (on masked data)
+            - num_rating_evaluations, num_ranking_evaluations
+            - masked_metrics, observed_metrics (detailed breakdown)
+        """
+        start_time = time.time()
+
+        # 1. Split test instance into observed (for training) and masked (for evaluation)
+        observed_data, missing_data = self.mask_test_data_for_evaluation(
+            test_instance_data, masking_rate, seed
+        )
+
+        logger.info(f"Domain model: Training on {len(observed_data['ratings'])} ratings + "
+                   f"{len(observed_data.get('pairwise_rankings', []))} rankings, "
+                   f"evaluating on {len(missing_data['ratings'])} ratings + "
+                   f"{len(missing_data.get('pairwise_rankings', []))} rankings")
+
+        # 2. Create domain model config with specified sample counts
+        config = DomainModelConfig(
+            chains=chains,
+            iter_warmup=iter_warmup,
+            iter_sampling=iter_sampling,
+            adapt_delta=adapt_delta,
+            max_treedepth=max_treedepth
+        )
+
+        # 3. Prepare Stan data from observed portion
+        stan_data = self.prepare_stan_data(observed_data, config, data_config)
+
+        # 4. Create initial values for MCMC
+        initial_values = self._create_initial_values(stan_data, seed, config)
+
+        # 5. Train MCMC on observed data
+        logger.info(f"Running MCMC with {chains} chains, {iter_sampling} samples...")
+        fit = self.model.sample(
+            data=stan_data,
+            chains=config.chains,
+            iter_warmup=config.iter_warmup,
+            iter_sampling=config.iter_sampling,
+            adapt_delta=config.adapt_delta,
+            max_treedepth=config.max_treedepth,
+            seed=seed,
+            inits=initial_values,
+            show_progress=False  # Reduce verbosity for evaluation
+        )
+
+        training_time = time.time() - start_time
+
+        # 6. Compute training metrics on observed data
+        training_log_losses = self.compute_training_log_loss(fit, observed_data, stan_data)
+
+        # 7. Compute evaluation metrics on masked data
+        missing_log_losses = self.compute_log_loss_on_missing(
+            fit, observed_data, missing_data, stan_data
+        )
+        missing_accuracies = self.evaluate_imputation_accuracy(
+            fit, observed_data, missing_data, stan_data
+        )
+
+        # 8. Format results to match EvaluationResults exactly
+
+        # Main metrics (on masked/missing data - what we're evaluating)
+        total_loss = missing_log_losses.get('total', 0.0)
+        rating_loss = missing_log_losses.get('ratings', 0.0)
+        ranking_loss = missing_log_losses.get('rankings', 0.0)
+
+        rating_accuracy = missing_accuracies.get('rating_accuracy')
+        ranking_accuracy = missing_accuracies.get('ranking_accuracy')
+        rating_rmse = missing_accuracies.get('rating_rmse')
+
+        num_rating_evaluations = len(missing_data['ratings'])
+        num_ranking_evaluations = len(missing_data.get('pairwise_rankings', []))
+
+        # Detailed breakdown by masked/observed
+        masked_metrics = {
+            'total_loss': total_loss,
+            'rating_loss': rating_loss,
+            'ranking_loss': ranking_loss,
+            'rating_accuracy': rating_accuracy,
+            'ranking_accuracy': ranking_accuracy,
+            'rating_rmse': rating_rmse,
+            'num_rating_evaluations': num_rating_evaluations,
+            'num_ranking_evaluations': num_ranking_evaluations
+        }
+
+        observed_metrics = {
+            'total_loss': training_log_losses.get('ratings', 0.0) + training_log_losses.get('rankings', 0.0),
+            'rating_loss': training_log_losses.get('ratings', 0.0),
+            'ranking_loss': training_log_losses.get('rankings', 0.0),
+            'rating_accuracy': None,  # Not computed for training data
+            'ranking_accuracy': None, # Not computed for training data
+            'rating_rmse': None,      # Not computed for training data
+            'num_rating_evaluations': len(observed_data['ratings']),
+            'num_ranking_evaluations': len(observed_data.get('pairwise_rankings', []))
+        }
+
+        logger.info(f"Domain model evaluation completed in {training_time:.1f}s")
+        logger.info(f"Missing data - Total loss: {total_loss:.3f}, "
+                   f"Rating accuracy: {rating_accuracy:.3f}, "
+                   f"Ranking accuracy: {ranking_accuracy:.3f}")
+
+        # 9. Return EvaluationResults object (same format as neural models)
+        return EvaluationResults(
+            total_loss=total_loss,
+            rating_loss=rating_loss,
+            ranking_loss=ranking_loss,
+            rating_accuracy=rating_accuracy,
+            rating_rmse=rating_rmse,
+            ranking_accuracy=ranking_accuracy,
+            num_rating_evaluations=num_rating_evaluations,
+            num_ranking_evaluations=num_ranking_evaluations,
+            masked_metrics=masked_metrics,
+            observed_metrics=observed_metrics
+        )
+
+    def compute_kl_divergence(self, learned_embeddings: np.ndarray,
                             true_embeddings: np.ndarray) -> float:
         """Compute KL divergence between learned and true embeddings"""
         
