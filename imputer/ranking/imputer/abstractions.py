@@ -26,10 +26,10 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         self.embedding_dim = int(embedding_dim) # word_embedding dim
 
     # Abstract hooks for subclasses
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value: Optional[int]) -> torch.Tensor:
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value: Optional[int], is_masked: bool = False) -> torch.Tensor:
         raise NotImplementedError
 
-    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order: Optional[List[int]]) -> torch.Tensor:
+    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order: Optional[List[int]], is_masked: bool = False) -> torch.Tensor:
         raise NotImplementedError
 
     @torch.no_grad()
@@ -55,12 +55,15 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         feature_embeddings = torch.zeros(1, V, D, device=device)
 
         for i, var in enumerate(variables):
+            # Determine if variable is masked (default to False if None)
+            is_masked = var.is_masked if var.is_masked is not None else False
+
             if var.is_listwise:
-                feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order)
+                feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_masked)
                 feature_embeddings[0, i] = feat
             else:
                 item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
-                feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value)
+                feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_masked)
                 feature_embeddings[0, i] = feat
 
         return feature_embeddings

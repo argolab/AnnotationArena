@@ -181,6 +181,13 @@
 
 **Objectives**: Rewrite MIT to respect separation of concerns and complete all implementations
 
+**✅ MASKING SYSTEM REFACTORING COMPLETED**:
+- **✅ Boolean Masking Implementation**: Replaced None-based masking with `is_masked` boolean field
+- **✅ Core Files Updated**: data.py, trainer.py, eval.py, losses.py, abstractions.py, embedding.py
+- **✅ Test Files Updated**: test_eval_engine.py, test_data_converter.py, test_embedding_providers.py
+- **✅ All Tests Passing**: Evaluation engine and embedding provider tests pass with new system
+- **✅ Backward Compatibility**: Original values preserved when masked for reference
+
 **Current Issues in multi_instance_trainer.py**:
 - ❌ Line 41: TODO comment for saving results
 - ❌ Line 125: NotImplementedError for GeneralMIT.finetune_on_instance
@@ -315,3 +322,21 @@
 - Clean separation of concerns
 - Configuration-driven experiments
 - Structured results and comprehensive metrics
+
+
+
+
+EXPERIMENT RUNNER
+
+- Read Config.
+- Generate Data.
+- Sequential/Mixed Pretraining -> Save the Results on Heldout Training Instances + Training History + Imputer Model
+- Domain MCMC -> On Each of the Test Instance -> Save Results for each
+- Finetune Imputer Only -> Finetune on EACH test Instance -> Evaluate on each. -> Save Results for each + Training History + Model.
+- Pretrained Imputer Finetuning -> Finetune on EACH test Instance -> Evaluate on each. -> Save Results for each + Training History + Model.
+  
+
+VISUALIZATION 
+
+- Take JSONs
+- Generate Plots whatever plots we need.

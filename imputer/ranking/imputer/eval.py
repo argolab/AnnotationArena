@@ -336,13 +336,23 @@ class EvaluationEngine:
                     attribute_id=var.attribute_id,
                     is_listwise=var.is_listwise,
                     item_ids=var.item_ids,
-                    rating_value=None,  # Mask the rating value
-                    ranking_order=None  # Mask the ranking order
+                    is_masked=True,  # Mark as masked
+                    rating_value=var.rating_value,  # Keep original value for reference
+                    ranking_order=var.ranking_order  # Keep original order for reference
                 )
                 masked_variables.append(masked_var)
             else:
                 # Keep original (observed) for conditioning
-                masked_variables.append(var)
+                observed_var = RankingData(
+                    annotator_id=var.annotator_id,
+                    attribute_id=var.attribute_id,
+                    is_listwise=var.is_listwise,
+                    item_ids=var.item_ids,
+                    is_masked=False,  # Mark as observed
+                    rating_value=var.rating_value,
+                    ranking_order=var.ranking_order
+                )
+                masked_variables.append(observed_var)
 
         return masked_variables
 

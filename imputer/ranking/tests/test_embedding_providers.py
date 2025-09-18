@@ -21,7 +21,8 @@ def create_mock_ranking_data():
             item_ids=[0, 1],  # Use 0-based indexing
             ranking_order=[1, 2],
             rating_value=None,
-            is_listwise=True
+            is_listwise=True,
+            is_masked=False
         ),
         RankingData(
             attribute_id=1,
@@ -29,7 +30,8 @@ def create_mock_ranking_data():
             item_ids=[1, 2],  # Use 0-based indexing
             ranking_order=[2, 1],
             rating_value=None,
-            is_listwise=True
+            is_listwise=True,
+            is_masked=False
         ),
         RankingData(
             attribute_id=0,
@@ -37,7 +39,8 @@ def create_mock_ranking_data():
             item_ids=[0],  # Use 0-based indexing
             ranking_order=None,
             rating_value=3,
-            is_listwise=False
+            is_listwise=False,
+            is_masked=False
         ),
         RankingData(
             attribute_id=1,
@@ -45,7 +48,8 @@ def create_mock_ranking_data():
             item_ids=[2],  # Use 0-based indexing
             ranking_order=None,
             rating_value=4,
-            is_listwise=False
+            is_listwise=False,
+            is_masked=False
         )
     ]
 
@@ -165,7 +169,8 @@ def test_max_rank_size_assertion():
             item_ids=[1, 2, 3],  # 3 items, but max_rank_size=2
             ranking_order=[1, 2, 3],  # 3 elements, but max_rank_size=2
             rating_value=None,
-            is_listwise=True
+            is_listwise=True,
+            is_masked=False
         )
     ]
     
@@ -197,7 +202,8 @@ def test_num_likert_classes_assertion():
             item_ids=[1],
             ranking_order=None,
             rating_value=10,  # 10 > num_likert_classes=5
-            is_listwise=False
+            is_listwise=False,
+            is_masked=False
         )
     ]
     

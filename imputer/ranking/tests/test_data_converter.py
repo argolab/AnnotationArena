@@ -88,7 +88,9 @@ def test_create_batch():
         variables, 10
     )
     for data in batch:
-        assert not(data.ranking_order is None and data.rating_value is None)
+        # Either should have data (not both None) unless explicitly masked
+        if data.is_masked is not True:  # If not explicitly masked, should have data
+            assert not(data.ranking_order is None and data.rating_value is None)
     print(batch)
         
 

@@ -14,6 +14,7 @@ class RankingData:
     - attribute_id: attribute index
     - is_listwise: True for listwise ranking, False for rating
     - item_ids: for rating, a list with one item id; for ranking, the ranked item ids
+    - is_masked: None=undecided, True=masked (no supervision), False=observed (has supervision)
     Optional supervision fields:
     - rating_value: class index [0..C-1] if rating observed
     - ranking_order: list of positions in [1..R] aligned with item_ids when ranking observed
@@ -22,6 +23,7 @@ class RankingData:
     attribute_id: int
     is_listwise: bool
     item_ids: List[int]
+    is_masked: Optional[bool] = None
     rating_value: Optional[int] = None
     ranking_order: Optional[List[int]] = None
 

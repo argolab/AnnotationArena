@@ -164,20 +164,24 @@ class DefaultLossStrategy(LossStrategyBase):
 
         for i, ref in enumerate(references):
             if not ref.is_listwise:
-                if ref.rating_value is not None and 0 <= ref.rating_value < C:
+                # Only compute loss for observed (non-masked) ratings
+                if not ref.is_masked and ref.rating_value is not None and 0 <= ref.rating_value < C:
                     rating_targets[0, i, ref.rating_value] = 1.0  # one-hot distribution
                     rating_mask[0, i] = True
-                else:
+                elif not ref.is_masked:
                     raise ValueError(f"Rating value not found or out of range for voter {i}")
+                # Skip masked ratings (is_masked=True)
             else:
-                if ref.ranking_order is not None and len(ref.ranking_order) > 0:
+                # Only compute loss for observed (non-masked) rankings
+                if not ref.is_masked and ref.ranking_order is not None and len(ref.ranking_order) > 0:
                     # Tensorize ranking order (1=best) and assign in one go
                     assert len(ref.ranking_order) == R, f"Ranking order length must match R: {len(ref.ranking_order)} != {R}"
                     order_tensor = torch.tensor(ref.ranking_order, device=device, dtype=ranking_targets.dtype)
                     ranking_targets[0, i] = order_tensor
                     ranking_mask[0, i] = True
-                else:
+                elif not ref.is_masked:
                     raise ValueError(f"Ranking order not found or empty for voter {i}")
+                # Skip masked rankings (is_masked=True)
 
         zero = torch.tensor(0.0, device=device)
         

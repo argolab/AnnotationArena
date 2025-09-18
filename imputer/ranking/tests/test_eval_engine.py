@@ -223,19 +223,23 @@ def test_evaluation_batch_creation():
 
     assert len(ranking_data_list) == len(variables)
 
-    # Check that masked variables have None values
+    # Check that masked variables have is_masked=True
     for i, (original_var, masked_var, is_masked) in enumerate(zip(variables, ranking_data_list, evaluation_mask)):
         if is_masked:
-            # Masked variables should have None for rating_value and ranking_order
-            assert masked_var.rating_value is None
-            assert masked_var.ranking_order is None
-            # But keep other attributes
+            # Masked variables should have is_masked=True
+            assert masked_var.is_masked is True
+            # But keep original values for reference
+            assert masked_var.rating_value == original_var.rating_value
+            assert masked_var.ranking_order == original_var.ranking_order
+            # And other attributes
             assert masked_var.annotator_id == original_var.annotator_id
             assert masked_var.attribute_id == original_var.attribute_id
             assert masked_var.item_ids == original_var.item_ids
         else:
-            # Observed variables should be unchanged
-            assert masked_var == original_var
+            # Observed variables should have is_masked=False
+            assert masked_var.is_masked is False
+            assert masked_var.rating_value == original_var.rating_value
+            assert masked_var.ranking_order == original_var.ranking_order
 
     print(f"  Created evaluation batch with {sum(evaluation_mask)} masked variables")
     print("✅ Evaluation batch creation test passed")
