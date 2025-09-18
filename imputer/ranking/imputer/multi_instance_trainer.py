@@ -78,34 +78,80 @@ class MultiInstanceTrainerBase:
         return train_vars, heldout_vars
     
     def train_on_instances(self, train_instances: List[Dict], test_instances: List[Dict]):
-        """Train using batch generator with multiple masked versions per batch."""
+        """Train using batch generator with enhanced progress tracking and callback collection."""
+        from tqdm import tqdm
+
         # Set up evaluation callback on heldout data
         heldout_variables = self.setup_heldout_evaluation_callback(train_instances)
 
         # Create batch generator and train
         training_results = []
+        callback_results = []
         batch_generator = self.create_training_batch_generator(train_instances)
+
+        # Enhanced progress bar
+        pbar = tqdm(total=self.config.total_batches, desc=f"{self.__class__.__name__} Training")
+
+        current_instance_idx = 0
 
         for step, batch_of_masked_versions in enumerate(batch_generator):
             if step >= self.config.total_batches:
                 break
 
+            # Update which instance we're processing (for Sequential)
+            if hasattr(self, 'instance_train_sets'):
+                current_instance_idx = step % len(self.instance_train_sets)
+
             # Train on all masked versions in this batch
             result = self.trainer.train_step(batch_of_masked_versions)
             training_results.append(result)
 
-            if step % max(1, self.config.total_batches // 10) == 0:
-                print(f"Step {step}: {result}")
+            # Update progress bar with instance info
+            pbar.set_postfix({
+                'instance': f"{current_instance_idx}/{len(train_instances)}" if hasattr(self, 'instance_train_sets') else "Mixed",
+                'loss': f"{result.get('total_loss', 0):.4f}"
+            })
+            pbar.update(1)
+
+            # Evaluate at regular intervals
+            eval_freq = getattr(self.config, 'eval_frequency', self.config.total_batches // 10)
+            if step % max(1, eval_freq) == 0:
+                # Call callbacks and collect results
+                step_callback_results = self.trainer._call_epoch_end_callbacks(step)
+                if step_callback_results:
+                    callback_results.extend(step_callback_results)
+
+                # Enhanced printing
+                self._print_training_progress(step, result, step_callback_results, current_instance_idx, len(train_instances))
+
+        pbar.close()
 
         return {
             'training_results': training_results,
-            'heldout_variables': heldout_variables
+            'heldout_variables': heldout_variables,
+            'callback_results': callback_results
         }
 
     def create_training_batch_generator(self, train_instances: List[Dict]) -> Iterator[List[List[RankingData]]]:
         """Create generator that yields batches of masked versions - override in subclasses."""
         raise NotImplementedError("Subclasses must implement create_training_batch_generator")
 
+    def _print_training_progress(self, step, train_result, callback_results, instance_idx, total_instances):
+        """Enhanced structured printing."""
+        print(f"\n=== Step {step+1}/{self.config.total_batches} ===")
+        if hasattr(self, 'instance_train_sets'):
+            print(f"Processing Instance: {instance_idx+1}/{total_instances}")
+
+        print(f"Train - Loss: {train_result.get('total_loss', 0):.4f}, "
+              f"Rating: {train_result.get('rating_loss', 0):.4f}, "
+              f"Ranking: {train_result.get('ranking_loss', 0):.4f}")
+
+        if callback_results:
+            for cb_result in callback_results:
+                if 'total_loss' in cb_result:
+                    print(f"Heldout - Loss: {cb_result.get('total_loss', 0):.4f}, "
+                          f"Rating Acc: {cb_result.get('rating_accuracy', 0):.3f}, "
+                          f"Ranking Acc: {cb_result.get('ranking_accuracy', 0):.3f}")
 
     def setup_heldout_evaluation_callback(self, train_instances: List[Dict]) -> List[RankingData]:
         """Set up evaluation callback on heldout data - override in subclasses."""
@@ -284,10 +330,16 @@ class GeneralMIT(MultiInstanceTrainerBase):
             )
             self.trainer.register_callback(callback)
 
-        # Step 4: Finetune on T_O_train using batch generator
+        # Step 4: Finetune on T_O_train using batch generator with progress tracking
+        from tqdm import tqdm
+
         finetuning_results = []
+        callback_results = []
         batch_generator = self.create_training_batch_generator([])
         finetuning_steps = getattr(self.config, 'finetuning_steps', 100)
+
+        # Progress bar for finetuning
+        pbar = tqdm(total=finetuning_steps, desc="Finetuning")
 
         for step, batch_of_masked_versions in enumerate(batch_generator):
             if step >= finetuning_steps:
@@ -299,23 +351,58 @@ class GeneralMIT(MultiInstanceTrainerBase):
             result = self.trainer.train_step(batch_of_masked_versions)
             finetuning_results.append(result)
 
-            if step % max(1, finetuning_steps // 10) == 0:
-                print(f"Finetuning step {step}: {result}")
+            # Update progress bar
+            pbar.set_postfix({'loss': f"{result.get('total_loss', 0):.4f}"})
+            pbar.update(1)
+
+            # Evaluate at regular intervals
+            eval_freq = getattr(self.config, 'eval_frequency', finetuning_steps // 10)
+            if step % max(1, eval_freq) == 0:
+                # Call callbacks and collect results
+                step_callback_results = self.trainer._call_epoch_end_callbacks(step)
+                if step_callback_results:
+                    callback_results.extend(step_callback_results)
+
+                # Print finetuning progress
+                print(f"\nFinetuning Step {step+1}/{finetuning_steps}")
+                print(f"Train - Loss: {result.get('total_loss', 0):.4f}, "
+                      f"Rating: {result.get('rating_loss', 0):.4f}, "
+                      f"Ranking: {result.get('ranking_loss', 0):.4f}")
+
+                if step_callback_results:
+                    for cb_result in step_callback_results:
+                        if 'total_loss' in cb_result:
+                            print(f"Heldout - Loss: {cb_result.get('total_loss', 0):.4f}, "
+                                  f"Rating Acc: {cb_result.get('rating_accuracy', 0):.3f}, "
+                                  f"Ranking Acc: {cb_result.get('ranking_accuracy', 0):.3f}")
+
+        pbar.close()
 
         # Step 5: Final evaluation on full test instance (T_O + T_M)
-        # Create test variables with proper masking (T_M masked, T_O observed)
-        final_test_variables = t_o_variables + t_m_variables
+        # Create test variables with explicit masking preservation
+        final_test_variables = []
+
+        # Ensure T_O variables are marked as observed
+        for var in t_o_variables:
+            var.is_masked = False
+            final_test_variables.append(var)
+
+        # Ensure T_M variables are marked as masked
+        for var in t_m_variables:
+            var.is_masked = True
+            final_test_variables.append(var)
 
         final_results = self.eval_engine.evaluate_model(
             model=self.model,
             variables=final_test_variables,
-            masking_rate=0.0,  # No additional masking - already have T_M marked as masked
+            masking_rate=0.0,  # Use existing is_masked flags
             converter=self.converter,
             device=self.config.device
         )
 
         return {
             'finetuning_results': finetuning_results,
+            'callback_results': callback_results,
             'final_evaluation': final_results,
             't_o_variables': t_o_variables,
             't_m_variables': t_m_variables

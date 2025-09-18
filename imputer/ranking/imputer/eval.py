@@ -87,7 +87,7 @@ class EvaluationEngine:
 
     def create_evaluation_mask(self, variables: List[RankingData], masking_rate: float) -> List[bool]:
         """
-        Create M% random mask across all variables.
+        Create M% random mask across all variables, respecting pre-existing is_masked flags.
 
         Args:
             variables: List of all variables (ratings + rankings)
@@ -100,6 +100,11 @@ class EvaluationEngine:
         if num_variables == 0:
             return []
 
+        # When masking_rate=0.0, respect existing is_masked flags
+        if masking_rate == 0.0:
+            return [var.is_masked if var.is_masked is not None else False for var in variables]
+
+        # Normal random masking behavior
         # Ensure masking_rate is valid
         masking_rate = max(0.0, min(1.0, masking_rate))
         num_to_mask = int(num_variables * masking_rate)

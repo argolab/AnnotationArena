@@ -22,6 +22,7 @@ class DataConfig:
     I: int = 10   # number of attributes
     J: int = 5    # number of annotators
     C: int = 5    # number of rating categories
+    D: int = 32   # embedding dimension
 
     # Data generation parameters
     sigma_annotator: float = 0.3
@@ -69,6 +70,8 @@ class FinetuningConfig:
     batch_size: int = 16  # Number of masked versions per batch
     learning_rate: float = 5e-4
     train_heldout_split: float = 0.8
+    eval_frequency: int = 20  # Evaluate every N steps during finetuning
+    test_masking_rate: float = 0.5  # Test instance masking rate for T_O/T_M split
     masking_rates: List[float] = field(default_factory=lambda: [0.3, 0.5, 0.7])
     device: str = "cpu"
 
@@ -179,6 +182,7 @@ def create_test_config() -> ExperimentConfig:
             K=10,  # Smaller for testing
             I=3,
             J=3,
+            D=16,  # Smaller for testing
             train_test_split=0.6  # 2 train, 1 test
         ),
         model_config=ModelConfig(
@@ -188,10 +192,13 @@ def create_test_config() -> ExperimentConfig:
         ),
         pretraining_config=PretrainingConfig(
             total_batches=50,  # Much smaller for testing
-            batch_size=8
+            batch_size=8,
+            eval_frequency=10  # Evaluate every 10 steps in test
         ),
         finetuning_config=FinetuningConfig(
-            finetuning_steps=20  # Smaller for testing
+            finetuning_steps=20,  # Smaller for testing
+            eval_frequency=5,   # Evaluate every 5 steps in test
+            test_masking_rate=0.3  # Match test expectation
         ),
         domain_config=DomainConfig(
             iter_warmup=100,  # Smaller for testing

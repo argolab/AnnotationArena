@@ -230,7 +230,8 @@ class ExperimentRunner:
         self.results["pretraining_results"] = {
             "strategy": self.config.pretraining_config.strategy,
             "training_results": training_results["training_results"] if self.config.save_training_histories else "saved_separately",
-            "heldout_evaluation": training_results.get("heldout_variables", []),
+            "heldout_evaluation_metrics": training_results.get("callback_results", []),
+            "heldout_variables_info": f"Combined heldout set: {len(training_results.get('heldout_variables', []))} variables",
             "model_path": str(model_path) if model_path else None
         }
 
@@ -308,6 +309,7 @@ class ExperimentRunner:
 
         return {
             "finetuning_results": finetuning_results["finetuning_results"] if self.config.save_training_histories else "saved_separately",
+            "callback_results": finetuning_results.get("callback_results", []),
             "evaluation_results": finetuning_results["final_evaluation"].__dict__,
             "model_path": str(model_path) if model_path else None,
             "wall_time": timer.get_elapsed()
@@ -343,6 +345,7 @@ class ExperimentRunner:
 
         return {
             "training_results": training_results["finetuning_results"] if self.config.save_training_histories else "saved_separately",
+            "callback_results": training_results.get("callback_results", []),
             "evaluation_results": training_results["final_evaluation"].__dict__,
             "model_path": str(model_path) if model_path else None,
             "wall_time": timer.get_elapsed()

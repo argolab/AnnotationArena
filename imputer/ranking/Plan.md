@@ -194,17 +194,26 @@ Each phase must include a comprehensive test script in `./tests/` directory:
 
 ## Implementation Priority
 
-1. **Phase 1** (Critical): Fix masked metrics and improve training clarity
+1. **✅ Phase 1 COMPLETED** (Critical): Fix masked metrics and improve training clarity
 2. **Phase 2** (Important): Add comprehensive step-by-step evaluation
 3. **Phase 3** (Enhancement): Enable instance parameter diversity
 
-## Success Criteria
+## Phase 1 - COMPLETED ✅
 
-**Phase 1 Complete When**:
-- Finetuning shows non-zero masked_metrics
-- Heldout evaluation stores actual metrics, not raw data
-- Sequential training has clear progress indicators
-- All masking logic verified with test data
+**✅ All Success Criteria Met**:
+- ✅ Finetuning shows non-zero masked_metrics (fixed evaluation engine)
+- ✅ Heldout evaluation stores actual metrics, not raw data (proper callback collection)
+- ✅ Sequential training has clear progress indicators (TQDM + structured logging)
+- ✅ All masking logic verified with test data (comprehensive test script)
+
+**Implementation Summary**:
+- **Fixed evaluation engine** (`imputer/eval.py`) to respect pre-existing `is_masked` flags
+- **Enhanced multi-instance trainer** (`imputer/multi_instance_trainer.py`) with TQDM progress bars and callback collection
+- **Fixed GeneralMIT evaluation** to preserve T_O/T_M masking information
+- **Updated experiment config** with `eval_frequency`, `test_masking_rate`, and missing `D` parameter
+- **Updated results storage** to capture callback metrics instead of raw variables
+- **Created comprehensive test script** (`tests/test_phase1_masked_metrics.py`) that validates all fixes
+- **Maintained backward compatibility** with existing `configs/test_config.json`
 
 **Phase 2 Complete When**:
 - Test set evaluation occurs during all training phases
