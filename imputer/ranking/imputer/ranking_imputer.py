@@ -103,6 +103,10 @@ class MultiVariableImputer(nn.Module):
                 nn.Linear(embedding_dim // 2, max_rank_size)
             ),
         })
+        
+        # Move the entire model to the specified device
+        self.to(self.device)
+        print(f"Main Imputer Model moved to {self.device}")
 
     def apply_head(self, head_key: str, hidden: torch.Tensor) -> torch.Tensor:
         """Apply a named head to hidden states [B, N, D] -> logits [B, N, *]."""
