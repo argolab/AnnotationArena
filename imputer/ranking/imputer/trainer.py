@@ -46,7 +46,6 @@ class EvaluationCallback:
             results = self.eval_engine.evaluate_model(
                 model=model,
                 variables=self.test_variables,
-                data=self.test_data,
                 masking_rate=self.masking_rate,
                 converter=self.converter,
                 device=self.device

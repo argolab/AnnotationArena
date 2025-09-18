@@ -92,102 +92,128 @@
 
 ---
 
-## Phase 2: Complete Evaluation Engine 🎯
+## Phase 2: Complete Evaluation Engine ✅ COMPLETED
 
-**Objectives**: Implement comprehensive evaluation for all metrics on masked test sets
+**Objectives**: Minor fixes to evaluation engine for complete metrics implementation
 
-**Tasks**:
-1. **Core Evaluation Metrics**:
-   - Log loss computation on masked variables
-   - Rating accuracy and RMSE
-   - Ranking accuracy for pairwise comparisons
-   - Metrics breakdown by masked/observed
+**Completed Tasks**:
+1. **✅ Minor Implementation Fixes**:
+   - Fixed type annotations for `List[RankingData]` consistency
+   - Implemented proper pairwise ranking accuracy computation
+   - Added device compatibility checks and model.to(device)
+   - Enhanced error handling for edge cases (empty variables, invalid masking rates)
+   - Added length validation for evaluation mask and variables
 
-2. **Evaluation Interface**:
-   - Clean API for evaluating any model on any test set
-   - M% masking handled within evaluation engine
-   - Device-aware evaluation
-   - Structured results output
+2. **✅ Integration Verification**:
+   - Fixed EvaluationCallback parameter mismatch in trainer.py
+   - Verified callback integration with comprehensive test
+   - Tested evaluation format consistency across all metrics
+   - Validated different masking rates (0.0, 0.5, 1.0)
 
-3. **Integration Points**:
-   - Called by trainer callbacks during training (on heldout sets)
-   - Called by MIT for instance-level evaluation
-   - Used by all 4 evaluation strategies
+3. **✅ Comprehensive Testing**:
+   - Created `tests/test_eval_engine.py` with 9 comprehensive test functions
+   - Tests masking logic, variable splitting, RMSE computation, ranking accuracy
+   - Tests model integration, trainer callbacks, and edge cases
+   - All tests pass successfully
 
-**Key Requirements**:
-- **NO TODO COMMENTS OR SIMPLIFIED VERSIONS**
-- Complete implementation of all metrics
-- Masking logic consistent with training
+**Key Achievements**:
+- **NO TODO COMMENTS OR SIMPLIFIED VERSIONS** - All implementations complete
+- Clean separation: eval only evaluates, doesn't handle data conversion or training
+- Proper pairwise ranking accuracy using relative order comparison
+- Robust error handling and device compatibility
 
 **Deliverables**:
-- Complete `EvaluationEngine` with all metrics
-- Clean evaluation interface
-- Integration with trainer callbacks
+- ✅ Fully verified `EvaluationEngine` with comprehensive test coverage
+- ✅ Complete trainer callback integration working correctly
+- ✅ All metrics (loss, accuracy, RMSE) working correctly for ratings and rankings
+- ✅ Proper Test_M/Test_O masking and evaluation
 
 ---
 
-## Phase 3: Complete Multi-Instance Training (MIT) 🚀
+## Phase 3: Domain Model Integration 📊
 
-**Objectives**: Implement all 3 MIT types supporting the 4 evaluation strategies
+**Objectives**: Connect existing domain model implementation to experimental framework
+
+**Current Status**:
+- ✅ Complete `DomainModelTrainer` class (domain_model_trainer.py)
+- ✅ `train_and_evaluate()` and `train_on_pooled_data_and_evaluate()` methods
+- ✅ Same metrics as neural models (log loss, accuracy, RMSE)
+- ✅ Stan integration with MCMC sampling
+
+**Remaining Tasks**:
+1. **Evaluation Strategy Integration**:
+   - Connect `DomainModelTrainer` to evaluation framework
+   - Ensure consistent metric format with neural models
+   - Handle train-on-Test_O, evaluate-on-Test_M workflow
+
+2. **Configuration Integration**:
+   - Add domain model config to experiment configuration
+   - Support domain model in strategy selection
+   - Handle domain model parameters consistently
+
+3. **Results Integration**:
+   - Ensure `DomainModelResults` format matches neural results
+   - Support comparison and aggregation across strategies
+
+**Key Requirements**:
+- **REUSE EXISTING IMPLEMENTATION** - domain_model_trainer.py is complete
+- Clean separation: domain model handles its own training and evaluation
+- Same metrics format as neural approaches
+
+**Deliverables**:
+- `DomainModelRunner` interface class
+- Integration with evaluation engine format
+- Strategy 4 (Domain EM) fully functional
+
+---
+
+## Phase 4: Complete Multi-Instance Training (MIT) 🚀
+
+**Objectives**: Rewrite MIT to respect separation of concerns and complete all implementations
+
+**Current Issues in multi_instance_trainer.py**:
+- ❌ Line 41: TODO comment for saving results
+- ❌ Line 125: NotImplementedError for GeneralMIT.finetune_on_instance
+- ❌ Lines 62-78: Uses old tensor-based batch creation instead of List[RankingData]
+- ❌ Creates own batches instead of using trainer's masking capabilities
+- ❌ Calls eval_engine directly instead of using trainer callbacks
+- ❌ Mixes data conversion, training, and evaluation logic
 
 **Tasks**:
-1. **Complete GeneralMIT**:
-   - Implement `finetune_on_instance()` method
-   - Support Test_O → Test_O_Masked/Test_O_Observed splitting
-   - Train on Test_O_Observed, validate on Test_O_Masked
-   - Integration with pretrained models
+1. **Rewrite MIT for Clean Separation**:
+   - Use data.py for all data conversion (List[RankingData] format)
+   - Use trainer.py for masking and training with callbacks
+   - Use eval_engine only through trainer callbacks
+   - Remove direct batch creation logic
 
-2. **Enhanced SequentialMIT**:
-   - Ensure proper M% random masking during training
-   - Evaluation on heldout sets after each instance
-   - Support for both fresh and pretrained models
+2. **Complete GeneralMIT**:
+   - Implement `finetune_on_instance()` method properly
+   - Support Test_O → Test_O_Masked/Test_O_Observed splitting via data.py
+   - Train on Test_O_Observed using trainer callbacks for evaluation
 
-3. **Enhanced MixedMIT**:
-   - IID batch sampling from combined instance pool
-   - Consistent masking across instances
-   - Evaluation on combined heldout set
+3. **Fix SequentialMIT and MixedMIT**:
+   - Remove direct batch creation, use trainer's masking
+   - Use trainer callbacks for evaluation, not direct eval_engine calls
+   - Remove TODO comments and implement result saving
 
 4. **MIT Integration**:
-   - Support all 4 evaluation strategies
-   - Results collection and aggregation
+   - Support all 4 evaluation strategies cleanly
+   - Results collection through trainer callback system
    - Configuration-driven training parameters
 
 **Key Requirements**:
-- **NO TODO COMMENTS**
+- **RESPECT SEPARATION OF CONCERNS**:
+  - Data gives data via List[RankingData]
+  - Trainer handles masking and training with eval callbacks
+  - Eval just evaluates when called by callbacks
+- **NO TODO COMMENTS OR NOTIMPLEMENTEDERROR**
 - Complete implementation of all methods
-- Support for evaluation strategy switching
 
 **Deliverables**:
+- Rewritten `MultiInstanceTrainerBase` with clean separation
 - Complete `GeneralMIT.finetune_on_instance()`
-- Enhanced `SequentialMIT` and `MixedMIT`
-- Full integration with evaluation strategies
-
----
-
-## Phase 4: Domain Model Integration 📊
-
-**Objectives**: Implement Domain EM evaluation strategy
-
-**Tasks**:
-1. **Domain Model Runner**:
-   - Interface to existing Stan domain model
-   - Fit EM model to Test_O for each test instance
-   - Generate predictions for Test_M variables
-
-2. **Domain Model Evaluation**:
-   - Compute same metrics as neural models (log loss, accuracy, RMSE)
-   - Integration with evaluation engine
-   - Results in same format as other strategies
-
-3. **Stan Integration**:
-   - Call existing Stan files
-   - Handle domain model outputs
-   - Error handling and validation
-
-**Deliverables**:
-- `DomainModelRunner` class
-- Integration with evaluation engine
-- Same metrics as neural approaches
+- Fixed `SequentialMIT` and `MixedMIT` using proper architecture
+- Full integration with evaluation strategies through callbacks
 
 ---
 
@@ -259,11 +285,17 @@
 ## Implementation Priority
 
 1. **✅ Phase 1** (Data Cleanup) - Critical foundation **COMPLETED**
-2. **⏳ Phase 2** (Evaluation Engine) - Core functionality **NEXT**
-3. **Phase 3** (Complete MIT) - Key experimental capability
-4. **Phase 4** (Domain Model) - Baseline comparison
+2. **✅ Phase 2** (Evaluation Engine) - Minor fixes to complete metrics **COMPLETED**
+3. **⏳ Phase 3** (Domain Model Integration) - Connect existing domain trainer **NEXT**
+4. **Phase 4** (Complete MIT) - Major rewrite for separation of concerns
 5. **Phase 5** (Experiment Runner) - End-to-end experiments
 6. **Phase 6** (Visualization) - Results analysis
+
+**Rationale for Reordering**:
+- **Phase 2**: Evaluation engine is mostly complete, just needs minor fixes
+- **Phase 3**: Domain model trainer is fully implemented, just needs integration
+- **Phase 4**: Multi-instance trainer has major separation violations and needs complete rewrite
+- This ordering respects dependencies: clean eval → domain integration → MIT rewrite
 
 ## Key Implementation Standards
 

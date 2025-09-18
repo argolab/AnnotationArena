@@ -73,6 +73,8 @@ class EvaluationEngine:
                 variables, evaluation_mask
             )
 
+            # Ensure model is on correct device
+            model = model.to(device)
             model_output = model(ranking_data_list)
 
             # Compute metrics
@@ -83,7 +85,7 @@ class EvaluationEngine:
         model.train()
         return results
 
-    def create_evaluation_mask(self, variables: List[Dict], masking_rate: float) -> List[bool]:
+    def create_evaluation_mask(self, variables: List[RankingData], masking_rate: float) -> List[bool]:
         """
         Create M% random mask across all variables.
 
@@ -95,18 +97,23 @@ class EvaluationEngine:
             List of booleans indicating which variables are masked
         """
         num_variables = len(variables)
+        if num_variables == 0:
+            return []
+
+        # Ensure masking_rate is valid
+        masking_rate = max(0.0, min(1.0, masking_rate))
         num_to_mask = int(num_variables * masking_rate)
 
         # Create mask: True = masked, False = observed
         mask = [False] * num_variables
-        masked_indices = random.sample(range(num_variables), num_to_mask)
-
-        for idx in masked_indices:
-            mask[idx] = True
+        if num_to_mask > 0:
+            masked_indices = random.sample(range(num_variables), num_to_mask)
+            for idx in masked_indices:
+                mask[idx] = True
 
         return mask
 
-    def split_variables(self, variables: List[Dict], mask: List[bool]) -> Tuple[List[Dict], List[Dict]]:
+    def split_variables(self, variables: List[RankingData], mask: List[bool]) -> Tuple[List[RankingData], List[RankingData]]:
         """
         Split variables into Test_M (masked) and Test_O (observed).
 
@@ -316,11 +323,12 @@ class EvaluationEngine:
         # Similar to converter.create_batch but with evaluation masking
         # This applies the evaluation mask to determine which variables have supervision
 
-        all_variables = variables
+        if len(variables) != len(evaluation_mask):
+            raise ValueError(f"Variables length ({len(variables)}) must match evaluation mask length ({len(evaluation_mask)})")
 
         masked_variables = []
 
-        for i, var in enumerate(all_variables):
+        for i, var in enumerate(variables):
             if evaluation_mask[i]:
                 # Create masked version (remove supervision)
                 masked_var = RankingData(
@@ -335,7 +343,7 @@ class EvaluationEngine:
             else:
                 # Keep original (observed) for conditioning
                 masked_variables.append(var)
-        
+
         return masked_variables
 
     def _compute_comprehensive_metrics(self, model_output, variables,
@@ -447,9 +455,19 @@ class EvaluationEngine:
 
             ranking_accuracy = None
             if len(metrics_dict['ranking_preds']) > 0:
-                # Simplified ranking accuracy (need proper implementation)
-                correct = sum(p == t for p, t in zip(metrics_dict['ranking_preds'],
-                                                   metrics_dict['ranking_targets']))
+                # Proper ranking accuracy for pairwise rankings
+                correct = 0
+                for pred_ranking, true_ranking in zip(metrics_dict['ranking_preds'], metrics_dict['ranking_targets']):
+                    if len(pred_ranking) == 2 and len(true_ranking) == 2:
+                        # For pairwise rankings: correct if both have same relative order
+                        pred_first_wins = pred_ranking[0] < pred_ranking[1]
+                        true_first_wins = true_ranking[0] < true_ranking[1]
+                        if pred_first_wins == true_first_wins:
+                            correct += 1
+                    else:
+                        # For other ranking sizes, exact match
+                        if pred_ranking == true_ranking:
+                            correct += 1
                 ranking_accuracy = correct / len(metrics_dict['ranking_preds'])
 
             return {
@@ -491,8 +509,19 @@ class EvaluationEngine:
             rmse = self.compute_rmse(predictions, targets)
             return {'accuracy': accuracy, 'rmse': rmse, 'count': len(predictions)}
         elif annotation_type == 'ranking':
-            # Simplified ranking accuracy
-            correct = sum(p == t for p, t in zip(predictions, targets))
+            # Proper ranking accuracy for pairwise rankings
+            correct = 0
+            for pred_ranking, true_ranking in zip(predictions, targets):
+                if len(pred_ranking) == 2 and len(true_ranking) == 2:
+                    # For pairwise rankings: correct if both have same relative order
+                    pred_first_wins = pred_ranking[0] < pred_ranking[1]
+                    true_first_wins = true_ranking[0] < true_ranking[1]
+                    if pred_first_wins == true_first_wins:
+                        correct += 1
+                else:
+                    # For other ranking sizes, exact match
+                    if pred_ranking == true_ranking:
+                        correct += 1
             accuracy = correct / len(predictions)
             return {'accuracy': accuracy, 'rmse': None, 'count': len(predictions)}
 
