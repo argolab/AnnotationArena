@@ -49,6 +49,10 @@ class ModelConfig:
     embedding_type: str = "pairwise"  # "pairwise", "combined_random", "fully_random"
     max_rank_size: int = 2
 
+    # Loss weighting configuration
+    masked_loss_weight: float = 1.0      # Weight for masked portion of loss
+    observed_loss_weight: float = 1.0    # Weight for observed portion of loss
+
 
 @dataclass
 class PretrainingConfig:
@@ -199,7 +203,9 @@ def create_test_config() -> ExperimentConfig:
         model_config=ModelConfig(
             encoder_layers=2,  # Smaller for testing
             attention_heads=4,
-            embedding_dim=32
+            embedding_dim=32,
+            masked_loss_weight=2.0,  # Weight masked losses higher for testing
+            observed_loss_weight=1.0
         ),
         pretraining_config=PretrainingConfig(
             total_batches=50,  # Much smaller for testing

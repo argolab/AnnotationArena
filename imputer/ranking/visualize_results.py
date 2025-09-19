@@ -62,7 +62,7 @@ def load_results(json_path: str) -> Dict[str, Any]:
         return json.load(f)
 
 
-def plot_pretraining_loss(results: Dict[str, Any], output_dir: Path) -> None:
+def plot_pretraining_loss(results: Dict[str, Any], output_dir: Path, test_config: Optional[Dict] = None) -> None:
     """
     Plot 1: Pretraining Training Loss Trend
     Shows training loss splits (total, rating, ranking) + heldout total loss
@@ -77,34 +77,29 @@ def plot_pretraining_loss(results: Dict[str, Any], output_dir: Path) -> None:
 
     epochs = list(range(len(training_data)))
 
-    # Extract training losses
-    train_total = [entry['total_loss'] for entry in training_data]
+    # Extract training losses - compute unweighted total if config available
     train_rating = [entry['rating_loss'] for entry in training_data]
     train_ranking = [entry['ranking_loss'] for entry in training_data]
 
-    # Extract heldout total loss (if available)
-    heldout_total = []
-    heldout_epochs = []
-    if heldout_data:
-        for entry in heldout_data:
-            if 'epoch' in entry and 'total_loss' in entry:
-                heldout_epochs.append(entry['epoch'])
-                heldout_total.append(entry['total_loss'])
+    # Compute unweighted total loss for original loss values
+    if test_config and 'model_config' in test_config:
+        # Use unweighted total = rating_loss + ranking_loss (original loss)
+        train_total = [r + rk for r, rk in zip(train_rating, train_ranking)]
+        total_label = 'Training Total Loss (Unweighted)'
+    else:
+        # Fallback to weighted total from results
+        train_total = [entry['total_loss'] for entry in training_data]
+        total_label = 'Training Total Loss'
 
     plt.figure(figsize=(10, 6))
 
-    # Plot training losses
+    # Plot training losses only (remove heldout)
     plt.plot(epochs, train_total, color=COLORS['total'], linestyle=LINE_STYLES['total'],
-             linewidth=2, label='Training Total Loss')
+             linewidth=2, label=total_label)
     plt.plot(epochs, train_rating, color=COLORS['rating'], linestyle=LINE_STYLES['rating'],
              linewidth=1.5, label='Training Rating Loss')
     plt.plot(epochs, train_ranking, color=COLORS['ranking'], linestyle=LINE_STYLES['ranking'],
              linewidth=1.5, label='Training Ranking Loss')
-
-    # Plot heldout total loss if available
-    if heldout_total:
-        plt.plot(heldout_epochs, heldout_total, color=COLORS['heldout'], linestyle=LINE_STYLES['heldout'],
-                 linewidth=2, label='Heldout Total Loss')
 
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
@@ -119,7 +114,7 @@ def plot_pretraining_loss(results: Dict[str, Any], output_dir: Path) -> None:
     print(f"Saved: {output_path}")
 
 
-def plot_finetuning_loss(results: Dict[str, Any], strategy_name: str, output_dir: Path) -> None:
+def plot_finetuning_loss(results: Dict[str, Any], strategy_name: str, output_dir: Path, test_config: Optional[Dict] = None) -> None:
     """
     Plot 2: Finetuning Loss Trends (separate plots for each strategy)
     Shows finetuning loss splits for a specific strategy
@@ -155,22 +150,33 @@ def plot_finetuning_loss(results: Dict[str, Any], strategy_name: str, output_dir
     max_epochs = max(len(data) for data in all_training_data)
     epochs = list(range(max_epochs))
 
-    avg_total = np.zeros(max_epochs)
     avg_rating = np.zeros(max_epochs)
     avg_ranking = np.zeros(max_epochs)
 
     for training_data in all_training_data:
         for i, entry in enumerate(training_data):
             if i < max_epochs:
-                avg_total[i] += entry['total_loss']
                 avg_rating[i] += entry['rating_loss']
                 avg_ranking[i] += entry['ranking_loss']
 
     # Average
     num_instances = len(all_training_data)
-    avg_total /= num_instances
     avg_rating /= num_instances
     avg_ranking /= num_instances
+
+    # Compute unweighted total loss for original loss values
+    if test_config and 'model_config' in test_config:
+        avg_total = avg_rating + avg_ranking  # Unweighted original loss
+        total_label = 'Training Total Loss (Unweighted)'
+    else:
+        # Fallback: compute weighted average from raw data
+        avg_total = np.zeros(max_epochs)
+        for training_data in all_training_data:
+            for i, entry in enumerate(training_data):
+                if i < max_epochs:
+                    avg_total[i] += entry['total_loss']
+        avg_total /= num_instances
+        total_label = 'Training Total Loss'
 
     plt.figure(figsize=(10, 6))
 
@@ -178,7 +184,7 @@ def plot_finetuning_loss(results: Dict[str, Any], strategy_name: str, output_dir
     color = COLORS['pretrain_finetuned'] if 'Pretrain' in strategy_name else COLORS['finetuned']
 
     plt.plot(epochs, avg_total, color=color, linestyle=LINE_STYLES['total'],
-             linewidth=2, label='Training Total Loss')
+             linewidth=2, label=total_label)
     plt.plot(epochs, avg_rating, color=COLORS['rating'], linestyle=LINE_STYLES['rating'],
              linewidth=1.5, label='Training Rating Loss')
     plt.plot(epochs, avg_ranking, color=COLORS['ranking'], linestyle=LINE_STYLES['ranking'],
@@ -220,7 +226,16 @@ def plot_finetuning_loss(results: Dict[str, Any], strategy_name: str, output_dir
 
     plt.xlabel('Epoch')
     plt.ylabel('Loss')
-    plt.title(f'{strategy_name} Loss Curves')
+
+    # Clean up strategy name for title (remove underscores)
+    if strategy_name == 'Pretrain_Finetuned_Imputer':
+        title = 'Pretrained & Finetuned Imputer Loss Curves'
+    elif strategy_name == 'Finetuned_Imputer':
+        title = 'Finetuned Imputer Loss Curves'
+    else:
+        title = f'{strategy_name.replace("_", " ")} Loss Curves'
+
+    plt.title(title)
     plt.legend()
     plt.grid(True, alpha=0.3)
 
@@ -232,7 +247,7 @@ def plot_finetuning_loss(results: Dict[str, Any], strategy_name: str, output_dir
     print(f"Saved: {output_path}")
 
 
-def plot_test_comparison(results: Dict[str, Any], output_dir: Path) -> None:
+def plot_test_comparison(results: Dict[str, Any], output_dir: Path, max_epochs: int = 100, test_config: Optional[Dict] = None) -> None:
     """
     Plot 3: Main Comparison Plot
     X-axis: epochs, Y-axis: test loss
@@ -247,7 +262,7 @@ def plot_test_comparison(results: Dict[str, Any], output_dir: Path) -> None:
     # Get finetuning progression data
     pretrain_finetuned_losses = []
     finetuned_losses = []
-    max_epochs = 0
+    max_epochs_found = 0
 
     # Collect data across all test instances
     for instance_key, instance_data in test_instances.items():
@@ -255,32 +270,70 @@ def plot_test_comparison(results: Dict[str, Any], output_dir: Path) -> None:
         if 'Pretrain_Finetuned_Imputer' in instance_data:
             callback_data = instance_data['Pretrain_Finetuned_Imputer'].get('callback_results', [])
             test_losses = []
+            print(f"DEBUG: Processing Pretrain_Finetuned_Imputer for {instance_key}")
+            print(f"DEBUG: test_config is not None: {test_config is not None}")
+            print(f"DEBUG: callback_data length: {len(callback_data)}")
+
             # Take every second entry (index 1, 3, 5, ...) to get test evaluations
             for i in range(1, len(callback_data), 2):
                 entry = callback_data[i]
                 if isinstance(entry, dict) and 'total_loss' in entry:
-                    test_losses.append(entry['total_loss'])
+                    # Debug first few entries
+                    if i <= 5:
+                        print(f"DEBUG: Entry {i} keys: {list(entry.keys())}")
+                        if 'rating_loss' in entry and 'ranking_loss' in entry:
+                            print(f"DEBUG: Entry {i} - rating_loss: {entry['rating_loss']}, ranking_loss: {entry['ranking_loss']}, total_loss: {entry['total_loss']}")
+
+                    # Compute unweighted loss if config available
+                    if test_config and 'rating_loss' in entry and 'ranking_loss' in entry:
+                        # Use the unweighted components from loss strategy
+                        unweighted_loss = entry['rating_loss'] + entry['ranking_loss']
+                        test_losses.append(unweighted_loss)
+                        if i <= 5:
+                            print(f"DEBUG: Entry {i} - Using unweighted: rating_loss({entry['rating_loss']}) + ranking_loss({entry['ranking_loss']}) = {unweighted_loss}")
+                            print(f"DEBUG: Entry {i} - vs total_loss: {entry['total_loss']}")
+                            print(f"DEBUG: Entry {i} - Reduction: {((entry['total_loss'] - unweighted_loss) / entry['total_loss'] * 100):.1f}%")
+                    else:
+                        test_losses.append(entry['total_loss'])
+                        if i <= 5:
+                            print(f"DEBUG: Entry {i} - Using total_loss: {entry['total_loss']}")
+                            print(f"DEBUG: test_config: {test_config is not None}, rating_loss in entry: {'rating_loss' in entry}, ranking_loss in entry: {'ranking_loss' in entry}")
 
             if test_losses:
                 pretrain_finetuned_losses.append(test_losses)
-                max_epochs = max(max_epochs, len(test_losses))
+                max_epochs_found = max(max_epochs_found, len(test_losses))
 
         # Finetuned_Imputer test loss progression
         if 'Finetuned_Imputer' in instance_data:
             callback_data = instance_data['Finetuned_Imputer'].get('callback_results', [])
             test_losses = []
+            print(f"DEBUG: Processing Finetuned_Imputer for {instance_key}")
+
             # Take every second entry (index 1, 3, 5, ...) to get test evaluations
             for i in range(1, len(callback_data), 2):
                 entry = callback_data[i]
                 if isinstance(entry, dict) and 'total_loss' in entry:
-                    test_losses.append(entry['total_loss'])
+                    # Compute unweighted loss if config available
+                    if test_config and 'rating_loss' in entry and 'ranking_loss' in entry:
+                        # Use the unweighted components from loss strategy
+                        unweighted_loss = entry['rating_loss'] + entry['ranking_loss']
+                        test_losses.append(unweighted_loss)
+                        if i <= 5:
+                            print(f"DEBUG: Finetuned Entry {i} - Using unweighted: {unweighted_loss} vs total: {entry['total_loss']}")
+                    else:
+                        test_losses.append(entry['total_loss'])
+                        if i <= 5:
+                            print(f"DEBUG: Finetuned Entry {i} - Using total_loss: {entry['total_loss']}")
 
             if test_losses:
                 finetuned_losses.append(test_losses)
-                max_epochs = max(max_epochs, len(test_losses))
+                max_epochs_found = max(max_epochs_found, len(test_losses))
+
+    # Use minimum of found epochs and requested max_epochs
+    plot_epochs = min(max_epochs_found, max_epochs) if max_epochs_found > 0 else max_epochs
 
     # If no callback data available, use final evaluation results only
-    if max_epochs == 0:
+    if max_epochs_found == 0:
         print("Warning: No callback progression data found, using final evaluation results")
 
         # Get final test results instead
@@ -313,16 +366,16 @@ def plot_test_comparison(results: Dict[str, Any], output_dir: Path) -> None:
 
     else:
         # Plot progression curves
-        epochs = list(range(max_epochs))
+        epochs = list(range(plot_epochs))
 
         if pretrain_finetuned_losses:
             # Average across instances
-            avg_pretrain_losses = np.zeros(max_epochs)
-            count = np.zeros(max_epochs)
+            avg_pretrain_losses = np.zeros(plot_epochs)
+            count = np.zeros(plot_epochs)
 
             for losses in pretrain_finetuned_losses:
                 for i, loss in enumerate(losses):
-                    if i < max_epochs:
+                    if i < plot_epochs:
                         avg_pretrain_losses[i] += loss
                         count[i] += 1
 
@@ -330,23 +383,23 @@ def plot_test_comparison(results: Dict[str, Any], output_dir: Path) -> None:
             avg_pretrain_losses = np.where(count > 0, avg_pretrain_losses / count, np.nan)
 
             plt.plot(epochs, avg_pretrain_losses, color=COLORS['pretrain_finetuned'],
-                     linestyle='-', linewidth=2, label='Pretrained_Finetuned_Imputer')
+                     linestyle='-', linewidth=2, label='Pretrained & Finetuned Imputer')
 
         if finetuned_losses:
             # Average across instances
-            avg_finetuned_losses = np.zeros(max_epochs)
-            count = np.zeros(max_epochs)
+            avg_finetuned_losses = np.zeros(plot_epochs)
+            count = np.zeros(plot_epochs)
 
             for losses in finetuned_losses:
                 for i, loss in enumerate(losses):
-                    if i < max_epochs:
+                    if i < plot_epochs:
                         avg_finetuned_losses[i] += loss
                         count[i] += 1
 
             avg_finetuned_losses = np.where(count > 0, avg_finetuned_losses / count, np.nan)
 
             plt.plot(epochs, avg_finetuned_losses, color=COLORS['finetuned'],
-                     linestyle='-', linewidth=2, label='Finetuned_Imputer')
+                     linestyle='-', linewidth=2, label='Finetuned Imputer')
 
     # Add MCMC baseline horizontal lines
     mcmc_results = []
@@ -368,11 +421,13 @@ def plot_test_comparison(results: Dict[str, Any], output_dir: Path) -> None:
             mcmc_by_samples[sample_count] = []
         mcmc_by_samples[sample_count].append(loss)
 
-    # Plot MCMC lines
-    for sample_count, losses in mcmc_by_samples.items():
+    # Plot MCMC lines with different colors for each sample size
+    mcmc_colors = ['#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#ff9896']  # Different colors for each sample size
+    for i, (sample_count, losses) in enumerate(mcmc_by_samples.items()):
         avg_loss = np.mean(losses)
-        plt.axhline(y=avg_loss, color=COLORS['mcmc'], linestyle='--',
-                   linewidth=1.5, alpha=0.8, label=f'MCMC_{sample_count}')
+        color = mcmc_colors[i % len(mcmc_colors)]
+        plt.axhline(y=avg_loss, color=color, linestyle='-',  # Solid lines for MCMC
+                   linewidth=1.5, alpha=0.8, label=f'MCMC {sample_count} Samples')
 
     plt.xlabel('Epoch')
     plt.ylabel('Test Loss')
@@ -387,12 +442,135 @@ def plot_test_comparison(results: Dict[str, Any], output_dir: Path) -> None:
     print(f"Saved: {output_path}")
 
 
+def plot_test_accuracy(results: Dict[str, Any], output_dir: Path, max_epochs: int = 100) -> None:
+    """
+    Plot test accuracy for pretrained imputer only.
+    Shows pretraining metrics with dotted line, then finetuning with trend.
+    """
+    test_instances = results.get('test_instance_results', {})
+    pretraining_results = results.get('pretraining_results', {})
+
+    plt.figure(figsize=(12, 8))
+
+    # Get Pretrained Imputer final test accuracy (baseline to compare against)
+    pretrained_imputer_rating_acc = []
+    pretrained_imputer_ranking_acc = []
+
+    # Collect Pretrained_Imputer final test results across all instances
+    for instance_key, instance_data in test_instances.items():
+        if 'Pretrained_Imputer' in instance_data:
+            eval_results = instance_data['Pretrained_Imputer'].get('evaluation_results', {})
+            if 'rating_accuracy' in eval_results:
+                pretrained_imputer_rating_acc.append(eval_results['rating_accuracy'])
+            if 'ranking_accuracy' in eval_results:
+                pretrained_imputer_ranking_acc.append(eval_results['ranking_accuracy'])
+
+    # Plot horizontal dotted lines for Pretrained Imputer performance (baseline)
+    if pretrained_imputer_rating_acc and pretrained_imputer_ranking_acc:
+        avg_pretrained_rating = sum(pretrained_imputer_rating_acc) / len(pretrained_imputer_rating_acc)
+        avg_pretrained_ranking = sum(pretrained_imputer_ranking_acc) / len(pretrained_imputer_ranking_acc)
+        avg_pretrained_overall = (avg_pretrained_rating + avg_pretrained_ranking) / 2
+
+        plt.axhline(y=avg_pretrained_overall, color=COLORS['total'], linestyle=':',
+                   linewidth=2, alpha=0.8, label='Pretrained Imputer Overall Accuracy')
+        plt.axhline(y=avg_pretrained_rating, color=COLORS['rating'], linestyle=':',
+                   linewidth=1.5, alpha=0.8, label='Pretrained Imputer Rating Accuracy')
+        plt.axhline(y=avg_pretrained_ranking, color=COLORS['ranking'], linestyle=':',
+                   linewidth=1.5, alpha=0.8, label='Pretrained Imputer Ranking Accuracy')
+
+    # Get finetuning test accuracy progression for Pretrained & Finetuned Imputer
+    pretrain_finetuned_rating_acc = []
+    pretrain_finetuned_ranking_acc = []
+    max_epochs_found = 0
+
+    # Collect data across all test instances
+    for instance_key, instance_data in test_instances.items():
+        if 'Pretrain_Finetuned_Imputer' in instance_data:
+            callback_data = instance_data['Pretrain_Finetuned_Imputer'].get('callback_results', [])
+            rating_accs = []
+            ranking_accs = []
+
+            # Take every second entry (index 1, 3, 5, ...) to get test evaluations
+            for i in range(1, len(callback_data), 2):
+                entry = callback_data[i]
+                if isinstance(entry, dict):
+                    if 'rating_accuracy' in entry:
+                        rating_accs.append(entry['rating_accuracy'])
+                    if 'ranking_accuracy' in entry:
+                        ranking_accs.append(entry['ranking_accuracy'])
+
+            if rating_accs:
+                pretrain_finetuned_rating_acc.append(rating_accs)
+                max_epochs_found = max(max_epochs_found, len(rating_accs))
+            if ranking_accs:
+                pretrain_finetuned_ranking_acc.append(ranking_accs)
+                max_epochs_found = max(max_epochs_found, len(ranking_accs))
+
+    # Use minimum of found epochs and requested max_epochs
+    plot_epochs = min(max_epochs_found, max_epochs) if max_epochs_found > 0 else max_epochs
+
+    if pretrain_finetuned_rating_acc and pretrain_finetuned_ranking_acc:
+        epochs = list(range(plot_epochs))
+
+        # Average rating accuracy across instances
+        avg_rating_acc = np.zeros(plot_epochs)
+        rating_count = np.zeros(plot_epochs)
+
+        for accs in pretrain_finetuned_rating_acc:
+            for i, acc in enumerate(accs):
+                if i < plot_epochs:
+                    avg_rating_acc[i] += acc
+                    rating_count[i] += 1
+
+        avg_rating_acc = np.where(rating_count > 0, avg_rating_acc / rating_count, np.nan)
+
+        # Average ranking accuracy across instances
+        avg_ranking_acc = np.zeros(plot_epochs)
+        ranking_count = np.zeros(plot_epochs)
+
+        for accs in pretrain_finetuned_ranking_acc:
+            for i, acc in enumerate(accs):
+                if i < plot_epochs:
+                    avg_ranking_acc[i] += acc
+                    ranking_count[i] += 1
+
+        avg_ranking_acc = np.where(ranking_count > 0, avg_ranking_acc / ranking_count, np.nan)
+
+        # Overall accuracy (average of rating and ranking)
+        avg_overall_acc = (avg_rating_acc + avg_ranking_acc) / 2
+
+        # Plot finetuning accuracy trends
+        plt.plot(epochs, avg_overall_acc, color=COLORS['total'], linestyle='-',
+                linewidth=2, label='Pretrained & Finetuned Overall Accuracy')
+        plt.plot(epochs, avg_rating_acc, color=COLORS['rating'], linestyle='-',
+                linewidth=1.5, label='Pretrained & Finetuned Rating Accuracy')
+        plt.plot(epochs, avg_ranking_acc, color=COLORS['ranking'], linestyle='-',
+                linewidth=1.5, label='Pretrained & Finetuned Ranking Accuracy')
+
+    plt.xlabel('Finetuning Epoch')
+    plt.ylabel('Test Accuracy')
+    plt.title('Pretrained Imputer vs Pretrained & Finetuned Imputer Accuracy')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.ylim(0, 1)  # Accuracy ranges from 0 to 1
+
+    # Save plot
+    output_path = output_dir / 'test_accuracy_pretrained_imputer.png'
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    plt.close()
+    print(f"Saved: {output_path}")
+
+
 def main():
     """Main function to generate all plots."""
     parser = argparse.ArgumentParser(description='Generate ICLR-ready plots from experiment results')
     parser.add_argument('json_path', type=str, help='Path to experiment results JSON file')
     parser.add_argument('--output-dir', type=str, default='plots',
                        help='Output directory for plots (default: plots)')
+    parser.add_argument('--test-config', type=str, default=None,
+                       help='Path to test config JSON file for unweighted loss calculation')
+    parser.add_argument('--max-epochs', type=int, default=100,
+                       help='Maximum epochs to display in progression plots (default: 100)')
 
     args = parser.parse_args()
 
@@ -403,27 +581,43 @@ def main():
 
     results = load_results(args.json_path)
 
+    # Load test config if provided
+    test_config = None
+    if args.test_config and Path(args.test_config).exists():
+        with open(args.test_config, 'r') as f:
+            test_config = json.load(f)
+        print(f"Loaded test config: {args.test_config}")
+        print(f"DEBUG: test_config keys: {list(test_config.keys())}")
+        if 'model_config' in test_config:
+            print(f"DEBUG: model_config keys: {list(test_config['model_config'].keys())}")
+    else:
+        print(f"DEBUG: test_config not loaded. args.test_config: {args.test_config}, exists: {Path(args.test_config).exists() if args.test_config else 'N/A'}")
+
     # Create output directory
     output_dir = Path(args.output_dir)
     output_dir.mkdir(exist_ok=True)
 
     print(f"Generating plots from: {args.json_path}")
     print(f"Output directory: {output_dir}")
+    print(f"Max epochs for progression plots: {args.max_epochs}")
 
     # Generate all plots
     print("\nGenerating plots...")
 
     # Plot 1: Pretraining loss curves
-    plot_pretraining_loss(results, output_dir)
+    plot_pretraining_loss(results, output_dir, test_config)
 
     # Plot 2a: Pretrain_Finetuned loss curves
-    plot_finetuning_loss(results, 'Pretrain_Finetuned_Imputer', output_dir)
+    plot_finetuning_loss(results, 'Pretrain_Finetuned_Imputer', output_dir, test_config)
 
     # Plot 2b: Finetuned loss curves
-    plot_finetuning_loss(results, 'Finetuned_Imputer', output_dir)
+    plot_finetuning_loss(results, 'Finetuned_Imputer', output_dir, test_config)
 
     # Plot 3: Main comparison plot
-    plot_test_comparison(results, output_dir)
+    plot_test_comparison(results, output_dir, args.max_epochs, test_config)
+
+    # Plot 4: Test accuracy plot
+    plot_test_accuracy(results, output_dir, args.max_epochs)
 
     print(f"\nAll plots saved to: {output_dir}")
     print("Generated files:")

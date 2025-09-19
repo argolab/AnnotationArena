@@ -10,6 +10,7 @@ import random
 import copy
 from typing import List, Iterator, Tuple, Any, Dict
 import torch
+import sys
 from .trainer import ImputerTrainer, EvaluationCallback
 from .eval import EvaluationEngine
 from .data import DataConverter, RankingData
@@ -18,12 +19,24 @@ from .data import DataConverter, RankingData
 class MultiInstanceTrainerBase:
     """Base class for multi-instance training with masking and evaluation coordination."""
 
-    def __init__(self, model, eval_engine: EvaluationEngine, config, converter: DataConverter):
+    def __init__(self, model, eval_engine: EvaluationEngine, config, converter: DataConverter, model_config=None):
         self.model = model
         self.eval_engine = eval_engine
         self.config = config
         self.converter = converter
-        self.trainer = ImputerTrainer(model, config.learning_rate, device=config.device)
+
+        # Extract loss weights from model_config if provided
+        masked_loss_weight = 1.0
+        observed_loss_weight = 1.0
+        if model_config is not None:
+            masked_loss_weight = getattr(model_config, 'masked_loss_weight', 1.0)
+            observed_loss_weight = getattr(model_config, 'observed_loss_weight', 1.0)
+
+        self.trainer = ImputerTrainer(
+            model, config.learning_rate, device=config.device,
+            masked_loss_weight=masked_loss_weight,
+            observed_loss_weight=observed_loss_weight
+        )
         self.train_heldout_split = getattr(config, 'train_heldout_split', 0.8)  # 80/20 default
 
     def apply_masking(self, variables: List[RankingData], masking_rate: float) -> List[RankingData]:
@@ -162,8 +175,8 @@ class MultiInstanceTrainerBase:
 class SequentialMIT(MultiInstanceTrainerBase):
     """Sequential Multi-Instance Trainer: process instances sequentially with train/heldout splits."""
 
-    def __init__(self, model, eval_engine: EvaluationEngine, config, converter: DataConverter):
-        super().__init__(model, eval_engine, config, converter)
+    def __init__(self, model, eval_engine: EvaluationEngine, config, converter: DataConverter, model_config=None):
+        super().__init__(model, eval_engine, config, converter, model_config)
         self.current_instance_idx = 0
         self.instance_train_sets = []
         self.instance_heldout_sets = []
@@ -215,8 +228,8 @@ class SequentialMIT(MultiInstanceTrainerBase):
 class MixedMIT(MultiInstanceTrainerBase):
     """Mixed Multi-Instance Trainer: IID sampling from combined instance pool."""
 
-    def __init__(self, model, eval_engine: EvaluationEngine, config, converter: DataConverter):
-        super().__init__(model, eval_engine, config, converter)
+    def __init__(self, model, eval_engine: EvaluationEngine, config, converter: DataConverter, model_config=None):
+        super().__init__(model, eval_engine, config, converter, model_config)
         self.instance_train_sets = []
         self.instance_heldout_sets = []
 
@@ -276,8 +289,8 @@ class MixedMIT(MultiInstanceTrainerBase):
 class GeneralMIT(MultiInstanceTrainerBase):
     """General Multi-Instance Trainer: for finetuning on single test instances."""
 
-    def __init__(self, model, eval_engine: EvaluationEngine, config, converter: DataConverter):
-        super().__init__(model, eval_engine, config, converter)
+    def __init__(self, model, eval_engine: EvaluationEngine, config, converter: DataConverter, model_config=None):
+        super().__init__(model, eval_engine, config, converter, model_config)
         self.test_instance_variables = []
         self.t_o_train_vars = []
         self.t_o_heldout_vars = []

@@ -80,7 +80,7 @@ class ExperimentRunner:
         # Initialize components
         self.data_generator = None
         self.converter = None
-        self.eval_engine = EvaluationEngine()
+        self.eval_engine = EvaluationEngine(self.config.model_config)
 
         # Results storage
         self.results = {
@@ -215,9 +215,9 @@ class ExperimentRunner:
 
             # Create MIT trainer
             if self.config.pretraining_config.strategy == "sequential":
-                mit = SequentialMIT(model, self.eval_engine, self.config.pretraining_config, self.converter)
+                mit = SequentialMIT(model, self.eval_engine, self.config.pretraining_config, self.converter, self.config.model_config)
             else:  # mixed
-                mit = MixedMIT(model, self.eval_engine, self.config.pretraining_config, self.converter)
+                mit = MixedMIT(model, self.eval_engine, self.config.pretraining_config, self.converter, self.config.model_config)
 
             # Run training
             training_results = mit.train_on_instances(train_instances, [])
@@ -301,7 +301,7 @@ class ExperimentRunner:
             model.load_state_dict(pretrained_model.state_dict())
 
             # Finetune using GeneralMIT
-            mit = GeneralMIT(model, self.eval_engine, self.config.finetuning_config, self.converter)
+            mit = GeneralMIT(model, self.eval_engine, self.config.finetuning_config, self.converter, self.config.model_config)
             finetuning_results = mit.finetune_on_instance(
                 model, test_instance,
                 full_test_instances=getattr(self, 'test_instances', None),
@@ -341,7 +341,7 @@ class ExperimentRunner:
             )
 
             # Train from scratch using GeneralMIT
-            mit = GeneralMIT(model, self.eval_engine, self.config.finetuning_config, self.converter)
+            mit = GeneralMIT(model, self.eval_engine, self.config.finetuning_config, self.converter, self.config.model_config)
             training_results = mit.finetune_on_instance(
                 model, test_instance,
                 full_test_instances=getattr(self, 'test_instances', None),

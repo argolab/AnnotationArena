@@ -7,6 +7,7 @@ import copy
 from .losses import DefaultLossStrategy, adapt_batched_logits_to_predictions
 from .data import RankingData
 import random
+import sys
 
 
 class EvaluationCallback:
@@ -113,11 +114,13 @@ def calculate_rmse(predictions: List[int], targets: List[int]) -> float:
 
 
 class ImputerTrainer:
-    def __init__(self, model, learning_rate=1e-3, device='cpu', embedding_anchor_reg: float = 0.0, callbacks=None):
+    def __init__(self, model, learning_rate=1e-3, device='cpu', embedding_anchor_reg: float = 0.0, callbacks=None,
+                 masked_loss_weight: float = 1.0, observed_loss_weight: float = 1.0):
         self.model = model.to(device)
         self.device = device
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
-        self.loss_strategy = DefaultLossStrategy()
+        self.loss_strategy = DefaultLossStrategy(masked_loss_weight=masked_loss_weight,
+                                               observed_loss_weight=observed_loss_weight)
         # Callback system
         self.callbacks = callbacks or []
 
@@ -231,6 +234,7 @@ class ImputerTrainer:
                     is_listwise=False,
                     item_ids=var.item_ids,
                     rating_value=var.rating_value,
+                    is_masked=var.is_masked,
                 ))
             elif var.is_listwise:
                 predictions.append(predictions_full[i])
@@ -240,10 +244,11 @@ class ImputerTrainer:
                     is_listwise=True,
                     item_ids=[it for it in var.item_ids[: self.model.max_rank_size]],
                     ranking_order=var.ranking_order,
+                    is_masked=var.is_masked,
                 ))
             else:
                 raise ValueError("Shouldn't be here")
-
+            
         losses = self.loss_strategy.compute(predictions, references)
 
         # Embedding anchor regularization: keep embeddings close to their random initialization

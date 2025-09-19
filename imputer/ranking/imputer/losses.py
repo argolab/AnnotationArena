@@ -18,6 +18,7 @@ ratings and rankings. It includes:
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 import torch
+import sys
 import torch.nn as nn
 from .data import RankingData
 
@@ -114,11 +115,13 @@ class LossStrategyBase:
 class DefaultLossStrategy(LossStrategyBase):
     """Default loss strategy with cross-entropy for ratings and Plackett-Luce for rankings."""
 
-    def __init__(self):
-        """Initialize loss functions."""
+    def __init__(self, masked_loss_weight: float = 1.0, observed_loss_weight: float = 1.0):
+        """Initialize loss functions and weights."""
         super().__init__()
         self.rating_loss_fn = nn.CrossEntropyLoss(reduction='none')
         self.ranking_loss_fn = PlackettLuceLoss()
+        self.masked_loss_weight = masked_loss_weight
+        self.observed_loss_weight = observed_loss_weight
 
     def compute(
         self,
@@ -131,11 +134,16 @@ class DefaultLossStrategy(LossStrategyBase):
         N = len(predictions)
         device = predictions[0].device if predictions else torch.device('cpu')
 
+        # Defensive check: ensure all references have is_masked properly set
+        for i, ref in enumerate(references):
+            if ref.is_masked is None:
+                raise ValueError(f"Reference {i} has is_masked=None. All references must have is_masked set to True or False.")
+                sys.exit()
+
         # for all prediction, check if either rating or ranking has data.
         for p in predictions:
             if p.rating_logits is None and p.ranking_logits is None:
                 raise ValueError("Either rating or ranking logits must be provided")
-            # check the data conform with the is_listwise flag.
             if p.is_listwise is False and p.rating_logits is None:
                 raise ValueError("Rating logits must be provided for rating")
             if p.is_listwise is True and p.ranking_logits is None:
@@ -164,48 +172,95 @@ class DefaultLossStrategy(LossStrategyBase):
 
         for i, ref in enumerate(references):
             if not ref.is_listwise:
-                # Only compute loss for observed (non-masked) ratings
-                if not ref.is_masked and ref.rating_value is not None and 0 <= ref.rating_value < C:
+
+                if ref.rating_value is not None and 0 <= ref.rating_value < C:
                     rating_targets[0, i, ref.rating_value] = 1.0  # one-hot distribution
                     rating_mask[0, i] = True
-                elif not ref.is_masked:
+                else:
                     raise ValueError(f"Rating value not found or out of range for voter {i}")
-                # Skip masked ratings (is_masked=True)
             else:
-                # Only compute loss for observed (non-masked) rankings
-                if not ref.is_masked and ref.ranking_order is not None and len(ref.ranking_order) > 0:
-                    # Tensorize ranking order (1=best) and assign in one go
+
+                if ref.ranking_order is not None and len(ref.ranking_order) > 0:
+
                     assert len(ref.ranking_order) == R, f"Ranking order length must match R: {len(ref.ranking_order)} != {R}"
                     order_tensor = torch.tensor(ref.ranking_order, device=device, dtype=ranking_targets.dtype)
                     ranking_targets[0, i] = order_tensor
                     ranking_mask[0, i] = True
-                elif not ref.is_masked:
+                else:
                     raise ValueError(f"Ranking order not found or empty for voter {i}")
-                # Skip masked rankings (is_masked=True)
 
         zero = torch.tensor(0.0, device=device)
-        
-        # Rating losses via CrossEntropy
-        rating_loss = zero
+
+        # Separate losses by masked status
+        masked_rating_loss = zero
+        observed_rating_loss = zero
+        masked_ranking_loss = zero
+        observed_ranking_loss = zero
+
+        # Rating losses via CrossEntropy - vectorized with masked/observed separation
         if rating_mask.any():
             idx = rating_mask.nonzero(as_tuple=False)
             v_logits = rating_logits[idx[:, 0], idx[:, 1]]
             v_targets = rating_targets[idx[:, 0], idx[:, 1]]
             target_classes = torch.argmax(v_targets, dim=1)
             losses = self.rating_loss_fn(v_logits, target_classes)
-            rating_loss = losses.mean()
 
-        # Ranking losses via Plackett-Luce
-        ranking_loss = zero
+            # Separate by masked status using boolean indexing
+            valid_indices = idx[:, 1]  # Get variable indices
+            masked_mask = torch.tensor([references[i].is_masked for i in valid_indices], device=device)
+
+            masked_losses = losses[masked_mask]
+            observed_losses = losses[~masked_mask]
+
+            # Proper averaging
+            if len(masked_losses) > 0:
+                masked_rating_loss = masked_losses.mean()
+            if len(observed_losses) > 0:
+                observed_rating_loss = observed_losses.mean()
+
+        # Ranking losses via Plackett-Luce - separated by masked status
         if ranking_mask.any():
-            ranking_loss = self.ranking_loss_fn(ranking_logits, ranking_targets, ranking_mask)
+            # Create separate masks for masked and observed rankings
+            masked_ranking_mask = torch.zeros_like(ranking_mask)
+            observed_ranking_mask = torch.zeros_like(ranking_mask)
 
-        total_loss = rating_loss + ranking_loss
+            for i in range(N):
+                if ranking_mask[0, i]:  # Has ranking data
+                    if references[i].is_masked:
+                        masked_ranking_mask[0, i] = True
+                    else:
+                        observed_ranking_mask[0, i] = True
+
+            # Compute losses separately
+            if masked_ranking_mask.any():
+                masked_ranking_loss = self.ranking_loss_fn(ranking_logits, ranking_targets, masked_ranking_mask)
+            if observed_ranking_mask.any():
+                observed_ranking_loss = self.ranking_loss_fn(ranking_logits, ranking_targets, observed_ranking_mask)
+
+        # Weighted combination of masked and observed losses
+        masked_total_loss = masked_rating_loss + masked_ranking_loss
+        observed_total_loss = observed_rating_loss + observed_ranking_loss
+
+        total_loss = (self.masked_loss_weight * masked_total_loss +
+                     self.observed_loss_weight * observed_total_loss)
+        
+        total_unweighted_loss = masked_total_loss + observed_total_loss
+
+        # For backward compatibility, also compute unweighted component losses
+        rating_loss = masked_rating_loss + observed_rating_loss
+        ranking_loss = masked_ranking_loss + observed_ranking_loss
 
         return {
-            'total_loss': float(total_loss.item()),
+            'total_loss': float(total_unweighted_loss.item()),
             'rating_loss': float(rating_loss.item()),
             'ranking_loss': float(ranking_loss.item()),
+            # Masked/observed breakdown
+            'masked_total_loss': float(masked_total_loss.item()),
+            'observed_total_loss': float(observed_total_loss.item()),
+            'masked_rating_loss': float(masked_rating_loss.item()),
+            'observed_rating_loss': float(observed_rating_loss.item()),
+            'masked_ranking_loss': float(masked_ranking_loss.item()),
+            'observed_ranking_loss': float(observed_ranking_loss.item()),
             # Return tensors for backprop in trainer
             '_total_loss_tensor': total_loss,
         }

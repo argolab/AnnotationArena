@@ -39,7 +39,14 @@ class EvaluationEngine:
 
     def __init__(self, config=None):
         self.config = config
-        self.loss_strategy = DefaultLossStrategy()
+        # Initialize loss strategy with config weights if available
+        if config and hasattr(config, 'masked_loss_weight') and hasattr(config, 'observed_loss_weight'):
+            self.loss_strategy = DefaultLossStrategy(
+                masked_loss_weight=config.masked_loss_weight,
+                observed_loss_weight=config.observed_loss_weight
+            )
+        else:
+            self.loss_strategy = DefaultLossStrategy()
 
     def evaluate_model(self, model, variables: List[RankingData], masking_rate: float, converter=None, device='cpu') -> EvaluationResults:
         """
@@ -394,6 +401,7 @@ class EvaluationEngine:
                     is_listwise=False,
                     item_ids=var.item_ids,
                     rating_value=rating_val,
+                    is_masked=is_masked,
                 ))
 
                 # Add to total
@@ -429,6 +437,7 @@ class EvaluationEngine:
                     is_listwise=True,
                     item_ids=var.item_ids,
                     ranking_order=ranking_order,
+                    is_masked=is_masked,
                 ))
 
                 # Add to total
