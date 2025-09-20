@@ -81,15 +81,9 @@ def plot_pretraining_loss(results: Dict[str, Any], output_dir: Path, test_config
     train_rating = [entry['rating_loss'] for entry in training_data]
     train_ranking = [entry['ranking_loss'] for entry in training_data]
 
-    # Compute unweighted total loss for original loss values
-    if test_config and 'model_config' in test_config:
-        # Use unweighted total = rating_loss + ranking_loss (original loss)
-        train_total = [r + rk for r, rk in zip(train_rating, train_ranking)]
-        total_label = 'Training Total Loss (Unweighted)'
-    else:
-        # Fallback to weighted total from results
-        train_total = [entry['total_loss'] for entry in training_data]
-        total_label = 'Training Total Loss'
+    # Always use rating_loss + ranking_loss for consistent comparison
+    train_total = [r + rk for r, rk in zip(train_rating, train_ranking)]
+    total_label = 'Training Total Loss (Rating + Ranking)'
 
     plt.figure(figsize=(10, 6))
 
@@ -284,20 +278,12 @@ def plot_test_comparison(results: Dict[str, Any], output_dir: Path, max_epochs: 
                         if 'rating_loss' in entry and 'ranking_loss' in entry:
                             print(f"DEBUG: Entry {i} - rating_loss: {entry['rating_loss']}, ranking_loss: {entry['ranking_loss']}, total_loss: {entry['total_loss']}")
 
-                    # Compute unweighted loss if config available
-                    if test_config and 'rating_loss' in entry and 'ranking_loss' in entry:
-                        # Use the unweighted components from loss strategy
+                    # Always use rating_loss + ranking_loss for consistent comparison
+                    if 'rating_loss' in entry and 'ranking_loss' in entry:
                         unweighted_loss = entry['rating_loss'] + entry['ranking_loss']
                         test_losses.append(unweighted_loss)
-                        if i <= 5:
-                            print(f"DEBUG: Entry {i} - Using unweighted: rating_loss({entry['rating_loss']}) + ranking_loss({entry['ranking_loss']}) = {unweighted_loss}")
-                            print(f"DEBUG: Entry {i} - vs total_loss: {entry['total_loss']}")
-                            print(f"DEBUG: Entry {i} - Reduction: {((entry['total_loss'] - unweighted_loss) / entry['total_loss'] * 100):.1f}%")
                     else:
                         test_losses.append(entry['total_loss'])
-                        if i <= 5:
-                            print(f"DEBUG: Entry {i} - Using total_loss: {entry['total_loss']}")
-                            print(f"DEBUG: test_config: {test_config is not None}, rating_loss in entry: {'rating_loss' in entry}, ranking_loss in entry: {'ranking_loss' in entry}")
 
             if test_losses:
                 pretrain_finetuned_losses.append(test_losses)
@@ -313,17 +299,12 @@ def plot_test_comparison(results: Dict[str, Any], output_dir: Path, max_epochs: 
             for i in range(1, len(callback_data), 2):
                 entry = callback_data[i]
                 if isinstance(entry, dict) and 'total_loss' in entry:
-                    # Compute unweighted loss if config available
-                    if test_config and 'rating_loss' in entry and 'ranking_loss' in entry:
-                        # Use the unweighted components from loss strategy
+                    # Always use rating_loss + ranking_loss for consistent comparison
+                    if 'rating_loss' in entry and 'ranking_loss' in entry:
                         unweighted_loss = entry['rating_loss'] + entry['ranking_loss']
                         test_losses.append(unweighted_loss)
-                        if i <= 5:
-                            print(f"DEBUG: Finetuned Entry {i} - Using unweighted: {unweighted_loss} vs total: {entry['total_loss']}")
                     else:
                         test_losses.append(entry['total_loss'])
-                        if i <= 5:
-                            print(f"DEBUG: Finetuned Entry {i} - Using total_loss: {entry['total_loss']}")
 
             if test_losses:
                 finetuned_losses.append(test_losses)
@@ -343,12 +324,16 @@ def plot_test_comparison(results: Dict[str, Any], output_dir: Path, max_epochs: 
         for instance_key, instance_data in test_instances.items():
             if 'Pretrain_Finetuned_Imputer' in instance_data:
                 eval_results = instance_data['Pretrain_Finetuned_Imputer'].get('evaluation_results', {})
-                if 'total_loss' in eval_results:
+                if 'rating_loss' in eval_results and 'ranking_loss' in eval_results:
+                    pretrain_final.append(eval_results['rating_loss'] + eval_results['ranking_loss'])
+                elif 'total_loss' in eval_results:
                     pretrain_final.append(eval_results['total_loss'])
 
             if 'Finetuned_Imputer' in instance_data:
                 eval_results = instance_data['Finetuned_Imputer'].get('evaluation_results', {})
-                if 'total_loss' in eval_results:
+                if 'rating_loss' in eval_results and 'ranking_loss' in eval_results:
+                    finetuned_final.append(eval_results['rating_loss'] + eval_results['ranking_loss'])
+                elif 'total_loss' in eval_results:
                     finetuned_final.append(eval_results['total_loss'])
 
         # Plot as horizontal lines
@@ -411,7 +396,9 @@ def plot_test_comparison(results: Dict[str, Any], output_dir: Path, max_epochs: 
                 sample_key = f'samples_{sample_count}'
                 if sample_key in domain_data:
                     eval_results = domain_data[sample_key].get('evaluation_results', {})
-                    if 'total_loss' in eval_results:
+                    if 'rating_loss' in eval_results and 'ranking_loss' in eval_results:
+                        mcmc_results.append((sample_count, eval_results['rating_loss'] + eval_results['ranking_loss']))
+                    elif 'total_loss' in eval_results:
                         mcmc_results.append((sample_count, eval_results['total_loss']))
 
     # Group by sample count and average

@@ -335,9 +335,9 @@ class DomainModelTrainer:
         # 8. Format results to match EvaluationResults exactly
 
         # Main metrics (on masked/missing data - what we're evaluating)
-        total_loss = missing_log_losses.get('total', 0.0)
         rating_loss = missing_log_losses.get('ratings', 0.0)
         ranking_loss = missing_log_losses.get('rankings', 0.0)
+        total_loss = rating_loss + ranking_loss
 
         rating_accuracy = missing_accuracies.get('rating_accuracy')
         ranking_accuracy = missing_accuracies.get('ranking_accuracy')
