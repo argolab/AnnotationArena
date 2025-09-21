@@ -41,8 +41,12 @@ class ICLRDatasetConfig:
 
 @dataclass  
 class ICLRAnnotationDataset:
+    """Complete dataset containing both observed data and ground truth parameters."""
     embeddings: np.ndarray
+    mean_preferences: np.ndarray
     annotator_preferences: np.ndarray
+    rating_probs: np.ndarray
+    rating_thresholds: np.ndarray
     base_scores: np.ndarray
     all_ratings: np.ndarray
     all_pairwise_rankings: List[Dict]
@@ -95,7 +99,10 @@ class ICLRDataGenerator:
         logger.info("Extracting and organizing generated data...")
         
         embeddings = fit.stan_variable('embeddings')[0]
+        mean_preferences = fit.stan_variable('mean_preferences')[0]
         annotator_preferences = fit.stan_variable('annotator_preferences')[0] 
+        rating_probs = fit.stan_variable('rating_probs')[0]
+        rating_thresholds = fit.stan_variable('rating_thresholds')[0]
         base_scores = fit.stan_variable('base_scores')[0]
         all_ratings = fit.stan_variable('all_rating_values')[0]
         
@@ -166,9 +173,10 @@ class ICLRDataGenerator:
         logger.info(f"Dataset statistics: {stats}")
         
         return ICLRAnnotationDataset(
-            embeddings=embeddings, annotator_preferences=annotator_preferences,
-            base_scores=base_scores, all_ratings=all_ratings,
-            all_pairwise_rankings=all_pairwise_ranking_list,
+            embeddings=embeddings, mean_preferences=mean_preferences,
+            annotator_preferences=annotator_preferences, rating_probs=rating_probs,
+            rating_thresholds=rating_thresholds, base_scores=base_scores, 
+            all_ratings=all_ratings, all_pairwise_rankings=all_pairwise_ranking_list,
             observed_ratings=train_ratings, missing_ratings=test_ratings,
             observed_pairwise_rankings=train_pairwise_rankings, 
             missing_pairwise_rankings=test_pairwise_rankings,
@@ -179,14 +187,18 @@ class ICLRDataGenerator:
         """Save dataset to JSON files."""
         output_dir.mkdir(parents=True, exist_ok=True)
         
-        ground_truth = {
+        # Save ground truth parameters
+        ground_truth_data = {
             'embeddings': dataset.embeddings.tolist(),
+            'mean_preferences': dataset.mean_preferences.tolist(),
             'annotator_preferences': dataset.annotator_preferences.tolist(),
+            'rating_probs': dataset.rating_probs.tolist(),
+            'rating_thresholds': dataset.rating_thresholds.tolist(),
             'base_scores': dataset.base_scores.tolist()
         }
         
         with open(output_dir / f"{name}_ground_truth.json", 'w') as f:
-            json.dump(ground_truth, f, indent=2)
+            json.dump(ground_truth_data, f, indent=2)
         
         # Train data has both ratings and pairwise rankings
         train_data = {
