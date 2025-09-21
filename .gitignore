@@ -229,9 +229,26 @@ imputer/legacy
 # Ranking Ignore
 imputer/ranking/domain_results
 imputer/ranking/generated_data
+imputer/ranking/generated_data/
 imputer/ranking/models/domain_model
 imputer/ranking/models/complete_data_generator
+imputer/ranking/models/iclr_data_generation
 imputer/ranking/outputs
+imputer/ranking/experiments/simple_test
+imputer/ranking/experiments/simple_test/
+imputer/ranking/test_*
+imputer/ranking/test_complete_ground_truth
+imputer/ranking/test_correct_architecture
+imputer/ranking/test_final_architecture
+imputer/ranking/*_ground_truth.json
+imputer/ranking/*_train.json
+imputer/ranking/*_test.json
+imputer/ranking/*_stats.json
+imputer/ranking/simple_check_results.json
+imputer/ranking/simple_stan_check.log
+imputer/ranking/models/*.exe
+imputer/ranking/models/*.o
+imputer/ranking/models/*.hpp
 
 **/.DS_Store 
 
