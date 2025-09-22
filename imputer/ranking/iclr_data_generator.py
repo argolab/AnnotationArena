@@ -228,33 +228,33 @@ def main():
     logging.basicConfig(level=logging.INFO)
     
     # Use centralized configuration
-    from config import ExperimentConfig
+    from experiment_config import ExperimentConfig
     experiment_config = ExperimentConfig()
     
-    # Convert to ICLRDatasetConfig using first instance
-    instance_config = experiment_config.instances[0]
+    # Convert to ICLRDatasetConfig using data config
+    data_config = experiment_config.data_config
     iclr_config = ICLRDatasetConfig(
-        K=instance_config.K,
-        I=instance_config.I,
-        J=instance_config.J,
-        D=instance_config.D,
-        C=instance_config.C,
-        max_pairs_per_tied_group=instance_config.max_pairs_per_tied_group,
-        min_group_size=instance_config.min_group_size,
-        max_group_size=instance_config.max_group_size,
-        train_fraction=experiment_config.train_fraction,
-        test_fraction=experiment_config.test_fraction,
-        sigma_annotator=instance_config.sigma_annotator,
-        sigma_measurement=instance_config.sigma_measurement,
-        alpha_dirichlet=instance_config.alpha_dirichlet,
-        temperature=instance_config.temperature
+        K=data_config.K,
+        I=data_config.I,
+        J=data_config.J,
+        D=data_config.D,
+        C=data_config.C,
+        max_pairs_per_tied_group=data_config.max_pairs_per_tied_group,
+        min_group_size=data_config.min_group_size,
+        max_group_size=data_config.max_group_size,
+        train_fraction=data_config.train_test_split,
+        test_fraction=1.0 - data_config.train_test_split,
+        sigma_annotator=data_config.sigma_annotator,
+        sigma_measurement=data_config.sigma_measurement,
+        alpha_dirichlet=data_config.alpha_dirichlet,
+        temperature=data_config.temperature
     )
     
     generator = ICLRDataGenerator()
     dataset = generator.generate_dataset(iclr_config, seed=12345)
     
     # Save to proper subfolder structure
-    output_dir = experiment_config.get_instance_data_dir(0)
+    output_dir = Path("generated_data") / "tiny_test"
     generator.save_dataset(dataset, output_dir, "iclr_complete")
     
     # Print some statistics
