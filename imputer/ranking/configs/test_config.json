@@ -1,7 +1,7 @@
 {
   "data_config": {
-    "num_instances": 2,
-    "train_test_split": 0.5,
+    "num_instances": 5,
+    "train_test_split": 0.8,
     "K": 30,
     "I": 7,
     "J": 5,
@@ -19,11 +19,11 @@
     "rankings_per_annotator_attribute": 10
   },
   "model_config": {
-    "encoder_layers": 4,
-    "attention_heads": 8,
-    "embedding_dim": 64,
-    "dropout": 0.3,
-    "embedding_type": "pairwise",
+    "encoder_layers": 2,
+    "attention_heads": 4,
+    "embedding_dim": 256,
+    "dropout": 0.1,
+    "embedding_type": "fully_random",
     "max_rank_size": 2
   },
   "pretraining_config": {
@@ -38,7 +38,7 @@
     ]
   },
   "finetuning_config": {
-    "finetuning_steps": 70,
+    "finetuning_steps": 50,
     "batch_size": 32,
     "learning_rate": 1e-3,
     "train_heldout_split": 0.8,

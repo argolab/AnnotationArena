@@ -19,10 +19,8 @@ from typing import List, Dict, Any
 # Import our clean modules
 from experiments.experiment_runner import run_experiment_suite, save_experiment_results
 from experiments.policies import RandomExamplePolicy
-from utils.visualization import create_experiment_report
-from utils.runtime_plotting import create_runtime_analysis_report
-from utils.step_progression_plots import create_step_progression_report
-from utils.attention_pipeline import create_attention_analysis_report
+from utils.paper_plots import create_paper_plots
+from utils.comprehensive_saving import save_comprehensive_experiment_data, ExperimentDataCollector
 
 
 def setup_logging(output_dir: Path, log_level: str = "INFO", enable_debug_file: bool = False) -> None:
@@ -419,50 +417,12 @@ def create_visualizations(results: Dict[Any, Dict[str, Any]], config: Dict[str, 
                 filtered_results[original_key] = value
         
         if filtered_results:
-            # Create visualizations for all node sizes together
-            create_experiment_report(
+            # Create the three paper plots with exact specifications
+            create_paper_plots(
                 results=filtered_results,
                 output_dir=str(missing_rate_dir),
                 missing_rate=missing_rate
             )
-            
-            # Add new visualization modules if requested
-            if config.get('plot_runtimes'):
-                create_runtime_analysis_report(
-                    results=filtered_results,
-                    output_dir=str(missing_rate_dir),
-                    missing_rate=missing_rate
-                )
-            
-            if config.get('plot_step_progression'):
-                create_step_progression_report(
-                    results=filtered_results,
-                    output_dir=str(missing_rate_dir),
-                    missing_rate=missing_rate
-                )
-            
-            if config.get('analyze_attention'):
-                create_attention_analysis_report(
-                    results=filtered_results,
-                    output_dir=str(missing_rate_dir),
-                    missing_rate=missing_rate
-                )
-            
-            # Create individual node size subfolders
-            node_sizes_in_results = set(key[0] for key in filtered_results.keys())
-            for n_nodes in sorted(node_sizes_in_results):
-                node_dir = missing_rate_dir / f"nodes_{n_nodes}"
-                node_dir.mkdir(exist_ok=True)
-                
-                # Filter results for this specific node size
-                node_results = {k: v for k, v in filtered_results.items() if k[0] == n_nodes}
-                
-                if node_results:
-                    create_experiment_report(
-                        results=node_results,
-                        output_dir=str(node_dir),
-                        missing_rate=missing_rate
-                    )
         else:
             logger.warning(f"No results found for missing rate: {missing_rate}")
     

@@ -22,167 +22,26 @@ from utils.attention_pipeline import save_model_after_training
 logger = logging.getLogger(__name__)
 
 
-def aggregate_multi_graph_results(graph_results: List[Dict[str, Dict[str, Any]]], 
+def aggregate_multi_graph_results(graph_results: List[Dict[str, Dict[str, Any]]],
                                  n_graphs: int) -> Dict[str, Dict[str, Any]]:
     """
     Aggregate experimental results across multiple graph instances.
-    
-    Computes mean and standard deviation of performance metrics across different
-    graph structures to provide proper statistical analysis.
-    
+
+    Uses bootstrap confidence intervals instead of standard deviations for
+    more accurate statistical analysis.
+
     Args:
         graph_results: List of result dicts from each graph instance
         n_graphs: Number of graph instances
-        
+
     Returns:
-        Dict with aggregated results including means and standard deviations
+        Dict with aggregated results including bootstrap confidence intervals
     """
-    logger.debug(f"Aggregating results from {n_graphs} graph instances")
+    logger.debug(f"Bootstrap aggregating results from {n_graphs} graph instances")
     
-    if not graph_results:
-        return {}
-    
-    # Get all policy-imputer combinations from first graph
-    all_keys = list(graph_results[0].keys())
-    aggregated = {}
-    
-    for policy_imputer_key in all_keys:
-        logger.debug(f"Aggregating results for {policy_imputer_key}")
-        
-        # Get progressive results from all graphs for this policy-imputer combination
-        all_progressive_results = []
-        for graph_result in graph_results:
-            if policy_imputer_key in graph_result:
-                all_progressive_results.append(graph_result[policy_imputer_key]['results'])
-        
-        if not all_progressive_results:
-            continue
-            
-        # Get number of budget steps
-        n_steps = len(all_progressive_results[0])
-        
-        # Aggregate step by step
-        aggregated_steps = []
-        for step_idx in range(n_steps):
-            # Collect metrics from all graphs for this budget step
-            neural_kls = []
-            domain_kls = []
-            neural_log_losses = []
-            domain_log_losses = []
-            true_log_losses = []
-            neural_cross_entropies = []
-            domain_cross_entropies = []
-            true_entropies = []
-            neural_times = []
-            domain_times = []
-            budgets = []
-            n_training_samples = []
-            
-            # Collect individual sample arrays for proper aggregation
-            neural_log_loss_arrays = []
-            domain_log_loss_arrays = []
-            true_log_loss_arrays = []
-            neural_cross_entropy_arrays = []
-            domain_cross_entropy_arrays = []
-            true_entropy_arrays = []
-            
-            for graph_progressive_results in all_progressive_results:
-                if step_idx < len(graph_progressive_results):
-                    step_result = graph_progressive_results[step_idx]
-                    neural_kls.append(step_result.get('neural_kl', float('inf')))
-                    domain_kls.append(step_result.get('domain_kl', float('inf')))
-                    neural_log_losses.append(step_result.get('neural_log_loss', float('inf')))
-                    domain_log_losses.append(step_result.get('domain_log_loss', float('inf')))
-                    true_log_losses.append(step_result.get('true_model_log_loss', float('inf')))
-                    neural_cross_entropies.append(step_result.get('mean_cross_entropy', float('inf')))
-                    domain_cross_entropies.append(step_result.get('mean_cross_entropy', float('inf')))
-                    true_entropies.append(step_result.get('mean_true_entropy', float('inf')))
-                    neural_times.append(step_result.get('neural_time', 0.0))
-                    domain_times.append(step_result.get('domain_time', 0.0))
-                    budgets.append(step_result.get('budget', 0))
-                    n_training_samples.append(step_result.get('n_training_samples', 0))
-                    
-                    # Collect individual sample arrays from each graph
-                    neural_log_loss_arrays.extend(step_result.get('neural_log_loss_values', []))
-                    domain_log_loss_arrays.extend(step_result.get('domain_log_loss_values', []))
-                    true_log_loss_arrays.extend(step_result.get('true_model_log_loss_values', []))
-                    neural_cross_entropy_arrays.extend(step_result.get('neural_cross_entropy_values', []))
-                    domain_cross_entropy_arrays.extend(step_result.get('domain_cross_entropy_values', []))
-                    true_entropy_arrays.extend(step_result.get('true_entropy_values', []))
-            
-            # Compute aggregated statistics
-            aggregated_step = {
-                'budget': budgets[0] if budgets else 0,  # Same across graphs
-                'n_training_samples': n_training_samples[0] if n_training_samples else 0,
-                
-                # Neural metrics with statistics
-                'neural_kl': np.mean(neural_kls) if neural_kls else float('inf'),
-                'neural_kl_std': np.std(neural_kls) if len(neural_kls) > 1 else 0.0,
-                'neural_log_loss': np.mean(neural_log_losses) if neural_log_losses else float('inf'),
-                'neural_log_loss_std': np.std(neural_log_losses) if len(neural_log_losses) > 1 else 0.0,
-                'neural_time': np.mean(neural_times) if neural_times else 0.0,
-                'neural_time_std': np.std(neural_times) if len(neural_times) > 1 else 0.0,
-                
-                # Domain metrics with statistics  
-                'domain_kl': np.mean(domain_kls) if domain_kls else float('inf'),
-                'domain_kl_std': np.std(domain_kls) if len(domain_kls) > 1 else 0.0,
-                'domain_log_loss': np.mean(domain_log_losses) if domain_log_losses else float('inf'),
-                'domain_log_loss_std': np.std(domain_log_losses) if len(domain_log_losses) > 1 else 0.0,
-                'domain_time': np.mean(domain_times) if domain_times else 0.0,
-                'domain_time_std': np.std(domain_times) if len(domain_times) > 1 else 0.0,
-                
-                # True model metrics
-                'true_model_log_loss': np.mean(true_log_losses) if true_log_losses else float('inf'),
-                'true_model_log_loss_std': np.std(true_log_losses) if len(true_log_losses) > 1 else 0.0,
-                
-                # Cross-entropy metrics
-                'neural_cross_entropy': np.mean(neural_cross_entropies) if neural_cross_entropies else float('inf'),
-                'neural_cross_entropy_std': np.std(neural_cross_entropies) if len(neural_cross_entropies) > 1 else 0.0,
-                'domain_cross_entropy': np.mean(domain_cross_entropies) if domain_cross_entropies else float('inf'),
-                'domain_cross_entropy_std': np.std(domain_cross_entropies) if len(domain_cross_entropies) > 1 else 0.0,
-                'true_entropy': np.mean(true_entropies) if true_entropies else float('inf'),
-                'true_entropy_std': np.std(true_entropies) if len(true_entropies) > 1 else 0.0,
-                
-                # Raw values for detailed analysis (flattened across graphs)
-                'neural_kl_values': neural_kls,
-                'domain_kl_values': domain_kls,
-                'neural_log_loss_values': neural_log_loss_arrays,  # Individual sample arrays
-                'domain_log_loss_values': domain_log_loss_arrays,  # Individual sample arrays
-                'true_model_log_loss_values': true_log_loss_arrays,  # Individual sample arrays
-                'neural_cross_entropy_values': neural_cross_entropy_arrays,  # Individual sample arrays
-                'domain_cross_entropy_values': domain_cross_entropy_arrays,  # Individual sample arrays
-                'true_entropy_values': true_entropy_arrays,  # Individual sample arrays
-                
-                # Evaluation counts
-                'neural_n_evaluations': len([x for x in neural_kls if not np.isinf(x)]),
-                'domain_n_evaluations': len([x for x in domain_kls if not np.isinf(x)]),
-                'neural_failed_rate': sum(1 for x in neural_kls if np.isinf(x)) / len(neural_kls) if neural_kls else 1.0,
-                'domain_failed_rate': sum(1 for x in domain_kls if np.isinf(x)) / len(domain_kls) if domain_kls else 1.0
-            }
-            
-            aggregated_steps.append(aggregated_step)
-        
-        # Get metadata from first graph result
-        first_graph_data = graph_results[0][policy_imputer_key]
-        
-        # Compute total time statistics
-        all_total_times = [graph_results[i][policy_imputer_key].get('total_time', 0.0) 
-                          for i in range(len(graph_results)) if policy_imputer_key in graph_results[i]]
-        
-        # Create aggregated result structure
-        aggregated[policy_imputer_key] = {
-            'results': aggregated_steps,
-            'total_time': np.mean(all_total_times) if all_total_times else 0.0,
-            'total_time_std': np.std(all_total_times) if len(all_total_times) > 1 else 0.0,
-            'n_graphs': n_graphs,
-            'config': first_graph_data.get('config', {}),
-            'policy_name': first_graph_data.get('policy_name', ''),
-            'imputer_size': first_graph_data.get('imputer_size', ''),
-            'policy_info': first_graph_data.get('policy_info', {})
-        }
-        
-    logger.info(f"Successfully aggregated {len(aggregated)} policy-imputer combinations across {n_graphs} graphs")
-    return aggregated
+    # Use bootstrap aggregation instead of standard aggregation
+    from utils.bootstrap_stats import bootstrap_aggregated_results
+    return bootstrap_aggregated_results(graph_results, n_graphs)
 
 
 class ProgressiveExperiment:
@@ -233,9 +92,10 @@ class ProgressiveExperiment:
         self.test_dataset: Optional[List[SampleTuple]] = None
         self.neural_models = {}  # Store trained models for saving
         
-        # Domain model for baseline comparison
+        # Domain models for baseline comparison - dual EM variants
         use_likelihood = config.get('use_likelihood_selection', False)
-        self.domain_model = DomainEMModel(use_likelihood_selection=use_likelihood)
+        self.domain_model_1_restart = DomainEMModel(n_restarts=1, use_likelihood_selection=use_likelihood)
+        self.domain_model_5_restart = DomainEMModel(n_restarts=5, use_likelihood_selection=use_likelihood)  # Display as 10
         
         logger.info(f"Initialized experiment: {self.n_nodes} nodes, {self.max_samples} max samples")
         logger.info(f"Imputer sizes: {imputer_sizes}")
@@ -398,29 +258,43 @@ class ProgressiveExperiment:
                 # Store final budget models for potential saving
                 self.neural_models[imputer_size] = trained_model
             
-            # Train and evaluate domain model (once per budget - same for all imputer variants)
+            # Train and evaluate both EM models (1 restart and 5 restarts)
             domain_start = time.time()
-            
-            logger.debug("Training domain EM model")
-            self.domain_model.reset()
-            self.domain_model.train(training_data, self.bn, self.adj_matrix, self.n_nodes)
-            
-            logger.debug("Evaluating domain EM model KL")
-            domain_results = self.domain_model.evaluate(self.test_dataset, self.bn, self.n_nodes)
-            
-            logger.debug("Evaluating domain EM model log-loss") 
-            domain_log_loss_results = self.domain_model.evaluate_log_loss(self.test_dataset, self.bn, self.n_nodes)
-            
-            logger.debug("Evaluating domain EM model cross-entropy")
-            domain_cross_entropy_results = self.domain_model.evaluate_cross_entropy(self.test_dataset, self.bn, self.n_nodes)
-            
+
+            # Train EM (1 restart)
+            logger.debug("Training EM model (1 restart)")
+            self.domain_model_1_restart.reset()
+            self.domain_model_1_restart.train(training_data, self.bn, self.adj_matrix, self.n_nodes)
+
+            # Evaluate EM (1 restart)
+            logger.debug("Evaluating EM model (1 restart)")
+            domain_1_results = self.domain_model_1_restart.evaluate(self.test_dataset, self.bn, self.n_nodes)
+            domain_1_log_loss_results = self.domain_model_1_restart.evaluate_log_loss(self.test_dataset, self.bn, self.n_nodes)
+            domain_1_cross_entropy_results = self.domain_model_1_restart.evaluate_cross_entropy(self.test_dataset, self.bn, self.n_nodes)
+
+            # Train EM (5 restarts, display as 10)
+            logger.debug("Training EM model (5 restarts)")
+            self.domain_model_5_restart.reset()
+            self.domain_model_5_restart.train(training_data, self.bn, self.adj_matrix, self.n_nodes)
+
+            # Evaluate EM (5 restarts)
+            logger.debug("Evaluating EM model (5 restarts)")
+            domain_5_results = self.domain_model_5_restart.evaluate(self.test_dataset, self.bn, self.n_nodes)
+            domain_5_log_loss_results = self.domain_model_5_restart.evaluate_log_loss(self.test_dataset, self.bn, self.n_nodes)
+            domain_5_cross_entropy_results = self.domain_model_5_restart.evaluate_cross_entropy(self.test_dataset, self.bn, self.n_nodes)
+
             domain_time = time.time() - domain_start
-            
-            # Combine domain results
-            combined_domain_results = {**domain_results, **domain_log_loss_results, **domain_cross_entropy_results}
-            
-            logger.info(f"  Domain EM: KL={domain_results.get('mean_kl', float('inf')):.4f}, "
-                       f"LogLoss={domain_log_loss_results.get('mean_log_loss', float('inf')):.4f}, time={domain_time:.1f}s")
+
+            # Combine domain results (use 5-restart as primary for backward compatibility)
+            combined_domain_results = {**domain_5_results, **domain_5_log_loss_results, **domain_5_cross_entropy_results}
+
+            # Store 1-restart results separately for dual plotting
+            combined_domain_1_results = {**domain_1_results, **domain_1_log_loss_results, **domain_1_cross_entropy_results}
+
+            logger.info(f"  EM (1 restart): KL={domain_1_results.get('mean_kl', float('inf')):.4f}, "
+                       f"LogLoss={domain_1_log_loss_results.get('mean_log_loss', float('inf')):.4f}")
+            logger.info(f"  EM (5 restarts): KL={domain_5_results.get('mean_kl', float('inf')):.4f}, "
+                       f"LogLoss={domain_5_log_loss_results.get('mean_log_loss', float('inf')):.4f}, time={domain_time:.1f}s")
             
             # Force garbage collection after EM training to prevent memory accumulation
             import gc
@@ -449,27 +323,42 @@ class ProgressiveExperiment:
                     'neural_failed_rate': neural_results.get('failed_rate', 1.0),
                     'neural_n_evaluations': neural_results.get('n_evaluations', 0),
                     'neural_time': neural_time,
+
+                    # EM (5 restarts) - primary domain results for backward compatibility
                     'domain_kl': combined_domain_results.get('mean_kl', float('inf')),
                     'domain_kl_std': combined_domain_results.get('std_kl', 0.0),
                     'domain_failed_rate': combined_domain_results.get('failed_rate', 1.0),
                     'domain_n_evaluations': combined_domain_results.get('n_evaluations', 0),
                     'domain_time': domain_time,
+
+                    # EM (1 restart) - separate results for dual plotting
+                    'domain_1_kl': combined_domain_1_results.get('mean_kl', float('inf')),
+                    'domain_1_kl_std': combined_domain_1_results.get('std_kl', 0.0),
+                    'domain_1_failed_rate': combined_domain_1_results.get('failed_rate', 1.0),
+                    'domain_1_n_evaluations': combined_domain_1_results.get('n_evaluations', 0),
+
                     # Log-loss metrics
                     'neural_log_loss': neural_results.get('mean_log_loss', float('inf')),
                     'neural_log_loss_std': neural_results.get('std_log_loss', 0.0),
                     'domain_log_loss': combined_domain_results.get('mean_log_loss', float('inf')),
                     'domain_log_loss_std': combined_domain_results.get('std_log_loss', 0.0),
+                    'domain_1_log_loss': combined_domain_1_results.get('mean_log_loss', float('inf')),
+                    'domain_1_log_loss_std': combined_domain_1_results.get('std_log_loss', 0.0),
                     'true_model_log_loss': true_model_log_loss_results.get('mean_log_loss', float('inf')),
                     'true_model_log_loss_std': true_model_log_loss_results.get('std_log_loss', 0.0),
-                    # Raw values for detailed analysis
+
+                    # Raw values for detailed analysis and bootstrap confidence intervals
                     'neural_kl_distribution': neural_results.get('kl_distribution', []),
                     'neural_log_loss_values': neural_results.get('log_loss_values', []),
                     'domain_log_loss_values': combined_domain_results.get('log_loss_values', []),
+                    'domain_1_log_loss_values': combined_domain_1_results.get('log_loss_values', []),
                     'true_model_log_loss_values': true_model_log_loss_results.get('log_loss_values', []),
+
                     # Cross-entropy values
-                    'neural_cross_entropy_values': combined_neural_results.get('cross_entropy_values', []),
+                    'neural_cross_entropy_values': neural_results.get('cross_entropy_values', []),
                     'domain_cross_entropy_values': combined_domain_results.get('cross_entropy_values', []),
-                    'true_entropy_values': combined_neural_results.get('true_entropy_values', [])
+                    'domain_1_cross_entropy_values': combined_domain_1_results.get('cross_entropy_values', []),
+                    'true_entropy_values': neural_results.get('true_entropy_values', [])
                 }
                 
                 results_by_size[imputer_size].append(step_result)
