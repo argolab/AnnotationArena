@@ -259,3 +259,4 @@ imputer/PAPER/*.tex
 imputer/ranking/OUTPUT
 imputer/ranking/experiment_results
 imputer/ranking/plots
+**/*.tex
