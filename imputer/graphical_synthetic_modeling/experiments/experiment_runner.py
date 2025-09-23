@@ -95,7 +95,7 @@ class ProgressiveExperiment:
         # Domain models for baseline comparison - dual EM variants
         use_likelihood = config.get('use_likelihood_selection', False)
         self.domain_model_1_restart = DomainEMModel(n_restarts=1, use_likelihood_selection=use_likelihood)
-        self.domain_model_5_restart = DomainEMModel(n_restarts=5, use_likelihood_selection=use_likelihood)  # Display as 10
+        self.domain_model_5_restart = DomainEMModel(n_restarts=3, use_likelihood_selection=use_likelihood)  # Display as 10
         
         logger.info(f"Initialized experiment: {self.n_nodes} nodes, {self.max_samples} max samples")
         logger.info(f"Imputer sizes: {imputer_sizes}")

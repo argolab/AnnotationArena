@@ -122,8 +122,8 @@ def train_epoch(model: GraphImputer, train_loader: DataLoader,
         optimizer.step()
         
         # Clear CUDA cache periodically for memory efficiency
-        if torch.cuda.is_available() and batch_idx % 10 == 0:
-            torch.cuda.empty_cache()
+        # if torch.cuda.is_available() and batch_idx % 10 == 0:
+        #     torch.cuda.empty_cache()
         
         total_loss += loss.item()
         n_batches += 1
