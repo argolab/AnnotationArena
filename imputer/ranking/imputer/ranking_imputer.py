@@ -18,10 +18,10 @@ import logging
 from tqdm import tqdm
 
 # New modular components (use relative imports only)
-from .embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider, FullyRandomizedEmbeddingProvider
-from .transformer import TransformerBlock, NormLayer as _NormLayer
-from .data import RankingData, DataConverter
-from .trainer import ImputerTrainer
+from embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider, FullyRandomizedEmbeddingProvider, AtomCompositonalEmbeddingProvider
+from transformer import TransformerBlock, NormLayer as _NormLayer
+from data import RankingData, DataConverter
+from trainer import ImputerTrainer
 
 # Export for backward compatibility with experiment runner
 __all__ = ['MultiVariableImputer', 'DataConverter', 'ImputerTrainer', 'RankingData']
@@ -46,7 +46,7 @@ class MultiVariableImputer(nn.Module):
                  attention_heads=4,
                  embedding_dim=64,
                  dropout=0.1,
-                 embedding_type="pairwise",
+                 embedding_type="atom",
                  device="cpu"):
         super().__init__()
         self.device = torch.device(device)
@@ -74,6 +74,10 @@ class MultiVariableImputer(nn.Module):
             )
         elif embedding_type == "fully_random":
             self.embedding_provider = FullyRandomizedEmbeddingProvider(
+                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
+            )
+        elif embedding_type == "atom":
+            self.embedding_provider = AtomCompositonalEmbeddingProvider(
                 num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
             )
         else:

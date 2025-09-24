@@ -5,12 +5,14 @@ from typing import Dict, Any, List
 
 import torch
 
-from .data import DataConverter, RankingData
-from .ranking_imputer import MultiVariableImputer
-from .trainer import ImputerTrainer
-from .eval import EvaluationEngine
-from ..stan.pipeline.bundle import GroundTruthBundle
-from ..stan.pipeline.io import new_run_dir, save_metrics, save_predictives
+from data import DataConverter, RankingData
+from ranking_imputer import MultiVariableImputer
+from trainer import ImputerTrainer
+from eval import EvaluationEngine
+import sys
+sys.path.insert(0, "..")
+from stan.pipeline.bundle import GroundTruthBundle
+from stan.pipeline.io import new_run_dir, save_metrics, save_predictives
 
 
 def _sizes_from_configs(configs: Dict[str, Any]) -> Dict[str, int]:

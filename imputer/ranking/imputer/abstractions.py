@@ -1,7 +1,7 @@
 from typing import List, Optional, Tuple
 import torch
 import torch.nn as nn
-from .data import RankingData
+from data import RankingData
 
 
 class EmbeddingProviderBase(nn.Module):
@@ -52,7 +52,7 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         D = self.embedding_dim
         device = self._ensure_device()
 
-        feature_embeddings = torch.zeros(1, V, D + 3 + 1 + max(self.max_rank_size, self.num_likert_classes), device=device)
+        feature_embeddings = torch.zeros(1, V, D, device=device)
 
         for i, var in enumerate(variables):
             # Determine if variable is masked (default to False if None)

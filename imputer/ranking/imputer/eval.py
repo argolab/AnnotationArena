@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from scipy.special import softmax
 import copy
 
-from .data import RankingData
-from .losses import DefaultLossStrategy, adapt_batched_logits_to_predictions
+from data import RankingData
+from losses import DefaultLossStrategy, adapt_batched_logits_to_predictions
 
 
 @dataclass

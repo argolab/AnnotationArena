@@ -5,8 +5,8 @@ import torch.optim as optim
 import copy
 import random
 
-from .losses import DefaultLossStrategy, adapt_batched_logits_to_predictions, TopLayerPredictionResult
-from .data import RankingData
+from losses import DefaultLossStrategy, adapt_batched_logits_to_predictions, TopLayerPredictionResult
+from data import RankingData
 
 
 class EvaluationCallback:
@@ -190,7 +190,7 @@ class ImputerTrainer:
 
         losses = self.loss_strategy.compute(predictions, references)
 
-        # Embedding anchor regularization: keep embeddings close to their random initialization
+        '''# Embedding anchor regularization: keep embeddings close to their random initialization
         reg_scaled = torch.tensor(0.0, device=self.device)
         if self.embedding_anchor_reg > 0.0 and self._embedding_initial_params:
             reg = torch.tensor(0.0, device=self.device)
@@ -204,14 +204,14 @@ class ImputerTrainer:
             losses['embedding_reg'] = float(reg_scaled.detach().item())
             # Ensure total_loss reflects the regularizer for logging
             if 'total_loss' in losses:
-                losses['total_loss'] = float(losses['total_loss'] + losses['embedding_reg'])
+                losses['total_loss'] = float(losses['total_loss'] + losses['embedding_reg'])'''
 
         # Create total loss tensor for backprop
         total_loss_tensor = losses.get('_total_loss_tensor', None)
         if total_loss_tensor is None:
             total_loss_tensor = (rating_logits.sum() * 0.0) + (ranking_logits.sum() * 0.0) + torch.tensor(losses['total_loss'], device=self.device)
         # Add regularization term to tensor used for backprop
-        total_loss_tensor = total_loss_tensor + reg_scaled
+        total_loss_tensor = total_loss_tensor #+ reg_scaled
 
         # Store tensor for backward pass
         losses['_total_loss_tensor'] = total_loss_tensor

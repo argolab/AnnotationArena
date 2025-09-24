@@ -3,8 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Tuple
 
-from .abstractions import RankingEmbeddingProviderBase
-from .data import RankingData
+from abstractions import RankingEmbeddingProviderBase
+from data import RankingData
 
 import logging
 
@@ -438,26 +438,23 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         device: str,
     ):
         super().__init__(
-            num_attributes=num_attributes,
-            num_annotators=num_annotators,
-            num_items=num_items,
-            embedding_dim=embedding_dim,
             num_likert_classes=num_likert_classes,
             max_rank_size=max_rank_size,
-            device=device,
+            embedding_dim=embedding_dim
         )
-        self.pairwise_relation = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
+        self.pairwise_relation = nn.Parameter(torch.randn(embedding_dim - 1 - max(num_likert_classes, max_rank_size), embedding_dim - 1 - max(num_likert_classes, max_rank_size)))
 
         self.num_attributes = num_attributes
         self.num_annotators = num_annotators
         self.num_items = num_items
         self.device = device
+        self.internal_dimension = embedding_dim - 3 - 1 - max(num_likert_classes, max_rank_size)
 
         # Embeddings for each component (learned parameters)
-        self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, embedding_dim))
-        self.annotator_embedding_learnable = nn.Parameter(torch.randn(num_annotators, embedding_dim // 2))
-        self.annotator_embedding_random = torch.randn(num_annotators, embedding_dim // 2)
-        self.item_embedding = torch.randn(num_annotators, embedding_dim)
+        self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, self.internal_dimension))
+        self.annotator_embedding_learnable = nn.Parameter(torch.randn(num_annotators, self.internal_dimension // 2))
+        self.annotator_embedding_random = torch.randn(num_annotators, self.internal_dimension - self.internal_dimension // 2)
+        self.item_embedding = torch.randn(num_items, self.internal_dimension)
 
         torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.annotator_embedding_learnable, mode='fan_out', nonlinearity='relu')
@@ -506,6 +503,6 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         self.partial_reset_embedding()
 
     def partial_reset_embedding(self):
-        self.annotator_embedding_random = torch.randn(self.num_annotators, self.embedding_dim // 2)
-        self.item_embedding = torch.randn(self.num_annotators, self.embedding_dim)
+        self.annotator_embedding_random = torch.randn(self.num_annotators, self.internal_dimension - self.internal_dimension // 2)
+        self.item_embedding = torch.randn(self.num_items, self.internal_dimension)
 

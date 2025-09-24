@@ -19,7 +19,7 @@ from typing import Dict, List, Optional
 from dataclasses import dataclass
 import torch
 import torch.nn as nn
-from .data import RankingData
+from data import RankingData
 
 
 class PlackettLuceLoss(nn.Module):
