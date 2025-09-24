@@ -137,6 +137,92 @@ python stan/scripts/run_full_experiment.py --use-test-only
 - `inference/`: MCMC inference results  
 - `evaluation/`: Evaluation results
 
+## Drop-in Commands by Scale
+
+### 🧪 **Micro Test** (30 seconds)
+Quick validation that everything works:
+```bash
+python stan/scripts/run_full_experiment.py --K-train 2 --K-test 1 --I 2 --J 3 --D 4 --C 3 --chains 1 --iter-warmup 25 --iter-sampling 25
+```
+
+### 🔬 **Small Experiment** (2-3 minutes)
+Development and debugging:
+```bash
+python stan/scripts/run_full_experiment.py --K-train 3 --K-test 2 --I 3 --J 4 --D 6 --C 5 --chains 2 --iter-warmup 100 --iter-sampling 100
+```
+
+### 📊 **Medium Experiment** (10-15 minutes)
+Standard research experiments:
+```bash
+python stan/scripts/run_full_experiment.py --K-train 5 --K-test 3 --I 5 --J 6 --D 8 --C 5 --chains 4 --iter-warmup 500 --iter-sampling 500
+```
+
+### 🚀 **Large Experiment** (30-60 minutes)
+Production-quality results:
+```bash
+python stan/scripts/run_full_experiment.py --K-train 10 --K-test 5 --I 5 --J 9 --D 10 --C 5 --chains 4 --iter-warmup 1000 --iter-sampling 1000
+```
+
+### 🏭 **Production Experiment** (2-4 hours)
+Full-scale evaluation:
+```bash
+python stan/scripts/run_full_experiment.py --K-train 20 --K-test 10 --I 5 --J 9 --D 12 --C 5 --chains 4 --iter-warmup 2000 --iter-sampling 2000
+```
+
+### 📋 **Parameter Scaling Guide**
+
+| Scale | K_train | K_test | I | J | D | C | Chains | Warmup | Sampling | Runtime |
+|-------|---------|--------|---|---|---|---|--------|--------|----------|---------|
+| Micro | 2 | 1 | 2 | 3 | 4 | 3 | 1 | 25 | 25 | ~30s |
+| Small | 3 | 2 | 3 | 4 | 6 | 5 | 2 | 100 | 100 | ~3min |
+| Medium | 5 | 3 | 5 | 6 | 8 | 5 | 4 | 500 | 500 | ~15min |
+| Large | 10 | 5 | 5 | 9 | 10 | 5 | 4 | 1000 | 1000 | ~60min |
+| Production | 20 | 10 | 5 | 9 | 12 | 5 | 4 | 2000 | 2000 | ~4hrs |
+
+**Parameter Explanations:**
+- **K_train/K_test**: Number of items in training/test instances
+- **I**: Number of criteria/attributes (typically 5 for real applications)
+- **J**: Number of annotators (9 covers train/test annotator overlap scenarios)
+- **D**: Embedding dimension (scales with problem complexity)
+- **C**: Rating categories (5-point Likert scale)
+- **Chains**: MCMC chains for convergence diagnostics
+- **Warmup/Sampling**: Iterations for adaptation and posterior sampling
+
+### 🔧 **Utility Commands**
+
+**Test Different Initialization Strategies:**
+```bash
+# Ground truth initialization (faster convergence)
+python stan/scripts/run_full_experiment.py --K-train 5 --K-test 3 --init-strategy ground_truth
+
+# Random initialization (more realistic)
+python stan/scripts/run_full_experiment.py --K-train 5 --K-test 3 --init-strategy random
+```
+
+**Learning Mode Ablations:**
+```bash
+# Train-only learning
+python stan/scripts/run_full_experiment.py --K-train 5 --K-test 3 --use-train-only
+
+# Test-only learning  
+python stan/scripts/run_full_experiment.py --K-train 5 --K-test 3 --use-test-only
+
+# Transductive learning (default: both train and test)
+python stan/scripts/run_full_experiment.py --K-train 5 --K-test 3
+```
+
+**Skip Stages for Development:**
+```bash
+# Skip data generation (use existing data)
+python stan/scripts/run_full_experiment.py --skip-data-gen --K-train 5 --K-test 3
+
+# Skip inference (use existing MCMC results)
+python stan/scripts/run_full_experiment.py --skip-inference --K-train 5 --K-test 3
+
+# Skip evaluation (just run data gen + inference)
+python stan/scripts/run_full_experiment.py --skip-evaluation --K-train 5 --K-test 3
+```
+
 ## Quick Start Examples
 
 ### Minimal Example
