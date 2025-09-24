@@ -84,6 +84,7 @@ def main():
             "J": datagen_config["J"],
             "D": datagen_config["D"],
             "C": datagen_config["C"],
+            "temperature": datagen_config.get("temperature", 1.0),
         }
     else:
         # Fallback to bundle stats if configs.json not found
@@ -94,6 +95,7 @@ def main():
             "J": 6,
             "D": 8,
             "C": 5,
+            "temperature": 1.0,
         }
     
     print(f"\nConfiguration:")
@@ -133,6 +135,7 @@ def main():
         print(f"\nLog-likelihood Summary:")
         print(f"  Observed ratings: {results.metrics['log_lik_ratings_obs_mean']:.3f} ± {results.metrics['log_lik_ratings_obs_std']:.3f}")
         print(f"  Observed pairwise: {results.metrics['log_lik_pairwise_obs_mean']:.3f} ± {results.metrics['log_lik_pairwise_obs_std']:.3f}")
+        print(f"  Observed pairwise accuracy: {results.metrics.get('pairwise_observed_accuracy', float('nan')):.3f}")
         print(f"  Total: {results.metrics['total_log_lik_mean']:.3f} ± {results.metrics['total_log_lik_std']:.3f}")
         
         if args.verbose:
