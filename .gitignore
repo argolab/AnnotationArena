@@ -262,3 +262,7 @@ imputer/ranking/plots
 **/*.tex
 imputer/ranking/runs/
 imputer/ranking/stan/outputs/
+
+**/*.pdf
+**/*.csv
+**/*.json

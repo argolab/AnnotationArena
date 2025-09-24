@@ -54,7 +54,7 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     
     # Output
-    parser.add_argument("--output-dir", type=str, required=True,
+    parser.add_argument("--output-dir", type=str, default="OUTPUT/generated_data",
                        help="Output directory for generated data")
     parser.add_argument("--run-name", type=str, default=None,
                        help="Custom run name (default: auto-generated)")
