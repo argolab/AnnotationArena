@@ -52,7 +52,7 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         D = self.embedding_dim
         device = self._ensure_device()
 
-        feature_embeddings = torch.zeros(1, V, D, device=device)
+        feature_embeddings = torch.zeros(1, V, D + 3 + 1 + max(self.max_rank_size, self.num_likert_classes), device=device)
 
         for i, var in enumerate(variables):
             # Determine if variable is masked (default to False if None)
