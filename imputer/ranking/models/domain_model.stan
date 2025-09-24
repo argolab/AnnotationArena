@@ -5,12 +5,11 @@
 
 data {
     // Dimensions
-    int<lower=1> K;  // number of items
-    int<lower=1> I;  // number of attributes
+    int<lower=1> K;  // number of items in this instance
+    int<lower=1> I;  // number of criteria (attributes)
     int<lower=1> J;  // number of annotators  
     int<lower=1> D;  // embedding dimension
     int<lower=1> C;  // number of rating categories
-    int<lower=2> ranking_size;  // size of ranking sets
     
     // Observed ratings
     int<lower=0> N_ratings;
@@ -20,12 +19,23 @@ data {
     array[N_ratings] int<lower=1, upper=C> rating_values;
     
     
-    // Observed rankings
-    int<lower=0> N_rankings;
-    array[N_rankings] int<lower=1, upper=I> ranking_attributes;
-    array[N_rankings] int<lower=1, upper=J> ranking_annotators;
-    array[N_rankings, ranking_size] int<lower=1, upper=K> ranking_items;
-    array[N_rankings, ranking_size] int<lower=1, upper=ranking_size> ranking_orders;
+    // Observed pairwise rankings (Bradley-Terry model)
+    int<lower=0> N_pairwise_rankings;
+    array[N_pairwise_rankings] int<lower=1, upper=I> pairwise_ranking_attributes;
+    array[N_pairwise_rankings] int<lower=1, upper=J> pairwise_ranking_annotators;
+    array[N_pairwise_rankings, 2] int<lower=1, upper=K> pairwise_ranking_items;  // [item1, item2] pairs
+    array[N_pairwise_rankings] int<lower=1, upper=2> pairwise_ranking_orders;    // 1 if item1 > item2, 2 if item2 > item1
+    
+    // Missing variables to predict (optional)
+    int<lower=0> N_missing_ratings;
+    array[N_missing_ratings] int<lower=1, upper=I> missing_rating_attributes;
+    array[N_missing_ratings] int<lower=1, upper=J> missing_rating_annotators;
+    array[N_missing_ratings] int<lower=1, upper=K> missing_rating_items;
+    
+    int<lower=0> N_missing_pairwise_rankings;
+    array[N_missing_pairwise_rankings] int<lower=1, upper=I> missing_pairwise_ranking_attributes;
+    array[N_missing_pairwise_rankings] int<lower=1, upper=J> missing_pairwise_ranking_annotators;
+    array[N_missing_pairwise_rankings, 2] int<lower=1, upper=K> missing_pairwise_ranking_items;
     
     // Hyperparameters
     real<lower=0> sigma_annotator;
@@ -33,45 +43,28 @@ data {
     real<lower=0> alpha_dirichlet;
     real<lower=0> temperature;
     
-    // Prior scales
-    // Use this as a paramters?
-    real<lower=0> sigma_embedding_prior;
-    real<lower=0> sigma_preference_prior;
 }
 
 parameters {
-    // Latent embeddings (unit norm constraint for identification)
-    matrix[K, D] embeddings_raw;
+    // Item embeddings: e_k ~ N(0, I)
+    matrix[K, D] embeddings;
     
-    // Mean preferences per attribute
+    // Mean preferences per criteria: v_i ~ N(0, I)
     matrix[I, D] mean_preferences;
     
-    // Annotator-specific preferences
+    // Annotator-specific preferences: v_ij ~ N(v_i, σ_a²I)
     matrix[I*J, D] annotator_preferences;
     
-    // Rating thresholds - first threshold fixed at 0 for identification
-    array[I*J, C-2] real rating_thresholds_increments;
+    // Rating probabilities: p_ij ~ Dir(α/C, ..., α/C)
+    array[I*J] simplex[C] rating_probs;
 }
 
 transformed parameters {
-    // Unit-normalized embeddings for identification
-    matrix[K, D] embeddings;
-    
-    // Base utility scores  
+    // Base utility scores: z_ijk = v_ij · e_k
     matrix[I*J, K] base_scores;
     
-    // Rating thresholds with -inf and +inf boundaries
+    // Rating thresholds: q_ij = Φ⁻¹(cumsum(p_ij))
     array[I*J] vector[C+1] rating_thresholds;
-    
-    // Normalize embeddings to unit norm for identification
-    for (k in 1:K) {
-        real norm = sqrt(dot_self(embeddings_raw[k]));
-        if (norm > 1e-10) {
-            embeddings[k] = embeddings_raw[k] / norm;
-        } else {
-            embeddings[k] = embeddings_raw[k];
-        }
-    }
     
     // Compute base scores: z_ij_k = v_ij · e_k  
     for (i in 1:I) {
@@ -83,16 +76,14 @@ transformed parameters {
         }
     }
     
-    // Construct ordered thresholds with identification constraints
+    // Convert probabilities to thresholds using inverse normal CDF
     for (ij in 1:(I*J)) {
         rating_thresholds[ij][1] = negative_infinity();  // -∞ for category 1
         
-        // First threshold FIXED at 0 for identification
-        rating_thresholds[ij][2] = 0.0;
-        
-        // Subsequent thresholds using positive increments
-        for (c in 3:C) {
-            rating_thresholds[ij][c] = rating_thresholds[ij][c-1] + abs(rating_thresholds_increments[ij, c-2]);
+        // Convert cumulative probabilities to thresholds
+        for (c in 2:C) {
+            real cum_prob = sum(rating_probs[ij][1:(c-1)]);
+            rating_thresholds[ij][c] = inv_Phi(cum_prob);
         }
         
         rating_thresholds[ij][C+1] = positive_infinity();  // +∞ for category C
@@ -102,14 +93,14 @@ transformed parameters {
 model {
     // ===== PRIORS =====
     
-    // Raw embeddings: e_k ~ N(0, σ_e²I) (will be normalized)
+    // Item embeddings: e_k ~ N(0, I)
     for (k in 1:K) {
-        embeddings_raw[k] ~ normal(0, sigma_embedding_prior);
+        embeddings[k] ~ normal(0, 1);
     }
     
-    // Mean preferences: v_i ~ N(0, σ_v²I) 
+    // Mean preferences: v_i ~ N(0, I) 
     for (i in 1:I) {
-        mean_preferences[i] ~ normal(0, sigma_preference_prior);
+        mean_preferences[i] ~ normal(0, 1);
     }
     
     // Annotator preferences: v_ij ~ N(v_i, σ_a²I)
@@ -120,11 +111,9 @@ model {
         }
     }
     
-    // Rating threshold increments (positive spacings)
+    // Rating probabilities: p_ij ~ Dir(α/C, ..., α/C)
     for (ij in 1:(I*J)) {
-        for (c in 1:(C-2)) {
-            rating_thresholds_increments[ij, c] ~ normal(0, 0.5);  // Moderate spacing
-        }
+        rating_probs[ij] ~ dirichlet(rep_vector(alpha_dirichlet / C, C));
     }
     
     // ===== LIKELIHOODS =====
@@ -169,23 +158,26 @@ model {
         }
     }
     
-    // 2. PAIRWISE RANKING LIKELIHOOD (Simplified for binary preferences)
-    for (n in 1:N_rankings) {
-        int i = ranking_attributes[n];
-        int j = ranking_annotators[n];
+    // 2. PAIRWISE RANKING LIKELIHOOD (Bradley-Terry model with Gumbel noise)
+    for (n in 1:N_pairwise_rankings) {
+        int i = pairwise_ranking_attributes[n];
+        int j = pairwise_ranking_annotators[n];
         int ij_idx = (i-1)*J + j;
         
-        // For pairwise: ranking_items[n] = [item1, item2], ranking_orders[n] = [1, 2] or [2, 1]
-        int item1 = ranking_items[n, 1];
-        int item2 = ranking_items[n, 2];
+        // Pairwise comparison: [item1, item2] with order 1 or 2
+        int item1 = pairwise_ranking_items[n, 1];
+        int item2 = pairwise_ranking_items[n, 2];
+        int order = pairwise_ranking_orders[n];  // 1 if item1 > item2, 2 if item2 > item1
+        
+        // Base scores scaled by temperature: z_ijk/T
         real score1 = base_scores[ij_idx, item1] / temperature;
         real score2 = base_scores[ij_idx, item2] / temperature;
         
-        // If order = [1, 2], item1 > item2, so P(item1 > item2) = sigmoid(score1 - score2)
-        // If order = [2, 1], item2 > item1, so P(item2 > item1) = sigmoid(score2 - score1)
-        if (ranking_orders[n, 1] == 1) {  // item1 ranks first
+        // Bradley-Terry likelihood: P(item1 > item2) = exp(score1) / (exp(score1) + exp(score2))
+        // This is equivalent to log_inv_logit(score1 - score2)
+        if (order == 1) {  // item1 > item2
             target += log_inv_logit(score1 - score2);
-        } else {  // item2 ranks first
+        } else {  // item2 > item1
             target += log_inv_logit(score2 - score1);
         }
     }
@@ -193,11 +185,19 @@ model {
 
 generated quantities {
     // Log-likelihood components for evaluation
-    real log_lik_ratings = 0;
-    real log_lik_rankings = 0;
+    real log_lik_ratings_obs = 0;        // Log-likelihood of observed ratings
+    real log_lik_pairwise_obs = 0;       // Log-likelihood of observed pairwise rankings
     real total_log_lik = 0;
     
-    // Compute log-likelihoods (same as in model block)
+    // Posterior predictive samples for missing variables
+    array[N_missing_ratings] int<lower=1, upper=C> missing_rating_predictions;
+    array[N_missing_pairwise_rankings] int<lower=1, upper=2> missing_pairwise_ranking_predictions;
+    
+    // Predicted distributions for missing variables (for evaluation)
+    array[N_missing_ratings] vector[C] missing_rating_probs;        // Predicted probability distribution over Likert scale
+    array[N_missing_pairwise_rankings] real missing_pairwise_logits; // Predicted Bradley-Terry logits
+    
+    // Compute observed log-likelihoods (same as in model block)
     for (n in 1:N_ratings) {
         int i = rating_attributes[n];
         int j = rating_annotators[n];
@@ -224,26 +224,99 @@ generated quantities {
         }
         
         real bin_prob = upper_prob - lower_prob;
-        log_lik_ratings += log(bin_prob + 1e-10);
+        log_lik_ratings_obs += log(bin_prob + 1e-10);
     }
     
-    for (n in 1:N_rankings) {
-        int i = ranking_attributes[n];
-        int j = ranking_annotators[n];
+    for (n in 1:N_pairwise_rankings) {
+        int i = pairwise_ranking_attributes[n];
+        int j = pairwise_ranking_annotators[n];
         int ij_idx = (i-1)*J + j;
         
-        // Same simplified pairwise logic as in model block
-        int item1 = ranking_items[n, 1];
-        int item2 = ranking_items[n, 2];
+        int item1 = pairwise_ranking_items[n, 1];
+        int item2 = pairwise_ranking_items[n, 2];
+        int order = pairwise_ranking_orders[n];
         real score1 = base_scores[ij_idx, item1] / temperature;
         real score2 = base_scores[ij_idx, item2] / temperature;
         
-        if (ranking_orders[n, 1] == 1) {  // item1 ranks first
-            log_lik_rankings += log_inv_logit(score1 - score2);
-        } else {  // item2 ranks first
-            log_lik_rankings += log_inv_logit(score2 - score1);
+        if (order == 1) {  // item1 > item2
+            log_lik_pairwise_obs += log_inv_logit(score1 - score2);
+        } else {  // item2 > item1
+            log_lik_pairwise_obs += log_inv_logit(score2 - score1);
         }
     }
     
-    total_log_lik = log_lik_ratings + log_lik_rankings;
+    total_log_lik = log_lik_ratings_obs + log_lik_pairwise_obs;
+    
+    // ===== POSTERIOR PREDICTIVE SAMPLING FOR MISSING VARIABLES =====
+    
+    // 1. Sample missing ratings and compute predicted distributions
+    for (n in 1:N_missing_ratings) {
+        int i = missing_rating_attributes[n];
+        int j = missing_rating_annotators[n];
+        int k = missing_rating_items[n];
+        int ij_idx = (i-1)*J + j;
+        
+        // Base score: z_ijk = v_ij · e_k
+        real base_score = base_scores[ij_idx, k];
+        
+        // Compute predicted probability distribution over Likert scale
+        for (c in 1:C) {
+            real upper_threshold = rating_thresholds[ij_idx][c+1];
+            real lower_threshold = rating_thresholds[ij_idx][c];
+            
+            real upper_prob, lower_prob;
+            
+            if (upper_threshold == positive_infinity()) {
+                upper_prob = 1.0;
+            } else {
+                upper_prob = Phi((upper_threshold - base_score) / sigma_measurement);
+            }
+            
+            if (lower_threshold == negative_infinity()) {
+                lower_prob = 0.0;
+            } else {
+                lower_prob = Phi((lower_threshold - base_score) / sigma_measurement);
+            }
+            
+            missing_rating_probs[n][c] = upper_prob - lower_prob;
+        }
+        
+        // Sample a rating from the predicted distribution
+        real noisy_score = base_score + normal_rng(0, sigma_measurement);
+        int rating = 1;
+        for (c in 1:C) {
+            if (noisy_score <= rating_thresholds[ij_idx][c+1]) {
+                rating = c;
+                break;
+            }
+        }
+        missing_rating_predictions[n] = rating;
+    }
+    
+    // 2. Sample missing pairwise rankings and compute predicted logits
+    for (n in 1:N_missing_pairwise_rankings) {
+        int i = missing_pairwise_ranking_attributes[n];
+        int j = missing_pairwise_ranking_annotators[n];
+        int ij_idx = (i-1)*J + j;
+        
+        int item1 = missing_pairwise_ranking_items[n, 1];
+        int item2 = missing_pairwise_ranking_items[n, 2];
+        
+        // Get base scores and apply temperature scaling: z_ijk/T
+        real score1 = base_scores[ij_idx, item1] / temperature;
+        real score2 = base_scores[ij_idx, item2] / temperature;
+        
+        // Compute predicted Bradley-Terry logit: logit(P(item1 > item2))
+        missing_pairwise_logits[n] = score1 - score2;
+        
+        // Sample ranking using Gumbel noise (same as in data generation)
+        real gumbel1 = -log(-log(uniform_rng(0, 1)));  // Gumbel noise G1
+        real gumbel2 = -log(-log(uniform_rng(0, 1)));  // Gumbel noise G2
+        
+        real utility1 = score1 + gumbel1;  // U1 = z_ijk1/T + G1
+        real utility2 = score2 + gumbel2;  // U2 = z_ijk2/T + G2
+        
+        // Determine ranking order: 1 if item1 > item2, 2 if item2 > item1
+        missing_pairwise_ranking_predictions[n] = (utility1 > utility2) ? 1 : 2;
+    }
 }
