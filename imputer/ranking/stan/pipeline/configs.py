@@ -4,14 +4,15 @@ from typing import Optional
 
 @dataclass
 class DataGenConfig:
-    K: int
+    K_train: int
+    K_test: int
     I: int
     J: int
     D: int
     C: int
 
     enable_third_annotator: bool = True
-    enable_pairwise: bool = True
+    enable_pairwise_rankings: bool = True
     pairwise_cap_per_item: int = 10
 
     sigma_annotator: float = 0.3
@@ -19,7 +20,6 @@ class DataGenConfig:
     alpha_dirichlet: float = 2.0
     temperature: float = 0.5
 
-    train_fraction: float = 0.8
     seed: Optional[int] = None
 
 

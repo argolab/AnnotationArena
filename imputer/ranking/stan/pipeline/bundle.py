@@ -5,7 +5,7 @@ import numpy as np
 
 @dataclass
 class GroundTruthBundle:
-    embeddings: np.ndarray  # shape [K, D]
+    embeddings: np.ndarray  # shape [K, D] (in practice we have K=K_train+K_test)
     mean_preferences: np.ndarray  # shape [I, D]
     annotator_preferences: np.ndarray  # shape [I*J, D] with ij_idx = (i-1)*J + j
     rating_probs: np.ndarray  # shape [I*J, C]

@@ -3,7 +3,11 @@
 CLI script for generating synthetic data using Stan.
 
 Usage:
-    PYTHONPATH=. python stan/scripts/generate_data.py --output-dir runs/data_gen_test --K 10 --I 3 --J 2
+    # Generate both train and test instances simultaneously
+    PYTHONPATH=. python stan/scripts/generate_data.py --output-dir runs/both --K-train 10 --K-test 10 --I 3 --J 9
+    
+    # Ablation: disable third annotator
+    PYTHONPATH=. python stan/scripts/generate_data.py --disable-third-annotator --output-dir runs/no_third --K-train 10 --K-test 10 --I 3 --J 9
 """
 
 import argparse
@@ -19,11 +23,22 @@ def main():
     parser = argparse.ArgumentParser(description="Generate synthetic data using Stan")
     
     # Data dimensions
-    parser.add_argument("--K", type=int, default=30, help="Number of items")
+    parser.add_argument("--K-train", type=int, default=10, help="Number of items in training instance")
+    parser.add_argument("--K-test", type=int, default=10, help="Number of items in test instance")
     parser.add_argument("--I", type=int, default=10, help="Number of attributes")
-    parser.add_argument("--J", type=int, default=5, help="Number of annotators")
+    parser.add_argument("--J", type=int, default=9, help="Number of annotators")
     parser.add_argument("--D", type=int, default=64, help="Embedding dimension")
     parser.add_argument("--C", type=int, default=5, help="Number of rating categories")
+    
+    # Observation protocol controls
+    parser.add_argument("--enable-third-annotator", action="store_true", default=True,
+                       help="Enable third annotator for disagreement > 1")
+    parser.add_argument("--disable-third-annotator", action="store_true",
+                       help="Disable third annotator (ablation)")
+    parser.add_argument("--enable-pairwise-rankings", action="store_true", default=True,
+                       help="Enable pairwise rankings (ablation)")
+    parser.add_argument("--disable-pairwise-rankings", action="store_true",
+                       help="Disable pairwise rankings (ablation)")
     
     # Generation parameters
     parser.add_argument("--pairwise-cap-per-item", type=int, default=10, 
@@ -48,13 +63,20 @@ def main():
     
     args = parser.parse_args()
     
+    # Handle ablation flags
+    enable_third_annotator = args.enable_third_annotator and not args.disable_third_annotator
+    enable_pairwise_rankings = args.enable_pairwise_rankings and not args.disable_pairwise_rankings
+    
     # Create configuration
     config = DataGenConfig(
-        K=args.K,
+        K_train=args.K_train,
+        K_test=args.K_test,
         I=args.I,
         J=args.J,
         D=args.D,
         C=args.C,
+        enable_third_annotator=enable_third_annotator,
+        enable_pairwise_rankings=enable_pairwise_rankings,
         pairwise_cap_per_item=args.pairwise_cap_per_item,
         sigma_annotator=args.sigma_annotator,
         sigma_measurement=args.sigma_measurement,
