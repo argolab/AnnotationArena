@@ -92,9 +92,9 @@ def main():
             cmd.extend(["--seed", str(args.seed)])
         
         print(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd)
         if result.returncode != 0:
-            print(f"Data generation failed: {result.stderr}")
+            print(f"Data generation failed with exit code {result.returncode}")
             sys.exit(1)
         print("Data generation completed successfully!")
     else:
@@ -130,9 +130,9 @@ def main():
             cmd.append("--use-test-only")
         
         print(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd)
         if result.returncode != 0:
-            print(f"MCMC inference failed: {result.stderr}")
+            print(f"MCMC inference failed with exit code {result.returncode}")
             sys.exit(1)
         print("MCMC inference completed successfully!")
     else:
@@ -161,9 +161,9 @@ def main():
         ]
         
         print(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True)
+        result = subprocess.run(cmd)
         if result.returncode != 0:
-            print(f"Evaluation failed: {result.stderr}")
+            print(f"Evaluation failed with exit code {result.returncode}")
             sys.exit(1)
         print("Evaluation completed successfully!")
     else:
@@ -185,18 +185,20 @@ def main():
             metrics = json.load(f)
         
         print(f"\n=== FINAL RESULTS ===")
-        print(f"Rating Predictions:")
-        print(f"  Accuracy: {metrics['rating_accuracy']:.3f}")
-        print(f"  MAE: {metrics['rating_mae']:.3f}")
-        print(f"  Log-likelihood: {metrics['rating_log_likelihood']:.3f}")
-        print(f"  Calibration error: {metrics['rating_calibration_error']:.3f}")
+        print(f"Rating Predictions (Missing Data):")
+        print(f"  Accuracy: {metrics['rating_missing_accuracy']:.3f}")
+        print(f"  MAE: {metrics['rating_missing_mae']:.3f}")
+        print(f"  Log-likelihood: {metrics['rating_missing_log_likelihood']:.3f}")
+        print(f"  Calibration error: {metrics['rating_missing_calibration_error']:.3f}")
         print(f"  N missing: {metrics['n_missing_ratings']}")
+        print(f"  N observed: {metrics.get('n_observed_ratings', 0)}")
         
-        print(f"\nPairwise Predictions:")
-        print(f"  Accuracy: {metrics['pairwise_accuracy']:.3f}")
-        print(f"  Log-likelihood: {metrics['pairwise_log_likelihood']:.3f}")
-        print(f"  AUC: {metrics['pairwise_auc']:.3f}")
+        print(f"\nPairwise Predictions (Missing Data):")
+        print(f"  Accuracy: {metrics['pairwise_missing_accuracy']:.3f}")
+        print(f"  Log-likelihood: {metrics['pairwise_missing_log_likelihood']:.3f}")
+        print(f"  AUC: {metrics['pairwise_missing_auc']:.3f}")
         print(f"  N missing: {metrics['n_missing_pairwise']}")
+        print(f"  N observed: {metrics.get('n_observed_pairwise', 0)}")
         
         print(f"\nLog-likelihood Summary:")
         print(f"  Observed ratings: {metrics['log_lik_ratings_obs_mean']:.3f} ± {metrics['log_lik_ratings_obs_std']:.3f}")

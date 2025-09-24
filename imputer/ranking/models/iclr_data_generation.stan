@@ -290,10 +290,10 @@ generated quantities {
                     // Find all training items (i,j,k) with this rating value that are observed (r=1)
                     for (k in 1:K_train) {
                         if (train_rating_values[ij_idx, k] == rating_val && train_rating_observed[ij_idx, k] == 1) {
-                            num_tied += 1;
-                            tied_items[num_tied] = k;
-                        }
+                        num_tied += 1;
+                        tied_items[num_tied] = k;
                     }
+                }
                 
                     // Generate per-item capped comparisons (sample without replacement)
                     if (num_tied >= 2 && pairwise_cap_per_item > 0) {
