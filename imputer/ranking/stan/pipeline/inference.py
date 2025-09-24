@@ -6,6 +6,7 @@ for the domain model inference.
 """
 
 import json
+import logging
 import numpy as np
 from pathlib import Path
 from typing import Dict, List, Any, Optional, Union
@@ -13,6 +14,9 @@ import cmdstanpy
 
 from .configs import DataGenConfig
 from .bundle import GroundTruthBundle
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 
 class InferenceConfig:
@@ -45,7 +49,11 @@ def compile_domain_model(stan_file: Optional[str] = None) -> cmdstanpy.CmdStanMo
     """Compile the domain model for inference."""
     if stan_file is None:
         stan_file = str(Path(__file__).parent.parent.parent / "models" / "domain_model.stan")
-    return cmdstanpy.CmdStanModel(stan_file=stan_file)
+    
+    logger.info(f"Compiling Stan model from: {stan_file}")
+    model = cmdstanpy.CmdStanModel(stan_file=stan_file)
+    logger.info("Stan model compiled successfully")
+    return model
 
 
 def prepare_stan_data_for_inference(
@@ -225,15 +233,25 @@ def run_mcmc_inference(
     stan_data = prepare_stan_data_for_inference(bundle, config, use_train_only, use_test_only)
     
     # Prepare initialization
+    logger.info(f"Preparing initialization with strategy: {inference_config.init_strategy}")
     if inference_config.init_strategy == "ground_truth":
         init_values = create_init_from_ground_truth(bundle, config, use_train_only, use_test_only)
         init = [init_values] * inference_config.chains
+        logger.info(f"Using ground truth initialization for {inference_config.chains} chains")
     elif inference_config.init_strategy == "file" and inference_config.init_file:
         init = inference_config.init_file
+        logger.info(f"Using initialization file: {inference_config.init_file}")
     else:  # "random"
-        init = "random"
+        # Use range [-2, 2] for random initialization
+        init = 2.0
+        logger.info(f"Using random initialization with range [-2, 2] for {inference_config.chains} chains")
     
     # Run MCMC sampling
+    logger.info(f"Starting MCMC sampling with {inference_config.chains} chains")
+    logger.info(f"Warmup iterations: {inference_config.iter_warmup}, Sampling iterations: {inference_config.iter_sampling}")
+    logger.info(f"Adapt delta: {inference_config.adapt_delta}, Max tree depth: {inference_config.max_treedepth}")
+    logger.info(f"Seed: {inference_config.seed}")
+    
     fit = model.sample(
         data=stan_data,
         chains=inference_config.chains,
@@ -245,5 +263,8 @@ def run_mcmc_inference(
         inits=init,
         show_progress=inference_config.show_progress
     )
+    
+    logger.info("MCMC sampling completed successfully")
+    logger.info(f"Divergent transitions: {fit.divergences}")
     
     return fit

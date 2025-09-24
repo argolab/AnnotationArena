@@ -8,6 +8,7 @@ Usage:
 
 import argparse
 import json
+import logging
 from pathlib import Path
 import sys
 
@@ -18,13 +19,24 @@ from stan.pipeline.inference import InferenceConfig, run_mcmc_inference
 from stan.pipeline.bundle import GroundTruthBundle
 from stan.pipeline.io import new_run_dir, save_bundle, save_configs
 
+# Set up logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('inference.log')
+    ]
+)
+logger = logging.getLogger(__name__)
+
 
 def main():
     parser = argparse.ArgumentParser(description="Run MCMC inference with domain model")
     
     # Required arguments
     parser.add_argument("--data-bundle", required=True, help="Path to data bundle JSON file")
-    parser.add_argument("--output-dir", required=True, help="Output directory for results")
+    parser.add_argument("--output-dir", default="OUTPUT/domain_model/runs", help="Output directory for results")
     
     # Data configuration
     parser.add_argument("--use-train-only", action="store_true", help="Use only training instance data")
@@ -61,14 +73,17 @@ def main():
         sys.exit(1)
     
     # Load data bundle
+    logger.info(f"Loading data bundle from {args.data_bundle}")
     print(f"Loading data bundle from {args.data_bundle}")
     with open(args.data_bundle, 'r') as f:
         bundle_data = json.load(f)
     
     bundle = GroundTruthBundle.from_dict(bundle_data)
+    logger.info(f"Loaded bundle with {len(bundle.missing_ratings)} missing ratings and {len(bundle.missing_pairwise)} missing pairwise")
     
     # Create output directory
     output_dir = new_run_dir(args.output_dir)
+    logger.info(f"Created output directory: {output_dir}")
     print(f"Output directory: {output_dir}")
     
     # Create inference configuration
@@ -114,21 +129,33 @@ def main():
     print(f"  Adapt delta: {args.adapt_delta}")
     print(f"  Max tree depth: {args.max_treedepth}")
     
-    # Extract data generation config from bundle stats
+    # Extract data generation config from bundle stats and configs
     from stan.pipeline.configs import DataGenConfig
     stats = bundle.stats
-    data_config = DataGenConfig(
-        K_train=stats["K_train"],
-        K_test=stats["K_test"],
-        I=3,  # Default values - should be extracted from bundle
-        J=6,
-        D=8,
-        C=5,
-        sigma_annotator=0.3,
-        sigma_measurement=0.1,
-        alpha_dirichlet=2.0,
-        temperature=0.5
-    )
+    
+    # Try to load from configs.json first
+    data_bundle_dir = Path(args.data_bundle).parent
+    configs_path = data_bundle_dir / "configs.json"
+    
+    if configs_path.exists():
+        with open(configs_path, 'r') as f:
+            configs_data = json.load(f)
+        datagen_config = configs_data["datagen"]
+        data_config = DataGenConfig(
+            K_train=datagen_config["K_train"],
+            K_test=datagen_config["K_test"],
+            I=datagen_config["I"],
+            J=datagen_config["J"],
+            D=datagen_config["D"],
+            C=datagen_config["C"],
+            sigma_annotator=datagen_config["sigma_annotator"],
+            sigma_measurement=datagen_config["sigma_measurement"],
+            alpha_dirichlet=datagen_config["alpha_dirichlet"],
+            temperature=datagen_config["temperature"]
+        )
+    else:
+        raise ValueError(f"Configs file not found at {configs_path}")
+        
     
     print(f"\nData Configuration:")
     print(f"  K_train: {data_config.K_train}")
@@ -139,6 +166,7 @@ def main():
     print(f"  C: {data_config.C}")
     
     # Run MCMC inference
+    logger.info("Starting MCMC inference")
     print(f"\nStarting MCMC inference...")
     try:
         fit = run_mcmc_inference(
@@ -150,11 +178,13 @@ def main():
             use_test_only=args.use_test_only
         )
         
+        logger.info("MCMC inference completed successfully")
         print("MCMC inference completed successfully!")
         
         # Save the fit object
         fit_path = output_dir / "mcmc_fit.csv"
         fit.save_csvfiles(str(output_dir))
+        logger.info(f"MCMC samples saved to {output_dir}")
         print(f"MCMC samples saved to {fit_path}")
         
         # Print diagnostics
@@ -162,12 +192,15 @@ def main():
         print(f"  Divergent transitions: {fit.divergences}")
         
         if fit.divergences.sum() > 0:
+            logger.warning(f"{fit.divergences.sum()} divergent transitions detected!")
             print(f"  WARNING: {fit.divergences.sum()} divergent transitions detected!")
             print(f"  Consider increasing adapt_delta or max_treedepth")
         else:
+            logger.info("No divergent transitions - good mixing!")
             print(f"  No divergent transitions - good mixing!")
         
     except Exception as e:
+        logger.error(f"Error during MCMC inference: {e}")
         print(f"Error during MCMC inference: {e}")
         sys.exit(1)
 
