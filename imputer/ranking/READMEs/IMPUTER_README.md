@@ -13,9 +13,10 @@ This document consolidates the latest understanding of the imputer system for Do
 
 <!-- Should there be a new module named Atom. Atom type is used in embedings of different Atom types (item, criterion, annotator) -->
 - Core modules live under `imputer/ranking/imputer/`:
-  - `embedding.py`: compositional embeddings for criteria (attributes), annotators, and items; supports mixed variable types (ratings C-way; pairwise rankings 2-way)
+  - `embedding.py`: compositional embeddings for criteria (attributes), annotators, and items; supports mixed variable types (ratings C-way; pairwise rankings 2-way) concatenate atoms with their atom var type (100 prefix for critieron,, 010 prefix for annotator, 001 for item)
+    - notice that criteria embeddings are always learned, annotator embeddings are half learnable and half fresh random, with the learnable part subject to dropouts at training time. while the item embeddigns are fresh at each forward pass, and can not be learned.
   - `ranking_imputer.py`: high-level imputation model wrapper
-  - `trainer.py` / `multi_instance_trainer.py`: training loops over instances, batching, masking, logging
+  - `trainer.py` / `multi_instance_trainer.py`: training loops over instances, batching, masking, logging. Since now we only have two instance.  A training and a testing instance. 
   - `losses.py`: cross-entropy and ranking losses
   - `eval.py`: `EvaluationResults` schema and helpers
 
