@@ -260,3 +260,5 @@ imputer/ranking/OUTPUT
 imputer/ranking/experiment_results
 imputer/ranking/plots
 **/*.tex
+imputer/ranking/runs/
+imputer/ranking/stan/outputs/
