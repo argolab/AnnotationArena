@@ -7,7 +7,7 @@ import torch
 
 from data import DataConverter, RankingData
 from ranking_imputer import MultiVariableImputer
-from trainer import ImputerTrainer
+from trainer import ImputerTrainer, EvaluationCallback
 from eval import EvaluationEngine
 import sys
 sys.path.insert(0, "..")
@@ -76,7 +76,7 @@ def main():
     parser.add_argument("--data-dir", required=True, help="Directory containing data_bundle.json and configs.json")
     parser.add_argument("--output-root", default="imputer/ranking/OUTPUT/IMPUTER", help="Root output directory")
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--masking-rate", type=float, default=0.5)
+    parser.add_argument("--masking-rate", type=float, default=0.15)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--device", default="cpu")
     parser.add_argument("--max-rank-size", type=int, default=2)
@@ -127,6 +127,10 @@ def main():
         num_likert_classes=sizes["num_likert_classes"],
         max_rank_size=args.max_rank_size,
         device=args.device,
+        encoder_layers_num=2,
+        attention_heads=4,
+        embedding_dim=64,
+        # embedding_type="pairwise",
     )
 
     # Trainer
@@ -136,18 +140,28 @@ def main():
         device=args.device,
     )
 
+    # Register evaluation callback on test set (runs each epoch)
+    eval_engine = EvaluationEngine()
+    trainer.register_callback(
+        EvaluationCallback(
+            eval_engine=eval_engine,
+            test_variables=test_all,
+            converter=converter,
+            device=args.device,
+        )
+    )
+
     # Train
     trainer.train(
         train_observed_vars=train_observed,
         train_missing_vars=train_missing,
         masking_rate=args.masking_rate,
         epochs=args.epochs,
-        call_callbacks_every=max(1, args.epochs // 5),
+        call_callbacks_every=1,
         verbose=True,
     )
 
     # Evaluate
-    eval_engine = EvaluationEngine()
     results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device)
 
     # Output

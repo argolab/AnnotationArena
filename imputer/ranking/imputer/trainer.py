@@ -37,7 +37,8 @@ class EvaluationCallback:
                 'num_rating_evaluations': results.num_rating_evaluations,
                 'num_ranking_evaluations': results.num_ranking_evaluations,
                 'masked_metrics': results.masked_metrics,
-                'observed_metrics': results.observed_metrics
+                'observed_metrics': results.observed_metrics,
+                'missing_metrics': results.missing_metrics,
             }
         except Exception as e:
             print(f"Warning: Evaluation callback failed at epoch {epoch}: {e}")
@@ -237,6 +238,9 @@ class ImputerTrainer:
             if (epoch + 1) % call_callbacks_every == 0:
                 callback_results = self._call_epoch_end_callbacks(epoch)
                 if callback_results:
+                    print("Callback results:")
+                    import json
+                    print(json.dumps(callback_results, indent=2, sort_keys=True))
                     callback_history.extend(callback_results)
 
             if verbose and (epoch + 1) % max(1, epochs // 10) == 0:

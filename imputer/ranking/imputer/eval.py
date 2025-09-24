@@ -163,14 +163,16 @@ class EvaluationEngine:
             num_rating = observed_metrics['num_rating_evaluations'] + missing_metrics['num_rating_evaluations'] + masked_metrics['num_rating_evaluations']
             num_ranking = observed_metrics['num_ranking_evaluations'] + missing_metrics['num_ranking_evaluations'] + masked_metrics['num_ranking_evaluations']
 
-            # Do not compute aggregated accuracies; keep them per-status for clarity
+            # Compute aggregated accuracies across all subsets for convenience
+            all_idx = observed_idx + missing_idx + masked_idx
+            overall_metrics = compute_subset(all_idx)
             results = EvaluationResults(
                 total_loss=total_loss,
                 rating_loss=rating_loss,
                 ranking_loss=ranking_loss,
-                rating_accuracy=None,
-                rating_rmse=None,
-                ranking_accuracy=None,
+                rating_accuracy=overall_metrics['rating_accuracy'],
+                rating_rmse=overall_metrics['rating_rmse'],
+                ranking_accuracy=overall_metrics['ranking_accuracy'],
                 num_rating_evaluations=num_rating,
                 num_ranking_evaluations=num_ranking,
                 observed_metrics=observed_metrics,
