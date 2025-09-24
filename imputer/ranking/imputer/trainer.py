@@ -226,28 +226,31 @@ class ImputerTrainer:
 
         # Reconstruct references from batch tensors (0-indexed) - for ALL training variables with ground truth
         for i, var in enumerate(reference_data_list):
-            if not var.is_listwise:
-                predictions.append(predictions_full[i])
-                references.append(RankingData(
-                    annotator_id=var.annotator_id,
-                    attribute_id=var.attribute_id,
-                    is_listwise=False,
-                    item_ids=var.item_ids,
-                    rating_value=var.rating_value,
-                    is_masked=var.is_masked,
-                ))
-            elif var.is_listwise:
-                predictions.append(predictions_full[i])
-                references.append(RankingData(
-                    annotator_id=var.annotator_id,
-                    attribute_id=var.attribute_id,
-                    is_listwise=True,
-                    item_ids=[it for it in var.item_ids[: self.model.max_rank_size]],
-                    ranking_order=var.ranking_order,
-                    is_masked=var.is_masked,
-                ))
-            else:
-                raise ValueError("Shouldn't be here")
+            if not var.is_missing:
+                if not var.is_listwise:
+                    predictions.append(predictions_full[i])
+                    references.append(RankingData(
+                        annotator_id=var.annotator_id,
+                        attribute_id=var.attribute_id,
+                        is_listwise=False,
+                        is_missing=False,
+                        item_ids=var.item_ids,
+                        rating_value=var.rating_value,
+                        is_masked=var.is_masked,
+                    ))
+                elif var.is_listwise:
+                    predictions.append(predictions_full[i])
+                    references.append(RankingData(
+                        annotator_id=var.annotator_id,
+                        attribute_id=var.attribute_id,
+                        is_listwise=True,
+                        is_missing=False,
+                        item_ids=[it for it in var.item_ids[: self.model.max_rank_size]],
+                        ranking_order=var.ranking_order,
+                        is_masked=var.is_masked,
+                    ))
+                else:
+                    raise ValueError("Shouldn't be here")
             
         losses = self.loss_strategy.compute(predictions, references)
 

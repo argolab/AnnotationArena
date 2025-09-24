@@ -73,7 +73,7 @@ class EvaluationEngine:
             if converter is None:
                 raise ValueError("DataConverter required for evaluation")
 
-            evaluation_mask = self.create_evaluation_mask(variables, masking_rate)
+            evaluation_mask = self.create_evaluation_mask(variables)
 
             # Create batch with evaluation masking
             ranking_data_list = self._create_evaluation_batch(
@@ -104,24 +104,13 @@ class EvaluationEngine:
             List of booleans indicating which variables are masked
         """
         num_variables = len(variables)
-        if num_variables == 0:
-            return []
-
-        # When masking_rate=0.0, respect existing is_masked flags
-        if masking_rate == 0.0:
-            return [var.is_masked if var.is_masked is not None else False for var in variables]
-
-        # Normal random masking behavior
-        # Ensure masking_rate is valid
-        masking_rate = max(0.0, min(1.0, masking_rate))
-        num_to_mask = int(num_variables * masking_rate)
-
-        # Create mask: True = masked, False = observed
         mask = [False] * num_variables
-        if num_to_mask > 0:
-            masked_indices = random.sample(range(num_variables), num_to_mask)
-            for idx in masked_indices:
-                mask[idx] = True
+
+        missing_idx = [i for i in range(num_variables) if variables[i].is_missing]
+
+        for idx in missing_idx:
+            mask[idx] = True
+        
 
         return mask
 
@@ -342,13 +331,14 @@ class EvaluationEngine:
 
         for i, var in enumerate(variables):
             if evaluation_mask[i]:
-                # Create masked version (remove supervision)
+                # Create missing version (remove supervision)
                 masked_var = RankingData(
                     annotator_id=var.annotator_id,
                     attribute_id=var.attribute_id,
                     is_listwise=var.is_listwise,
                     item_ids=var.item_ids,
                     is_masked=True,  # Mark as masked
+                    is_missing=True,
                     rating_value=var.rating_value,  # Keep original value for reference
                     ranking_order=var.ranking_order  # Keep original order for reference
                 )
@@ -360,6 +350,7 @@ class EvaluationEngine:
                     attribute_id=var.attribute_id,
                     is_listwise=var.is_listwise,
                     item_ids=var.item_ids,
+                    is_missing=False,
                     is_masked=False,  # Mark as observed
                     rating_value=var.rating_value,
                     ranking_order=var.ranking_order
@@ -435,6 +426,7 @@ class EvaluationEngine:
                     annotator_id=var.annotator_id,
                     attribute_id=var.attribute_id,
                     is_listwise=True,
+                    is_missing=False,
                     item_ids=var.item_ids,
                     ranking_order=ranking_order,
                     is_masked=is_masked,

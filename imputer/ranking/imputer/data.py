@@ -23,7 +23,8 @@ class RankingData:
     attribute_id: int
     is_listwise: bool
     item_ids: List[int]
-    status: int
+    is_masked: Optional[bool] = None
+    is_missing: Optional[bool] = None
     rating_value: Optional[int] = None
     ranking_order: Optional[List[int]] = None
 

@@ -57,6 +57,9 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         for i, var in enumerate(variables):
             # Determine if variable is masked (default to False if None)
             is_masked = var.is_masked if var.is_masked is not None else False
+            is_missing = var.is_missing if var.is_missing is not None else False
+
+            is_masked = is_masked or is_missing
 
             if var.is_listwise:
                 feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_masked)
