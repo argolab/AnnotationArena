@@ -41,21 +41,20 @@ generated quantities {
     
     // ===== PAIRWISE RANKINGS =====
     // Training pairwise rankings
-    array[I*J*C*K_train*(K_train-1)/2, 2] int train_pairwise_items;     // [k1, k2] pairs for training pairwise comparisons
-    array[I*J*C*K_train*(K_train-1)/2] int train_pairwise_orders;       // 1 if k1 > k2, 2 if k2 > k1 (Bradley-Terry)
-    array[I*J*C*K_train*(K_train-1)/2] int train_pairwise_annotator;    // annotator j for each training pairwise comparison
-    array[I*J*C*K_train*(K_train-1)/2] int train_pairwise_attribute;    // attribute i for each training pairwise comparison
-    array[I*J*C*K_train*(K_train-1)/2] int train_pairwise_tied_rating;  // rating value that tied (x_ijk1 = x_ijk2 = rating_val)
-    array[I*J*C*K_train*(K_train-1)/2] int train_pairwise_observed;     // 1 if observed, 0 if missing
-    
+    array[I*J*C*(K_train*(K_train-1)%/%2), 2] int train_pairwise_items;     // [k1, k2] pairs for training pairwise comparisons
+    array[I*J*C*(K_train*(K_train-1)%/%2)] int train_pairwise_orders;       // 1 if k1 > k2, 2 if k2 > k1 (Bradley-Terry)
+    array[I*J*C*(K_train*(K_train-1)%/%2)] int train_pairwise_annotator;    // annotator j for each training pairwise comparison
+    array[I*J*C*(K_train*(K_train-1)%/%2)] int train_pairwise_attribute;    // attribute i for each training pairwise comparison
+    array[I*J*C*(K_train*(K_train-1)%/%2)] int train_pairwise_tied_rating;  // rating value that tied (x_ijk1 = x_ijk2 = rating_val)
+    array[I*J*C*(K_train*(K_train-1)%/%2)] int train_pairwise_observed;     // 1 if observed, 0 if missing
+
     // Test pairwise rankings
-    array[I*J*C*K_test*(K_test-1)/2, 2] int test_pairwise_items;      // [k1, k2] pairs for test pairwise comparisons
-    array[I*J*C*K_test*(K_test-1)/2] int test_pairwise_orders;         // 1 if k1 > k2, 2 if k2 > k1 (Bradley-Terry)
-    array[I*J*C*K_test*(K_test-1)/2] int test_pairwise_annotator;      // annotator j for each test pairwise comparison
-    array[I*J*C*K_test*(K_test-1)/2] int test_pairwise_attribute;      // attribute i for each test pairwise comparison
-    array[I*J*C*K_test*(K_test-1)/2] int test_pairwise_tied_rating;    // rating value that tied (x_ijk1 = x_ijk2 = rating_val)
-    array[I*J*C*K_test*(K_test-1)/2] int test_pairwise_observed;       // 1 if observed, 0 if missing
-    
+    array[I*J*C*(K_test*(K_test-1)%/%2), 2] int test_pairwise_items;      // [k1, k2] pairs for test pairwise comparisons
+    array[I*J*C*(K_test*(K_test-1)%/%2)] int test_pairwise_orders;         // 1 if k1 > k2, 2 if k2 > k1 (Bradley-Terry)
+    array[I*J*C*(K_test*(K_test-1)%/%2)] int test_pairwise_annotator;      // annotator j for each test pairwise comparison
+    array[I*J*C*(K_test*(K_test-1)%/%2)] int test_pairwise_attribute;      // attribute i for each test pairwise comparison
+    array[I*J*C*(K_test*(K_test-1)%/%2)] int test_pairwise_tied_rating;    // rating value that tied (x_ijk1 = x_ijk2 = rating_val)
+    array[I*J*C*(K_test*(K_test-1)%/%2)] int test_pairwise_observed;       // 1 if observed, 0 if missing
     // Counts
     int num_train_pairwise_rankings;    // Number of training pairwise comparisons generated
     int num_test_pairwise_rankings;     // Number of test pairwise comparisons generated
