@@ -4,7 +4,7 @@ Posterior predictive extraction and evaluation utilities.
 Extracts predictive samples from MCMC output and evaluates predictions
 against ground truth for missing ratings and pairwise rankings.
 """
-
+import pdb
 import numpy as np
 import pandas as pd
 from pathlib import Path
@@ -82,7 +82,7 @@ def evaluate_rating_predictions(
     Evaluate rating predictions against ground truth.
     
     Args:
-        predictions: Array of predicted ratings [n_samples, n_missing_ratings]
+        predictions: Array of predicted ratings [n_samples, n_missing_ratings] n_samples is the chain length * num of chains
         probabilities: Array of rating probabilities [n_samples, n_missing_ratings, C]
         ground_truth: List of ground truth missing ratings
         config: Configuration dict with C (number of rating categories)
@@ -98,6 +98,7 @@ def evaluate_rating_predictions(
     
     # Compute accuracy (mode of posterior predictions)
     posterior_mode = np.zeros(n_missing, dtype=int)
+    pdb.set_trace()
     for i in range(n_missing):
         # Find most frequent prediction across samples
         unique, counts = np.unique(predictions[:, i], return_counts=True)

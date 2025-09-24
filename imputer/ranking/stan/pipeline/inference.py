@@ -243,7 +243,7 @@ def run_mcmc_inference(
         logger.info(f"Using initialization file: {inference_config.init_file}")
     else:  # "random"
         # Use range [-2, 2] for random initialization
-        init = 2.0
+        init = 1.0
         logger.info(f"Using random initialization with range [-2, 2] for {inference_config.chains} chains")
     
     # Run MCMC sampling
@@ -261,7 +261,8 @@ def run_mcmc_inference(
         adapt_delta=inference_config.adapt_delta,
         max_treedepth=inference_config.max_treedepth,
         inits=init,
-        show_progress=inference_config.show_progress
+        show_progress=inference_config.show_progress,
+        show_console=True
     )
     
     logger.info("MCMC sampling completed successfully")

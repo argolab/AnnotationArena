@@ -74,8 +74,8 @@ def _build_predictives(model: MultiVariableImputer, variables: List[RankingData]
 def main():
     parser = argparse.ArgumentParser(description="Run imputer training/evaluation on a data bundle")
     parser.add_argument("--data-dir", required=True, help="Directory containing data_bundle.json and configs.json")
-    parser.add_argument("--output-root", default="imputer/ranking/OUTPUT/IMPUTER", help="Root output directory")
-    parser.add_argument("--epochs", type=int, default=500)
+    parser.add_argument("--output-root", default="OUTPUT/IMPUTER", help="Root output directory")
+    parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--masking-rate", type=float, default=0.15)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--device", default="cpu")

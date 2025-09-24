@@ -166,7 +166,7 @@ python stan/scripts/run_full_experiment.py --K-train 10 --K-test 5 --I 5 --J 9 -
 ### 🏭 **Production Experiment** (2-4 hours)
 Full-scale evaluation:
 ```bash
-python stan/scripts/run_full_experiment.py --K-train 20 --K-test 10 --I 5 --J 9 --D 12 --C 5 --chains 4 --iter-warmup 2000 --iter-sampling 2000
+python stan/scripts/run_full_experiment.py --K-train 30 --K-test 30 --I 5 --J 9 --D 64 --C 5 --chains 4 --iter-warmup 1000 --iter-sampling 2000
 ```
 
 ### 📋 **Parameter Scaling Guide**

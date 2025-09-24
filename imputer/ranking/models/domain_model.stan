@@ -45,6 +45,12 @@ data {
     
 }
 
+transformed data {
+    // Debug printing flag (0 = off, 1 = on). Toggle here.
+    int DEBUG_PRINT;
+    DEBUG_PRINT = 0;
+}
+
 parameters {
     // Item embeddings: e_k ~ N(0, I)
     matrix[K, D] embeddings;
@@ -65,6 +71,9 @@ transformed parameters {
     
     // Rating thresholds: q_ij = Φ⁻¹(cumsum(p_ij))
     array[I*J] vector[C+1] rating_thresholds;
+    
+    // Total standard deviation per annotator-criterion for rating binning
+    array[I*J] real total_std;  // sqrt(||v_ij||^2 + sigma_measurement^2)
     
     // Compute base scores: z_ij_k = v_ij · e_k  
     for (i in 1:I) {
@@ -87,6 +96,24 @@ transformed parameters {
         }
         
         rating_thresholds[ij][C+1] = positive_infinity();  // +∞ for category C
+    }
+    
+    // Compute total_std per ij for rating likelihood standardization
+    for (i in 1:I) {
+        for (j in 1:J) {
+            int ij_idx = (i-1)*J + j;
+            real pref_norm = sqrt(dot_self(annotator_preferences[ij_idx]));
+            total_std[ij_idx] = sqrt(pref_norm^2 + square(sigma_measurement));
+        }
+    }
+
+    // ===== DEBUG: print a few rating_probs and thresholds per draw =====
+    if (DEBUG_PRINT == 1) {
+        int max_ij_print = (I*J < 3) ? I*J : 3;
+        for (ij in 1:max_ij_print) {
+            print("[DEBUG TP] ij=", ij, " rating_probs=", rating_probs[ij]);
+            print("[DEBUG TP] ij=", ij, " thresholds=", rating_thresholds[ij]);
+        }
     }
 }
 
@@ -139,13 +166,15 @@ model {
         if (upper_threshold == positive_infinity()) {
             upper_prob = 1.0;
         } else {
-            upper_prob = Phi((upper_threshold - base_score) / sigma_measurement);
+            // Standardize by total_std to match data generation binning
+            upper_prob = Phi((upper_threshold - base_score) / total_std[ij_idx]);
         }
         
         if (lower_threshold == negative_infinity()) {
             lower_prob = 0.0;
         } else {
-            lower_prob = Phi((lower_threshold - base_score) / sigma_measurement);
+            // Standardize by total_std to match data generation binning
+            lower_prob = Phi((lower_threshold - base_score) / total_std[ij_idx]);
         }
         
         real bin_prob = upper_prob - lower_prob;
@@ -214,17 +243,28 @@ generated quantities {
         if (upper_threshold == positive_infinity()) {
             upper_prob = 1.0;
         } else {
-            upper_prob = Phi((upper_threshold - base_score) / sigma_measurement);
+            upper_prob = Phi((upper_threshold - base_score) / total_std[ij_idx]);
         }
         
         if (lower_threshold == negative_infinity()) {
             lower_prob = 0.0;
         } else {
-            lower_prob = Phi((lower_threshold - base_score) / sigma_measurement);
+            lower_prob = Phi((lower_threshold - base_score) / total_std[ij_idx]);
         }
         
         real bin_prob = upper_prob - lower_prob;
         log_lik_ratings_obs += log(bin_prob + 1e-10);
+
+        // ===== DEBUG: print the first few observed rating terms per draw =====
+        if (DEBUG_PRINT == 1 && n <= 10) {
+            print("[DEBUG RATING] n=", n,
+                  " i=", i, " j=", j, " k=", k, " ij_idx=", ij_idx,
+                  " base_score=", base_score,
+                  " lower_th=", lower_threshold, " upper_th=", upper_threshold,
+                  " lower_prob=", lower_prob, " upper_prob=", upper_prob,
+                  " bin_prob=", bin_prob,
+                  " value=", c);
+        }
     }
     
     for (n in 1:N_pairwise_rankings) {
@@ -243,9 +283,45 @@ generated quantities {
         } else {  // item2 > item1
             log_lik_pairwise_obs += log_inv_logit(score2 - score1);
         }
+
+        // ===== DEBUG: print the first few observed pairwise terms per draw =====
+        if (DEBUG_PRINT == 1 && n <= 10) {
+            real logit12 = score1 - score2;
+            real p12 = inv_logit(logit12);
+            print("[DEBUG PAIR] n=", n,
+                  " i=", i, " j=", j, " ij_idx=", ij_idx,
+                  " item1=", item1, " item2=", item2, " order=", order,
+                  " score1_T=", score1, " score2_T=", score2,
+                  " logit=", logit12, " p12=", p12);
+        }
     }
     
     total_log_lik = log_lik_ratings_obs + log_lik_pairwise_obs;
+
+    // ===== DEBUG: summary stats per draw =====
+    if (DEBUG_PRINT == 1) {
+        // Print brief summary of base_scores for a couple ij indices
+        int max_ij_print = (I*J < 2) ? I*J : 2;
+        for (m in 1:max_ij_print) {
+            real min_bs = positive_infinity();
+            real max_bs = negative_infinity();
+            real sum_bs = 0;
+            for (kk in 1:K) {
+                real v = base_scores[m, kk];
+                sum_bs += v;
+                if (v < min_bs) min_bs = v;
+                if (v > max_bs) max_bs = v;
+            }
+            print("[DEBUG SUMMARY] ij=", m,
+                  " base_scores mean=", sum_bs / K,
+                  " min=", min_bs, " max=", max_bs);
+        }
+        print("[DEBUG HYPER] sigma_measurement=", sigma_measurement,
+              " sigma_annotator=", sigma_annotator,
+              " temperature=", temperature,
+              " N_ratings=", N_ratings,
+              " N_pairwise=", N_pairwise_rankings);
+    }
     
     // ===== POSTERIOR PREDICTIVE SAMPLING FOR MISSING VARIABLES =====
     
@@ -269,13 +345,13 @@ generated quantities {
             if (upper_threshold == positive_infinity()) {
                 upper_prob = 1.0;
             } else {
-                upper_prob = Phi((upper_threshold - base_score) / sigma_measurement);
+                upper_prob = Phi((upper_threshold - base_score) / total_std[ij_idx]);
             }
             
             if (lower_threshold == negative_infinity()) {
                 lower_prob = 0.0;
             } else {
-                lower_prob = Phi((lower_threshold - base_score) / sigma_measurement);
+                lower_prob = Phi((lower_threshold - base_score) / total_std[ij_idx]);
             }
             
             missing_rating_probs[n][c] = upper_prob - lower_prob;
@@ -283,14 +359,26 @@ generated quantities {
         
         // Sample a rating from the predicted distribution
         real noisy_score = base_score + normal_rng(0, sigma_measurement);
+        real standardized_score = noisy_score / total_std[ij_idx];
         int rating = 1;
         for (c in 1:C) {
-            if (noisy_score <= rating_thresholds[ij_idx][c+1]) {
+            if (standardized_score <= rating_thresholds[ij_idx][c+1]) {
                 rating = c;
                 break;
             }
         }
         missing_rating_predictions[n] = rating;
+
+        // ===== DEBUG: print first few missing rating predictives per draw =====
+        if (DEBUG_PRINT == 1 && n <= 10) {
+            print("[DEBUG MRATING] n=", n,
+                  " i=", i, " j=", j, " k=", k, " ij_idx=", ij_idx,
+                  " base_score=", base_score,
+                  " standardized_score=", standardized_score,
+                  " thresholds=", rating_thresholds[ij_idx],
+                  " probs=", missing_rating_probs[n],
+                  " sampled=", rating);
+        }
     }
     
     // 2. Sample missing pairwise rankings and compute predicted logits
@@ -318,5 +406,17 @@ generated quantities {
         
         // Determine ranking order: 1 if item1 > item2, 2 if item2 > item1
         missing_pairwise_ranking_predictions[n] = (utility1 > utility2) ? 1 : 2;
+
+        // ===== DEBUG: print first few missing pairwise predictives per draw =====
+        if (n <= 10) {
+            real logit12 = score1 - score2;
+            real p12 = inv_logit(logit12);
+            print("[DEBUG MPAIR] n=", n,
+                  " i=", i, " j=", j, " ij_idx=", ij_idx,
+                  " item1=", item1, " item2=", item2,
+                  " score1_T=", score1, " score2_T=", score2,
+                  " logit=", logit12, " p12=", p12,
+                  " sampled_order=", missing_pairwise_ranking_predictions[n]);
+        }
     }
 }
