@@ -1,4 +1,5 @@
 import json
+import numpy as np
 import time
 from pathlib import Path
 from typing import Any
@@ -51,8 +52,17 @@ def new_run_dir(root: Path | str = "runs", run_name: str = None) -> Path:
 
 def save_json(obj: Any, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Ensure double precision by converting numpy floats to Python float (which are double precision)
+    def _default(o):
+        if isinstance(o, (np.floating,)):
+            return float(o)
+        if isinstance(o, (np.integer,)):
+            return int(o)
+        if isinstance(o, (np.ndarray,)):
+            return o.tolist()
+        raise TypeError(f"Object of type {type(o)} is not JSON serializable")
     with open(path, "w") as f:
-        json.dump(obj, f, indent=2)
+        json.dump(obj, f, indent=2, default=_default)
 
 
 def save_configs(run_dir: Path, **configs: Any) -> None:
@@ -66,7 +76,26 @@ def save_configs(run_dir: Path, **configs: Any) -> None:
 
 
 def save_bundle(run_dir: Path, bundle_dict: dict) -> None:
-    # Expect numpy converted to lists by caller
+    # Expect numpy converted to lists by caller; sanitize any simplex arrays for exact sum-to-one
+    # Specifically fix rating_probs rows (each row is a simplex over classes)
+    if "rating_probs" in bundle_dict and isinstance(bundle_dict["rating_probs"], list):
+        fixed_rows = []
+        for row in bundle_dict["rating_probs"]:
+            v = np.asarray(row, dtype=np.float64)
+            # Project to simplex with exact sum 1, guarding against tiny negatives
+            v = np.maximum(v, 0.0)
+            s = v.sum()
+            if s <= 0:
+                v[:] = 1.0 / v.size
+            else:
+                v /= s
+                v = np.maximum(v, 1e-12)
+                v /= v.sum()
+                k = int(np.argmax(v))
+                v[k] += (1.0 - v.sum(dtype=np.float64))
+            fixed_rows.append(v.tolist())
+        bundle_dict = {**bundle_dict, "rating_probs": fixed_rows}
+
     save_json(bundle_dict, run_dir / "data_bundle.json")
 
 
