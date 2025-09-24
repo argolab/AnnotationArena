@@ -37,6 +37,29 @@ class GroundTruthBundle:
     log_lik_rankings_obs: Optional[float] = None
     log_lik_rankings_missing: Optional[float] = None
 
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> 'GroundTruthBundle':
+        """Create GroundTruthBundle from dictionary (e.g., loaded from JSON)."""
+        return cls(
+            embeddings=np.array(data["embeddings"]),
+            mean_preferences=np.array(data["mean_preferences"]),
+            annotator_preferences=np.array(data["annotator_preferences"]),
+            rating_probs=np.array(data["rating_probs"]),
+            rating_thresholds=np.array(data["rating_thresholds"]),
+            base_scores=np.array(data["base_scores"]),
+            all_ratings=data["all_ratings"],
+            all_pairwise=data["all_pairwise"],
+            observed_ratings=data["observed_ratings"],
+            missing_ratings=data["missing_ratings"],
+            observed_pairwise=data["observed_pairwise"],
+            missing_pairwise=data["missing_pairwise"],
+            stats=data["stats"],
+            log_lik_ratings_obs=data.get("log_lik_ratings_obs"),
+            log_lik_ratings_missing=data.get("log_lik_ratings_missing"),
+            log_lik_rankings_obs=data.get("log_lik_rankings_obs"),
+            log_lik_rankings_missing=data.get("log_lik_rankings_missing"),
+        )
+
 
 @dataclass
 class ObservedSet:
