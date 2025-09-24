@@ -442,19 +442,19 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
             max_rank_size=max_rank_size,
             embedding_dim=embedding_dim
         )
-        self.pairwise_relation = nn.Parameter(torch.randn(embedding_dim - 1 - max(num_likert_classes, max_rank_size), embedding_dim - 1 - max(num_likert_classes, max_rank_size)))
+        self.pairwise_relation = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
 
         self.num_attributes = num_attributes
         self.num_annotators = num_annotators
         self.num_items = num_items
         self.device = device
-        self.internal_dimension = embedding_dim - 3 - 1 - max(num_likert_classes, max_rank_size)
+        self.internal_dimension = embedding_dim - 3
 
         # Embeddings for each component (learned parameters)
         self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, self.internal_dimension))
         self.annotator_embedding_learnable = nn.Parameter(torch.randn(num_annotators, self.internal_dimension // 2))
-        self.annotator_embedding_random = torch.randn(num_annotators, self.internal_dimension - self.internal_dimension // 2)
-        self.item_embedding = torch.randn(num_items, self.internal_dimension)
+        self.annotator_embedding_random = torch.rand(num_annotators, self.internal_dimension - self.internal_dimension // 2)
+        self.item_embedding = torch.rand(num_items, self.internal_dimension)
 
         torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.annotator_embedding_learnable, mode='fan_out', nonlinearity='relu')
@@ -503,6 +503,6 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         self.partial_reset_embedding()
 
     def partial_reset_embedding(self):
-        self.annotator_embedding_random = torch.randn(self.num_annotators, self.internal_dimension - self.internal_dimension // 2)
-        self.item_embedding = torch.randn(self.num_items, self.internal_dimension)
+        self.annotator_embedding_random = torch.rand(self.num_annotators, self.internal_dimension - self.internal_dimension // 2)
+        self.item_embedding = torch.rand(self.num_items, self.internal_dimension)
 

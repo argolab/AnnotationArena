@@ -127,7 +127,7 @@ def main():
         num_likert_classes=sizes["num_likert_classes"],
         max_rank_size=args.max_rank_size,
         device=args.device,
-        encoder_layers_num=2,
+        encoder_layers_num=4,
         attention_heads=4,
         embedding_dim=64,
         # embedding_type="pairwise",

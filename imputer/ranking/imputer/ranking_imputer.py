@@ -86,7 +86,7 @@ class MultiVariableImputer(nn.Module):
             pass
         
         self.blocks = nn.ModuleList([
-            TransformerBlock(embedding_dim, attention_heads, dropout)
+            TransformerBlock(embedding_dim, max(self.num_likert_classes, self.max_rank_size), attention_heads, dropout)
             for _ in range(encoder_layers_num)
         ])
         # use transformer.NormLayer implementation
@@ -110,7 +110,10 @@ class MultiVariableImputer(nn.Module):
 
     def apply_head(self, head_key: str, hidden: torch.Tensor) -> torch.Tensor:
         """Apply a named head to hidden states [B, N, D] -> logits [B, N, *]."""
-        return self.heads[head_key](hidden)
+        if head_key == "rating":
+            return hidden
+        else:
+            return hidden[:, :, :2]
 
 
     def forward_hidden(self, ranking_data_list, attn_mask: torch.Tensor | None = None):
@@ -131,11 +134,11 @@ class MultiVariableImputer(nn.Module):
     def forward(self, ranking_data_list, attn_mask: torch.Tensor | None = None, return_hidden: bool = False):
         # Support both structured list inputs and legacy tensor inputs
 
-        features = self.embedding_provider(ranking_data_list)
+        features, params = self.embedding_provider(ranking_data_list)
 
         hidden_states = []
         for block in self.blocks:
-            features = block(features, attn_mask=attn_mask)
+            features, params = block(features, params, attn_mask=attn_mask)
             if return_hidden:
                 hidden_states.append(features)
         features = self.norm(features)
@@ -143,8 +146,8 @@ class MultiVariableImputer(nn.Module):
             hidden_states.append(features)
 
         logits = {
-            'rating': self.apply_head('rating', features),
-            'ranking': self.apply_head('ranking', features),
+            'rating': self.apply_head('rating', params),
+            'ranking': self.apply_head('ranking', params),
         }
         if return_hidden:
             return logits, hidden_states
