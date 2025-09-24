@@ -533,7 +533,7 @@ def extract_predictions(data_file: str, model_path: str, model_type: str,
 
 def main():
     """Main function with argument parsing."""
-    file_list = [f for f in os.listdir("models") if "map_model" in f or "mapinit_model" in f or ("neural_model" in f and ("tiny" in f or "small" in f or "large" in f))]
+    file_list = [f for f in os.listdir("models_final") if "map_model" in f or "mapinit_model" in f or ("neural_model" in f and ("tiny" in f or "small" in f or "large" in f))]
     file_list.sort()
     
     # Create predictions directory if it doesn't exist
@@ -550,8 +550,14 @@ def main():
         else:
             model_type = "neural"
             device = "cuda"
-
+        if not model_type == "neural":
+            continue
+        size = file.split("_")[3]
+        if not size == "100":
+            continue
         obs_type = file.split("_")[7]
+        if not obs_type=="obs50":
+            continue
         prefix = file.split("_")[4]
         data_file = f"{prefix}_dev_10_{obs_type}_new.json"
 
@@ -563,7 +569,7 @@ def main():
             data_file_name = os.path.splitext(os.path.basename(data_file))[0]
             true_model_file = f"predictions/predictions_true_model_{data_file_name}.json"
 
-        output_file = f"predictions/predictions_{file.replace('.json', '').replace('.pth', '')}.json"
+        output_file = f"predictions_final/predictions_{file.replace('.json', '').replace('.pth', '')}.json"
         if os.path.exists(output_file):
             print(f"File {file} already processed")
             continue
@@ -571,7 +577,7 @@ def main():
         # Extract predictions
         predictions = extract_predictions(
             data_file=data_file,
-            model_path=f"models/{file}",
+            model_path=f"models_final/{file}",
             model_type=model_type,
             device=device,
             output_file=output_file

@@ -80,7 +80,7 @@ class AnnotationArena:
         self.num_patterns_per_example = num_patterns_per_example
         self.visible_ratio = visible_ratio
         self.masking_lambda = masking_lambda
-        logger.debug(f"Dynamic masking params set: patterns={num_patterns_per_example}, visible_ratio={visible_ratio}")
+        logger.info(f"Dynamic masking params set: patterns={num_patterns_per_example}, visible_ratio={visible_ratio}")
     
     def add(self, variable_id, loss_function="cross_entropy", distribution_family="categorical", cost=1.0):
         """

@@ -272,8 +272,7 @@ class EncoderLayer(nn.Module):
         # Param update and smoothing
         combined = torch.cat([feature_x, param_x], dim=-1)
         param_x = self.param_update(combined)
-        
-        feature_x, param_x = self.smoothing(feature_x, param_x, questions, mask)
+    
         
         return feature_x, param_x, query_x
 

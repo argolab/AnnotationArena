@@ -258,11 +258,11 @@ class DomainSpecificEvaluator:
                                metadata: dict, dev_patterns: List, dev_data: List[Dict],
                                pytorch_epochs: int = 500, save_path: str = None,
                                train_file: str = "", training_size: int = 0,
-                               init_with_metadata: bool = False, num_restart=3) -> Tuple[Dict, Dict]:
+                               init_with_metadata: bool = False, num_restart=1) -> Tuple[Dict, Dict]:
         """Train MAP model and evaluate with timing."""
         
         # Check if save path exists and skip training if so
-        if save_path and os.path.exists(save_path):
+        '''if save_path and os.path.exists(save_path):
             logger.info(f"Model already exists at {save_path}, loading instead of training...")
             with open(save_path, 'r') as f:
                 map_params = json.load(f)
@@ -272,7 +272,7 @@ class DomainSpecificEvaluator:
                 map_params['boundaries'] = np.array(map_params['boundaries'])
             if 'p_mat' in map_params and map_params['p_mat'] is not None:
                 map_params['p_mat'] = np.array(map_params['p_mat'])
-            return map_params
+            return map_params'''
         
         boundaries = np.array(metadata['boundaries'])
         
@@ -351,7 +351,7 @@ class NeuralModelEvaluator:
         """Train the neural model on training data and optionally save weights with timing."""
         
         # Check if save path exists and skip training if so
-        if save_path and os.path.exists(save_path):
+        '''if save_path and os.path.exists(save_path):
             logger.info(f"Neural model already exists at {save_path}, loading instead of training...")
             checkpoint = torch.load(save_path, map_location=self.device)
             
@@ -362,7 +362,7 @@ class NeuralModelEvaluator:
             model = ImputerEmbedding(**model_config).to(self.device)
             model.load_state_dict(checkpoint['model_state_dict'])
             model.eval()
-            return model
+            return model'''
         
         # Rest of the training code remains the same...
         # Import neural model classes
@@ -373,7 +373,7 @@ class NeuralModelEvaluator:
         start_time = time.time()
         
         # Determine number of restarts based on model scale
-        num_restarts = 3 if model_scale == "tiny" else 1
+        num_restarts = 1 if model_scale == "tiny" else 1
         best_model = None
         best_loss = float('inf')
         best_training_metrics = None
@@ -425,8 +425,8 @@ class NeuralModelEvaluator:
             
             # Set dynamic masking parameters
             arena.set_dynamic_masking_params(
-                num_patterns_per_example=3,
-                visible_ratio=0.6,
+                num_patterns_per_example=1,
+                visible_ratio=0.85,
                 masking_lambda=0.1
             )
             
@@ -740,7 +740,7 @@ def evaluate_all_models(train_file: str, dev_file: str, training_size: int,
     train_dataset = GaussianDataset(train_file, is_training=True, data_num=training_size)
     dev_dataset = GaussianDataset(dev_file, is_training=False, data_num=100)  # Fixed dev size
     
-    # Get metadata
+    """# Get metadata
     metadata = train_dataset.metadata
     if not metadata:
         raise ValueError("Training data must include metadata with true parameters")
@@ -758,9 +758,9 @@ def evaluate_all_models(train_file: str, dev_file: str, training_size: int,
         map_save_path = None
         mapinit_save_path = None
     
-    # Extract train file name without path and extension for timing records
+    # Extract train file name without path and extension for timing records"""
     train_file_name = train_file
-    
+    """
     domain_evaluator = DomainSpecificEvaluator(n, k)
     domain_evaluator.setup_model_from_metadata(metadata)
     
@@ -776,15 +776,14 @@ def evaluate_all_models(train_file: str, dev_file: str, training_size: int,
 
     print(map_save_path)
     
-    if os.path.exists(map_save_path):
-        print(f"Skip training {map_save_path}")
-    else:
-        map_params = domain_evaluator.train_and_evaluate_map_model(
-            train_x_obs_batch, train_obs_idx_batch, metadata, dev_patterns, 
-            dev_dataset.data, pytorch_epochs=domain_epochs, save_path=map_save_path,
-            train_file=train_file_name, training_size=training_size,
-            init_with_metadata=False
-        )
+    '''if os.path.exists(map_save_path):
+        print(f"Skip training {map_save_path}")'''
+    map_params = domain_evaluator.train_and_evaluate_map_model(
+        train_x_obs_batch, train_obs_idx_batch, metadata, dev_patterns, 
+        dev_dataset.data, pytorch_epochs=domain_epochs, save_path=map_save_path,
+        train_file=train_file_name, training_size=training_size,
+        init_with_metadata=False
+    )
     
     # Train MAP model with metadata initialization
     logger.info("\n" + "="*60)
@@ -803,20 +802,20 @@ def evaluate_all_models(train_file: str, dev_file: str, training_size: int,
     
     logger.info("\n" + "="*60)
     logger.info("TRAINING NEURAL MODELS")
-    logger.info("="*60)
+    logger.info("="*60)"""
     
     # Train neural models of different sizes
     for size in ["large", "small", "tiny"]:
         if save_models:
-            neural_save_path = f"models/neural_model_train_{training_size}_{train_file_name}_{size}.pth"
+            neural_save_path = f"models_final/neural_model_train_{training_size}_{train_file_name}_{size}.pth"
         else:
             neural_save_path = None
 
         print(neural_save_path)
         
-        if os.path.exists(neural_save_path):
+        """if os.path.exists(neural_save_path):
             print(f"Skip training {neural_save_path}")
-            continue
+            continue"""
             
         neural_evaluator = NeuralModelEvaluator(n, k, device)
         neural_model = neural_evaluator.train_neural_model(
@@ -840,7 +839,7 @@ def main():
                        help='Number of training examples to use')
     parser.add_argument('--n', type=int, default=10, help='Number of variables')
     parser.add_argument('--k', type=int, default=5, help='Number of categories')
-    parser.add_argument('--neural_epochs', type=int, default=20,
+    parser.add_argument('--neural_epochs', type=int, default=60,
                        help='Number of epochs for neural model')
     parser.add_argument('--domain_epochs', type=int, default=40,
                        help='Number of epochs for domain model')
