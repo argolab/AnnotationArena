@@ -76,42 +76,42 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     sample = fit.stan_variables()
     
     # Extract shared parameters (same for train and test)
-    mean_preferences = sample["mean_preferences"]  # Shape: [I, D] - SHARED
-    annotator_preferences = sample["annotator_preferences"]  # Shape: [I*J, D] - SHARED
-    rating_probs = sample["rating_probs"]  # Shape: [I*J, C] - SHARED
-    rating_thresholds = sample["rating_thresholds"]  # Shape: [I*J, C] - SHARED
+    mean_preferences = sample["mean_preferences"][0]  # Shape: [I, D] - SHARED
+    annotator_preferences = sample["annotator_preferences"][0]  # Shape: [I*J, D] - SHARED
+    rating_probs = sample["rating_probs"][0]  # Shape: [I*J, C] - SHARED
+    rating_thresholds = sample["rating_thresholds"][0]  # Shape: [I*J, C] - SHARED
     
     # Extract training instance data
-    train_embeddings = sample["train_embeddings"]  # Shape: [K_train, D]
-    train_base_scores = sample["train_base_scores"]  # Shape: [I*J, K_train]
-    train_rating_values = sample["train_rating_values"]  # Shape: [I*J, K_train]
-    train_rating_observed = sample["train_rating_observed"]  # Shape: [I*J, K_train]
+    train_embeddings = sample["train_embeddings"][0]  # Shape: [K_train, D]
+    train_base_scores = sample["train_base_scores"][0]  # Shape: [I*J, K_train]
+    train_rating_values = sample["train_rating_values"][0]  # Shape: [I*J, K_train]
+    train_rating_observed = sample["train_rating_observed"][0]  # Shape: [I*J, K_train]
     
     # Extract test instance data
-    test_embeddings = sample["test_embeddings"]  # Shape: [K_test, D]
-    test_base_scores = sample["test_base_scores"]  # Shape: [I*J, K_test]
-    test_rating_values = sample["test_rating_values"]  # Shape: [I*J, K_test]
-    test_rating_observed = sample["test_rating_observed"]  # Shape: [I*J, K_test]
+    test_embeddings = sample["test_embeddings"][0]  # Shape: [K_test, D]
+    test_base_scores = sample["test_base_scores"][0]  # Shape: [I*J, K_test]
+    test_rating_values = sample["test_rating_values"][0]  # Shape: [I*J, K_test]
+    test_rating_observed = sample["test_rating_observed"][0]  # Shape: [I*J, K_test]
     
     # Extract pairwise rankings
     num_train_pairwise = int(sample["num_train_pairwise_rankings"])
     num_test_pairwise = int(sample["num_test_pairwise_rankings"])
     
     # Training pairwise rankings
-    train_pairwise_items = sample["train_pairwise_items"][:num_train_pairwise]  # Shape: [N_train, 2]
-    train_pairwise_orders = sample["train_pairwise_orders"][:num_train_pairwise]  # Shape: [N_train]
-    train_pairwise_annotators = sample["train_pairwise_annotator"][:num_train_pairwise]  # Shape: [N_train]
-    train_pairwise_attributes = sample["train_pairwise_attribute"][:num_train_pairwise]  # Shape: [N_train]
-    train_pairwise_tied_ratings = sample["train_pairwise_tied_rating"][:num_train_pairwise]  # Shape: [N_train]
-    train_pairwise_observed = sample["train_pairwise_observed"][:num_train_pairwise]  # Shape: [N_train]
+    train_pairwise_items = sample["train_pairwise_items"][0, :num_train_pairwise]  # Shape: [N_train, 2]
+    train_pairwise_orders = sample["train_pairwise_orders"][0, :num_train_pairwise]  # Shape: [N_train]
+    train_pairwise_annotators = sample["train_pairwise_annotator"][0, :num_train_pairwise]  # Shape: [N_train]
+    train_pairwise_attributes = sample["train_pairwise_attribute"][0, :num_train_pairwise]  # Shape: [N_train]
+    train_pairwise_tied_ratings = sample["train_pairwise_tied_rating"][0, :num_train_pairwise]  # Shape: [N_train]
+    train_pairwise_observed = sample["train_pairwise_observed"][0, :num_train_pairwise]  # Shape: [N_train]
     
     # Test pairwise rankings
-    test_pairwise_items = sample["test_pairwise_items"][:num_test_pairwise]  # Shape: [N_test, 2]
-    test_pairwise_orders = sample["test_pairwise_orders"][:num_test_pairwise]  # Shape: [N_test]
-    test_pairwise_annotators = sample["test_pairwise_annotator"][:num_test_pairwise]  # Shape: [N_test]
-    test_pairwise_attributes = sample["test_pairwise_attribute"][:num_test_pairwise]  # Shape: [N_test]
-    test_pairwise_tied_ratings = sample["test_pairwise_tied_rating"][:num_test_pairwise]  # Shape: [N_test]
-    test_pairwise_observed = sample["test_pairwise_observed"][:num_test_pairwise]  # Shape: [N_test]
+    test_pairwise_items = sample["test_pairwise_items"][0, :num_test_pairwise]  # Shape: [N_test, 2]
+    test_pairwise_orders = sample["test_pairwise_orders"][0, :num_test_pairwise]  # Shape: [N_test]
+    test_pairwise_annotators = sample["test_pairwise_annotator"][0, :num_test_pairwise]  # Shape: [N_test]
+    test_pairwise_attributes = sample["test_pairwise_attribute"][0, :num_test_pairwise]  # Shape: [N_test]
+    test_pairwise_tied_ratings = sample["test_pairwise_tied_rating"][0, :num_test_pairwise]  # Shape: [N_test]
+    test_pairwise_observed = sample["test_pairwise_observed"][0, :num_test_pairwise]  # Shape: [N_test]
     
     # Convert training ratings to list format
     train_ratings = []
