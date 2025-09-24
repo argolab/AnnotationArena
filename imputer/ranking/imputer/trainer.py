@@ -1,53 +1,28 @@
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional
 import torch
 import numpy as np
 import torch.optim as optim
 import copy
-
-from .losses import DefaultLossStrategy, adapt_batched_logits_to_predictions
-from .data import RankingData
 import random
-import sys
+
+from .losses import DefaultLossStrategy, adapt_batched_logits_to_predictions, TopLayerPredictionResult
+from .data import RankingData
 
 
 class EvaluationCallback:
-    """Callback for evaluation during training."""
+    """Callback for evaluation during training (no masking during eval)."""
 
-    def __init__(self, eval_engine, test_variables, test_data, converter, masking_rate=0.5, device='cpu'):
-        """
-        Initialize evaluation callback.
-
-        Args:
-            eval_engine: EvaluationEngine instance
-            test_variables: List of test variables for evaluation
-            test_data: Dictionary with test rating_data and ranking_data
-            converter: DataConverter instance
-            masking_rate: Masking rate for evaluation
-            device: Device for computation
-        """
+    def __init__(self, eval_engine, test_variables, converter, device='cpu'):
         self.eval_engine = eval_engine
         self.test_variables = test_variables
-        self.test_data = test_data
         self.converter = converter
-        self.masking_rate = masking_rate
         self.device = device
 
     def on_epoch_end(self, model, epoch):
-        """
-        Called at the end of each epoch.
-
-        Args:
-            model: The model being trained
-            epoch: Current epoch number
-
-        Returns:
-            Dictionary with evaluation results
-        """
         try:
             results = self.eval_engine.evaluate_model(
                 model=model,
                 variables=self.test_variables,
-                masking_rate=self.masking_rate,
                 converter=self.converter,
                 device=self.device
             )
@@ -114,6 +89,8 @@ def calculate_rmse(predictions: List[int], targets: List[int]) -> float:
 
 
 class ImputerTrainer:
+    """Trainer that masks a subset of training observed variables and appends missing ones."""
+
     def __init__(self, model, learning_rate=1e-3, device='cpu', embedding_anchor_reg: float = 0.0, callbacks=None,
                  masked_loss_weight: float = 1.0, observed_loss_weight: float = 1.0):
         self.model = model.to(device)
@@ -123,20 +100,6 @@ class ImputerTrainer:
                                                observed_loss_weight=observed_loss_weight)
         # Callback system
         self.callbacks = callbacks or []
-
-        # Regularize embedding parameters towards their random initialization
-        self.embedding_anchor_reg = float(embedding_anchor_reg)
-        self._embedding_initial_params = {}
-        if self.embedding_anchor_reg > 0.0:
-            # Snapshot initial embedding parameters after model is moved to device
-            for name, param in self.model.named_parameters():
-                if param.requires_grad and self._is_embedding_param_name(name):
-                    self._embedding_initial_params[name] = param.detach().clone()
-
-    def _is_embedding_param_name(self, name: str) -> bool:
-        # FIXME: this function seems not robust. Be careful.
-        n = name.lower()
-        return ("embedding" in n) or ("embed" in n)
 
     def register_callback(self, callback):
         """Register an evaluation callback."""
@@ -155,103 +118,76 @@ class ImputerTrainer:
                     callback_results.append({'epoch': epoch, 'error': str(e)})
         return callback_results
     
+    def _apply_training_mask(self, observed_vars: List[RankingData], masking_rate: float) -> List[RankingData]:
+        """Return a new list where a random subset of observed vars are marked masked (status=1)."""
+        if not observed_vars:
+            return []
+        num_to_mask = int(len(observed_vars) * masking_rate)
+        num_to_mask = max(0, min(len(observed_vars), num_to_mask))
+        masked_indices = set(random.sample(list(range(len(observed_vars))), num_to_mask)) if num_to_mask > 0 else set()
 
+        out: List[RankingData] = []
+        for idx, var in enumerate(observed_vars):
+            status = 1 if idx in masked_indices else 2  # 1=masked, 2=observed
+            out.append(RankingData(
+                annotator_id=var.annotator_id,
+                attribute_id=var.attribute_id,
+                is_listwise=var.is_listwise,
+                item_ids=var.item_ids,
+                status=status,
+                instance=var.instance,
+                rating_value=var.rating_value,
+                ranking_order=var.ranking_order,
+            ))
+        return out
 
-    def train_step(self, batch_of_masked_versions):
-        """Single training step with batch of multiple masked versions."""
+    def train_step(self,
+                   train_observed_vars: List[RankingData],
+                   train_missing_vars: List[RankingData],
+                   masking_rate: float) -> Dict[str, float]:
+        """Single training step: mask subset of observed, append missing, compute loss on non-missing only."""
         self.optimizer.zero_grad()
 
-        # Handle both old format (List[RankingData]) and new format (List[List[RankingData]])
-        if len(batch_of_masked_versions) > 0 and isinstance(batch_of_masked_versions[0], list):
-            # New format: List[List[RankingData]] - batch of masked versions
-            # For now, process each masked version separately and accumulate gradients
-            total_loss_tensor = None
-            total_losses = {}
+        # Validate inputs
+        if train_observed_vars is None or train_missing_vars is None:
+            raise ValueError("train_observed_vars and train_missing_vars must be provided")
 
-            for masked_version in batch_of_masked_versions:
-                if len(masked_version) == 0:
-                    continue
+        # Apply masking to observed
+        masked_or_observed = self._apply_training_mask(train_observed_vars, masking_rate)
 
-                # Forward pass on this masked version
-                reference_data_list = copy.deepcopy(masked_version)
-                out = self.model(masked_version)
+        # Append missing as-is (status=0)
+        batch_list: List[RankingData] = []
+        batch_list.extend(masked_or_observed)
+        for var in train_missing_vars:
+            if not var.is_missing and not var.is_masked and not var.is_observed:
+                # Defensive: enforce valid status
+                raise ValueError("train_missing_vars contains an entry that is not missing")
+            batch_list.append(var)
 
-                # Compute loss for this version
-                version_losses = self._compute_loss_for_version(out, reference_data_list)
+        # Forward
+        out = self.model(batch_list)
 
-                # Accumulate losses
-                if total_loss_tensor is None:
-                    total_loss_tensor = version_losses.get('_total_loss_tensor')
-                    total_losses = {k: v for k, v in version_losses.items()}
-                else:
-                    if version_losses.get('_total_loss_tensor') is not None:
-                        total_loss_tensor = total_loss_tensor + version_losses.get('_total_loss_tensor')
-                    for k, v in version_losses.items():
-                        if not k.startswith('_'):
-                            total_losses[k] = total_losses.get(k, 0.0) + v
+        # Compute loss: only over non-missing (observed+masked)
+        total_losses = self._compute_loss_for_batch(out, masked_or_observed)
+        total_loss_tensor = total_losses.get('_total_loss_tensor')
 
-            # Average losses by number of versions
-            num_versions = len([v for v in batch_of_masked_versions if len(v) > 0])
-            if num_versions > 0:
-                if total_loss_tensor is not None:
-                    total_loss_tensor = total_loss_tensor / num_versions
-                for k in total_losses:
-                    if not k.startswith('_'):
-                        total_losses[k] = total_losses[k] / num_versions
-
-        else:
-            # Old format: List[RankingData] - single masked version
-            reference_data_list = copy.deepcopy(batch_of_masked_versions)
-            out = self.model(batch_of_masked_versions)
-            total_losses = self._compute_loss_for_version(out, reference_data_list)
-            total_loss_tensor = total_losses.get('_total_loss_tensor')
-
-        # Backprop and step
         if total_loss_tensor is not None:
             total_loss_tensor.backward()
             self.optimizer.step()
 
-        # Return only float metrics
         return {k: v for k, v in total_losses.items() if not k.startswith('_')}
 
-    def _compute_loss_for_version(self, model_output, reference_data_list):
-        """Compute loss for a single masked version."""
+    def _compute_loss_for_batch(self, model_output, supervised_refs: List[RankingData]):
+        """Compute loss for supervised refs (observed+masked); ignores missing."""
         rating_logits = model_output['rating']
         ranking_logits = model_output['ranking']
 
-        # Structured predictions and references for loss computation
         predictions_full = adapt_batched_logits_to_predictions({'rating': rating_logits, 'ranking': ranking_logits})
-        predictions: List["TopLayerPredictionResult"] = []
-        references: List[RankingData] = []
+        # Only take predictions corresponding to supervised refs (the first segment of the batch)
+        num_supervised = len(supervised_refs)
+        predictions = predictions_full[:num_supervised]
+        references = supervised_refs
 
-        # Reconstruct references from batch tensors (0-indexed) - for ALL training variables with ground truth
-        for i, var in enumerate(reference_data_list):
-            if not var.is_missing:
-                if not var.is_listwise:
-                    predictions.append(predictions_full[i])
-                    references.append(RankingData(
-                        annotator_id=var.annotator_id,
-                        attribute_id=var.attribute_id,
-                        is_listwise=False,
-                        is_missing=False,
-                        item_ids=var.item_ids,
-                        rating_value=var.rating_value,
-                        is_masked=var.is_masked,
-                    ))
-                elif var.is_listwise:
-                    predictions.append(predictions_full[i])
-                    references.append(RankingData(
-                        annotator_id=var.annotator_id,
-                        attribute_id=var.attribute_id,
-                        is_listwise=True,
-                        is_missing=False,
-                        item_ids=[it for it in var.item_ids[: self.model.max_rank_size]],
-                        ranking_order=var.ranking_order,
-                        is_masked=var.is_masked,
-                    ))
-                else:
-                    raise ValueError("Shouldn't be here")
-            
         losses = self.loss_strategy.compute(predictions, references)
 
         # Embedding anchor regularization: keep embeddings close to their random initialization
@@ -282,53 +218,31 @@ class ImputerTrainer:
 
         return losses
 
-    def train(self, train_batches, epochs=10, call_callbacks_every=1, verbose=True):
-        """
-        Training loop with callback support.
-
-        Args:
-            train_batches: List of training batches or single batch to repeat
-            epochs: Number of epochs to train
-            call_callbacks_every: Call callbacks every N epochs
-            verbose: Print training progress
-
-        Returns:
-            Dictionary with training history and callback results
-        """
+    def train(self,
+              train_observed_vars: List[RankingData],
+              train_missing_vars: List[RankingData],
+              masking_rate: float,
+              epochs: int = 10,
+              call_callbacks_every: int = 1,
+              verbose: bool = True):
+        """Simple training loop using the new API."""
         training_history = []
         callback_history = []
 
-        # Handle single batch case
-        if isinstance(train_batches, dict):
-            train_batches = [train_batches]
-
         for epoch in range(epochs):
-            epoch_losses = []
+            loss_dict = self.train_step(train_observed_vars, train_missing_vars, masking_rate)
 
-            # Training on all batches
-            for batch in train_batches:
-                loss_dict = self.train_step(batch)
-                epoch_losses.append(loss_dict)
+            training_history.append({'epoch': epoch, **loss_dict})
 
-            # Average losses for this epoch
-            avg_losses = {}
-            if epoch_losses:
-                for key in epoch_losses[0].keys():
-                    avg_losses[key] = np.mean([losses[key] for losses in epoch_losses])
-
-            training_history.append({'epoch': epoch, **avg_losses})
-
-            # Call callbacks
             if (epoch + 1) % call_callbacks_every == 0:
                 callback_results = self._call_epoch_end_callbacks(epoch)
                 if callback_results:
                     callback_history.extend(callback_results)
 
-            # Print progress
             if verbose and (epoch + 1) % max(1, epochs // 10) == 0:
-                total_loss = avg_losses.get('total_loss', 0.0)
-                rating_loss = avg_losses.get('rating_loss', 0.0)
-                ranking_loss = avg_losses.get('ranking_loss', 0.0)
+                total_loss = loss_dict.get('total_loss', 0.0)
+                rating_loss = loss_dict.get('rating_loss', 0.0)
+                ranking_loss = loss_dict.get('ranking_loss', 0.0)
                 print(f"Epoch {epoch + 1}/{epochs}: "
                       f"Total Loss: {total_loss:.4f}, "
                       f"Rating Loss: {rating_loss:.4f}, "

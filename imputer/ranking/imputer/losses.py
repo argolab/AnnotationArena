@@ -18,7 +18,6 @@ ratings and rankings. It includes:
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 import torch
-import sys
 import torch.nn as nn
 from .data import RankingData
 
@@ -134,20 +133,10 @@ class DefaultLossStrategy(LossStrategyBase):
         N = len(predictions)
         device = predictions[0].device if predictions else torch.device('cpu')
 
-        # Defensive check: ensure all references have is_masked properly set
-        for i, ref in enumerate(references):
-            if ref.is_masked is None:
-                raise ValueError(f"Reference {i} has is_masked=None. All references must have is_masked set to True or False.")
-                sys.exit()
-
-        # for all prediction, check if either rating or ranking has data.
+        # Basic check: each prediction should provide at least one head
         for p in predictions:
             if p.rating_logits is None and p.ranking_logits is None:
                 raise ValueError("Either rating or ranking logits must be provided")
-            if p.is_listwise is False and p.rating_logits is None:
-                raise ValueError("Rating logits must be provided for rating")
-            if p.is_listwise is True and p.ranking_logits is None:
-                raise ValueError("Ranking logits must be provided for ranking")
 
         # Infer dimensions
         C = next((p.rating_logits.shape[-1] for p in predictions if p.rating_logits is not None), 0) # FIXME: should we use is_listwise for stricter checking? Implicitly checking either rating or ranking has to contain data.
@@ -237,7 +226,7 @@ class DefaultLossStrategy(LossStrategyBase):
             if observed_ranking_mask.any():
                 observed_ranking_loss = self.ranking_loss_fn(ranking_logits, ranking_targets, observed_ranking_mask)
 
-        # Weighted combination of masked and observed losses
+        # Weighted combination of masked and observed losses (weights mostly relevant during training)
         masked_total_loss = masked_rating_loss + masked_ranking_loss
         observed_total_loss = observed_rating_loss + observed_ranking_loss
 
@@ -283,9 +272,9 @@ class TopLayerPredictionResult:
 
 
 def adapt_batched_logits_to_predictions(logits: Dict[str, torch.Tensor]) -> List[TopLayerPredictionResult]:
-    """Convert batched model logits dict {'rating': [B,N,C], 'ranking': [B,N,R]} to a list of per-variable predictions for B==1.
+    """Convert batched model logits dict {'rating': [B,N,C], 'ranking': [B,N,R]} to per-variable predictions for B==1.
 
-    This adapter is useful when pairing with a List[RankingData] on the outside.
+    This adapter pairs naturally with a List[RankingData] of length N used as references.
     """
     rating = logits['rating']  # [B,N,C]
     ranking = logits['ranking']  # [B,N,R]

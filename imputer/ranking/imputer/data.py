@@ -72,8 +72,8 @@ class DataConverter:
         
         Args:
             bundle: Complete data bundle
-            partition: "train", "test", or "all"
-            status: "observed", "missing", or "all"
+            partition: "train", "test"
+            status: "observed", "missing"
         
         Returns:
             List of RankingData objects
