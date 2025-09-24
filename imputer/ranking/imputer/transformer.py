@@ -34,7 +34,7 @@ class TransformerBlock(nn.Module):
     Padded tokens neither attend to others nor contribute to outputs.
     """
 
-    def __init__(self, feature_dim: int, attention_heads: int, dropout: float = 0.3):
+    def __init__(self, feature_dim: int, param_dim: int, attention_heads: int, dropout: float = 0.3):
         super().__init__()
         self.feature_dim = feature_dim
         self.attention_heads = attention_heads
@@ -49,6 +49,8 @@ class TransformerBlock(nn.Module):
         self.norm_2 = NormLayer(feature_dim)
         self.dropout_1 = nn.Dropout(dropout)
         self.dropout_2 = nn.Dropout(dropout)
+
+        self.param_update = nn.Linear(feature_dim + param_dim, param_dim)
 
         self.ff = FeedForward(feature_dim, dropout=dropout)
 
@@ -72,7 +74,7 @@ class TransformerBlock(nn.Module):
         scores = scores.transpose(1, 2).contiguous().view(batch_size, -1, self.feature_dim)
         return self.out(scores)
 
-    def forward(self, feature_x: torch.Tensor, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, feature_x: torch.Tensor, param_x: torch.Tensor, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
         batch_size = feature_x.shape[0]
 
         feature_x_norm = self.norm_1(feature_x) # pre-norm before attention
@@ -87,4 +89,6 @@ class TransformerBlock(nn.Module):
         if attn_mask is not None:
             ff_out = ff_out * attn_mask.unsqueeze(-1).to(ff_out.dtype)
         feature_x = self.dropout_2(ff_out) + feature_x
-        return feature_x
+        combined = torch.cat([feature_x, param_x], dim=-1)
+        param_x = self.param_update(combined)
+        return feature_x, param_x
