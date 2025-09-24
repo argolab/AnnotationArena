@@ -51,113 +51,6 @@ COLORS = {
     'marformer_large': '#660708'    # Very dark red for Large
 }
 
-
-def get_em_true_init_performance_at_budgets(node_results: Dict[str, Any], n_nodes: int, budgets: List[int]) -> Tuple[List[float], List[float], List[float]]:
-    """
-    Evaluate EM performance when initialized with true parameters at each budget level.
-
-    Runs EM true init at each training set size with multiple trials for confidence intervals.
-
-    Args:
-        node_results: Results for this node size
-        n_nodes: Number of nodes
-        budgets: List of training set sizes to evaluate at
-
-    Returns:
-        Tuple of (kl_means, kl_lowers, kl_uppers) for plotting
-    """
-    try:
-        # Import needed modules
-        from data.graph_generator import generate_experiment_graph
-        from domain.em_model import DomainEMModel
-        from data.sample_generator import generate_sample_pool, generate_test_dataset
-        import pyagrum as gum
-
-        # Get configuration from first experiment
-        first_experiment = next(iter(node_results.values()))
-        config = first_experiment.get('config', {})
-
-        # Recreate the exact true BN used in experiments
-        true_bn, adj_matrix = generate_experiment_graph(
-            n_nodes=n_nodes,
-            target_parents=config.get('target_parents', 5.0),
-            seed=config.get('seed', 42),
-            cpt_generation=config.get('cpt_generation', 'logistic'),
-            logistic_std=config.get('logistic_std', 1.0)
-        )
-
-        missing_rate = config.get('missing_rate', 0.4)
-        test_samples_count = config.get('test_samples', 250)
-
-        # Generate test data once
-        test_samples = generate_test_dataset(
-            true_bn, adj_matrix, n_nodes, test_samples_count, missing_rate, seed=config.get('seed', 42) + 2000
-        )
-
-        kl_means = []
-        kl_lowers = []
-        kl_uppers = []
-
-        # Run EM true init at each budget level
-        for budget in budgets:
-            budget_kl_values = []
-
-            # Run multiple trials for confidence intervals (like the other methods)
-            n_trials = 3  # Match number of graph instances
-            for trial in range(n_trials):
-                try:
-                    # Generate training data of this specific size
-                    training_samples = generate_sample_pool(
-                        true_bn, adj_matrix, n_nodes, budget, missing_rate,
-                        seed=config.get('seed', 42) + 1000 + trial * 10000
-                    )
-
-                    # Create EM model - start with true BN parameters
-                    em_model = DomainEMModel(max_iter=10, n_restarts=1, use_likelihood_selection=False)
-
-                    # Train EM starting from the true BN
-                    em_model.train(training_samples, true_bn, adj_matrix, n_nodes)
-
-                    # Evaluate on test data
-                    eval_results = em_model.evaluate(test_samples, true_bn, n_nodes)
-                    kl_value = eval_results.get('mean_kl', 0.001)
-                    budget_kl_values.append(kl_value)
-
-                    logger.debug(f"EM true init trial {trial+1}: budget={budget}, KL={kl_value:.6f}")
-
-                except Exception as e:
-                    logger.warning(f"EM true init failed for budget {budget}, trial {trial}: {e}")
-                    budget_kl_values.append(0.001)
-
-            # Compute confidence intervals for this budget
-            if budget_kl_values:
-                from utils.bootstrap_stats import bootstrap_confidence_interval
-
-                mean_kl = np.mean(budget_kl_values)
-                if len(budget_kl_values) > 1:
-                    lower, upper = bootstrap_confidence_interval(budget_kl_values)
-                else:
-                    lower, upper = mean_kl, mean_kl
-
-                kl_means.append(mean_kl)
-                kl_lowers.append(lower)
-                kl_uppers.append(upper)
-
-                logger.info(f"EM true init budget {budget}: KL={mean_kl:.6f} [{lower:.6f}, {upper:.6f}]")
-            else:
-                kl_means.append(0.001)
-                kl_lowers.append(0.001)
-                kl_uppers.append(0.001)
-
-        return kl_means, kl_lowers, kl_uppers
-
-    except Exception as e:
-        logger.error(f"Failed to compute EM true init performance for {n_nodes} nodes: {e}")
-        # Return fallback values
-        fallback = [0.001] * len(budgets)
-        return fallback, fallback, fallback
-
-
 def format_model_name(model_type: str, size: str = None) -> str:
     """
     Format model names with consistent LaTeX styling.
@@ -289,12 +182,12 @@ def plot_kl_divergence_curves(results: Dict[str, Any], output_dir: str = "plots"
         # Add reference lines
         ax.axhline(y=0, color='green', linestyle='-', linewidth=2, alpha=0.8, label='True Model (LazyPropagation)')
 
-        # Compute and plot EM true init performance at each budget level
-        em_true_init_kls, em_true_init_lowers, em_true_init_uppers = get_em_true_init_performance_at_budgets(node_results, n_nodes, costs)
-        ax.plot(costs, em_true_init_kls, 's--', label='EM (True Init)',
-               color='green', linewidth=2, markersize=6, alpha=0.8)
-        ax.fill_between(costs, em_true_init_lowers, em_true_init_uppers,
-                       color='green', alpha=0.2)
+        # # Compute and plot EM true init performance at each budget level
+        # em_true_init_kls, em_true_init_lowers, em_true_init_uppers = get_em_true_init_performance_at_budgets(node_results, n_nodes, costs)
+        # ax.plot(costs, em_true_init_kls, 's--', label='EM (True Init)',
+        #        color='green', linewidth=2, markersize=6, alpha=0.8)
+        # ax.fill_between(costs, em_true_init_lowers, em_true_init_uppers,
+        #                color='green', alpha=0.2)
 
         ax.set_xlabel('Training Set Size', fontsize=12)
         ax.set_ylabel('KL divergence per marginal prediction (nats)', fontsize=12)
@@ -468,7 +361,7 @@ def plot_true_vs_predicted_cross_entropy(results: Dict[str, Any], output_dir: st
 
             # Model names on left
             if col == 0:
-                ax.text(-0.1, 0.5, model_name, rotation=90, ha='right', va='center',
+                ax.text(-0.13, 0.5, model_name, rotation=90, ha='right', va='center',
                        transform=ax.transAxes, fontsize=10)
 
     plt.tight_layout()
