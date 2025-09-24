@@ -7,15 +7,21 @@ import torch.nn.functional as F
 
 @dataclass
 class RankingData:
-    """Structured representation of a single variable for ranking/rating.
+    """Enhanced structured representation with clear status tracking.
 
     All indices are 0-indexed for model consumption.
+    Status encoding:
+    - 0: missing (not observed, target for prediction)
+    - 1: masked (observed but hidden during training)
+    - 2: observed (available for training)
+    
+    Fields:
     - annotator_id: annotator index
     - attribute_id: attribute index
     - is_listwise: True for listwise ranking, False for rating
     - item_ids: for rating, a list with one item id; for ranking, the ranked item ids
-    - is_masked: None=undecided, True=masked (no supervision), False=observed (has supervision)
-    Optional supervision fields:
+    - status: status code (0=missing, 1=masked, 2=observed)
+    - instance: "train" or "test"
     - rating_value: class index [0..C-1] if rating observed
     - ranking_order: list of positions in [1..R] aligned with item_ids when ranking observed
     """
@@ -24,8 +30,24 @@ class RankingData:
     is_listwise: bool
     item_ids: List[int]
     status: int
+    instance: str
     rating_value: Optional[int] = None
     ranking_order: Optional[List[int]] = None
+    
+    @property
+    def is_missing(self) -> bool:
+        """True if this variable is missing (status=0)."""
+        return self.status == 0
+    
+    @property
+    def is_masked(self) -> bool:
+        """True if this variable is masked (status=1)."""
+        return self.status == 1
+    
+    @property
+    def is_observed(self) -> bool:
+        """True if this variable is observed (status=2)."""
+        return self.status == 2
 
 
 class DataConverter:
