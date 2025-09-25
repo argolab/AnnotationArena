@@ -8,7 +8,6 @@ data {
     int<lower=1> C;         // number of rating categories
     
     // Observation protocol controls
-    int<lower=0, upper=1> enable_third_annotator;  // Ablation: enable third annotator for disagreement
     int<lower=0, upper=1> enable_pairwise_rankings;  // Ablation: enable pairwise rankings
     int<lower=0> pairwise_cap_per_item;     // Max comparisons per item within its tied group
     
@@ -190,83 +189,74 @@ generated quantities {
     
     // ===== TRAINING INSTANCE OBSERVATION PROTOCOL =====
     for (k in 1:K_train) {  // for each training item
-        // Sample two different annotators from training set
-        real u1 = uniform_rng(0, 1);
-        int j1 = train_annotator_start + to_int(floor(u1 * (train_annotator_end - train_annotator_start + 1)));
-        if (j1 > train_annotator_end) j1 = train_annotator_end;
+        // Sample 4 different annotators from training set
+        array[4] int selected_annotators;
+        int num_selected = 0;
         
-        // Sample j2 such that j2 != j1
-        int j2 = j1;
-        while (j2 == j1) {
-            real u2 = uniform_rng(0, 1);
-            j2 = train_annotator_start + to_int(floor(u2 * (train_annotator_end - train_annotator_start + 1)));
-            if (j2 > train_annotator_end) j2 = train_annotator_end;
+        while (num_selected < 4) {
+            real u = uniform_rng(0, 1);
+            int candidate = train_annotator_start + to_int(floor(u * (train_annotator_end - train_annotator_start + 1)));
+            if (candidate > train_annotator_end) candidate = train_annotator_end;
+            
+            // Check if this annotator is already selected
+            int already_selected = 0;
+            for (s in 1:num_selected) {
+                if (selected_annotators[s] == candidate) {
+                    already_selected = 1;
+                    break;
+                }
+            }
+            
+            // Add if not already selected
+            if (already_selected == 0) {
+                num_selected += 1;
+                selected_annotators[num_selected] = candidate;
+            }
         }
         
-        // Assign both annotators to rate this item on all criteria
+        // Assign all 4 annotators to rate this item on all criteria
         for (i in 1:I) {
-            int idx1 = (i-1)*J + j1;
-            int idx2 = (i-1)*J + j2;
-            train_rating_observed[idx1, k] = 1;
-            train_rating_observed[idx2, k] = 1;
-            
-            // Check for disagreement > 1 and add third annotator if enabled
-            if (enable_third_annotator == 1) {
-                int rating1 = train_rating_values[idx1, k];
-                int rating2 = train_rating_values[idx2, k];
-                if (abs(rating1 - rating2) > 1) {
-                    // Find a third annotator from the training set, ensuring j3 != j1 and j3 != j2
-                    int j3 = j1;
-                    while (j3 == j1 || j3 == j2) {
-                        real u3 = uniform_rng(0, 1);
-                        j3 = train_annotator_start + to_int(floor(u3 * (train_annotator_end - train_annotator_start + 1)));
-                        if (j3 > train_annotator_end) j3 = train_annotator_end;
-                    }
-
-                    int idx3 = (i-1)*J + j3;
-                    train_rating_observed[idx3, k] = 1;
-                }
+            for (s in 1:4) {
+                int j = selected_annotators[s];
+                int idx = (i-1)*J + j;
+                train_rating_observed[idx, k] = 1;
             }
         }
     }
     
     // ===== TEST INSTANCE OBSERVATION PROTOCOL =====
     for (k in 1:K_test) {
-        // Sample two different annotators from test set
-        real u1 = uniform_rng(0, 1);
-        int j1 = test_annotator_start + to_int(floor(u1 * (test_annotator_end - test_annotator_start + 1)));
-        if (j1 > test_annotator_end) j1 = test_annotator_end;
+        // Sample 4 different annotators from test set
+        array[4] int selected_annotators;
+        int num_selected = 0;
         
-        int j2 = j1;
-        while (j2 == j1) {
-            real u2 = uniform_rng(0, 1);
-            j2 = test_annotator_start + to_int(floor(u2 * (test_annotator_end - test_annotator_start + 1)));
-            if (j2 > test_annotator_end) j2 = test_annotator_end;
+        while (num_selected < 4) {
+            real u = uniform_rng(0, 1);
+            int candidate = test_annotator_start + to_int(floor(u * (test_annotator_end - test_annotator_start + 1)));
+            if (candidate > test_annotator_end) candidate = test_annotator_end;
+            
+            // Check if this annotator is already selected
+            int already_selected = 0;
+            for (s in 1:num_selected) {
+                if (selected_annotators[s] == candidate) {
+                    already_selected = 1;
+                    break;
+                }
+            }
+            
+            // Add if not already selected
+            if (already_selected == 0) {
+                num_selected += 1;
+                selected_annotators[num_selected] = candidate;
+            }
         }
         
-        // Assign both annotators to rate this item on all criteria
+        // Assign all 4 annotators to rate this item on all criteria
         for (i in 1:I) {
-            int idx1 = (i-1)*J + j1;
-            int idx2 = (i-1)*J + j2;
-            test_rating_observed[idx1, k] = 1;
-            test_rating_observed[idx2, k] = 1;
-            
-            // Check for disagreement > 1 and add third annotator if enabled
-            if (enable_third_annotator == 1) {
-                int rating1 = test_rating_values[idx1, k];
-                int rating2 = test_rating_values[idx2, k];
-                if (abs(rating1 - rating2) > 1) {
-                    // Find a third annotator from the test set, ensuring j3 != j1 and j3 != j2
-                    int j3 = j1;
-                    while (j3 == j1 || j3 == j2) {
-                        real u3 = uniform_rng(0, 1);
-                        j3 = test_annotator_start + to_int(floor(u3 * (test_annotator_end - test_annotator_start + 1)));
-                        if (j3 > test_annotator_end) j3 = test_annotator_end;
-                    }
-                    
-                    int idx3 = (i-1)*J + j3;
-                    test_rating_observed[idx3, k] = 1;
-                }
+            for (s in 1:4) {
+                int j = selected_annotators[s];
+                int idx = (i-1)*J + j;
+                test_rating_observed[idx, k] = 1;
             }
         }
     }
