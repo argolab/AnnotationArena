@@ -12,7 +12,7 @@ from data import RankingData
 class EvaluationCallback:
     """Callback for evaluation during training (no masking during eval)."""
 
-    def __init__(self, eval_engine, test_variables, converter, device='cpu'):
+    def __init__(self, eval_engine, test_variables, converter, device='cuda'):
         self.eval_engine = eval_engine
         self.test_variables = test_variables
         self.converter = converter
@@ -92,7 +92,7 @@ def calculate_rmse(predictions: List[int], targets: List[int]) -> float:
 class ImputerTrainer:
     """Trainer that masks a subset of training observed variables and appends missing ones."""
 
-    def __init__(self, model, learning_rate=1e-3, device='cpu', embedding_anchor_reg: float = 0.0, callbacks=None,
+    def __init__(self, model, learning_rate=1e-3, device='cuda', embedding_anchor_reg: float = 0.0, callbacks=None,
                  masked_loss_weight: float = 1.0, observed_loss_weight: float = 1.0):
         self.model = model.to(device)
         self.device = device

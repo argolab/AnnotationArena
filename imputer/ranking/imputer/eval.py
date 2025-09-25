@@ -42,7 +42,7 @@ class EvaluationEngine:
         # Loss strategy; weights don't matter in eval since masked subset is empty
         self.loss_strategy = DefaultLossStrategy()
 
-    def evaluate_model(self, model, variables: List[RankingData], converter=None, device='cpu') -> EvaluationResults:
+    def evaluate_model(self, model, variables: List[RankingData], converter=None, device='cuda') -> EvaluationResults:
         """Evaluate on provided variables as-is; compute metrics/log-loss per status (observed/missing/masked)."""
         if converter is None:
             raise ValueError("DataConverter required for evaluation")

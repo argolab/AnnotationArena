@@ -83,7 +83,7 @@ class BaseRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         num_likert_classes: int,
         max_rank_size: int,
         freeze: bool | dict = False,
-        device: str = "cpu",
+        device: str = "cuda",
     ) -> "BaseRankingEmbeddingProvider":
         f"""Factory: build a provider from ground-truth embedding matrices.
 
@@ -436,12 +436,15 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         num_likert_classes: int,
         max_rank_size: int,
         device: str,
+        randomness: bool
     ):
+
         super().__init__(
             num_likert_classes=num_likert_classes,
             max_rank_size=max_rank_size,
             embedding_dim=embedding_dim
         )
+        self.to("cuda")
         self.pairwise_relation = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
 
         self.num_attributes = num_attributes
@@ -449,12 +452,15 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         self.num_items = num_items
         self.device = device
         self.internal_dimension = embedding_dim - 3
+        self.randomness = randomness
+
+        print(f"Randomness set to {self.randomness}")
 
         # Embeddings for each component (learned parameters)
         self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, self.internal_dimension))
         self.annotator_embedding_learnable = nn.Parameter(torch.randn(num_annotators, self.internal_dimension // 2))
-        self.annotator_embedding_random = torch.rand(num_annotators, self.internal_dimension - self.internal_dimension // 2)
-        self.item_embedding = torch.rand(num_items, self.internal_dimension)
+        self.annotator_embedding_random = torch.rand(num_annotators, self.internal_dimension - self.internal_dimension // 2, device="cuda")
+        self.item_embedding = torch.rand(num_items, self.internal_dimension, device="cuda")
 
         torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.annotator_embedding_learnable, mode='fan_out', nonlinearity='relu')
@@ -462,9 +468,9 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
 
     def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_masked: bool = False) -> torch.Tensor:
         """Implementation for rating embeddings."""
-        attr_vec = torch.cat((torch.tensor([1, 0, 0]), self.attribute_embedding[attribute_id]), dim=-1)
-        annot_vec = torch.cat((torch.tensor([0, 1, 0]), self.annotator_embedding_learnable[annotator_id], self.annotator_embedding_random[annotator_id]), dim=-1)
-        item_vec = torch.cat((torch.tensor([0, 0, 1]), self.item_embedding[item_id]), dim=-1)
+        attr_vec = torch.cat((torch.tensor([1, 0, 0]).to("cuda"), self.attribute_embedding[attribute_id]), dim=-1)
+        annot_vec = torch.cat((torch.tensor([0, 1, 0]).to("cuda"), self.annotator_embedding_learnable[annotator_id], self.annotator_embedding_random[annotator_id]), dim=-1)
+        item_vec = torch.cat((torch.tensor([0, 0, 1]).to("cuda"), self.item_embedding[item_id]), dim=-1)
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
         parameter = torch.zeros(max(self.num_likert_classes, self.max_rank_size) + 1).to(self.device)
         if is_masked:
@@ -477,12 +483,12 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
     # Get embedding for ranking variables
     def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_masked: bool = False) -> torch.Tensor:
         # print("WARNING: not using ranking order")
-        attr_vec = torch.cat((torch.tensor([1, 0, 0]), self.attribute_embedding[attribute_id]), dim=-1)
-        annot_vec = torch.cat((torch.tensor([0, 1, 0]), self.annotator_embedding_learnable[annotator_id], self.annotator_embedding_random[annotator_id]), dim=-1)
+        attr_vec = torch.cat((torch.tensor([1, 0, 0]).to("cuda"), self.attribute_embedding[attribute_id]), dim=-1)
+        annot_vec = torch.cat((torch.tensor([0, 1, 0]).to("cuda"), self.annotator_embedding_learnable[annotator_id], self.annotator_embedding_random[annotator_id]), dim=-1)
         assert len(item_ids) == 2, "Pairwise Ranking Embedding Provider only support two items ranking"
 
-        item_embedding_1 = torch.cat((torch.tensor([0, 0, 1]), self.item_embedding[item_ids[0]]), dim=-1)
-        item_embedding_2 = torch.cat((torch.tensor([0, 0, 1]), self.item_embedding[item_ids[1]]), dim=-1)
+        item_embedding_1 = torch.cat((torch.tensor([0, 0, 1]).to("cuda"), self.item_embedding[item_ids[0]]), dim=-1)
+        item_embedding_2 = torch.cat((torch.tensor([0, 0, 1]).to("cuda"), self.item_embedding[item_ids[1]]), dim=-1)
         item_embedding = item_embedding_1 + item_embedding_2 @ self.pairwise_relation
         total_embedding = attr_vec + annot_vec + item_embedding
         parameter = torch.zeros(1 + max(self.num_likert_classes, self.max_rank_size)).to(self.device)
@@ -498,11 +504,11 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
     def on_forward_start(self, variables: List[RankingData]):
         """Generate new random embeddings for all components at the start of each forward pass."""
 
-        
-        # Reset embeddings with the required dimensions
+        if not self.randomness:
+            return
         self.partial_reset_embedding()
 
     def partial_reset_embedding(self):
-        self.annotator_embedding_random = torch.rand(self.num_annotators, self.internal_dimension - self.internal_dimension // 2)
-        self.item_embedding = torch.rand(self.num_items, self.internal_dimension)
+        self.annotator_embedding_random = torch.rand(self.num_annotators, self.internal_dimension - self.internal_dimension // 2, device="cuda")
+        self.item_embedding = torch.rand(self.num_items, self.internal_dimension, device="cuda")
 
