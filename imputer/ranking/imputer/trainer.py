@@ -7,12 +7,12 @@ import random
 
 from losses import DefaultLossStrategy, adapt_batched_logits_to_predictions, TopLayerPredictionResult
 from data import RankingData
-
+from tqdm import tqdm
 
 class EvaluationCallback:
     """Callback for evaluation during training (no masking during eval)."""
 
-    def __init__(self, eval_engine, test_variables, converter, device='cpu', name='EvaluationCallback'):
+    def __init__(self, eval_engine, test_variables, converter, device='cuda', name='EvaluationCallback'):
         self.eval_engine = eval_engine
         self.test_variables = test_variables
         self.converter = converter
@@ -94,8 +94,8 @@ def calculate_rmse(predictions: List[int], targets: List[int]) -> float:
 class ImputerTrainer:
     """Trainer that masks a subset of training observed variables and appends missing ones."""
 
-    def __init__(self, model, learning_rate=1e-3, device='cpu', embedding_anchor_reg: float = 0.0, callbacks=None,
-                 masked_loss_weight: float = 1.0, observed_loss_weight: float = 1.0):
+    def __init__(self, model, learning_rate=1e-3, device='cuda', embedding_anchor_reg: float = 0.0, callbacks=None,
+                 masked_loss_weight: float = 3.0, observed_loss_weight: float = 1.0):
         self.model = model.to(device)
         self.device = device
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -232,7 +232,7 @@ class ImputerTrainer:
         training_history = []
         callback_history = []
 
-        for epoch in range(epochs):
+        for epoch in tqdm(range(epochs)):
             loss_dict = self.train_step(train_observed_vars, train_missing_vars, masking_rate)
 
             training_history.append({'epoch': epoch, **loss_dict})
@@ -253,6 +253,12 @@ class ImputerTrainer:
                       f"Total Loss: {total_loss:.4f}, "
                       f"Rating Loss: {rating_loss:.4f}, "
                       f"Ranking Loss: {ranking_loss:.4f}")
+                
+            model_path = '/export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/IMPUTER/models' / f"model_{str(epoch)}.pt"
+            torch.save({
+                "state_dict": self.model.state_dict(),
+                "max_rank_size": 2
+            }, model_path)
 
         return {
             'training_history': training_history,

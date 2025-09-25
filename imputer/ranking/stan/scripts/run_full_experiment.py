@@ -26,11 +26,11 @@ def main():
     parser = argparse.ArgumentParser(description="Run complete experiment: data generation + MCMC + evaluation")
     
     # Data generation arguments
-    parser.add_argument("--K-train", type=int, default=5, help="Number of training items")
-    parser.add_argument("--K-test", type=int, default=3, help="Number of test items")
-    parser.add_argument("--I", type=int, default=3, help="Number of criteria")
-    parser.add_argument("--J", type=int, default=6, help="Number of annotators")
-    parser.add_argument("--D", type=int, default=8, help="Embedding dimension")
+    parser.add_argument("--K-train", type=int, default=15, help="Number of training items")
+    parser.add_argument("--K-test", type=int, default=15, help="Number of test items")
+    parser.add_argument("--I", type=int, default=10, help="Number of criteria")
+    parser.add_argument("--J", type=int, default=9, help="Number of annotators")
+    parser.add_argument("--D", type=int, default=16, help="Embedding dimension")
     parser.add_argument("--C", type=int, default=5, help="Number of rating categories")
     parser.add_argument("--seed", type=int, help="Random seed")
     

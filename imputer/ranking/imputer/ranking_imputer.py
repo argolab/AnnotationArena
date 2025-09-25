@@ -47,9 +47,11 @@ class MultiVariableImputer(nn.Module):
                  embedding_dim=64,
                  dropout=0.1,
                  embedding_type="atom",
-                 device="cpu"):
+                 device="cuda",
+                 randomness=True):
         super().__init__()
         self.device = torch.device(device)
+        self.to("cuda")
         self.num_attributes = num_attributes
         self.num_annotators = num_annotators
         self.num_items = num_items
@@ -78,7 +80,7 @@ class MultiVariableImputer(nn.Module):
             )
         elif embedding_type == "atom":
             self.embedding_provider = AtomCompositonalEmbeddingProvider(
-                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
+                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device, randomness
             )
         else:
             print("WARNING - You shouldn't be here also!")

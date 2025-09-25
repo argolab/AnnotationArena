@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 import torch
+import time
 
 from data import DataConverter, RankingData
 from ranking_imputer import MultiVariableImputer
@@ -78,8 +79,10 @@ def main():
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--masking-rate", type=float, default=0.15)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--device", default="cpu")
+    parser.add_argument("--device", default="cuda")
     parser.add_argument("--max-rank-size", type=int, default=2)
+    parser.add_argument("--transductive_learning", action="store_true")
+    parser.add_argument("--full_random", action="store_true")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -119,7 +122,10 @@ def main():
     test_missing = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
     train_all: List[RankingData] = train_observed + train_missing
     test_all: List[RankingData] = test_observed + test_missing
-
+    if args.full_random:
+        random = True
+    else:
+        random = False
     # Build model
     model = MultiVariableImputer(
         num_attributes=sizes["num_attributes"],
@@ -128,10 +134,10 @@ def main():
         num_likert_classes=sizes["num_likert_classes"],
         max_rank_size=args.max_rank_size,
         device=args.device,
-        encoder_layers_num=4,
-        attention_heads=4,
-        embedding_dim=64,
-        # embedding_type="pairwise",
+        encoder_layers_num=6,
+        attention_heads=8,
+        embedding_dim=128,
+        randomness=random
     )
 
     # Trainer
@@ -161,17 +167,23 @@ def main():
             name="train_all_evaluation",
         )
     )
-
-
+    train_vars = train_observed
+    if args.transductive_learning:
+        print("Using transductive learning")
+        train_vars += test_observed
+    start_time = time.time()
     # Train
     trainer.train(
-        train_observed_vars=train_observed,
+        train_observed_vars=train_vars,
         train_missing_vars=train_missing,
         masking_rate=args.masking_rate,
         epochs=args.epochs,
         call_callbacks_every=1,
         verbose=True,
     )
+
+    running_time = time.time() - start_time
+    print(running_time)
 
     # Evaluate
     results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device)

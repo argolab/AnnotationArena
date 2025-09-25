@@ -43,9 +43,9 @@ def main():
     parser.add_argument("--use-test-only", action="store_true", help="Use only test instance data")
     
     # MCMC configuration
-    parser.add_argument("--chains", type=int, default=4, help="Number of MCMC chains")
-    parser.add_argument("--iter-warmup", type=int, default=1000, help="Number of warmup iterations")
-    parser.add_argument("--iter-sampling", type=int, default=1000, help="Number of sampling iterations")
+    parser.add_argument("--chains", type=int, default=8, help="Number of MCMC chains")
+    parser.add_argument("--iter-warmup", type=int, default=500, help="Number of warmup iterations")
+    parser.add_argument("--iter-sampling", type=int, default=2000, help="Number of sampling iterations")
     parser.add_argument("--seed", type=int, help="Random seed for MCMC")
     parser.add_argument("--adapt-delta", type=float, default=0.8, help="Adapt delta for NUTS")
     parser.add_argument("--max-treedepth", type=int, default=10, help="Maximum tree depth for NUTS")
