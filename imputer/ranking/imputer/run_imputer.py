@@ -120,6 +120,7 @@ def main():
     train_missing = converter.create_variables_from_bundle(bundle, partition="train", status="missing")
     test_observed = converter.create_variables_from_bundle(bundle, partition="test", status="observed")
     test_missing = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
+    train_all: List[RankingData] = train_observed + train_missing
     test_all: List[RankingData] = test_observed + test_missing
     if args.full_random:
         random = True
@@ -154,6 +155,16 @@ def main():
             test_variables=test_all,
             converter=converter,
             device=args.device,
+            name="test_all_evaluation",
+        )
+    )
+    trainer.register_callback(
+        EvaluationCallback(
+            eval_engine=eval_engine,
+            test_variables=train_all,
+            converter=converter,
+            device=args.device,
+            name="train_all_evaluation",
         )
     )
     train_vars = train_observed

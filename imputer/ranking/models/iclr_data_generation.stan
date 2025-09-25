@@ -21,10 +21,14 @@ data {
 generated quantities {
 
     // ===== SHARED COMPONENTS (same for train and test) =====
+    // Debug printing flag (0 = off, 1 = on). Toggle here.
+    int DEBUG_PRINT;
+    DEBUG_PRINT = 1;
     matrix[I, D] mean_preferences;              // Global criteria embeddings v_i
     matrix[I*J, D] annotator_preferences;      // All annotator preferences v_ij
     array[I*J] simplex[C] rating_probs;        // Rating probabilities p_ij
-    array[I*J] vector[C] rating_thresholds;    // Rating thresholds q_ij = prefix sum of p_ij
+    array[I*J] vector[C] rating_cumprobs;      // Cumulative probabilities q_ij = cumsum(p_ij) in (0,1]
+    array[I*J] vector[C+1] rating_thresholds_z; // Z-cutpoints: [-inf, inv_Phi(cumprob[1..C-1]), +inf]
     
     // ===== TRAINING INSTANCE =====
     matrix[K_train, D] train_embeddings;       // Training item embeddings e_k_train
@@ -62,6 +66,10 @@ generated quantities {
     int num_train_missing_ratings;      // Number of missing training ratings (R_ijk_train = 0)
     int num_test_missing_ratings;       // Number of missing test ratings (R_ijk_test = 0)
     
+    // Posterior rating probabilities (due to measurement error)
+    array[I*J, K_train] vector[C] train_posterior_rating_probs;  // Posterior distribution over Likert scale for training ratings
+    array[I*J, K_test] vector[C] test_posterior_rating_probs;     // Posterior distribution over Likert scale for test ratings
+    
     // ===== GENERATE SHARED COMPONENTS =====
     
     // Generate mean preferences: v_i ~ N(0,I) - SHARED across train/test
@@ -86,8 +94,17 @@ generated quantities {
         for (j in 1:J) {
             int idx = (i-1)*J + j;
             rating_probs[idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
-            rating_thresholds[idx] = cumulative_sum(rating_probs[idx]);
+            rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
         }
+    }
+    
+    // Convert cumulative probabilities to standard normal cutpoints (z-space)
+    for (ij in 1:(I*J)) {
+        rating_thresholds_z[ij][1] = negative_infinity();
+        for (c in 2:C) {
+            rating_thresholds_z[ij][c] = inv_Phi(rating_cumprobs[ij][c-1]);
+        }
+        rating_thresholds_z[ij][C+1] = positive_infinity();
     }
     
     // ===== GENERATE TRAINING INSTANCE =====
@@ -140,10 +157,10 @@ generated quantities {
                 real standardized_score = noisy_score / total_std;
                 real cdf_val = Phi(standardized_score);
                 
-                // Bin into rating categories using thresholds q_ij
+                // Bin into rating categories using cumulative probabilities q_ij
                 int rating = 1;
                 for (c in 1:C) {
-                    if (cdf_val <= rating_thresholds[idx][c]) {
+                    if (cdf_val <= rating_cumprobs[idx][c]) {
                         rating = c;
                         break;
                     }
@@ -166,16 +183,100 @@ generated quantities {
                 real standardized_score = noisy_score / total_std;
                 real cdf_val = Phi(standardized_score);
                 
-                // Bin into rating categories using thresholds q_ij
+                // Bin into rating categories using cumulative probabilities q_ij
                 int rating = 1;
                 for (c in 1:C) {
-                    if (cdf_val <= rating_thresholds[idx][c]) {
+                    if (cdf_val <= rating_cumprobs[idx][c]) {
                         rating = c;
                         break;
                     }
                 }
                 test_rating_values[idx, k] = rating;
                 test_rating_observed[idx, k] = 0;  // Initialize as missing
+            }
+        }
+    }
+    
+    // ===== COMPUTE POSTERIOR RATING PROBABILITIES =====
+    // These capture the posterior distribution over Likert scale categories due to measurement error
+    // when we have the true parameters fixed
+    
+    // Training posterior rating probabilities
+    for (i in 1:I) {
+        for (j in 1:J) {
+            int idx = (i-1)*J + j;
+            for (k in 1:K_train) {
+                // True base score: z_ijk_train = v_ij · e_k_train
+                real true_base_score = train_base_scores[idx, k];
+
+                // Precompute scaling terms
+                real pref_norm = sqrt(dot_self(annotator_preferences[idx]));
+                real total_std_val = sqrt(pref_norm^2 + sigma_measurement^2);
+                real mean_std = true_base_score / total_std_val;
+
+                // Compute bin probabilities against z-cutpoints
+                real noise_sd = (sigma_measurement == 0) ? 0 : sigma_measurement / total_std_val;
+                if (noise_sd == 0) {
+                    // Deterministic: assign by cutpoints in z-space
+                    int one_c = 1;
+                    for (c in 1:C) {
+                        if (mean_std <= rating_thresholds_z[idx][c+1]) {
+                            one_c = c;
+                            break;
+                        }
+                    }
+                    for (c in 1:C) {
+                        train_posterior_rating_probs[idx, k][c] = (c == one_c) ? 1 : 0;
+                    }
+                } else {
+                    for (c in 1:C) {
+                        real upper_z = rating_thresholds_z[idx][c+1];
+                        real lower_z = rating_thresholds_z[idx][c];
+                        real upper_prob = Phi((upper_z - mean_std) / noise_sd);
+                        real lower_prob = Phi((lower_z - mean_std) / noise_sd);
+                        train_posterior_rating_probs[idx, k][c] = upper_prob - lower_prob;
+                    }
+                }
+            }
+        }
+    }
+    
+    // Test posterior rating probabilities
+    for (i in 1:I) {
+        for (j in 1:J) {
+            int idx = (i-1)*J + j;
+            for (k in 1:K_test) {
+                // True base score: z_ijk_test = v_ij · e_k_test
+                real true_base_score = test_base_scores[idx, k];
+
+                // Precompute scaling terms
+                real pref_norm = sqrt(dot_self(annotator_preferences[idx]));
+                real total_std_val = sqrt(pref_norm^2 + sigma_measurement^2);
+                real mean_std = true_base_score / total_std_val;
+
+                // Compute bin probabilities against z-cutpoints
+                real noise_sd = (sigma_measurement == 0) ? 0 : sigma_measurement / total_std_val;
+                if (noise_sd == 0) {
+                    // Deterministic: assign by cutpoints in z-space
+                    int one_c = 1;
+                    for (c in 1:C) {
+                        if (mean_std <= rating_thresholds_z[idx][c+1]) {
+                            one_c = c;
+                            break;
+                        }
+                    }
+                    for (c in 1:C) {
+                        test_posterior_rating_probs[idx, k][c] = (c == one_c) ? 1 : 0;
+                    }
+                } else {
+                    for (c in 1:C) {
+                        real upper_z = rating_thresholds_z[idx][c+1];
+                        real lower_z = rating_thresholds_z[idx][c];
+                        real upper_prob = Phi((upper_z - mean_std) / noise_sd);
+                        real lower_prob = Phi((lower_z - mean_std) / noise_sd);
+                        test_posterior_rating_probs[idx, k][c] = upper_prob - lower_prob;
+                    }
+                }
             }
         }
     }
@@ -411,6 +512,27 @@ generated quantities {
         }
     }
     
+    // ===== DEBUG: print a few posterior rating probabilities =====
+    if (DEBUG_PRINT == 1) {
+        int max_i = (I < 1) ? I : 1;
+        int max_j = (J < 2) ? J : 2;
+        int max_k_train = (K_train < 2) ? K_train : 2;
+        int max_k_test = (K_test < 2) ? K_test : 2;
+        for (i in 1:max_i) {
+            for (j in 1:max_j) {
+                int ij_idx = (i-1)*J + j;
+                for (k in 1:max_k_train) {
+                    print("[DEBUG TRAIN POST] i=", i, " j=", j, " k=", k,
+                          " probs=", train_posterior_rating_probs[ij_idx, k]);
+                }
+                for (k in 1:max_k_test) {
+                    print("[DEBUG TEST POST]  i=", i, " j=", j, " k=", k,
+                          " probs=", test_posterior_rating_probs[ij_idx, k]);
+                }
+            }
+        }
+    }
+
     // ===== COMPUTE COUNTS =====
     
     // Training instance counts
