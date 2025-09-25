@@ -9,7 +9,8 @@ class GroundTruthBundle:
     mean_preferences: np.ndarray  # shape [I, D]
     annotator_preferences: np.ndarray  # shape [I*J, D] with ij_idx = (i-1)*J + j
     rating_probs: np.ndarray  # shape [I*J, C]
-    rating_thresholds: np.ndarray  # shape [I*J, C] (internal thresholds)
+    rating_cumprobs: np.ndarray  # shape [I*J, C] cumulative probabilities
+    rating_thresholds_z: np.ndarray  # shape [I*J, C+1] z-cutpoints [-inf, ..., +inf]
     base_scores: np.ndarray  # shape [I*J, K]
 
     # Each rating dict: {'attribute': int(1..I), 'annotator': int(1..J), 'item': int(1..K), 'value': int(1..C)}
@@ -37,6 +38,11 @@ class GroundTruthBundle:
     log_lik_rankings_obs: Optional[float] = None
     log_lik_rankings_missing: Optional[float] = None
 
+    # Posterior rating probabilities under measurement noise
+    # train: shape [I*J, K_train, C], test: shape [I*J, K_test, C]
+    train_posterior_rating_probs: Optional[np.ndarray] = None
+    test_posterior_rating_probs: Optional[np.ndarray] = None
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'GroundTruthBundle':
         """Create GroundTruthBundle from dictionary (e.g., loaded from JSON)."""
@@ -45,7 +51,8 @@ class GroundTruthBundle:
             mean_preferences=np.array(data["mean_preferences"]),
             annotator_preferences=np.array(data["annotator_preferences"]),
             rating_probs=np.array(data["rating_probs"]),
-            rating_thresholds=np.array(data["rating_thresholds"]),
+            rating_cumprobs=np.array(data["rating_cumprobs"]),
+            rating_thresholds_z=np.array(data["rating_thresholds_z"]),
             base_scores=np.array(data["base_scores"]),
             all_ratings=data["all_ratings"],
             all_pairwise=data["all_pairwise"],
@@ -58,6 +65,8 @@ class GroundTruthBundle:
             log_lik_ratings_missing=data.get("log_lik_ratings_missing"),
             log_lik_rankings_obs=data.get("log_lik_rankings_obs"),
             log_lik_rankings_missing=data.get("log_lik_rankings_missing"),
+            train_posterior_rating_probs=(np.array(data["train_posterior_rating_probs"]) if "train_posterior_rating_probs" in data else None),
+            test_posterior_rating_probs=(np.array(data["test_posterior_rating_probs"]) if "test_posterior_rating_probs" in data else None),
         )
 
 

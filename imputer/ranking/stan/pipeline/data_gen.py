@@ -45,7 +45,6 @@ def generate_data(config: DataGenConfig, stan_file: Optional[str] = None) -> Gro
         "J": config.J,
         "D": config.D,
         "C": config.C,
-        "enable_third_annotator": 1 if config.enable_third_annotator else 0,
         "enable_pairwise_rankings": 1 if config.enable_pairwise_rankings else 0,
         "pairwise_cap_per_item": config.pairwise_cap_per_item,
         "sigma_annotator": config.sigma_annotator,
@@ -61,7 +60,7 @@ def generate_data(config: DataGenConfig, stan_file: Optional[str] = None) -> Gro
         chains=1,
         iter_sampling=1,
         seed=config.seed,
-        # show_console=True
+        show_console=True
     )
     
     # Extract generated quantities
@@ -80,7 +79,8 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     mean_preferences = sample["mean_preferences"][0]  # Shape: [I, D] - SHARED
     annotator_preferences = sample["annotator_preferences"][0]  # Shape: [I*J, D] - SHARED
     rating_probs = sample["rating_probs"][0]  # Shape: [I*J, C] - SHARED
-    rating_thresholds = sample["rating_thresholds"][0]  # Shape: [I*J, C] - SHARED
+    rating_cumprobs = sample["rating_cumprobs"][0]  # Shape: [I*J, C] - SHARED
+    rating_thresholds_z = sample["rating_thresholds_z"][0]  # Shape: [I*J, C+1] - SHARED
     
     # Extract training instance data
     train_embeddings = sample["train_embeddings"][0]  # Shape: [K_train, D]
@@ -94,6 +94,14 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     test_rating_values = sample["test_rating_values"][0]  # Shape: [I*J, K_test]
     test_rating_observed = sample["test_rating_observed"][0]  # Shape: [I*J, K_test]
     
+    # Extract posterior rating probabilities (optional downstream use)
+    train_posterior_rating_probs = sample.get("train_posterior_rating_probs")
+    if train_posterior_rating_probs is not None:
+        train_posterior_rating_probs = train_posterior_rating_probs[0]
+    test_posterior_rating_probs = sample.get("test_posterior_rating_probs")
+    if test_posterior_rating_probs is not None:
+        test_posterior_rating_probs = test_posterior_rating_probs[0]
+
     # Extract pairwise rankings
     num_train_pairwise = int(sample["num_train_pairwise_rankings"])
     num_test_pairwise = int(sample["num_test_pairwise_rankings"])
@@ -248,7 +256,8 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
         mean_preferences=mean_preferences,
         annotator_preferences=annotator_preferences,
         rating_probs=rating_probs,
-        rating_thresholds=rating_thresholds,
+        rating_cumprobs=rating_cumprobs,
+        rating_thresholds_z=rating_thresholds_z,
         base_scores=all_base_scores,
         all_ratings=all_ratings,
         all_pairwise=all_pairwise,
@@ -256,5 +265,7 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
         missing_ratings=missing_ratings,
         observed_pairwise=observed_pairwise,
         missing_pairwise=missing_pairwise,
-        stats=stats
+        stats=stats,
+        train_posterior_rating_probs=train_posterior_rating_probs,
+        test_posterior_rating_probs=test_posterior_rating_probs,
     )

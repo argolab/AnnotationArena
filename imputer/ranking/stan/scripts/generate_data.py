@@ -6,7 +6,7 @@ Usage:
     # Generate both train and test instances simultaneously
     PYTHONPATH=. python stan/scripts/generate_data.py --output-dir runs/both --K-train 10 --K-test 10 --I 3 --J 9
     
-    # Ablation: disable third annotator
+    # Ablation: disable third annotator (deprecated in generator)
     PYTHONPATH=. python stan/scripts/generate_data.py --disable-third-annotator --output-dir runs/no_third --K-train 10 --K-test 10 --I 3 --J 9
 """
 
@@ -31,10 +31,11 @@ def main():
     parser.add_argument("--C", type=int, default=5, help="Number of rating categories")
     
     # Observation protocol controls
+    # Deprecated in generator; keep flags for backward CLI compatibility (ignored)
     parser.add_argument("--enable-third-annotator", action="store_true", default=True,
-                       help="Enable third annotator for disagreement > 1")
+                       help="[deprecated] Enable third annotator for disagreement > 1")
     parser.add_argument("--disable-third-annotator", action="store_true",
-                       help="Disable third annotator (ablation)")
+                       help="[deprecated] Disable third annotator (ablation)")
     parser.add_argument("--enable-pairwise-rankings", action="store_true", default=True,
                        help="Enable pairwise rankings (ablation)")
     parser.add_argument("--disable-pairwise-rankings", action="store_true",
@@ -64,7 +65,6 @@ def main():
     args = parser.parse_args()
     
     # Handle ablation flags
-    enable_third_annotator = args.enable_third_annotator and not args.disable_third_annotator
     enable_pairwise_rankings = args.enable_pairwise_rankings and not args.disable_pairwise_rankings
     
     # Create configuration
@@ -75,7 +75,6 @@ def main():
         J=args.J,
         D=args.D,
         C=args.C,
-        enable_third_annotator=enable_third_annotator,
         enable_pairwise_rankings=enable_pairwise_rankings,
         pairwise_cap_per_item=args.pairwise_cap_per_item,
         sigma_annotator=args.sigma_annotator,
@@ -104,7 +103,8 @@ def main():
         "mean_preferences": bundle.mean_preferences.tolist(),
         "annotator_preferences": bundle.annotator_preferences.tolist(),
         "rating_probs": bundle.rating_probs.tolist(),
-        "rating_thresholds": bundle.rating_thresholds.tolist(),
+        "rating_cumprobs": bundle.rating_cumprobs.tolist(),
+        "rating_thresholds_z": bundle.rating_thresholds_z.tolist(),
         "base_scores": bundle.base_scores.tolist(),
         "all_ratings": bundle.all_ratings,
         "all_pairwise": bundle.all_pairwise,
@@ -113,6 +113,8 @@ def main():
         "observed_pairwise": bundle.observed_pairwise,
         "missing_pairwise": bundle.missing_pairwise,
         "stats": bundle.stats,
+        "train_posterior_rating_probs": (bundle.train_posterior_rating_probs.tolist() if bundle.train_posterior_rating_probs is not None else None),
+        "test_posterior_rating_probs": (bundle.test_posterior_rating_probs.tolist() if bundle.test_posterior_rating_probs is not None else None),
     }
     
     save_bundle(run_dir, bundle_dict)
