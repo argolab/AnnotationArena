@@ -28,6 +28,7 @@ class GroundTruthBundle:
     missing_ratings: List[Dict[str, Any]]
     observed_pairwise: List[Dict[str, Any]]
     missing_pairwise: List[Dict[str, Any]]
+    missing_ratings_indexes: List[int]
 
     # Example keys: {'total_possible_ratings': int, 'total_pairwise_rankings': int, 'train_ratings': int, ...}
     stats: Dict[str, Any]
@@ -51,6 +52,7 @@ class GroundTruthBundle:
             all_pairwise=data["all_pairwise"],
             observed_ratings=data["observed_ratings"],
             missing_ratings=data["missing_ratings"],
+            missing_ratings_indexes=[i for i in range(len(data["missing_ratings"])) if data["missing_ratings"][i]["instance"] == "test"],
             observed_pairwise=data["observed_pairwise"],
             missing_pairwise=data["missing_pairwise"],
             stats=data["stats"],

@@ -7,7 +7,7 @@ import random
 
 from losses import DefaultLossStrategy, adapt_batched_logits_to_predictions, TopLayerPredictionResult
 from data import RankingData
-
+from tqdm import tqdm
 
 class EvaluationCallback:
     """Callback for evaluation during training (no masking during eval)."""
@@ -93,7 +93,7 @@ class ImputerTrainer:
     """Trainer that masks a subset of training observed variables and appends missing ones."""
 
     def __init__(self, model, learning_rate=1e-3, device='cuda', embedding_anchor_reg: float = 0.0, callbacks=None,
-                 masked_loss_weight: float = 1.0, observed_loss_weight: float = 1.0):
+                 masked_loss_weight: float = 3.0, observed_loss_weight: float = 1.0):
         self.model = model.to(device)
         self.device = device
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -230,7 +230,7 @@ class ImputerTrainer:
         training_history = []
         callback_history = []
 
-        for epoch in range(epochs):
+        for epoch in tqdm(range(epochs)):
             loss_dict = self.train_step(train_observed_vars, train_missing_vars, masking_rate)
 
             training_history.append({'epoch': epoch, **loss_dict})

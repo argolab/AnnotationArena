@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 import torch
+import time
 
 from data import DataConverter, RankingData
 from ranking_imputer import MultiVariableImputer
@@ -159,6 +160,7 @@ def main():
     if args.transductive_learning:
         print("Using transductive learning")
         train_vars += test_observed
+    start_time = time.time()
     # Train
     trainer.train(
         train_observed_vars=train_vars,
@@ -168,6 +170,9 @@ def main():
         call_callbacks_every=1,
         verbose=True,
     )
+
+    running_time = time.time() - start_time
+    print(running_time)
 
     # Evaluate
     results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device)

@@ -5,7 +5,7 @@ from typing import List, Tuple
 
 from abstractions import RankingEmbeddingProviderBase
 from data import RankingData
-
+import random
 import logging
 
 logger = logging.getLogger(__name__)
@@ -485,7 +485,6 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         # print("WARNING: not using ranking order")
         attr_vec = torch.cat((torch.tensor([1, 0, 0]).to("cuda"), self.attribute_embedding[attribute_id]), dim=-1)
         annot_vec = torch.cat((torch.tensor([0, 1, 0]).to("cuda"), self.annotator_embedding_learnable[annotator_id], self.annotator_embedding_random[annotator_id]), dim=-1)
-        assert len(item_ids) == 2, "Pairwise Ranking Embedding Provider only support two items ranking"
 
         item_embedding_1 = torch.cat((torch.tensor([0, 0, 1]).to("cuda"), self.item_embedding[item_ids[0]]), dim=-1)
         item_embedding_2 = torch.cat((torch.tensor([0, 0, 1]).to("cuda"), self.item_embedding[item_ids[1]]), dim=-1)
