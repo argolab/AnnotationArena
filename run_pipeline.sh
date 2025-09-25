@@ -6,7 +6,7 @@
 
 #SBATCH --job-name=ActiveLearner
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=24GB
+#SBATCH --mem-per-cpu=18GB
 #SBATCH --gpus=1
 #SBATCH --partition=gpu
 #SBATCH --account=a100acct
@@ -17,5 +17,6 @@ module load cuda/12.1
 
 conda activate llm_rubric_env
 
-python /export/fs06/psingh54/AnnotationArena/imputer/graphical_synthetic_modeling/main.py --node-sizes 7 5 \
- --imputer-sizes Tiny Small Large --max-samples 2000 --test-samples 500 --start-examples 10 --increment 200 --missing-rates 0.3 0.5 0.7 --n-graphs 5
+cd /export/fs06/psingh54/StanExps/imputer/ranking/imputer
+
+python run_imputer.py --data-dir /export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/random_folder --epochs 70 --transductive_learning

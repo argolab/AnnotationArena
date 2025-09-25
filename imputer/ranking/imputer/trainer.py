@@ -251,6 +251,12 @@ class ImputerTrainer:
                       f"Total Loss: {total_loss:.4f}, "
                       f"Rating Loss: {rating_loss:.4f}, "
                       f"Ranking Loss: {ranking_loss:.4f}")
+                
+            model_path = '/export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/IMPUTER/models' / f"model_{str(epoch)}.pt"
+            torch.save({
+                "state_dict": self.model.state_dict(),
+                "max_rank_size": 2
+            }, model_path)
 
         return {
             'training_history': training_history,
