@@ -482,7 +482,7 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         else:
             assert rating_value is not None and 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
             parameter[rating_value + 1] = 1.0
-        return torch.cat((attr_vec@self.W_I + annot_vec@self.W_J + item_vec@self.W_K, parameter), dim=-1)
+        return torch.cat((attr_vec + annot_vec + item_vec, parameter), dim=-1)
 
     # Get embedding for ranking variables
     def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_masked: bool = False) -> torch.Tensor:
@@ -492,8 +492,8 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
 
         item_embedding_1 = torch.cat((torch.tensor([0, 0, 1]).to("cuda"), self.item_embedding[item_ids[0]]), dim=-1)
         item_embedding_2 = torch.cat((torch.tensor([0, 0, 1]).to("cuda"), self.item_embedding[item_ids[1]]), dim=-1)
-        item_embedding = item_embedding_1@self.W_K1 + item_embedding_2 @ self.pairwise_relation
-        total_embedding = attr_vec@self.W_I + annot_vec@self.W_J + item_embedding
+        item_embedding = item_embedding_1 + item_embedding_2 @ self.pairwise_relation
+        total_embedding = attr_vec + annot_vec  + item_embedding
         parameter = torch.zeros(1 + max(self.num_likert_classes, self.max_rank_size)).to(self.device)
         if is_masked:
             parameter[0] = 1.0

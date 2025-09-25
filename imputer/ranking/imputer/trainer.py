@@ -93,7 +93,7 @@ class ImputerTrainer:
     """Trainer that masks a subset of training observed variables and appends missing ones."""
 
     def __init__(self, model, learning_rate=1e-3, device='cuda', embedding_anchor_reg: float = 0.0, callbacks=None,
-                 masked_loss_weight: float = 3.0, observed_loss_weight: float = 1.0):
+                 masked_loss_weight: float = 8.0, observed_loss_weight: float = 1.0):
         self.model = model.to(device)
         self.device = device
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -252,7 +252,7 @@ class ImputerTrainer:
                       f"Rating Loss: {rating_loss:.4f}, "
                       f"Ranking Loss: {ranking_loss:.4f}")
                 
-            model_path = '/export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/IMPUTER/models' / f"model_{str(epoch)}.pt"
+            model_path =  f"models_final/model_{str(epoch)}.pt"
             torch.save({
                 "state_dict": self.model.state_dict(),
                 "max_rank_size": 2
