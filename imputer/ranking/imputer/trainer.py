@@ -115,6 +115,22 @@ class ImputerTrainer:
         """Register an evaluation callback."""
         self.callbacks.append(callback)
     
+    def _extract_model_config(self) -> Dict[str, Any]:
+        """Extract model configuration for checkpoint saving."""
+        return {
+            'num_attributes': self.model.num_attributes,
+            'num_annotators': self.model.num_annotators,
+            'num_items': self.model.num_items,
+            'num_likert_classes': self.model.num_likert_classes,
+            'max_rank_size': self.model.max_rank_size,
+            'encoder_layers_num': len(self.model.blocks),
+            'attention_heads': self.model.blocks[0].attention_heads if self.model.blocks else 4,
+            'embedding_dim': self.model.embedding_dim,
+            'dropout': self.model.blocks[0].dropout_1.p if self.model.blocks else 0.1,
+            'embedding_type': self.model.embedding_type,
+            'device': str(self.device)
+        }
+    
     def _save_checkpoint(self, epoch: int, loss_dict: Dict[str, float]):
         """Save model checkpoint if checkpoint saving is enabled."""
         if not self.save_checkpoints:
@@ -134,6 +150,7 @@ class ImputerTrainer:
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "loss_dict": loss_dict,
+            "model_config": self._extract_model_config(),
         }, checkpoint_file)
         
         # Also save as latest checkpoint
@@ -143,6 +160,7 @@ class ImputerTrainer:
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "loss_dict": loss_dict,
+            "model_config": self._extract_model_config(),
         }, latest_file)
 
     def _call_epoch_end_callbacks(self, epoch):
