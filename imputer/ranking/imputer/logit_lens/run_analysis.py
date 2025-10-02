@@ -109,7 +109,7 @@ def run_logit_lens_analysis(model: MultiVariableImputer,
     analyzer = LogitLensAnalyzer(model, converter, device)
     results = analyzer.analyze_all_layers(train_variables, test_variables)
     
-    print(f"Analysis complete. Analyzed {len(results.train_results)} layers.")
+    print(f"Analysis complete. Analyzed {len(results.all_variables[0].layer_analyses)} layers.")
     
     return results
 
@@ -149,12 +149,12 @@ def create_visualizations(results: LogitLensResults,
     visualizer.plot_heatmap(metric='accuracy', save_path=str(heatmap_path))
     
     # RMSE heatmap (if available)
-    if 'rmse' in results.train_results[0].metrics:
+    if results.all_variables and 'rmse' in results.all_variables[0].layer_analyses[0].metrics:
         rmse_heatmap_path = output_dir / f"{analysis_type}_rmse_heatmap.png"
         visualizer.plot_heatmap(metric='rmse', save_path=str(rmse_heatmap_path))
     
     # Layer comparison
-    num_layers = len(results.train_results)
+    num_layers = len(results.all_variables[0].layer_analyses) if results.all_variables else 0
     if num_layers > 1:
         layers_to_compare = [0, num_layers // 2, num_layers - 1]
         comparison_path = output_dir / f"{analysis_type}_layer_comparison.png"
