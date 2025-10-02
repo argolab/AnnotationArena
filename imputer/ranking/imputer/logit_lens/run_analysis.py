@@ -14,11 +14,11 @@ from imputer.logit_lens import LogitLensAnalyzer, LogitLensVisualizer
 from stan.pipeline.bundle import GroundTruthBundle
 
 
-def load_model_and_data(model_path: str, data_path: str) -> tuple:
+def load_model_and_data(model_path: str, data_path: str, device: str = 'cpu') -> tuple:
     """Load a trained model and data bundle."""
     
-    # Load model checkpoint
-    checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
+    # Load model checkpoint onto the target device
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     
     # Debug: print checkpoint keys and config
     print(f"Checkpoint keys: {list(checkpoint.keys())}")
@@ -52,7 +52,7 @@ def load_model_and_data(model_path: str, data_path: str) -> tuple:
         embedding_dim=config['embedding_dim'],
         dropout=config['dropout'],
         embedding_type=config['embedding_type'],
-        device='cpu'
+        device=device
     )
     
     print(f"Created model with {len(model.blocks)} blocks, embedding_dim={model.embedding_dim}")
@@ -196,7 +196,7 @@ def main():
     # Load model and data
     print("Loading model and data...")
     model, converter, train_variables, test_variables = load_model_and_data(
-        args.model_path, args.data_path
+        args.model_path, args.data_path, args.device
     )
     
     print(f"Loaded model with {len(model.blocks)} transformer layers")
