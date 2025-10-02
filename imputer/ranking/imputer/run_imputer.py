@@ -210,8 +210,19 @@ def main():
     model_path = run_dir / "model.pt"
     torch.save({
         "state_dict": model.state_dict(),
-        "sizes": sizes,
-        "max_rank_size": args.max_rank_size,
+        "model_config": {
+            'num_attributes': sizes['num_attributes'],
+            'num_annotators': sizes['num_annotators'],
+            'num_items': sizes['num_items'],
+            'num_likert_classes': sizes['num_likert_classes'],
+            'max_rank_size': args.max_rank_size,
+            'encoder_layers_num': sizes.get('encoder_layers_num', 2),
+            'attention_heads': sizes.get('attention_heads', 4),
+            'embedding_dim': sizes.get('embedding_dim', 64),
+            'dropout': sizes.get('dropout', 0.1),
+            'embedding_type': sizes.get('embedding_type', 'atom'),
+            'device': args.device
+        }
     }, model_path)
 
     # Save metrics
