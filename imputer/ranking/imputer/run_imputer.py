@@ -147,6 +147,8 @@ def main():
         model=model,
         learning_rate=args.lr,
         device=args.device,
+        checkpoint_dir=None,  # Will be set later if checkpoints are enabled
+        save_checkpoints=False,  # Will be set later if checkpoints are enabled
     )
 
     # Register evaluation callback on test set (runs each epoch)
