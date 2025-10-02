@@ -224,8 +224,11 @@ class LogitLensVisualizer:
         # RMSE comparison (for rating tasks)
         rmse_data = []
         for results in results_list:
-            layer_rmse = [results[i].metrics.get('rmse', 0.0) for i in layers_to_compare]
-            rmse_data.append(layer_rmse)
+            if results:  # Check if results list is not empty
+                layer_rmse = [np.mean([var.layer_analyses[i].metrics.get('rmse', 0.0) for var in results]) for i in layers_to_compare]
+                rmse_data.append(layer_rmse)
+            else:
+                rmse_data.append([0.0] * len(layers_to_compare))
         
         for i, layer_idx in enumerate(layers_to_compare):
             layer_rmse = [rmse_data[j][i] for j in range(len(conditions))]
@@ -242,8 +245,11 @@ class LogitLensVisualizer:
         # Evaluation count comparison
         eval_data = []
         for results in results_list:
-            layer_eval = [results[i].metrics.get('num_evaluations', 0) for i in layers_to_compare]
-            eval_data.append(layer_eval)
+            if results:  # Check if results list is not empty
+                layer_eval = [np.mean([var.layer_analyses[i].metrics.get('num_evaluations', 0) for var in results]) for i in layers_to_compare]
+                eval_data.append(layer_eval)
+            else:
+                eval_data.append([0.0] * len(layers_to_compare))
         
         for i, layer_idx in enumerate(layers_to_compare):
             layer_eval = [eval_data[j][i] for j in range(len(conditions))]
@@ -270,41 +276,21 @@ class LogitLensVisualizer:
         serializable_results = {
             'model_config': self.results.model_config,
             'data_config': self.results.data_config,
-            'train_results': [
+            'all_variables': [
                 {
-                    'layer_idx': r.layer_idx,
-                    'metrics': r.metrics
-                } for r in self.results.train_results
-            ],
-            'test_results': [
-                {
-                    'layer_idx': r.layer_idx,
-                    'metrics': r.metrics
-                } for r in self.results.test_results
-            ],
-            'rating_results': [
-                {
-                    'layer_idx': r.layer_idx,
-                    'metrics': r.metrics
-                } for r in self.results.rating_results
-            ],
-            'ranking_results': [
-                {
-                    'layer_idx': r.layer_idx,
-                    'metrics': r.metrics
-                } for r in self.results.ranking_results
-            ],
-            'observed_results': [
-                {
-                    'layer_idx': r.layer_idx,
-                    'metrics': r.metrics
-                } for r in self.results.observed_results
-            ],
-            'masked_results': [
-                {
-                    'layer_idx': r.layer_idx,
-                    'metrics': r.metrics
-                } for r in self.results.masked_results
+                    'variable_id': f"{var.variable.attribute_id}_{var.variable.annotator_id}_{var.variable.item_ids}",
+                    'instance': var.variable.instance,
+                    'is_listwise': var.variable.is_listwise,
+                    'is_observed': var.variable.is_observed,
+                    'is_masked': var.variable.is_masked,
+                    'is_missing': var.variable.is_missing,
+                    'layer_analyses': [
+                        {
+                            'layer_idx': layer.layer_idx,
+                            'metrics': layer.metrics
+                        } for layer in var.layer_analyses
+                    ]
+                } for var in self.results.all_variables
             ]
         }
         
@@ -328,39 +314,49 @@ class LogitLensVisualizer:
         
         print(f"\nVariable Status Breakdown:")
         print(f"  Training Instance:")
-        print(f"    Observed: {self.results.data_config.get('num_train_observed', 'N/A')}")
-        print(f"    Masked: {self.results.data_config.get('num_train_masked', 'N/A')}")
+        print(f"    Observed: {self.results.data_config.get('num_observed_variables', 'N/A')}")
+        print(f"    Masked: {self.results.data_config.get('num_masked_variables', 'N/A')}")
         print(f"  Test Instance:")
-        print(f"    Observed: {self.results.data_config.get('num_test_observed', 'N/A')}")
-        print(f"    Missing: {self.results.data_config.get('num_test_missing', 'N/A')}")
+        print(f"    Observed: {self.results.data_config.get('num_observed_variables', 'N/A')}")
+        print(f"    Missing: {self.results.data_config.get('num_missing_variables', 'N/A')}")
         
         print(f"\nPerformance Summary:")
         
         # Find best performing layer for each condition
         conditions = [
-            ('Train', self.results.train_results),
-            ('Test', self.results.test_results),
-            ('Rating', self.results.rating_results),
-            ('Ranking', self.results.ranking_results),
-            ('Observed', self.results.observed_results),
-            ('Masked', self.results.masked_results)
+            ('Train', self.results.get_train_variables()),
+            ('Test', self.results.get_test_variables()),
+            ('Rating', self.results.get_rating_variables()),
+            ('Ranking', self.results.get_ranking_variables()),
+            ('Observed', self.results.get_observed_variables()),
+            ('Masked', self.results.get_masked_variables())
         ]
         
-        for condition_name, results in conditions:
-            if not results:
+        for condition_name, variables in conditions:
+            if not variables:
                 continue
-                
-            accuracies = [r.metrics.get('accuracy', 0.0) for r in results]
-            best_layer = np.argmax(accuracies)
-            best_acc = accuracies[best_layer]
+            
+            # Calculate average accuracy across all variables for each layer
+            layer_accuracies = []
+            for layer_idx in range(self.num_layers):
+                accuracies = [var.layer_analyses[layer_idx].metrics.get('accuracy', 0.0) for var in variables]
+                layer_accuracies.append(np.mean(accuracies))
+            
+            best_layer = np.argmax(layer_accuracies)
+            best_acc = layer_accuracies[best_layer]
             
             print(f"  {condition_name}:")
             print(f"    Best Layer: {best_layer} (Accuracy: {best_acc:.4f})")
             
-            if 'rmse' in results[0].metrics:
-                rmses = [r.metrics.get('rmse', 0.0) for r in results]
-                best_rmse_layer = np.argmin(rmses)
-                best_rmse = rmses[best_rmse_layer]
+            # Check if RMSE is available (for rating tasks)
+            if variables and 'rmse' in variables[0].layer_analyses[0].metrics:
+                layer_rmses = []
+                for layer_idx in range(self.num_layers):
+                    rmses = [var.layer_analyses[layer_idx].metrics.get('rmse', 0.0) for var in variables]
+                    layer_rmses.append(np.mean(rmses))
+                
+                best_rmse_layer = np.argmin(layer_rmses)
+                best_rmse = layer_rmses[best_rmse_layer]
                 print(f"    Best RMSE Layer: {best_rmse_layer} (RMSE: {best_rmse:.4f})")
         
         print("=" * 60)
