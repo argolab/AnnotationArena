@@ -206,19 +206,19 @@ def main():
     # Output
     run_dir = new_run_dir(Path(args.output_root))
 
-    # Save model
+    # Save model - extract config directly from the trained model
     model_path = run_dir / "model.pt"
     model_config = {
-        'num_attributes': sizes['num_attributes'],
-        'num_annotators': sizes['num_annotators'],
-        'num_items': sizes['num_items'],
-        'num_likert_classes': sizes['num_likert_classes'],
-        'max_rank_size': args.max_rank_size,
-        'encoder_layers_num': sizes.get('encoder_layers_num', 2),
-        'attention_heads': sizes.get('attention_heads', 4),
-        'embedding_dim': sizes.get('embedding_dim', 64),
-        'dropout': sizes.get('dropout', 0.1),
-        'embedding_type': sizes.get('embedding_type', 'atom'),
+        'num_attributes': model.num_attributes,
+        'num_annotators': model.num_annotators,
+        'num_items': model.num_items,
+        'num_likert_classes': model.num_likert_classes,
+        'max_rank_size': model.max_rank_size,
+        'encoder_layers_num': len(model.blocks),
+        'attention_heads': model.blocks[0].attention_heads,
+        'embedding_dim': model.embedding_dim,
+        'dropout': model.blocks[0].dropout_1.p,
+        'embedding_type': model.embedding_type,
         'device': args.device
     }
     print(f"Saving model with config: {model_config}")

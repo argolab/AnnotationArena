@@ -126,21 +126,15 @@ class ImputerTrainer:
             'max_rank_size': self.model.max_rank_size,
             'encoder_layers_num': len(self.model.blocks),
             'embedding_dim': self.model.embedding_dim,
-            'embedding_type': getattr(self.model, 'embedding_type', 'atom'),
+            'embedding_type': self.model.embedding_type,
             'device': str(self.device)
         }
         
-        # Get attention heads - be more robust
-        if self.model.blocks:
-            config['attention_heads'] = getattr(self.model.blocks[0], 'attention_heads', 4)
-        else:
-            config['attention_heads'] = 4
+        # Get attention heads - fail fast if missing
+        config['attention_heads'] = self.model.blocks[0].attention_heads
             
-        # Get dropout - be more robust
-        if self.model.blocks and hasattr(self.model.blocks[0], 'dropout_1'):
-            config['dropout'] = getattr(self.model.blocks[0].dropout_1, 'p', 0.1)
-        else:
-            config['dropout'] = 0.1
+        # Get dropout - fail fast if missing
+        config['dropout'] = self.model.blocks[0].dropout_1.p
             
         # Debug: print what we're saving
         print(f"Saving model_config: {config}")
