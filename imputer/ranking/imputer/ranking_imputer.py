@@ -51,7 +51,7 @@ class MultiVariableImputer(nn.Module):
                  randomness=True):
         super().__init__()
         self.device = torch.device(device)
-        self.to("cuda")
+        # Defer moving to device until after all submodules are created
         self.num_attributes = num_attributes
         self.num_annotators = num_annotators
         self.num_items = num_items
@@ -110,6 +110,9 @@ class MultiVariableImputer(nn.Module):
                 nn.Linear(embedding_dim // 2, max_rank_size)
             ),
         })
+
+        # Now move the complete model (including newly created submodules) to the target device
+        self.to(self.device)
 
     def apply_head(self, head_key: str, hidden: torch.Tensor) -> torch.Tensor:
         """Apply a named head to hidden states [B, N, D] -> logits [B, N, *]."""

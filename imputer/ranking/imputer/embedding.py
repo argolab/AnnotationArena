@@ -37,7 +37,7 @@ class BaseRankingEmbeddingProvider(RankingEmbeddingProviderBase):
         self.num_attributes = num_attributes
         self.num_annotators = num_annotators
         self.num_items = num_items
-        self.device = device
+        self.device = torch.device(device)
 
         # Embeddings for each component (learned parameters)
         self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, embedding_dim))
@@ -459,11 +459,19 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
 
         print(f"Randomness set to {self.randomness}")
 
-        # Embeddings for each component (learned parameters)
+        # Embeddings for each component
+        # Learned parameters
         self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, self.internal_dimension))
         self.annotator_embedding_learnable = nn.Parameter(torch.randn(num_annotators, self.internal_dimension // 2))
-        self.annotator_embedding_random = torch.rand(num_annotators, self.internal_dimension - self.internal_dimension // 2, device="cuda")
-        self.item_embedding = torch.rand(num_items, self.internal_dimension, device="cuda")
+        # Non-learned random components should move with module device: register as buffers
+        self.register_buffer(
+            'annotator_embedding_random',
+            torch.rand(num_annotators, self.internal_dimension - self.internal_dimension // 2, device=self.device)
+        )
+        self.register_buffer(
+            'item_embedding',
+            torch.rand(num_items, self.internal_dimension, device=self.device)
+        )
 
         torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.annotator_embedding_learnable, mode='fan_out', nonlinearity='relu')
@@ -511,6 +519,12 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         self.partial_reset_embedding()
 
     def partial_reset_embedding(self):
-        self.annotator_embedding_random = torch.rand(self.num_annotators, self.internal_dimension - self.internal_dimension // 2, device="cuda")
-        self.item_embedding = torch.rand(self.num_items, self.internal_dimension, device="cuda")
+        # In-place reset to preserve registered buffers and device placement
+        with torch.no_grad():
+            self.annotator_embedding_random.copy_(
+                torch.rand(self.num_annotators, self.internal_dimension - self.internal_dimension // 2, device=self.device)
+            )
+            self.item_embedding.copy_(
+                torch.rand(self.num_items, self.internal_dimension, device=self.device)
+            )
 
