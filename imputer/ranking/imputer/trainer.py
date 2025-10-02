@@ -95,7 +95,8 @@ class ImputerTrainer:
     """Trainer that masks a subset of training observed variables and appends missing ones."""
 
     def __init__(self, model, learning_rate=1e-3, device='cuda', embedding_anchor_reg: float = 0.0, callbacks=None,
-                 masked_loss_weight: float = 8.0, observed_loss_weight: float = 1.0):
+                 masked_loss_weight: float = 8.0, observed_loss_weight: float = 1.0, 
+                 checkpoint_dir: Optional[str] = None, save_checkpoints: bool = False):
         self.model = model.to(device)
         self.device = device
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -103,6 +104,12 @@ class ImputerTrainer:
                                                observed_loss_weight=observed_loss_weight)
         # Callback system
         self.callbacks = callbacks or []
+        
+        # Checkpoint saving configuration
+        self.checkpoint_dir = checkpoint_dir
+        self.save_checkpoints = save_checkpoints
+        if self.save_checkpoints and self.checkpoint_dir is None:
+            raise ValueError("checkpoint_dir must be provided when save_checkpoints=True")
 
     def register_callback(self, callback):
         """Register an evaluation callback."""
