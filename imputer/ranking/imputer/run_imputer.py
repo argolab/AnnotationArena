@@ -6,10 +6,10 @@ from typing import Dict, Any, List
 import torch
 import time
 
-from data import DataConverter, RankingData
-from ranking_imputer import MultiVariableImputer
-from trainer import ImputerTrainer, EvaluationCallback
-from eval import EvaluationEngine
+from imputer.data import DataConverter, RankingData
+from imputer.ranking_imputer import MultiVariableImputer
+from imputer.trainer import ImputerTrainer, EvaluationCallback
+from imputer.eval import EvaluationEngine
 import sys
 sys.path.insert(0, "..")
 from stan.pipeline.bundle import GroundTruthBundle

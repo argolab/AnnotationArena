@@ -3,8 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from typing import List, Tuple
 
-from abstractions import RankingEmbeddingProviderBase
-from data import RankingData
+from imputer.abstractions import RankingEmbeddingProviderBase
+from imputer.data import RankingData
 import random
 import logging
 

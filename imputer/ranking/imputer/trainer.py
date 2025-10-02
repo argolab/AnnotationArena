@@ -5,8 +5,8 @@ import torch.optim as optim
 import copy
 import random
 
-from losses import DefaultLossStrategy, adapt_batched_logits_to_predictions, TopLayerPredictionResult
-from data import RankingData
+from imputer.losses import DefaultLossStrategy, adapt_batched_logits_to_predictions, TopLayerPredictionResult
+from imputer.data import RankingData
 from tqdm import tqdm
 
 class EvaluationCallback:

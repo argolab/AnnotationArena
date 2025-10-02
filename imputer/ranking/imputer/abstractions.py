@@ -1,7 +1,7 @@
 from typing import List, Optional, Tuple
 import torch
 import torch.nn as nn
-from data import RankingData
+from imputer.data import RankingData
 
 
 class EmbeddingProviderBase(nn.Module):

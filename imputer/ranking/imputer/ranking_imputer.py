@@ -17,11 +17,11 @@ from collections import defaultdict
 import logging
 from tqdm import tqdm
 
-# New modular components (use relative imports only)
-from embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider, FullyRandomizedEmbeddingProvider, AtomCompositonalEmbeddingProvider
-from transformer import TransformerBlock, NormLayer as _NormLayer
-from data import RankingData, DataConverter
-from trainer import ImputerTrainer
+# New modular components (use absolute imports)
+from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider, FullyRandomizedEmbeddingProvider, AtomCompositonalEmbeddingProvider
+from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
+from imputer.data import RankingData, DataConverter
+from imputer.trainer import ImputerTrainer
 
 # Export for backward compatibility with experiment runner
 __all__ = ['MultiVariableImputer', 'DataConverter', 'ImputerTrainer', 'RankingData']
@@ -58,6 +58,7 @@ class MultiVariableImputer(nn.Module):
         self.num_likert_classes = num_likert_classes
         self.max_rank_size = max_rank_size
         self.embedding_dim = embedding_dim
+        self.embedding_type = embedding_type  # Store embedding type for checkpoint saving
 
         if embedding_type == "pairwise":
             self.embedding_provider = PairwiseRankingProjectionEmbeddingProvider(
