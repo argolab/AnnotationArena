@@ -11,6 +11,7 @@ from typing import List, Dict, Any
 from imputer.data import DataConverter, RankingData
 from imputer.ranking_imputer import MultiVariableImputer
 from imputer.logit_lens import LogitLensAnalyzer, LogitLensVisualizer
+from stan.pipeline.bundle import GroundTruthBundle
 
 
 def load_model_and_data(model_path: str, data_path: str) -> tuple:
@@ -70,7 +71,10 @@ def load_model_and_data(model_path: str, data_path: str) -> tuple:
     
     # Load data bundle
     with open(data_path, 'r') as f:
-        data_bundle = json.load(f)
+        bundle_dict = json.load(f)
+    
+    # Create GroundTruthBundle from JSON data
+    data_bundle = GroundTruthBundle.from_dict(bundle_dict)
     
     # Create variables
     train_observed = converter.create_variables_from_bundle(
