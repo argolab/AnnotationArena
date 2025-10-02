@@ -83,6 +83,8 @@ def main():
     parser.add_argument("--max-rank-size", type=int, default=2)
     parser.add_argument("--transductive_learning", action="store_true")
     parser.add_argument("--full_random", action="store_true")
+    parser.add_argument("--save-checkpoints", action="store_true", help="Save model checkpoints during training")
+    parser.add_argument("--checkpoint-every", type=int, default=10, help="Save checkpoint every N epochs")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -171,6 +173,16 @@ def main():
     if args.transductive_learning:
         print("Using transductive learning")
         train_vars += test_observed
+    
+    # Set up checkpoint directory if saving is enabled (before training)
+    if args.save_checkpoints:
+        # Create a temporary run directory to get the checkpoint path
+        temp_run_dir = new_run_dir(Path(args.output_root))
+        checkpoint_dir = str(temp_run_dir / "checkpoints")
+        trainer.checkpoint_dir = checkpoint_dir
+        trainer.save_checkpoints = True
+        print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
+    
     start_time = time.time()
     # Train
     trainer.train(
@@ -179,6 +191,7 @@ def main():
         masking_rate=args.masking_rate,
         epochs=args.epochs,
         call_callbacks_every=1,
+        save_checkpoints_every=args.checkpoint_every,
         verbose=True,
     )
 

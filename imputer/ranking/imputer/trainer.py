@@ -107,6 +107,36 @@ class ImputerTrainer:
     def register_callback(self, callback):
         """Register an evaluation callback."""
         self.callbacks.append(callback)
+    
+    def _save_checkpoint(self, epoch: int, loss_dict: Dict[str, float]):
+        """Save model checkpoint if checkpoint saving is enabled."""
+        if not self.save_checkpoints:
+            return
+            
+        import os
+        from pathlib import Path
+        
+        # Create checkpoint directory if it doesn't exist
+        checkpoint_path = Path(self.checkpoint_dir)
+        checkpoint_path.mkdir(parents=True, exist_ok=True)
+        
+        # Save checkpoint
+        checkpoint_file = checkpoint_path / f"checkpoint_epoch_{epoch:04d}.pt"
+        torch.save({
+            "epoch": epoch,
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "loss_dict": loss_dict,
+        }, checkpoint_file)
+        
+        # Also save as latest checkpoint
+        latest_file = checkpoint_path / "checkpoint_latest.pt"
+        torch.save({
+            "epoch": epoch,
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "loss_dict": loss_dict,
+        }, latest_file)
 
     def _call_epoch_end_callbacks(self, epoch):
         """Call all registered callbacks at epoch end."""
@@ -227,6 +257,7 @@ class ImputerTrainer:
               masking_rate: float,
               epochs: int = 10,
               call_callbacks_every: int = 1,
+              save_checkpoints_every: int = 10,
               verbose: bool = True):
         """Simple training loop using the new API."""
         training_history = []
@@ -236,6 +267,10 @@ class ImputerTrainer:
             loss_dict = self.train_step(train_observed_vars, train_missing_vars, masking_rate)
 
             training_history.append({'epoch': epoch, **loss_dict})
+
+            # Save checkpoint if enabled and at specified intervals
+            if self.save_checkpoints and (epoch + 1) % save_checkpoints_every == 0:
+                self._save_checkpoint(epoch, loss_dict)
 
             if (epoch + 1) % call_callbacks_every == 0:
                 callback_results = self._call_epoch_end_callbacks(epoch)
@@ -253,12 +288,6 @@ class ImputerTrainer:
                       f"Total Loss: {total_loss:.4f}, "
                       f"Rating Loss: {rating_loss:.4f}, "
                       f"Ranking Loss: {ranking_loss:.4f}")
-                
-            model_path =  f"models_final/model_{str(epoch)}.pt"
-            torch.save({
-                "state_dict": self.model.state_dict(),
-                "max_rank_size": 2
-            }, model_path)
 
         return {
             'training_history': training_history,
