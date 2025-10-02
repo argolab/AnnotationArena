@@ -19,7 +19,12 @@ def load_model_and_data(model_path: str, data_path: str) -> tuple:
     # Load model checkpoint
     checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
     
-    # Extract model configuration
+    # Extract model configuration - should always be present in properly saved checkpoints
+    if 'model_config' not in checkpoint:
+        raise ValueError(f"No model_config found in checkpoint {model_path}. "
+                        "This checkpoint was saved with an older version. "
+                        "Please retrain the model with the updated trainer.")
+    
     config = checkpoint['model_config']
     max_rank_size = config['max_rank_size']
     
@@ -160,7 +165,7 @@ def main():
     parser.add_argument('--output_dir', type=str, required=True,
                        help='Output directory for results and visualizations')
     parser.add_argument('--analysis_type', type=str, choices=['logit_lens', 'tuned_lens', 'both'],
-                       default='both', help='Type of analysis to run')
+                       default='logit_lens', help='Type of analysis to run')
     parser.add_argument('--device', type=str, default='cuda',
                        help='Device to run analysis on')
     
