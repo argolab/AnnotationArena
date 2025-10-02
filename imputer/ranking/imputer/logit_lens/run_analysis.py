@@ -140,9 +140,8 @@ def create_visualizations(results: LogitLensResults,
     
     visualizer = LogitLensVisualizer(results)
     
-    # Main performance plot
-    perf_path = output_dir / f"{analysis_type}_performance_by_layer.png"
-    visualizer.plot_performance_by_layer(save_path=str(perf_path))
+    # Rating and ranking performance plots (separated)
+    visualizer.plot_all_performance_by_layer(save_dir=str(output_dir))
     
     # Accuracy heatmap
     heatmap_path = output_dir / f"{analysis_type}_accuracy_heatmap.png"
@@ -210,11 +209,10 @@ def main():
         )
         create_visualizations(logit_results, output_dir, 'logit_lens')
     
+    # Note: Tuned lens analysis removed for minimalism
     if args.analysis_type in ['tuned_lens', 'both']:
-        tuned_results = run_tuned_lens_analysis(
-            model, converter, train_variables, test_variables, args.device
-        )
-        create_visualizations(tuned_results, output_dir, 'tuned_lens')
+        print("Tuned lens analysis not available (removed for minimalism)")
+        print("Use 'logit_lens' analysis type instead")
     
     print("Analysis complete!")
 
