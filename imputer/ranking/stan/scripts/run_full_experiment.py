@@ -36,9 +36,9 @@ def main():
     
     # MCMC arguments
     parser.add_argument("--chains", type=int, default=4, help="Number of MCMC chains")
-    parser.add_argument("--iter-warmup", type=int, default=1000, help="Number of warmup iterations")
-    parser.add_argument("--iter-sampling", type=int, default=1000, help="Number of sampling iterations")
-    parser.add_argument("--init-strategy", choices=["random", "ground_truth"], default="ground_truth", help="Initialization strategy")
+    parser.add_argument("--iter-warmup", type=int, default=10, help="Number of warmup iterations")
+    parser.add_argument("--iter-sampling", type=int, default=50, help="Number of sampling iterations")
+    parser.add_argument("--init-strategy", choices=["random", "ground_truth"], default="random", help="Initialization strategy")
     parser.add_argument("--use-train-only", action="store_true", help="Use only training instance data")
     parser.add_argument("--use-test-only", action="store_true", help="Use only test instance data")
     

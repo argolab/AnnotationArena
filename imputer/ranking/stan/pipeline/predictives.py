@@ -235,7 +235,7 @@ def evaluate_predictives(
     """
     # Extract predictives
     predictives = extract_predictives_from_fit(fit)
-    missing_indices = bundle.missing_ratings_indexes
+    missing_indices = bundle.missing_ratings_indexes_in_test_instance
     # Evaluate rating predictions
     rating_metrics = evaluate_rating_predictions(
         predictives["missing_rating_predictions"][:, missing_indices],

@@ -251,6 +251,9 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
         "test_observation_rate": len(test_observed_ratings) / len(test_ratings) if test_ratings else 0
     }
     
+    # Create missing_ratings_indexes_in_test_instance: indices of missing ratings that are from test set
+    missing_ratings_indexes_in_test_instance = [i for i, rating in enumerate(missing_ratings) if rating["instance"] == "test"]
+    
     return GroundTruthBundle(
         embeddings=all_embeddings,
         mean_preferences=mean_preferences,
@@ -263,6 +266,7 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
         all_pairwise=all_pairwise,
         observed_ratings=observed_ratings,
         missing_ratings=missing_ratings,
+        missing_ratings_indexes_in_test_instance=missing_ratings_indexes_in_test_instance,
         observed_pairwise=observed_pairwise,
         missing_pairwise=missing_pairwise,
         stats=stats,
