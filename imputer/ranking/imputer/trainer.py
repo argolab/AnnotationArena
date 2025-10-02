@@ -142,6 +142,9 @@ class ImputerTrainer:
         else:
             config['dropout'] = 0.1
             
+        # Debug: print what we're saving
+        print(f"Saving model_config: {config}")
+            
         return config
     
     def _save_checkpoint(self, epoch: int, loss_dict: Dict[str, float]):

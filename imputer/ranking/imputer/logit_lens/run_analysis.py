@@ -19,6 +19,9 @@ def load_model_and_data(model_path: str, data_path: str) -> tuple:
     # Load model checkpoint
     checkpoint = torch.load(model_path, map_location='cpu', weights_only=False)
     
+    # Debug: print checkpoint keys and config
+    print(f"Checkpoint keys: {list(checkpoint.keys())}")
+    
     # Extract model configuration - should always be present in properly saved checkpoints
     if 'model_config' not in checkpoint:
         raise ValueError(f"No model_config found in checkpoint {model_path}. "
@@ -26,9 +29,17 @@ def load_model_and_data(model_path: str, data_path: str) -> tuple:
                         "Please retrain the model with the updated trainer.")
     
     config = checkpoint['model_config']
+    print(f"Loaded model_config: {config}")
+    
+    # Debug: print some state_dict keys to see what we're trying to load
+    state_dict = checkpoint['state_dict']
+    print(f"State dict keys (first 10): {list(state_dict.keys())[:10]}")
+    print(f"Number of blocks in checkpoint: {len([k for k in state_dict.keys() if k.startswith('blocks.') and 'Q.weight' in k])}")
+    
     max_rank_size = config['max_rank_size']
     
     # Create model
+    print(f"Creating model with config: {config}")
     model = MultiVariableImputer(
         num_attributes=config['num_attributes'],
         num_annotators=config['num_annotators'],
@@ -43,7 +54,10 @@ def load_model_and_data(model_path: str, data_path: str) -> tuple:
         device='cpu'
     )
     
+    print(f"Created model with {len(model.blocks)} blocks, embedding_dim={model.embedding_dim}")
+    
     # Load state dict
+    print("Loading state dict...")
     model.load_state_dict(checkpoint['state_dict'])
     
     converter = DataConverter(
