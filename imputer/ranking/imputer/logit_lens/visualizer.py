@@ -16,7 +16,28 @@ from .analyzer import LogitLensResults, LayerAnalysis
 
 
 class LogitLensVisualizer:
-    """Creates visualizations for logit lens analysis results."""
+    """Creates visualizations for logit lens analysis results.
+    
+    This visualizer generates three main types of plots:
+    
+    1. Performance by Layer (plot_performance_by_layer):
+       - Train vs Test accuracy across layers
+       - Rating vs Ranking accuracy across layers  
+       - Observed vs Masked accuracy (training instance only)
+       - Train vs Test RMSE across layers
+       - Number of evaluations per layer
+       - Performance improvement from baseline layer
+    
+    2. Heatmap (plot_heatmap):
+       - Performance matrix across conditions (Train/Test/Rating/Ranking/Observed/Masked)
+       - Shows how different conditions perform at each layer
+       - Supports accuracy, RMSE, or other metrics
+    
+    3. Layer Comparison (plot_layer_comparison):
+       - Direct comparison of specific layers side-by-side
+       - Bar charts for accuracy, RMSE, and evaluation counts
+       - Useful for identifying optimal layer depths
+    """
     
     def __init__(self, results: LogitLensResults):
         self.results = results
