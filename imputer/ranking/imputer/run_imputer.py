@@ -176,11 +176,14 @@ def main():
         print("Using transductive learning")
         train_vars += test_observed
     
-    # Set up checkpoint directory if saving is enabled (before training)
+    # Create the main run directory first (before training)
+    run_dir = new_run_dir(Path(args.output_root))
+    
+    # Set up checkpoint directory if saving is enabled (using separate folder with _checkpoints suffix)
     if args.save_checkpoints:
-        # Create a temporary run directory to get the checkpoint path
-        temp_run_dir = new_run_dir(Path(args.output_root))
-        checkpoint_dir = str(temp_run_dir / "checkpoints")
+        checkpoint_run_dir = Path(str(run_dir) + "_checkpoints")
+        checkpoint_run_dir.mkdir(parents=True, exist_ok=True)
+        checkpoint_dir = str(checkpoint_run_dir)
         trainer.checkpoint_dir = checkpoint_dir
         trainer.save_checkpoints = True
         print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
@@ -203,8 +206,7 @@ def main():
     # Evaluate
     results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device)
 
-    # Output
-    run_dir = new_run_dir(Path(args.output_root))
+    # Output (using the same run_dir created earlier)
 
     # Save model - extract config directly from the trained model
     model_path = run_dir / "model.pt"
