@@ -72,7 +72,7 @@ class LogitLensVisualizer:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+        plt.close()
     
     def plot_test_performance(self, save_path: Optional[str] = None) -> None:
         """Plot test performance: observed vs missing for all metrics."""
@@ -115,7 +115,7 @@ class LogitLensVisualizer:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+        plt.close()
     
     def plot_all_performance(self, save_path: Optional[str] = None) -> None:
         """Plot all performance metrics in a single comprehensive view."""
@@ -164,7 +164,7 @@ class LogitLensVisualizer:
         plt.tight_layout()
         if save_path:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
-        plt.show()
+        plt.close()
     
     def save_results(self, save_path: str) -> None:
         """Save analysis results to JSON file."""
