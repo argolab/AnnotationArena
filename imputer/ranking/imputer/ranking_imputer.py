@@ -122,41 +122,26 @@ class MultiVariableImputer(nn.Module):
             return hidden[:, :, :2]
 
 
-    def forward_hidden(self, ranking_data_list, attn_mask: torch.Tensor | None = None):
-        """Return intermediate hidden states from each transformer block and the final normalized features.
-
-        Returns list[Tensor] of length = num_blocks + 1, where the last is post-norm features.
-        """
-        features = self.embedding_provider(ranking_data_list)
-
-        hiddens = []
-        for block in self.blocks:
-            features = block(features, attn_mask=attn_mask)
-            hiddens.append(features)
-        features = self.norm(features)
-        hiddens.append(features)
-        return hiddens
-
-    def forward(self, ranking_data_list, attn_mask: torch.Tensor | None = None, return_hidden: bool = False):
+    def forward(self, ranking_data_list, attn_mask: torch.Tensor | None = None, return_intermediate: bool = False):
         # Support both structured list inputs and legacy tensor inputs
 
         features, params = self.embedding_provider(ranking_data_list)
 
-        hidden_states = []
+        hidden_intermediates = []
         for block in self.blocks:
             features, params = block(features, params, attn_mask=attn_mask)
-            if return_hidden:
-                hidden_states.append(features)
+            if return_intermediate:
+                hidden_intermediates.append([features, params])
         features = self.norm(features)
-        if return_hidden:
-            hidden_states.append(features)
+        if return_intermediate:
+            hidden_intermediates.append([features, params])
 
         logits = {
             'rating': self.apply_head('rating', params),
             'ranking': self.apply_head('ranking', params),
         }
-        if return_hidden:
-            return logits, hidden_states
+        if return_intermediate:
+            return logits, hidden_intermediates
         return logits
 
 
