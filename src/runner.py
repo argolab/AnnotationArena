@@ -425,7 +425,7 @@ class NeuralModelEvaluator:
             
             # Set dynamic masking parameters
             arena.set_dynamic_masking_params(
-                num_patterns_per_example=1,
+                num_patterns_per_example=3,
                 visible_ratio=0.85,
                 masking_lambda=0.1
             )
@@ -805,17 +805,17 @@ def evaluate_all_models(train_file: str, dev_file: str, training_size: int,
     logger.info("="*60)"""
     
     # Train neural models of different sizes
-    for size in ["large", "small", "tiny"]:
+    for size in ["large"]:
         if save_models:
-            neural_save_path = f"models_final/neural_model_train_{training_size}_{train_file_name}_{size}.pth"
+            neural_save_path = f"models_new/neural_model_train_{training_size}_{train_file_name}_{size}.pth"
         else:
             neural_save_path = None
 
         print(neural_save_path)
         
-        """if os.path.exists(neural_save_path):
+        if os.path.exists(neural_save_path):
             print(f"Skip training {neural_save_path}")
-            continue"""
+            continue
             
         neural_evaluator = NeuralModelEvaluator(n, k, device)
         neural_model = neural_evaluator.train_neural_model(
@@ -839,7 +839,7 @@ def main():
                        help='Number of training examples to use')
     parser.add_argument('--n', type=int, default=10, help='Number of variables')
     parser.add_argument('--k', type=int, default=5, help='Number of categories')
-    parser.add_argument('--neural_epochs', type=int, default=60,
+    parser.add_argument('--neural_epochs', type=int, default=20,
                        help='Number of epochs for neural model')
     parser.add_argument('--domain_epochs', type=int, default=40,
                        help='Number of epochs for domain model')
