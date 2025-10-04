@@ -23,8 +23,8 @@ from sentence_transformers import SentenceTransformer
 logger = logging.getLogger(__name__)
 
 # Change Based on Usage
-# model = SentenceTransformer("all-MiniLM-L6-v2")
-model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
+model = SentenceTransformer("all-MiniLM-L6-v2")
+#model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
 
 random.seed(90)
 torch.manual_seed(90)
@@ -89,20 +89,21 @@ class DataManager:
         random.shuffle(text_ids)
 
         if dataset == "hanna":
-            validation_ratio = 0.3
-            test_ratio = 0.2
+            validation_ratio = 0.0
+            test_ratio = 0.1
         else:
-            validation_ratio = 0.1
+            validation_ratio = 0.0
             test_ratio = 0.1
         
         initial_train_size = int(num_partition * initial_train_ratio)
         validation_size = int(num_partition * validation_ratio)
-        test_size = int(num_partition * test_ratio)
+        test_size = num_partition - initial_train_size
         active_pool_size = num_partition - initial_train_size - validation_size - test_size
 
         initial_train_texts = text_ids[:initial_train_size]
         validation_texts = text_ids[initial_train_size:initial_train_size + validation_size]
         test_texts = text_ids[initial_train_size + validation_size:initial_train_size + validation_size + test_size]
+        #test_texts = text_ids[:test_size]
         active_pool_texts = text_ids[initial_train_size + validation_size + test_size:
                                 initial_train_size + validation_size + test_size + active_pool_size]
         
@@ -234,9 +235,9 @@ class DataManager:
                         combined_input = [mask_bit] + [0.0] * 5
                         entry["known_questions"].append(0)
                     elif split_type == "test":
-                        mask_bit = 1
-                        combined_input = [mask_bit] + [0.0] * 5
-                        entry["known_questions"].append(0)
+                        mask_bit = 0
+                        combined_input = [mask_bit] + true_prob
+                        entry["known_questions"].append(1)
                     else:
                         mask_bit = 0
                         combined_input = [mask_bit] + true_prob
@@ -323,7 +324,7 @@ class DataManager:
                 with open(os.path.join(self.config.INPUT_DATA_DIR, "texts.json"), "r", encoding="utf-8") as file:
                     text_data = json.load(file)
 
-            for text_id in texts:
+            for text_id in tqdm(texts):
                 if use_embedding and text_id not in text_data.keys():
                     continue
                 annotators = list(human_data[text_id].keys())
@@ -349,9 +350,9 @@ class DataManager:
                             combined_input = [mask_bit] + [0.0] * 4
                             entry["known_questions"].append(0)
                         elif split_type == "test":
-                            mask_bit = 1
-                            combined_input = [mask_bit] + [0.0] * 4
-                            entry["known_questions"].append(0)
+                            mask_bit = 0
+                            combined_input = [mask_bit] + true_prob
+                            entry["known_questions"].append(1)
                         else:
                             mask_bit = 0
                             combined_input = [mask_bit] + true_prob

@@ -104,11 +104,11 @@ class ModelConfig:
     HANNA = {
         'question_num': 7,
         'max_choices': 5,
-        'encoder_layers_num': 6,
+        'encoder_layers_num': 2,
         'attention_heads': 4,
-        'hidden_dim': 64,
+        'hidden_dim': 32,
         'num_annotator': 18,
-        'annotator_embedding_dim': 19,
+        'annotator_embedding_dim': 32,
         'dropout': 0.1
     }
     

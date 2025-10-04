@@ -14,7 +14,7 @@ import logging
 import time
 from tqdm.auto import tqdm
 import random
-
+import ipdb
 logger = logging.getLogger(__name__)
 
 try:
@@ -164,8 +164,8 @@ class Positional_Encoder(nn.Module):
             
         # Combine all embeddings
         combined_embeds = question_embeds + annotator_embeds
-        feature_x = torch.cat((combined_embeds, embeddings, x[:,:,1:]), dim=-1)
-        param_x = x[:,:,1:].clone()
+        feature_x = torch.cat((combined_embeds, embeddings), dim=-1)
+        param_x = torch.cat((embeddings, x[:,:,1:]), dim=-1)
         
         return feature_x, param_x
 
@@ -176,22 +176,22 @@ class EncoderLayer(nn.Module):
     def __init__(self, feature_dim, param_dim, attention_heads, num_question_types, dropout=0.3):
         """Initialize encoder layer."""
         super().__init__()
-        self.feature_dim = feature_dim 
-        self.param_dim = param_dim  
+        self.feature_dim = feature_dim + 384
+        self.param_dim = param_dim + 384
         self.attention_heads = attention_heads
         
-        self.Q = nn.Linear(feature_dim, feature_dim)
-        self.K = nn.Linear(feature_dim, feature_dim)
-        self.V = nn.Linear(feature_dim, feature_dim)
-        self.out = nn.Linear(feature_dim, feature_dim)
+        self.Q = nn.Linear(self.feature_dim, self.feature_dim)
+        self.K = nn.Linear(self.feature_dim, self.feature_dim)
+        self.V = nn.Linear(self.feature_dim, self.feature_dim)
+        self.out = nn.Linear(self.feature_dim, self.feature_dim)
         
-        self.norm_1 = NormLayer(feature_dim)
-        self.norm_2 = NormLayer(feature_dim)
+        self.norm_1 = NormLayer(self.feature_dim)
+        self.norm_2 = NormLayer(self.feature_dim)
         self.dropout_1 = nn.Dropout(dropout)
         self.dropout_2 = nn.Dropout(dropout)
         
-        self.ff = FeedForward(feature_dim, dropout=dropout)
-        self.param_update = nn.Linear(feature_dim + param_dim, param_dim)
+        self.ff = FeedForward(self.feature_dim, dropout=dropout)
+        self.param_update = nn.Linear(self.feature_dim + self.param_dim, self.param_dim)
 
         # Add smoothing layer
         self.smoothing = FullyVectorizedSimilaritySmoothing(
@@ -230,8 +230,6 @@ class EncoderLayer(nn.Module):
         combined = torch.cat([feature_x, param_x], dim=-1)
         param_x = self.param_update(combined)
         
-        # Apply smoothing (this is the key addition)
-        feature_x, param_x = self.smoothing(feature_x, param_x, questions, mask)
         
         return feature_x, param_x
 
@@ -243,7 +241,7 @@ class Encoder(nn.Module):
              num_annotator, annotator_embedding_dim, dropout=0.1):
         """Initialize encoder with multiple layers."""
         super().__init__()
-        self.feature_dim = annotator_embedding_dim + max_choices + 384
+        self.feature_dim = annotator_embedding_dim
         self.param_dim = max_choices
         self.position_encoder = Positional_Encoder(question_num, max_choices, num_annotator, annotator_embedding_dim)
 
@@ -314,7 +312,7 @@ class ImputerEmbedding(nn.Module):
     def forward(self, x, annotators, questions, embeddings):
         """Forward pass through the model."""
         param_x = self.encoder(x, annotators, questions, embeddings)
-        return param_x
+        return param_x[:, :, 384:]
     
     def replace_training_queue_entry(self, new_entry, clear_buffer_size=1):
         old_indices = [i for i in range(len(self.unique_examples)) if not self.recent_indicators[i]] #avoid recent examples
@@ -410,340 +408,6 @@ class ImputerEmbedding(nn.Module):
         
         return predictions
     
-    def update_training_supervision(self, observed_values, variable_ids, example_indices=None):
-        """
-        Update training queue when new observations are made.
-        
-        Args:
-            observed_values: Observed values to update with
-            variable_ids: Variable IDs that were observed
-            example_indices: Indices of examples to update (unused, kept for compatibility)
-            
-        Returns:
-            Number of queue entries updated
-        """
-        if not variable_ids:
-            return 0
-        
-        # Parse variable_ids to get (example_idx, position) pairs
-        observed_positions = []
-        for var_id in variable_ids:
-            if isinstance(var_id, str) and var_id.startswith('example_') and '_position_' in var_id:
-                parts = var_id.split('_')
-                if len(parts) >= 4:
-                    try:
-                        example_idx = int(parts[1])
-                        position = int(parts[3])
-                        observed_positions.append((example_idx, position))
-                    except ValueError:
-                        continue
-        
-        if not observed_positions:
-            logger.debug("No valid variable_ids to process")
-            return 0
-        
-        # FIXED: Mark relevant training queue entries for revisiting
-        updated_count = 0
-        for queue_idx, queue_entry in enumerate(self.training_queue):
-            entry_example_idx = queue_entry['example_idx']
-            entry_positions = queue_entry['positions']
-            
-            # Check if this queue entry is affected by any observation
-            for obs_example_idx, obs_position in observed_positions:
-                if entry_example_idx == obs_example_idx and obs_position in entry_positions:
-                    queue_entry['needs_revisit'] = True
-                    self.examples_to_revisit.add(queue_idx)
-                    updated_count += 1
-                    logger.debug(f"Marked queue entry {queue_idx} for revisit (example {entry_example_idx}, position {obs_position})")
-                    break
-        
-        # Also update prediction history for analysis
-        for history_entry in self.prediction_history:
-            if history_entry['example_idx'] in [ex_idx for ex_idx, _ in observed_positions]:
-                history_entry['needs_revisit'] = True
-        
-        logger.debug(f"Updated supervision for {len(variable_ids)} variables, marked {updated_count} queue entries for revisit")
-        return updated_count
-    
-    def compute_log_loss(self, outputs, targets, weights=None):
-        """
-        Compute log loss (cross-entropy) for predicted distributions.
-        
-        Args:
-            outputs: Predicted logits [batch_size, sequence_length, max_choices]
-            targets: Target values [batch_size, sequence_length, max_choices]
-            weights: Optional weights for examples [batch_size]
-            
-        Returns:
-            Log loss value
-        """
-        batch_size, seq_len, num_classes = outputs.shape
-        loss = torch.zeros(1, device=self.device)
-        
-        for i in range(batch_size):
-            for j in range(seq_len):
-                target_idx = torch.argmax(targets[i, j]).item()
-                example_loss = F.cross_entropy(
-                    outputs[i:i+1, j], 
-                    torch.tensor([target_idx], device=self.device)
-                )
-                
-                if weights is not None:
-                    example_loss *= weights[i]
-                    
-                loss += example_loss
-        
-        # Normalize
-        if weights is not None:
-            total_weight = weights.sum().item()
-            loss = loss / max(1.0, total_weight)
-        else:
-            loss = loss / (batch_size * seq_len)
-            
-        return loss
-    
-    def train_on_examples_basic(self, examples_indices=None, epochs=1, batch_size=8, lr=1e-4):
-        """
-        Train the model on stored examples with prioritized revisiting.
-        
-        Args:
-            examples_indices: Indices of queue entries to train on (default: all)
-            epochs: Number of training epochs
-            batch_size: Batch size
-            lr: Learning rate
-            
-        Returns:
-            List of training losses
-        """
-        # FIXED: Use training queue instead of training_examples
-        if examples_indices is None:
-            examples_indices = list(range(len(self.training_queue)))
-        
-        if not examples_indices:
-            return []
-        
-        self.train()
-        optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
-        
-        losses = []
-        for epoch in range(epochs):
-            epoch_loss = 0.0
-            batch_count = 0
-            
-            np.random.shuffle(examples_indices)
-            
-            for batch_start in range(0, len(examples_indices), batch_size):
-                batch_indices = examples_indices[batch_start:batch_start + batch_size]
-                
-                # FIXED: Get current data from dataset using training queue
-                batch_examples = []
-                for queue_idx in batch_indices:
-                    if queue_idx >= len(self.training_queue):
-                        continue
-                    queue_entry = self.training_queue[queue_idx]
-                    example_idx = queue_entry['example_idx']
-                    current_data = self.dataset[example_idx]
-                    
-                    known_questions, inputs, answers, annotators, questions, embeddings = current_data
-                    batch_examples.append({
-                        'inputs': inputs.clone(),
-                        'annotators': annotators.clone(),
-                        'questions': questions.clone(),
-                        'embeddings': embeddings.clone() if embeddings is not None else None,
-                        'weight': queue_entry.get('weight', 1.0)
-                    })
-                
-                if not batch_examples:
-                    continue
-                
-                # Extract batch data
-                batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
-                batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
-                batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
-                batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device) if batch_examples[0]['embeddings'] is not None else None
-                batch_weights = torch.tensor([e['weight'] for e in batch_examples]).to(self.device)
-                
-                # Forward pass
-                optimizer.zero_grad()
-                outputs = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
-                
-                # Compute loss on all positions
-                batch_targets = batch_inputs[:, :, 1:].clone()
-                loss = self.compute_log_loss(outputs, batch_targets, batch_weights)
-                
-                if loss > 0:
-                    loss.backward()
-                    optimizer.step()
-                    epoch_loss += loss.item()
-                    batch_count += 1
-                    
-                    # Store individual losses for analysis
-                    for i, queue_idx in enumerate(batch_indices):
-                        if queue_idx < len(self.prediction_history):
-                            individual_loss = self.compute_log_loss(
-                                outputs[i:i+1], 
-                                batch_targets[i:i+1]
-                            ).item()
-                            self.prediction_history[queue_idx]['loss'] = individual_loss
-                    
-                    if WANDB_AVAILABLE and wandb.run is not None:
-                        wandb.log({"batch_loss": loss.item(), "epoch": epoch})
-            
-            avg_epoch_loss = epoch_loss / max(1, batch_count)
-            losses.append(avg_epoch_loss)
-            self.training_losses.append(avg_epoch_loss)
-            
-            logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}")
-            
-            if WANDB_AVAILABLE and wandb.run is not None:
-                wandb.log({"epoch_loss": avg_epoch_loss, "epoch": epoch})
-        
-        # Clear revisit flags for trained examples
-        for queue_idx in examples_indices:
-            if queue_idx < len(self.training_queue):
-                self.training_queue[queue_idx]['needs_revisit'] = False
-                #After training, no longer recent examples
-                self.recent_indicators[queue_idx] = False
-            if queue_idx < len(self.prediction_history):
-                self.prediction_history[queue_idx]['needs_revisit'] = False
-        self.examples_to_revisit.clear()
-        
-        logger.info(f"Training completed - Final loss: {losses[-1]:.4f}")
-        return losses
-
-    def train_on_examples_random_masking(self, examples_indices=None, epochs=1, batch_size=8, lr=1e-4):
-        """Train with random masking patterns."""
-        # FIXED: Use training queue instead of training_examples
-        if examples_indices is None:
-            examples_indices = list(range(len(self.training_queue)))
-        
-        if not examples_indices:
-            return []
-        
-        self.train()
-        optimizer = torch.optim.AdamW(self.parameters(), lr=lr)
-        
-        # Original complete masking patterns (30+ patterns)
-        masking_patterns = [
-            [0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 0, 1],
-            [0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0],
-            [0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0],
-            [0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 1, 0],
-            [0, 1, 0, 0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 0],
-            [1, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 0],
-            [0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1],
-            [0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 0, 1, 0],
-            [0, 0, 1, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0, 0],
-            [0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0, 1],
-            [0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1, 0],
-            [0, 1, 1, 0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 0],
-            [1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 0],
-            [0, 0, 1, 1, 0, 1, 0, 0, 0, 0, 1, 0, 0, 1],
-            [0, 0, 1, 0, 0, 1, 0, 1, 1, 0, 0, 1, 0, 0],
-            [0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 1, 0, 0, 0],
-            [0, 1, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0],
-            [0, 1, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0],
-            [0, 1, 1, 0, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0],
-            [1, 0, 0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 1],
-            [0, 0, 0, 1, 0, 0, 1, 0, 1, 0, 0, 0, 1, 1],
-            [0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0, 1],
-            [1, 0, 0, 0, 0, 1, 1, 0, 0, 0, 1, 0, 1, 0],
-            [0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 0, 1, 0, 1],
-            [0, 1, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0],
-            [0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1, 1, 0, 0],
-            [0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 1, 0],
-            [0, 1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 0, 1],
-            [0, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0, 0, 1],
-            [0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0],
-            [1, 0, 0, 1, 0, 1, 0, 0, 1, 0, 0, 1, 0, 0],
-            [0, 1, 1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 1, 0],
-            [0, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 1, 0],
-            [0, 1, 0, 1, 0, 1, 0, 1, 0, 0, 0, 1, 0, 0],
-        ]
-
-        losses = []
-        for epoch in range(epochs):
-            epoch_loss = 0.0
-            batch_count = 0
-            
-            np.random.shuffle(examples_indices)
-            
-            for batch_start in range(0, len(examples_indices), batch_size):
-                batch_indices = examples_indices[batch_start:batch_start + batch_size]
-                
-                # FIXED: Get current data from dataset using training queue
-                batch_examples = []
-                for queue_idx in batch_indices:
-                    if queue_idx >= len(self.training_queue):
-                        continue
-                    queue_entry = self.training_queue[queue_idx]
-                    example_idx = queue_entry['example_idx']
-                    current_data = self.dataset[example_idx]
-                    
-                    known_questions, inputs, answers, annotators, questions, embeddings = current_data
-                    batch_examples.append({
-                        'inputs': inputs.clone(),
-                        'annotators': annotators.clone(),
-                        'questions': questions.clone(),
-                        'embeddings': embeddings.clone() if embeddings is not None else None,
-                        'weight': queue_entry.get('weight', 1.0)
-                    })
-                
-                if not batch_examples:
-                    continue
-                
-                # Extract batch data
-                batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
-                batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
-                batch_questions = torch.stack([e['questions'] for e in batch_examples]).to(self.device)
-                batch_embeddings = torch.stack([e['embeddings'] for e in batch_examples]).to(self.device) if batch_examples[0]['embeddings'] is not None else None
-                
-                # Apply random masking pattern
-                temp_inputs = batch_inputs.clone()
-                pattern_idx = np.random.randint(0, len(masking_patterns))
-                pattern = masking_patterns[pattern_idx]
-                
-                for b in range(temp_inputs.shape[0]):
-                    for i in range(temp_inputs.shape[1]):
-                        q_idx = batch_questions[b, i].item()
-                        is_llm = (batch_annotators[b, i].item() == -1)
-                        
-                        # Only mask positions that are currently observed
-                        if temp_inputs[b, i, 0] == 0:  # Currently observed
-                            pattern_pos = 2 * q_idx + (0 if is_llm else 1)
-                            if pattern_pos < len(pattern) and pattern[pattern_pos] == 1:
-                                temp_inputs[b, i, 0] = 1  # Mask it
-                                temp_inputs[b, i, 1:] = 0  # Zero out
-                
-                optimizer.zero_grad()
-                outputs = self(temp_inputs, batch_annotators, batch_questions, batch_embeddings)
-                
-                # Compute loss on ALL positions (using original labels)
-                batch_targets = batch_inputs[:, :, 1:].clone()
-                loss = self.compute_log_loss(outputs, batch_targets)
-                
-                if loss > 0:
-                    loss.backward()
-                    optimizer.step()
-                    epoch_loss += loss.item()
-                    batch_count += 1
-            
-            avg_epoch_loss = epoch_loss / max(1, batch_count)
-            losses.append(avg_epoch_loss)
-            self.training_losses.append(avg_epoch_loss)
-            
-            logger.info(f"Epoch {epoch+1}/{epochs}, Loss: {avg_epoch_loss:.4f}")
-            
-            if WANDB_AVAILABLE and wandb.run is not None:
-                wandb.log({"epoch_loss_random": avg_epoch_loss, "epoch": epoch})
-        
-        # Clear revisit flags
-        for queue_idx in examples_indices:
-            if queue_idx < len(self.training_queue):
-                self.training_queue[queue_idx]['needs_revisit'] = False
-        self.examples_to_revisit.clear()
-        
-        return losses
     
     def train_on_examples_dynamic_masking(self, examples_indices=None, epochs=5, batch_size=32, lr=1e-4, 
                                  num_patterns_per_example=5, visible_ratio=0.5):
@@ -776,7 +440,6 @@ class ImputerEmbedding(nn.Module):
                 example_idx = queue_entry['example_idx']
                 if example_idx not in unique_examples:
                     unique_examples[example_idx] = queue_entry
-
         if not unique_examples:
             return []
         
@@ -829,9 +492,11 @@ class ImputerEmbedding(nn.Module):
                     if num_visible >= len(observed_positions):
                         visible_positions = observed_positions.copy()
                     else:
-                        visible_positions = np.random.choice(
+                        visible_positions = [np.random.choice(
                             observed_positions, size=num_visible, replace=False
-                        ).tolist()
+                        ).tolist()]
+
+                    visible_positions = [0, 1, 2, 3, 4, 5, 6]
                     
                     # Mask the non-visible observed positions
                     for pos in observed_positions:
@@ -850,7 +515,6 @@ class ImputerEmbedding(nn.Module):
                 
                 if not batch_examples:
                     continue
-                
                 # Extract batch data
                 batch_inputs = torch.stack([e['inputs'] for e in batch_examples]).to(self.device)
                 batch_annotators = torch.stack([e['annotators'] for e in batch_examples]).to(self.device)
@@ -861,34 +525,29 @@ class ImputerEmbedding(nn.Module):
                 # Extract original targets and observed masks
                 batch_targets = torch.stack([e['original_targets'] for e in batch_examples]).to(self.device)
                 batch_observed_mask = torch.stack([e['original_observed_mask'] for e in batch_examples]).to(self.device)
-                
                 # Forward pass
                 optimizer.zero_grad()
                 outputs = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
-                
                 # Compute loss only for originally observed AND currently visible positions
                 batch_size_actual, seq_len, num_classes = outputs.shape
+                num_classes = 5
                 outputs_flat = outputs.view(-1, num_classes)
                 targets_flat = batch_targets.view(-1, num_classes)
 
                 # Get current mask state (0 = visible, 1 = masked)
                 current_mask = batch_inputs[:, :, 0]
                 currently_visible = (current_mask == 0).float()
-
+                artificially_masked = batch_observed_mask * (1 - currently_visible)
                 # Combine: originally observed AND currently visible
-                loss_mask = batch_observed_mask * currently_visible
+                loss_mask = 1.0 * artificially_masked
                 loss_mask_flat = loss_mask.view(-1)
 
                 # Compute loss only where mask allows
-                log_probs = F.log_softmax(outputs_flat, dim=-1)
-                loss_per_position = kl_criterion(log_probs.unsqueeze(0), targets_flat.unsqueeze(0))
+                loss_per_position = F.cross_entropy(outputs_flat, torch.argmax(targets_flat, dim=-1), reduction='none')
 
                 # Apply masking and weights
                 weighted_loss = loss_per_position * loss_mask_flat
 
-                if batch_weights.numel() > 0:
-                    batch_weights_expanded = batch_weights.unsqueeze(1).expand(-1, seq_len).contiguous().view(-1)
-                    weighted_loss = weighted_loss * batch_weights_expanded
 
                 # Average loss over valid positions
                 total_valid = loss_mask_flat.sum()
@@ -924,7 +583,6 @@ class ImputerEmbedding(nn.Module):
                 self.training_queue[queue_idx]['needs_revisit'] = False
         for i in range(len(self.recent_indicators)):
             self.recent_indicators[i] = False
-        logger.info(f"Current examples in the training buffer: {self.unique_examples}")
         logger.debug(f"Indicators for recent examples: {self.recent_indicators}")
         self.examples_to_revisit.clear()
 
