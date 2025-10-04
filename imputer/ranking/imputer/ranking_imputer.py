@@ -128,10 +128,16 @@ class MultiVariableImputer(nn.Module):
         features, params = self.embedding_provider(ranking_data_list)
 
         hidden_intermediates = []
+        if return_intermediate:
+            # Add embeddings as the first entry
+            hidden_intermediates.append([features, params])
+        
         for block in self.blocks:
             features, params = block(features, params, attn_mask=attn_mask)
             if return_intermediate:
                 hidden_intermediates.append([features, params])
+        
+        # Apply final normalization
         features = self.norm(features)
         if return_intermediate:
             hidden_intermediates.append([features, params])
