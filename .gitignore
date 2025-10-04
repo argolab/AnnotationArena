@@ -218,3 +218,7 @@ src/predictions
 src/predictions_prev
 src/prev_models
 src/models
+src/input_*
+src/input
+src/logs_*
+src/output_*
