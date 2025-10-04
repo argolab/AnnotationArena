@@ -114,56 +114,20 @@ def run_logit_lens_analysis(model: MultiVariableImputer,
     return results
 
 
-# def run_tuned_lens_analysis(model: MultiVariableImputer, 
-#                            converter: DataConverter,
-#                            train_variables: List[RankingData],
-#                            test_variables: List[RankingData],
-#                            device: str = 'cuda') -> LogitLensResults:
-#     """Run tuned lens analysis."""
-    
-#     print("Running Tuned Lens Analysis...")
-    
-#     analyzer = TunedLensAnalyzer(model, converter, device)
-#     results = analyzer.analyze_all_layers_tuned(train_variables, test_variables)
-    
-#     print(f"Analysis complete. Analyzed {len(results.train_results)} layers.")
-    
-#     return results
-
-
-def create_visualizations(results: LogitLensResults, 
-                         output_dir: Path,
-                         analysis_type: str) -> None:
+def create_visualizations(results: LogitLensResults, output_dir: Path) -> None:
     """Create and save visualizations."""
     
     print("Creating visualizations...")
     
     visualizer = LogitLensVisualizer(results)
     
-    # Rating and ranking performance plots (separated)
-    visualizer.plot_all_performance_by_layer(save_dir=str(output_dir))
-    
-    # Accuracy heatmap
-    heatmap_path = output_dir / f"{analysis_type}_accuracy_heatmap.png"
-    visualizer.plot_heatmap(metric='accuracy', save_path=str(heatmap_path))
-    
-    # RMSE heatmap (if available)
-    if results.all_variables and 'rmse' in results.all_variables[0].layer_analyses[0].metrics:
-        rmse_heatmap_path = output_dir / f"{analysis_type}_rmse_heatmap.png"
-        visualizer.plot_heatmap(metric='rmse', save_path=str(rmse_heatmap_path))
-    
-    # Layer comparison
-    num_layers = len(results.all_variables[0].layer_analyses) if results.all_variables else 0
-    if num_layers > 1:
-        layers_to_compare = [0, num_layers // 2, num_layers - 1]
-        comparison_path = output_dir / f"{analysis_type}_layer_comparison.png"
-        visualizer.plot_layer_comparison(
-            layers_to_compare, 
-            save_path=str(comparison_path)
-        )
+    # Create the three main plots
+    visualizer.plot_train_performance(save_path=str(output_dir / "train_performance.png"))
+    visualizer.plot_test_performance(save_path=str(output_dir / "test_performance.png"))
+    visualizer.plot_all_performance(save_path=str(output_dir / "all_performance.png"))
     
     # Save results
-    results_path = output_dir / f"{analysis_type}_results.json"
+    results_path = output_dir / "logit_lens_results.json"
     visualizer.save_results(str(results_path))
     
     # Print summary
@@ -181,8 +145,6 @@ def main():
                        help='Path to data bundle JSON file')
     parser.add_argument('--output_dir', type=str, required=True,
                        help='Output directory for results and visualizations')
-    parser.add_argument('--analysis_type', type=str, choices=['logit_lens', 'tuned_lens', 'both'],
-                       default='logit_lens', help='Type of analysis to run')
     parser.add_argument('--device', type=str, default='cuda',
                        help='Device to run analysis on')
     
@@ -203,16 +165,10 @@ def main():
     print(f"Test variables: {len(test_variables)}")
     
     # Run analysis
-    if args.analysis_type in ['logit_lens', 'both']:
-        logit_results = run_logit_lens_analysis(
-            model, converter, train_variables, test_variables, args.device
-        )
-        create_visualizations(logit_results, output_dir, 'logit_lens')
-    
-    # Note: Tuned lens analysis removed for minimalism
-    if args.analysis_type in ['tuned_lens', 'both']:
-        print("Tuned lens analysis not available (removed for minimalism)")
-        print("Use 'logit_lens' analysis type instead")
+    logit_results = run_logit_lens_analysis(
+        model, converter, train_variables, test_variables, args.device
+    )
+    create_visualizations(logit_results, output_dir)
     
     print("Analysis complete!")
 

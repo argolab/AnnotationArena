@@ -109,44 +109,25 @@ class LogitLensAnalyzer:
         """Analyze all variables across all layers in a single forward pass."""
         
         with torch.no_grad():
-            # Get embeddings (both features and params) for all variables
-            features, params = self.model.embedding_provider(all_variables)
-            
-            # Forward through all layers, capturing intermediate representations
-            layer_analyses = []
-            current_features = features
-            current_params = params
-            
-            # Process each transformer block
-            for layer_idx, block in enumerate(self.model.blocks):
-                current_features, current_params = block(current_features, current_params)
-                
-                # Apply both heads to get logits for this layer
-                rating_logits = self.model.apply_head('rating', current_params)
-                ranking_logits = self.model.apply_head('ranking', current_params)
-                
-                # Store layer analysis with both head types
-                layer_analysis = LayerAnalysis(
-                    layer_idx=layer_idx,
-                    hidden_states=current_features,
-                    logits={'rating': rating_logits, 'ranking': ranking_logits},
-                    metrics={}  # Will be computed per variable
+            # Run a single forward pass with intermediates captured
+            logits_final, hidden_intermediates = self.model(all_variables, return_intermediate=True)
+            # hidden_intermediates is a list of [features, params] per transformer block,
+            # plus a final [features_normed, params] entry after normalization per model.forward
+
+            layer_analyses: List[LayerAnalysis] = []
+            for layer_idx, (features_snapshot, params_snapshot) in enumerate(hidden_intermediates):
+                # Compute head logits from the params snapshot at this layer
+                rating_logits = self.model.apply_head('rating', params_snapshot)
+                ranking_logits = self.model.apply_head('ranking', params_snapshot)
+
+                layer_analyses.append(
+                    LayerAnalysis(
+                        layer_idx=layer_idx,
+                        hidden_states=features_snapshot,
+                        logits={'rating': rating_logits, 'ranking': ranking_logits},
+                        metrics={}
+                    )
                 )
-                layer_analyses.append(layer_analysis)
-            
-            # Apply final normalization
-            final_features = self.model.norm(current_features)
-            final_rating_logits = self.model.apply_head('rating', current_params)
-            final_ranking_logits = self.model.apply_head('ranking', current_params)
-            
-            # Add final layer analysis
-            final_layer_analysis = LayerAnalysis(
-                layer_idx=len(self.model.blocks),
-                hidden_states=final_features,
-                logits={'rating': final_rating_logits, 'ranking': final_ranking_logits},
-                metrics={}  # Will be computed per variable
-            )
-            layer_analyses.append(final_layer_analysis)
             
             # Create VariableAnalysis for each variable
             variable_analyses = []
@@ -157,13 +138,25 @@ class LogitLensAnalyzer:
                 # Extract metrics for this variable across all layers
                 var_layer_analyses = []
                 for layer_analysis in layer_analyses:
-                    logits = layer_analysis.logits[head_type]
-                    metrics = self._compute_single_variable_metrics(var, i, logits, head_type)
+                    logits_full = layer_analysis.logits[head_type]
+                    # Take per-variable slice to avoid storing logits for all variables
+                    logits_slice = logits_full[0, i]
+                    metrics = self._compute_single_variable_metrics(var, logits_slice, head_type)
                     
+                    # Store only this variable's hidden state vector for the layer
+                    if layer_analysis.hidden_states is not None:
+                        # hidden_states shape expected [B, N, D]; take [0, i, :]
+                        try:
+                            hidden_slice = layer_analysis.hidden_states[0, i]
+                        except Exception:
+                            hidden_slice = layer_analysis.hidden_states
+                    else:
+                        hidden_slice = None
+
                     var_layer_analysis = LayerAnalysis(
                         layer_idx=layer_analysis.layer_idx,
-                        hidden_states=layer_analysis.hidden_states,
-                        logits={head_type: logits},
+                        hidden_states=hidden_slice,
+                        logits={head_type: logits_slice},
                         metrics=metrics
                     )
                     var_layer_analyses.append(var_layer_analysis)
@@ -178,18 +171,22 @@ class LogitLensAnalyzer:
     
     def _compute_single_variable_metrics(self, 
                                         target_variable: RankingData,
-                                        target_idx: int,
-                                        logits: torch.Tensor, 
+                                        variable_prediction_logits: torch.Tensor, 
                                         head_type: str) -> Dict[str, float]:
         """Compute metrics for a single variable at a specific layer."""
         
-        if not target_variable.is_observed:
-            return {'accuracy': 0.0, 'rmse': 0.0, 'l2_loss': 0.0, 'num_evaluations': 0}
+        # Evaluate whenever we have a valid target, mirroring eval.py behavior:
+        # - observed (train/test)
+        # - masked (train held-out with ground truth)
+        # - missing (test items that still carry reference in bundle)
         
         if head_type == 'rating' and not target_variable.is_listwise:
             # Rating metrics
-            prediction = torch.argmax(logits[0, target_idx]).item()
+            assert not target_variable.is_listwise, "rating variables should be provided"
             target = target_variable.rating_value
+            if target is None:
+                raise RuntimeError("no valid target")
+            prediction = torch.argmax(variable_prediction_logits).item()
             accuracy = 1.0 if prediction == target else 0.0
             
             pred_rating = prediction + 1  # Convert to 1-5 scale
@@ -197,7 +194,7 @@ class LogitLensAnalyzer:
             rmse = float(np.sqrt((pred_rating - true_rating) ** 2))
             
             # Compute soft prediction (expected value under softmax)
-            probs = torch.softmax(logits[0, target_idx], dim=0).cpu().numpy()
+            probs = torch.softmax(variable_prediction_logits, dim=0).cpu().numpy()
             # Assume classes are 0,1,2,3,4 (for 1-5 scale)
             class_indices = np.arange(len(probs))
             expected_rating = float(np.sum(probs * (class_indices + 1)))
@@ -206,8 +203,9 @@ class LogitLensAnalyzer:
             return {'accuracy': accuracy, 'rmse': rmse, 'l2_loss': l2_loss, 'num_evaluations': 1}
             
         elif head_type == 'ranking' and target_variable.is_listwise:
+            assert target_variable.is_listwise, "ranking variables should be provided here"
             # Ranking metrics
-            scores = logits[0, target_idx].cpu().numpy()
+            scores = variable_prediction_logits.cpu().numpy()
             
             if len(target_variable.ranking_order or []) == 2:
                 # Compute softmax probabilities for the two items
@@ -228,12 +226,13 @@ class LogitLensAnalyzer:
                 p = np.clip(probs[true_label], eps, 1 - eps)
                 bt_loss = -np.log(p)
             else:
-                accuracy = 0.0
-                bt_loss = 0.0
+                # No valid target for ranking
+                raise RuntimeError("no valid target")
             
             return {'accuracy': accuracy, 'bt_loss': float(bt_loss), 'num_evaluations': 1}
         
-        return {'accuracy': 0.0, 'rmse': 0.0, 'num_evaluations': 0}
+        # No valid target for this head/variable
+        raise RuntimeError("no valid target")
     
     def analyze_all_layers(self, 
                           train_variables: List[RankingData],
