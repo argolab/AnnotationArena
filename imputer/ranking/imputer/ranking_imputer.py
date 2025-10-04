@@ -92,27 +92,24 @@ class MultiVariableImputer(nn.Module):
             TransformerBlock(embedding_dim, max(self.num_likert_classes, self.max_rank_size), attention_heads, dropout)
             for _ in range(encoder_layers_num)
         ])
-        # use transformer.NormLayer implementation
-        self.norm = _NormLayer(embedding_dim)
+        # Final normalization removed - no longer needed
+        # Output heads removed - no longer used
 
-        # Output heads in a ModuleDict for extensibility
-        self.heads = nn.ModuleDict({
-            'rating': nn.Sequential(
-                nn.Linear(embedding_dim, embedding_dim // 2),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(embedding_dim // 2, num_likert_classes)
-            ),
-            'ranking': nn.Sequential(
-                nn.Linear(embedding_dim, embedding_dim // 2),
-                nn.ReLU(),
-                nn.Dropout(dropout),
-                nn.Linear(embedding_dim // 2, max_rank_size)
-            ),
-        })
-
-        # Now move the complete model (including newly created submodules) to the target device
         self.to(self.device)
+
+    def load_state_dict_with_warnings(self, state_dict, strict=True):
+        """Load state dict with warnings for extra/missing keys."""
+        missing_keys, unexpected_keys = self.load_state_dict(state_dict, strict=False)
+        
+        if unexpected_keys:
+            print(f"Warning: Found unexpected keys in checkpoint (ignoring): {unexpected_keys}")
+        if missing_keys:
+            print(f"Warning: Missing keys in checkpoint: {missing_keys}")
+            
+        if strict and (missing_keys or unexpected_keys):
+            raise RuntimeError(f"State dict loading failed. Missing: {missing_keys}, Unexpected: {unexpected_keys}")
+            
+        return missing_keys, unexpected_keys
 
     def apply_head(self, head_key: str, hidden: torch.Tensor) -> torch.Tensor:
         """Apply a named head to hidden states [B, N, D] -> logits [B, N, *]."""
@@ -136,11 +133,6 @@ class MultiVariableImputer(nn.Module):
             features, params = block(features, params, attn_mask=attn_mask)
             if return_intermediate:
                 hidden_intermediates.append([features, params])
-        
-        # Apply final normalization
-        features = self.norm(features)
-        if return_intermediate:
-            hidden_intermediates.append([features, params])
 
         logits = {
             'rating': self.apply_head('rating', params),
