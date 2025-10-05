@@ -178,6 +178,43 @@ def main():
     
     # Create the main run directory first (before training)
     run_dir = new_run_dir(Path(args.output_root))
+
+    # Save train configuration snapshot next to outputs
+    train_config = {
+        "data": {
+            "data_dir": str(data_dir),
+            "bundle_path": str(bundle_path),
+            "configs_path": str(configs_path),
+        },
+        "resolved_sizes": sizes,
+        "model": {
+            "num_attributes": sizes["num_attributes"],
+            "num_annotators": sizes["num_annotators"],
+            "num_items": sizes["num_items"],
+            "num_likert_classes": sizes["num_likert_classes"],
+            "max_rank_size": args.max_rank_size,
+            "encoder_layers_num": 6,
+            "attention_heads": 8,
+            "embedding_dim": 128,
+            "embedding_type": "atom",
+            "device": args.device,
+            "include_sign_bit_in_params": True
+        },
+        "training": {
+            "epochs": args.epochs,
+            "lr": args.lr,
+            "masking_rate": args.masking_rate,
+            "transductive_learning": bool(args.transductive_learning),
+            "full_random": bool(args.full_random),
+            "save_checkpoints": bool(args.save_checkpoints),
+            "checkpoint_every": args.checkpoint_every,
+        },
+        "run": {
+            "run_dir": str(run_dir)
+        }
+    }
+    with open(run_dir / "train_config.json", "w") as f:
+        json.dump(train_config, f, indent=2)
     
     # Set up checkpoint directory if saving is enabled (using separate folder with _checkpoints suffix)
     if args.save_checkpoints:
