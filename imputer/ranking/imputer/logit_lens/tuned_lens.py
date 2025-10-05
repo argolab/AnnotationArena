@@ -164,7 +164,7 @@ class TunedLensAnalyzer(LogitLensAnalyzer):
         
         # Get dimensions from model
         self.feature_dim = self.model.embedding_dim
-        self.param_dim = self.model.embedding_provider.parameter_dimension
+        self.param_dim = self.model.embedding_provider.parameter_dimension - 1 #TODO: minus the masking bit, because we don't give it to the model.
         self.num_layers = len(self.model.blocks) + 1  # +1 for final layer after norm
         
         # Create translators for each layer
@@ -486,9 +486,9 @@ class TunedLensAnalyzer(LogitLensAnalyzer):
         self.optimizer.zero_grad()
         
         # Process each instance separately
-        layer_losses = [0.0] * self.num_layers
-        layer_rating_losses = [0.0] * self.num_layers
-        layer_ranking_losses = [0.0] * self.num_layers
+        layer_losses = [torch.tensor(0.0, device=self.device, requires_grad=True) for _ in range(self.num_layers)]
+        layer_rating_losses = [torch.tensor(0.0, device=self.device, requires_grad=True) for _ in range(self.num_layers)]
+        layer_ranking_losses = [torch.tensor(0.0, device=self.device, requires_grad=True) for _ in range(self.num_layers)]
         num_instances = len(instance_variable_lists)
         
         for instance_variables in instance_variable_lists:
@@ -516,26 +516,27 @@ class TunedLensAnalyzer(LogitLensAnalyzer):
                 # Compute loss for this layer
                 loss_dict = self._compute_loss(predictions, targets)
                 
-                # Accumulate losses
-                layer_losses[layer_idx] += loss_dict['total'].item()
-                layer_rating_losses[layer_idx] += loss_dict['rating'].item()
-                layer_ranking_losses[layer_idx] += loss_dict['ranking'].item()
+                # Accumulate losses (avoid in-place operations)
+                layer_losses[layer_idx] = layer_losses[layer_idx] + loss_dict['total']
+                layer_rating_losses[layer_idx] = layer_rating_losses[layer_idx] + loss_dict['rating']
+                layer_ranking_losses[layer_idx] = layer_ranking_losses[layer_idx] + loss_dict['ranking']
         
         # Average losses across instances
         for layer_idx in range(self.num_layers):
-            layer_losses[layer_idx] /= num_instances
-            layer_rating_losses[layer_idx] /= num_instances
-            layer_ranking_losses[layer_idx] /= num_instances
+            layer_losses[layer_idx] = layer_losses[layer_idx] / num_instances
+            layer_rating_losses[layer_idx] = layer_rating_losses[layer_idx] / num_instances
+            layer_ranking_losses[layer_idx] = layer_ranking_losses[layer_idx] / num_instances
         
         # Backward pass and optimization
         total_loss = sum(layer_losses)
         total_loss.backward()
         self.optimizer.step()
         
+        # Convert to Python floats for return
         return {
-            'total': layer_losses,
-            'rating': layer_rating_losses,
-            'ranking': layer_ranking_losses
+            'total': [loss.item() for loss in layer_losses],
+            'rating': [loss.item() for loss in layer_rating_losses],
+            'ranking': [loss.item() for loss in layer_ranking_losses]
         }
     
     def _eval_epoch(self, instance_variable_lists: List[List[RankingData]]) -> Dict[str, List[float]]:
