@@ -137,6 +137,9 @@ def create_visualizations(results: LogitLensResults, output_dir: Path, analysis_
     
     print("Creating visualizations...")
     
+    # Create output directory if it doesn't exist
+    output_dir.mkdir(parents=True, exist_ok=True)
+    
     visualizer = LogitLensVisualizer(results)
     
     # Create the three main plots

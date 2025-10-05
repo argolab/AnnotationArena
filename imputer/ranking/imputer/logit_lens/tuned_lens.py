@@ -366,10 +366,10 @@ class TunedLensAnalyzer(LogitLensAnalyzer):
             
             # KL divergence in logit space using PyTorch's built-in function
             # Convert predictions to log-probabilities, keep targets as logits
-            pred_log_probs = F.log_softmax(valid_preds, dim=-1)  # [valid_count, num_classes]
+            target_log_probs = F.log_softmax(valid_targets, dim=-1)  # [valid_count, num_classes]
             
             # KL divergence: KL(target || pred) using log_target=True for efficiency
-            rating_loss = F.kl_div(pred_log_probs, valid_targets, reduction='batchmean', log_target=True)
+            rating_loss = F.kl_div(target_log_probs, valid_preds, reduction='batchmean', log_target=True)
             num_valid += 1
         else:
             logger.debug("no valid rating targets")
@@ -387,10 +387,10 @@ class TunedLensAnalyzer(LogitLensAnalyzer):
             
             # KL divergence in logit space using PyTorch's built-in function
             # Convert predictions to log-probabilities, keep targets as logits
-            pred_log_probs = F.log_softmax(valid_preds, dim=-1)  # [valid_count, max_rank_size]
+            target_log_probs = F.log_softmax(valid_targets, dim=-1)  # [valid_count, max_rank_size]
             
             # KL divergence: KL(target || pred) using log_target=True for efficiency
-            ranking_loss = F.kl_div(pred_log_probs, valid_targets, reduction='batchmean', log_target=True)
+            ranking_loss = F.kl_div(target_log_probs, valid_preds, reduction='batchmean', log_target=True)
             num_valid += 1
         else:
             logger.debug("no valid ranking targets")
