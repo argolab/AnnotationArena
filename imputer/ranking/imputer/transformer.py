@@ -17,11 +17,11 @@ class NormLayer(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self, d_model: int, d_ff: int = 512, dropout: float = 0.1):
+    def __init__(self, d_model: int, d_ff: int = 512, dropout: float = 0.1, output_dim: int = None):
         super().__init__()
         self.linear_1 = nn.Linear(d_model, d_ff)
         self.dropout = nn.Dropout(dropout)
-        self.linear_2 = nn.Linear(d_ff, d_model)
+        self.linear_2 = nn.Linear(d_ff, d_model if output_dim is None else output_dim)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.linear_2(self.dropout(F.relu(self.linear_1(x))))
@@ -52,7 +52,7 @@ class TransformerBlock(nn.Module):
 
         self.param_update = nn.Linear(feature_dim + param_dim, param_dim)
 
-        self.ff = FeedForward(feature_dim, dropout=dropout)
+        self.ff = FeedForward(feature_dim + param_dim, dropout=dropout, output_dim=feature_dim)
 
     def _multihead_attention(self, feature_x: torch.Tensor, batch_size: int, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
         H = self.attention_heads
@@ -83,9 +83,10 @@ class TransformerBlock(nn.Module):
             attn_out = attn_out * attn_mask.unsqueeze(-1).to(attn_out.dtype)
         feature_x = feature_x + self.dropout_1(attn_out)
 
-        # parallel Feed-Forward
-        feature_x_ff = self.norm_2(feature_x) # pre-norm before feed-forward
-        ff_out = self.ff(feature_x_ff)
+        # Feed-Forward on concatenated [feature_x, param_x], update feature_x only
+        feature_x_ff = self.norm_2(feature_x)  # pre-norm before feed-forward
+        concat_x = torch.cat([feature_x_ff, param_x], dim=-1)
+        ff_out = self.ff(concat_x)
         if attn_mask is not None:
             ff_out = ff_out * attn_mask.unsqueeze(-1).to(ff_out.dtype)
         feature_x = self.dropout_2(ff_out) + feature_x
