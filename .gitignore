@@ -242,3 +242,6 @@ imputer/ranking/OUTPUT
 imputer/ranking/experiment_results
 imputer/ranking/plots
 imputer/graphical_synthetic_modeling/OUTPUT_MI_TEST
+imputer/graphical_synthetic_modeling/OUTPUT_DEEP_SUPERVISION_TEST
+imputer/graphical_synthetic_modeling/OUTPUT_LOGIT_LENS
+imputer/graphical_synthetic_modeling/OUTPUT_TUNED_LENS

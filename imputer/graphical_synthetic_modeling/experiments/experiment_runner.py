@@ -14,7 +14,7 @@ from pathlib import Path
 from data.graph_generator import generate_experiment_graph
 from data.sample_generator import generate_sample_pool, generate_test_dataset
 from imputer.architecture import create_model, DEVICE, SampleTuple
-from imputer.training_eval import train_model, evaluate_model, evaluate_log_loss, evaluate_cross_entropy, ImputationDataset, collate_batch
+from imputer.training_eval import train_model, train_model_with_deep_supervision, evaluate_model, evaluate_log_loss, evaluate_cross_entropy, ImputationDataset, collate_batch
 from domain.em_model import DomainEMModel
 from experiments.policies import BaseObservationPolicy, SampleTuple
 from utils.attention_pipeline import save_model_after_training
@@ -169,7 +169,20 @@ class ProgressiveExperiment:
                 model_size=imputer_size
             )
             neural_models[imputer_size] = model
-            
+
+            # If deep supervision is enabled, create additional variant
+            if self.config.get('deep_supervision', False):
+                ds_key = f"{imputer_size}_DeepSupervision"
+                ds_model = create_model(
+                    n_nodes=self.n_nodes,
+                    input_dim=input_dim,
+                    structure_dim=structure_dim,
+                    cpt_dim=max_cpt_size,
+                    model_size=imputer_size
+                )
+                neural_models[ds_key] = ds_model
+                logger.debug(f"Created {imputer_size} imputer model with Deep Supervision variant")
+
         logger.info(f"Created {len(neural_models)} neural imputer models with cpt_dim={max_cpt_size}")
         return neural_models
     
@@ -193,9 +206,13 @@ class ProgressiveExperiment:
             
         # Create neural models
         neural_models = self._create_neural_models()
-        
-        # Results storage for each imputer size
-        results_by_size = {size: [] for size in self.imputer_sizes}
+
+        # Results storage for each imputer size (include deep supervision variants)
+        imputer_variants = list(self.imputer_sizes)
+        if self.config.get('deep_supervision', False):
+            for size in self.imputer_sizes:
+                imputer_variants.append(f"{size}_DeepSupervision")
+        results_by_size = {size: [] for size in imputer_variants}
         
         # Progressive observation loop
         for budget, training_data in policy.observe_progressively(self.sample_pool):
@@ -218,13 +235,25 @@ class ProgressiveExperiment:
                 
                 # Reset model parameters (create fresh model)
                 neural_model = self._create_neural_models()[imputer_size]
-                
-                # Train neural model
-                logger.debug(f"Training {imputer_size} neural imputer")
-                trained_model = train_model(
-                    neural_model, train_loader, val_loader,
-                    epochs=100, lr=1e-4, patience=45
-                )
+
+                # Check if this is a deep supervision variant
+                is_deep_supervision = imputer_size.endswith('_DeepSupervision')
+
+                if is_deep_supervision:
+                    logger.debug(f"Training {imputer_size} neural imputer with deep supervision")
+                    final_weight = self.config.get('ds_final_weight', 3.0)
+                    layer_weight = self.config.get('ds_layer_weight', 1.0)
+                    trained_model = train_model_with_deep_supervision(
+                        neural_model, train_loader, val_loader,
+                        epochs=100, lr=1e-4, patience=45,
+                        final_weight=final_weight, layer_weight=layer_weight
+                    )
+                else:
+                    logger.debug(f"Training {imputer_size} neural imputer")
+                    trained_model = train_model(
+                        neural_model, train_loader, val_loader,
+                        epochs=100, lr=1e-4, patience=45
+                    )
                 
                 # Evaluate neural model (KL divergence)
                 logger.debug(f"Evaluating {imputer_size} neural imputer KL")
@@ -309,8 +338,8 @@ class ProgressiveExperiment:
             
             logger.info(f"  True Model: LogLoss={true_model_log_loss_results.get('mean_log_loss', float('inf')):.4f}")
             
-            # Store results for each imputer size
-            for imputer_size in self.imputer_sizes:
+            # Store results for each imputer size (including deep supervision variants)
+            for imputer_size in imputer_variants:
                 neural_results = neural_results_by_size[imputer_size]
                 neural_time = neural_times_by_size[imputer_size]
                 

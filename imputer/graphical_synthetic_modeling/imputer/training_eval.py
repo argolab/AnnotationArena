@@ -231,6 +231,154 @@ def train_model(model: GraphImputer, train_loader: DataLoader, val_loader: DataL
     return model
 
 
+def train_epoch_with_deep_supervision(
+    model: GraphImputer,
+    train_loader: DataLoader,
+    optimizer: torch.optim.Optimizer,
+    final_weight: float = 3.0,
+    layer_weight: float = 1.0
+) -> float:
+    """
+    Train one epoch with deep supervision on intermediate layers.
+
+    Supervises layer_0, layer_1, layer_2, layer_3 (NOT initial or final_norm).
+    Uses shared output heads with final normalization applied to intermediate layers.
+
+    Args:
+        model: GraphImputer model to train
+        train_loader: DataLoader with training batches
+        optimizer: Optimizer for parameter updates
+        final_weight: Weight for final layer loss (default: 3.0)
+        layer_weight: Weight for intermediate layer losses (default: 1.0)
+
+    Returns:
+        Average training loss for the epoch
+    """
+    model.train()
+    total_loss = 0.0
+    n_batches = 0
+    n_layers = len(model.transformer.layers)
+
+    for batch in train_loader:
+        inputs, structure_info, dimensions, mask, targets, cpt_info, true_states = batch
+
+        # Move to device
+        inputs = inputs.to(DEVICE)
+        structure_info = structure_info.to(DEVICE)
+        dimensions = dimensions.to(DEVICE)
+        mask = mask.to(DEVICE)
+        targets = targets.to(DEVICE)
+        cpt_info = cpt_info.to(DEVICE)
+
+        optimizer.zero_grad()
+
+        # Forward pass with layer capture
+        final_predictions, layer_streams = forward_with_layer_capture(
+            model, inputs, structure_info, cpt_info, dimensions
+        )
+
+        # Compute final layer loss
+        final_loss = compute_kl_loss(final_predictions, targets, mask)
+
+        # Compute intermediate layer losses
+        # Supervise layers 1-4 (layer_0, layer_1, layer_2, layer_3)
+        # Skip index 0 (initial) and index 5 (final_norm)
+        layer_losses = []
+        for layer_idx in range(1, n_layers + 1):  # Indices 1, 2, 3, 4 = transformer layers
+            layer_stream = layer_streams[layer_idx]
+            layer_predictions = get_predictions_from_layer_stream(model, layer_stream)
+            layer_loss = compute_kl_loss(layer_predictions, targets, mask)
+            layer_losses.append(layer_loss)
+
+        # Weighted combination (normalized)
+        mean_layer_loss = sum(layer_losses) / len(layer_losses)
+        total_loss_value = (final_weight * final_loss + layer_weight * mean_layer_loss) / (final_weight + layer_weight)
+
+        # Backward pass
+        total_loss_value.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+        optimizer.step()
+
+        total_loss += total_loss_value.item()
+        n_batches += 1
+
+    avg_loss = total_loss / n_batches if n_batches > 0 else 0.0
+    logger.debug(f"Training epoch (deep supervision): avg_loss={avg_loss:.6f}")
+
+    return avg_loss
+
+
+def train_model_with_deep_supervision(
+    model: GraphImputer,
+    train_loader: DataLoader,
+    val_loader: DataLoader,
+    epochs: int = 100,
+    lr: float = 1e-4,
+    patience: int = 30,
+    final_weight: float = 3.0,
+    layer_weight: float = 1.0
+) -> GraphImputer:
+    """
+    Train the imputation model with deep supervision and early stopping.
+
+    Deep supervision applies loss to intermediate transformer layers (layer_0 through layer_3),
+    not to the initial embedding or final normalization.
+
+    Args:
+        model: GraphImputer model to train
+        train_loader: Training data loader
+        val_loader: Validation data loader
+        epochs: Maximum number of training epochs
+        lr: Learning rate for optimizer
+        patience: Early stopping patience (epochs without improvement)
+        final_weight: Weight for final layer loss (default: 3.0)
+        layer_weight: Weight for intermediate layer losses (default: 1.0)
+
+    Returns:
+        Trained model
+    """
+    logger.info(f"Training model with DEEP SUPERVISION: epochs={epochs}, lr={lr}, patience={patience}")
+    logger.info(f"Deep supervision weights: final={final_weight}, layer={layer_weight}")
+
+    # Setup optimizer and scheduler
+    optimizer = optim.AdamW(model.parameters(), lr=lr)
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='min', patience=patience//2, factor=0.5
+    )
+
+    best_val_loss = float('inf')
+    patience_counter = 0
+
+    # Training loop
+    for epoch in tqdm(range(epochs), desc="Training (deep supervision)"):
+        # Train for one epoch with deep supervision
+        train_loss = train_epoch_with_deep_supervision(
+            model, train_loader, optimizer, final_weight, layer_weight
+        )
+
+        # Validate (standard validation, no deep supervision)
+        val_loss = validate_epoch(model, val_loader)
+
+        # Update learning rate
+        scheduler.step(val_loss)
+
+        # Early stopping check
+        if val_loss < best_val_loss:
+            best_val_loss = val_loss
+            patience_counter = 0
+            logger.debug(f"Epoch {epoch}: New best validation loss = {val_loss:.6f}")
+        else:
+            patience_counter += 1
+
+        # Early stopping
+        if patience_counter >= patience:
+            logger.info(f"Early stopping at epoch {epoch}: no improvement for {patience} epochs")
+            break
+
+    logger.info(f"Deep supervision training completed. Best validation loss: {best_val_loss:.4f}")
+    return model
+
+
 # ================================= EVALUATION FUNCTIONS =================================
 
 def evaluate_model(model: GraphImputer, test_data: List[SampleTuple], 
@@ -607,19 +755,24 @@ def get_predictions_from_layer_stream(
     """
     Convert layer parameter stream to state probability predictions using output heads.
 
-    This applies the SAME output heads used in the final model (logit lens approach).
-    No layer-specific probes are used.
+    CRITICAL: Applies final_norm_parameter BEFORE output heads, since output heads
+    were trained on normalized parameter streams. This ensures intermediate layers
+    are processed the same way as the final layer.
 
     Args:
         model: GraphImputer model
-        layer_parameter_stream: [batch, n_nodes, cpt_dim]
+        layer_parameter_stream: [batch, n_nodes, cpt_dim] - RAW layer output
 
     Returns:
         predictions: [batch, n_nodes, n_states]
     """
+    # Apply final normalization (output heads expect normalized inputs)
+    normalized_stream = model.transformer.final_norm_parameter(layer_parameter_stream)
+
+    # Apply output heads to normalized stream
     predictions = []
     for i in range(model.n_nodes):
-        node_probs = model.output_heads[i](layer_parameter_stream[:, i, :])
+        node_probs = model.output_heads[i](normalized_stream[:, i, :])
         predictions.append(node_probs)
     return torch.stack(predictions, dim=1)
 

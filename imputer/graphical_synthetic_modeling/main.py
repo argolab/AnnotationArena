@@ -210,7 +210,21 @@ def parse_arguments() -> argparse.Namespace:
         '--save-models', action='store_true', default=False,
         help='Save trained models for post-hoc analysis'
     )
-    
+
+    # Deep supervision options
+    parser.add_argument(
+        '--deep-supervision', action='store_true', default=False,
+        help='Enable deep supervision training (supervise intermediate transformer layers)'
+    )
+    parser.add_argument(
+        '--ds-final-weight', type=float, default=3.0,
+        help='Weight for final layer loss in deep supervision (default: 3.0)'
+    )
+    parser.add_argument(
+        '--ds-layer-weight', type=float, default=1.0,
+        help='Weight for intermediate layer losses in deep supervision (default: 1.0)'
+    )
+
     return parser.parse_args()
 
 
@@ -244,7 +258,10 @@ def create_experiment_config(args: argparse.Namespace) -> Dict[str, Any]:
         'cpt_generation': args.cpt_generation,
         'logistic_std': args.logistic_std,
         'analyze_attention': args.analyze_attention,
-        'save_models': args.save_models
+        'save_models': args.save_models,
+        'deep_supervision': args.deep_supervision,
+        'ds_final_weight': args.ds_final_weight,
+        'ds_layer_weight': args.ds_layer_weight
     }
 
 
@@ -421,7 +438,8 @@ def create_visualizations(results: Dict[Any, Dict[str, Any]], config: Dict[str, 
             create_paper_plots(
                 results=filtered_results,
                 output_dir=str(missing_rate_dir),
-                missing_rate=missing_rate
+                missing_rate=missing_rate,
+                deep_supervision=config.get('deep_supervision', False)
             )
         else:
             logger.warning(f"No results found for missing rate: {missing_rate}")

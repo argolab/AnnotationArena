@@ -101,7 +101,8 @@ def get_step_progression_budgets(results: Dict[str, Any]) -> List[int]:
 
 
 def plot_kl_divergence_curves(results: Dict[str, Any], output_dir: str = "plots",
-                             missing_rate: Optional[float] = None) -> None:
+                             missing_rate: Optional[float] = None,
+                             deep_supervision: bool = False) -> None:
     """
     Plot 1: KL divergence curves with bootstrap confidence intervals.
 
@@ -112,6 +113,7 @@ def plot_kl_divergence_curves(results: Dict[str, Any], output_dir: str = "plots"
         results: Results dictionary from experiment_runner
         output_dir: Directory to save plots
         missing_rate: Missing rate for filename suffix
+        deep_supervision: Deprecated - auto-detected from imputer_size now
     """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -170,11 +172,18 @@ def plot_kl_divergence_curves(results: Dict[str, Any], output_dir: str = "plots"
             neural_kl_lowers = [r.get('neural_kl_lower', r['neural_kl']) for r in experiment_results]
             neural_kl_uppers = [r.get('neural_kl_upper', r['neural_kl']) for r in experiment_results]
 
+            # Check if this is a deep supervision variant
+            is_deep_supervision = '_DeepSupervision' in imputer_size
+            base_size = imputer_size.replace('_DeepSupervision', '') if is_deep_supervision else imputer_size
+
             # Plot Marformer with shaded confidence intervals
-            color_key = f'marformer_{imputer_size.lower()}'
+            color_key = f'marformer_{base_size.lower()}'
             if color_key in COLORS:
-                marformer_label = format_model_name('marformer', imputer_size)
-                ax.plot(costs, neural_kls, 'o-', label=marformer_label,
+                # Use dotted line for deep supervision, solid for regular
+                linestyle = 'o--' if is_deep_supervision else 'o-'
+                label_suffix = ' (Deep Supervision)' if is_deep_supervision else ''
+                marformer_label = format_model_name('marformer', base_size) + label_suffix
+                ax.plot(costs, neural_kls, linestyle, label=marformer_label,
                        color=COLORS[color_key], linewidth=2, markersize=6, alpha=0.8)
                 ax.fill_between(costs, neural_kl_lowers, neural_kl_uppers,
                                color=COLORS[color_key], alpha=0.2)
@@ -206,7 +215,8 @@ def plot_kl_divergence_curves(results: Dict[str, Any], output_dir: str = "plots"
 
 
 def plot_true_vs_predicted_cross_entropy(results: Dict[str, Any], output_dir: str = "plots",
-                                        missing_rate: Optional[float] = None) -> None:
+                                        missing_rate: Optional[float] = None,
+                                        deep_supervision: bool = False) -> None:
     """
     Plot 2: True entropy vs predicted cross-entropy step progression.
 
@@ -220,6 +230,7 @@ def plot_true_vs_predicted_cross_entropy(results: Dict[str, Any], output_dir: st
         results: Results dictionary from experiment_runner
         output_dir: Directory to save plots
         missing_rate: Missing rate for filename suffix
+        deep_supervision: Deprecated - auto-detected from imputer_size now
     """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -233,7 +244,13 @@ def plot_true_vs_predicted_cross_entropy(results: Dict[str, Any], output_dir: st
         experiment_results = policy_results['results']
         imputer_size = policy_results.get('imputer_size', 'Large')
 
-        model_name = format_model_name('marformer', imputer_size)
+        # Check if this is a deep supervision variant
+        is_deep_supervision = '_DeepSupervision' in imputer_size
+        base_size = imputer_size.replace('_DeepSupervision', '') if is_deep_supervision else imputer_size
+
+        model_name = format_model_name('marformer', base_size)
+        if is_deep_supervision:
+            model_name += ' (Deep Supervision)'
         if model_name not in model_data:
             model_data[model_name] = {}
 
@@ -284,16 +301,26 @@ def plot_true_vs_predicted_cross_entropy(results: Dict[str, Any], output_dir: st
                 model_data[em_model_name][budget].extend(pairs)
         break  # Only need one policy for EM data
 
-    # Create 4×3 subplot grid
-    fig, axes = plt.subplots(4, 3, figsize=(18, 16))
+    # Model order for rows - dynamically build from actual models in data
+    # Order: Large, Large (DS), Small, Small (DS), Tiny, Tiny (DS), EM
+    model_order = []
+    standard_order = ['Large', 'Small', 'Tiny']
+    for size in standard_order:
+        base_name = format_model_name('marformer', size)
+        if base_name in model_data:
+            model_order.append(base_name)
+        ds_name = base_name + ' (Deep Supervision)'
+        if ds_name in model_data:
+            model_order.append(ds_name)
 
-    # Model order for rows
-    model_order = [
-        format_model_name('marformer', 'Large'),
-        format_model_name('marformer', 'Small'),
-        format_model_name('marformer', 'Tiny'),
-        format_model_name('em', '10')
-    ]
+    # Always add EM at the end
+    em_name = format_model_name('em', '10')
+    if em_name in model_data:
+        model_order.append(em_name)
+
+    # Create subplot grid with correct number of rows
+    n_rows = len(model_order)
+    fig, axes = plt.subplots(n_rows, 3, figsize=(18, 4 * n_rows))
 
     # Budget labels for columns
     budget_labels = ['Early', 'Middle', 'Final']
@@ -330,6 +357,7 @@ def plot_true_vs_predicted_cross_entropy(results: Dict[str, Any], output_dir: st
 
                     # Scatter plot with model-specific color
                     if 'Marformer' in model_name or 'MARFORMER' in model_name:
+                        # Extract base size (remove Deep Supervision suffix)
                         if 'Large' in model_name:
                             color = COLORS['marformer_large']
                         elif 'Small' in model_name:
@@ -339,7 +367,9 @@ def plot_true_vs_predicted_cross_entropy(results: Dict[str, Any], output_dir: st
                     else:  # EM
                         color = COLORS['em_10_restart']
 
-                    ax.scatter(true_vals, pred_vals, c=color, alpha=0.4, s=20)
+                    # Use different marker for deep supervision
+                    marker = 'x' if '(Deep Supervision)' in model_name else 'o'
+                    ax.scatter(true_vals, pred_vals, c=color, alpha=0.4, s=20, marker=marker)
 
             # Perfect agreement line
             ax.plot([axis_min, axis_max], [axis_min, axis_max], 'k--', alpha=0.7, linewidth=1)
@@ -377,7 +407,8 @@ def plot_true_vs_predicted_cross_entropy(results: Dict[str, Any], output_dir: st
 
 
 def plot_em_vs_marformer_cross_entropy(results: Dict[str, Any], output_dir: str = "plots",
-                                      missing_rate: Optional[float] = None) -> None:
+                                      missing_rate: Optional[float] = None,
+                                      deep_supervision: bool = False) -> None:
     """
     Plot 3: EM vs Marformer cross-entropy comparison.
 
@@ -391,6 +422,7 @@ def plot_em_vs_marformer_cross_entropy(results: Dict[str, Any], output_dir: str 
         results: Results dictionary from experiment_runner
         output_dir: Directory to save plots
         missing_rate: Missing rate for filename suffix
+        deep_supervision: If True, add suffix to model names indicating deep supervision training
     """
     Path(output_dir).mkdir(parents=True, exist_ok=True)
 
@@ -422,6 +454,9 @@ def plot_em_vs_marformer_cross_entropy(results: Dict[str, Any], output_dir: str 
         experiment_results = policy_results['results']
         imputer_size = policy_results.get('imputer_size', 'Large')
 
+        # Normalize size (remove _DeepSupervision suffix for grouping, keep raw for labels)
+        base_size = imputer_size.replace('_DeepSupervision', '') if '_DeepSupervision' in imputer_size else imputer_size
+
         if imputer_size not in marformer_data:
             marformer_data[imputer_size] = {}
 
@@ -436,12 +471,21 @@ def plot_em_vs_marformer_cross_entropy(results: Dict[str, Any], output_dir: str 
                     marformer_data[imputer_size][budget] = []
                 marformer_data[imputer_size][budget].extend(valid_values)
 
-    # Create 3×3 subplot grid
-    fig, axes = plt.subplots(3, 3, figsize=(15, 12))
+    # Size order for rows - dynamically build from actual data
+    # Order: Large, Large_DeepSupervision, Small, Small_DeepSupervision, Tiny, Tiny_DeepSupervision
+    size_order = []
+    standard_order = ['Large', 'Small', 'Tiny']
+    for size in standard_order:
+        if size in marformer_data:
+            size_order.append(size)
+        ds_size = f"{size}_DeepSupervision"
+        if ds_size in marformer_data:
+            size_order.append(ds_size)
 
-    # Size order for rows
-    size_order = ['Large', 'Small', 'Tiny']
+    # Create subplot grid with correct number of rows
+    n_rows = len(size_order)
     budget_labels = ['Early', 'Middle', 'Final']
+    fig, axes = plt.subplots(n_rows, 3, figsize=(15, 4 * n_rows))
 
     # Get consistent axis limits
     all_em_vals = []
@@ -475,12 +519,14 @@ def plot_em_vs_marformer_cross_entropy(results: Dict[str, Any], output_dir: str 
                 em_paired = em_vals[:min_len]
                 marformer_paired = marformer_vals[:min_len]
 
-                # Get color for this Marformer size
-                color_key = f'marformer_{size.lower()}'
+                # Get color for this Marformer size (use base size for color lookup)
+                base_size_for_color = size.replace('_DeepSupervision', '') if '_DeepSupervision' in size else size
+                color_key = f'marformer_{base_size_for_color.lower()}'
                 color = COLORS.get(color_key, COLORS['marformer_large'])
 
-                # Scatter plot
-                ax.scatter(em_paired, marformer_paired, c=color, alpha=0.4, s=20)
+                # Use different marker for deep supervision
+                marker = 'x' if '_DeepSupervision' in size else 'o'
+                ax.scatter(em_paired, marformer_paired, c=color, alpha=0.4, s=20, marker=marker)
 
             # Perfect agreement line
             ax.plot([axis_min, axis_max], [axis_min, axis_max], 'k--', alpha=0.7, linewidth=1)
@@ -494,7 +540,12 @@ def plot_em_vs_marformer_cross_entropy(results: Dict[str, Any], output_dir: str 
             if row == 2:  # Bottom row
                 ax.set_xlabel('EM (10) Cross-Entropy', fontsize=10)
             if col == 0:  # Left column
-                marformer_label = format_model_name('marformer', size)
+                # Check if this size has _DeepSupervision suffix
+                is_ds = '_DeepSupervision' in size
+                base_size = size.replace('_DeepSupervision', '') if is_ds else size
+                marformer_label = format_model_name('marformer', base_size)
+                if is_ds:
+                    marformer_label += ' (DS)'  # Abbreviated for ylabel to fit
                 ax.set_ylabel(f'{marformer_label}\nCross-Entropy', fontsize=10)
 
             # Titles
@@ -514,7 +565,8 @@ def plot_em_vs_marformer_cross_entropy(results: Dict[str, Any], output_dir: str 
 
 
 def create_paper_plots(results: Dict[str, Any], output_dir: str = "plots",
-                      missing_rate: Optional[float] = None) -> None:
+                      missing_rate: Optional[float] = None,
+                      deep_supervision: bool = False) -> None:
     """
     Create all three paper plots.
 
@@ -522,12 +574,13 @@ def create_paper_plots(results: Dict[str, Any], output_dir: str = "plots",
         results: Results dictionary from experiment_runner
         output_dir: Directory to save plots
         missing_rate: Missing rate for filename suffix
+        deep_supervision: If True, indicate deep supervision training in plots
     """
     logger.info("Creating paper plots...")
 
     # Create all three plots
-    plot_kl_divergence_curves(results, output_dir, missing_rate)
-    plot_true_vs_predicted_cross_entropy(results, output_dir, missing_rate)
-    plot_em_vs_marformer_cross_entropy(results, output_dir, missing_rate)
+    plot_kl_divergence_curves(results, output_dir, missing_rate, deep_supervision)
+    plot_true_vs_predicted_cross_entropy(results, output_dir, missing_rate, deep_supervision)
+    plot_em_vs_marformer_cross_entropy(results, output_dir, missing_rate, deep_supervision)
 
     logger.info(f"All paper plots saved to {output_dir}/")

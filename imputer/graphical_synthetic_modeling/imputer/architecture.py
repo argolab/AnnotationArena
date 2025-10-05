@@ -153,11 +153,12 @@ class LayerNorm(nn.Module):
 
 class FeedForward(nn.Module):
     """Feed-forward network with ReLU activation and dropout."""
-    
-    def __init__(self, dim: int, dropout: float = 0.1):
+
+    def __init__(self, dim: int, dropout: float = 0.1, output_dim: Optional[int] = None):
         super().__init__()
+        self.output_dim = output_dim if output_dim is not None else dim
         self.layer1 = nn.Linear(dim, dim * 2)
-        self.layer2 = nn.Linear(dim * 2, dim)
+        self.layer2 = nn.Linear(dim * 2, self.output_dim)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -244,17 +245,21 @@ class TransformerLayer(nn.Module):
         self.attention = nn.MultiheadAttention(
             embedding_dim, attention_heads, dropout=dropout, batch_first=True
         )
-        
+
+        # Cross-stream integration: inject parameter stream into embedding stream
+        self.cross_stream_ff = FeedForward(embedding_dim + parameter_dim, dropout, output_dim=embedding_dim)
+
         # Feed-forward for embedding stream
         self.ff_embedding = FeedForward(embedding_dim, dropout)
-        
+
         # Cross-stream parameter update (embedding -> parameter)
         self.parameter_update = nn.Linear(embedding_dim + parameter_dim, parameter_dim)
-        
+
         # Normalization layers
         self.norm1 = LayerNorm(embedding_dim)
         self.norm2 = LayerNorm(embedding_dim)
-        self.norm3 = LayerNorm(parameter_dim)
+        self.norm3 = LayerNorm(embedding_dim)
+        self.norm4 = LayerNorm(parameter_dim)
         
         # Dropout
         self.dropout = nn.Dropout(dropout)
@@ -276,17 +281,23 @@ class TransformerLayer(nn.Module):
         # Embedding stream processing
         # 1. Multi-head self-attention with residual connection
         embedding_norm = self.norm1(embedding_stream)
-        attn_out, attn_weights = self.attention(embedding_norm, embedding_norm, embedding_norm, 
+        attn_out, attn_weights = self.attention(embedding_norm, embedding_norm, embedding_norm,
                                                key_padding_mask=mask, average_attn_weights=False)
         embedding_stream = embedding_stream + self.dropout(attn_out)
-        
-        # 2. Feed-forward with residual connection
+
+        # 2. Cross-stream integration: inject parameter stream into embedding stream
         embedding_norm = self.norm2(embedding_stream)
+        combined = torch.cat([embedding_norm, parameter_stream], dim=-1)
+        cross_out = self.cross_stream_ff(combined)
+        embedding_stream = embedding_stream + self.dropout(cross_out)
+
+        # 3. Feed-forward with residual connection
+        embedding_norm = self.norm3(embedding_stream)
         ff_out = self.ff_embedding(embedding_norm)
         embedding_stream = embedding_stream + self.dropout(ff_out)
-        
-        # Parameter stream update using embedding context
-        parameter_norm = self.norm3(parameter_stream)
+
+        # 4. Parameter stream update using embedding context
+        parameter_norm = self.norm4(parameter_stream)
         combined = torch.cat([embedding_stream, parameter_norm], dim=-1)
         parameter_stream = self.parameter_update(combined)
         
