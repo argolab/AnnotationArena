@@ -2,5 +2,7 @@
 
 from .analyzer import LogitLensAnalyzer, LogitLensResults, LayerAnalysis, VariableAnalysis
 from .visualizer import LogitLensVisualizer
+from .tuned_lens import TunedLensAnalyzer, TunedLensConfig
 
-__all__ = ['LogitLensAnalyzer', 'LogitLensResults', 'LayerAnalysis', 'VariableAnalysis', 'LogitLensVisualizer']
+__all__ = ['LogitLensAnalyzer', 'LogitLensResults', 'LayerAnalysis', 'VariableAnalysis', 
+           'LogitLensVisualizer', 'TunedLensAnalyzer', 'TunedLensConfig']

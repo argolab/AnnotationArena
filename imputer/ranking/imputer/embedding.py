@@ -468,6 +468,9 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.annotator_embedding_learnable, mode='fan_out', nonlinearity='relu')
 
+    @property
+    def parameter_dimension(self):
+        return max(self.num_likert_classes, self.max_rank_size) + 1
 
     def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_masked: bool = False) -> torch.Tensor:
         """Implementation for rating embeddings."""
@@ -475,7 +478,7 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), self.annotator_embedding_learnable[annotator_id], self.annotator_embedding_random[annotator_id]), dim=-1)
         item_vec = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_id]), dim=-1)
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
-        parameter = torch.zeros(max(self.num_likert_classes, self.max_rank_size) + 1).to(self.device)
+        parameter = torch.zeros(self.parameter_dimension).to(self.device)
         if is_masked:
             parameter[0] = 1.0
         else:
@@ -493,7 +496,7 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         item_embedding_2 = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_ids[1]]), dim=-1)
         item_embedding = item_embedding_1 + item_embedding_2 @ self.pairwise_relation
         total_embedding = attr_vec + annot_vec  + item_embedding
-        parameter = torch.zeros(1 + max(self.num_likert_classes, self.max_rank_size)).to(self.device)
+        parameter = torch.zeros(self.parameter_dimension).to(self.device)
         if is_masked:
             parameter[0] = 1.0
         else:

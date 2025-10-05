@@ -166,6 +166,78 @@ class LogitLensVisualizer:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
     
+    def plot_translator_training_curves(self, save_path: Optional[str] = None) -> None:
+        """
+        Plot translator training curves if this is a tuned lens analysis.
+        
+        Args:
+            save_path: Optional path to save the plot
+        """
+        if 'translator_training_history' not in self.results.data_config:
+            print("No training history found. This appears to be a logit lens analysis, not tuned lens.")
+            return
+        
+        training_history = self.results.data_config['translator_training_history']
+        
+        if not training_history.get('epochs'):
+            print("No training epochs found in training history.")
+            return
+        
+        epochs = training_history['epochs']
+        num_layers = len(training_history['train_losses'])
+        
+        # Create subplots - 3 rows: total, rating, ranking
+        fig, axes = plt.subplots(3, num_layers, figsize=(4*num_layers, 12))
+        if num_layers == 1:
+            axes = axes.reshape(3, 1)
+        
+        fig.suptitle('Tuned Lens Training Curves: Per-Layer Losses (Total, Rating, Ranking)', fontsize=16)
+        
+        for layer_idx in range(num_layers):
+            # Total losses
+            train_total = training_history['train_losses'][layer_idx]
+            eval_total = training_history['eval_losses'][layer_idx]
+            
+            axes[0, layer_idx].plot(epochs, train_total, 'b-', label='Train', linewidth=2)
+            axes[0, layer_idx].plot(epochs, eval_total, 'r-', label='Eval', linewidth=2)
+            axes[0, layer_idx].set_title(f'Layer {layer_idx} - Total Loss')
+            axes[0, layer_idx].set_xlabel('Epoch')
+            axes[0, layer_idx].set_ylabel('Loss')
+            axes[0, layer_idx].legend()
+            axes[0, layer_idx].grid(True, alpha=0.3)
+            
+            # Rating losses
+            train_rating = training_history['train_rating_losses'][layer_idx]
+            eval_rating = training_history['eval_rating_losses'][layer_idx]
+            
+            axes[1, layer_idx].plot(epochs, train_rating, 'b-', label='Train', linewidth=2)
+            axes[1, layer_idx].plot(epochs, eval_rating, 'r-', label='Eval', linewidth=2)
+            axes[1, layer_idx].set_title(f'Layer {layer_idx} - Rating Loss')
+            axes[1, layer_idx].set_xlabel('Epoch')
+            axes[1, layer_idx].set_ylabel('Loss')
+            axes[1, layer_idx].legend()
+            axes[1, layer_idx].grid(True, alpha=0.3)
+            
+            # Ranking losses
+            train_ranking = training_history['train_ranking_losses'][layer_idx]
+            eval_ranking = training_history['eval_ranking_losses'][layer_idx]
+            
+            axes[2, layer_idx].plot(epochs, train_ranking, 'b-', label='Train', linewidth=2)
+            axes[2, layer_idx].plot(epochs, eval_ranking, 'r-', label='Eval', linewidth=2)
+            axes[2, layer_idx].set_title(f'Layer {layer_idx} - Ranking Loss')
+            axes[2, layer_idx].set_xlabel('Epoch')
+            axes[2, layer_idx].set_ylabel('Loss')
+            axes[2, layer_idx].legend()
+            axes[2, layer_idx].grid(True, alpha=0.3)
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        else:
+            plt.show()
+        plt.close()
+    
     def save_results(self, save_path: str) -> None:
         """Save analysis results to JSON file."""
         serializable_results = {

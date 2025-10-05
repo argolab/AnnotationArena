@@ -306,7 +306,7 @@ class PartialExperimentRunner:
             device=self.config.device
         )
         
-        model.load_state_dict(torch.load(model_file, map_location=self.config.device))
+        model.load_state_dict_with_warnings(torch.load(model_file, map_location=self.config.device), strict=False)
         return model
 
     def save_results(self, results: Dict[str, Any], filename: str = None):

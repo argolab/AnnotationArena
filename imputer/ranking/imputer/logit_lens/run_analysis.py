@@ -6,11 +6,11 @@ from imputer.logit_lens.analyzer import LogitLensResults
 import torch
 import json
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 
 from imputer.data import DataConverter, RankingData
 from imputer.ranking_imputer import MultiVariableImputer
-from imputer.logit_lens import LogitLensAnalyzer, LogitLensVisualizer
+from imputer.logit_lens import LogitLensAnalyzer, LogitLensVisualizer, TunedLensAnalyzer, TunedLensConfig
 from stan.pipeline.bundle import GroundTruthBundle
 
 
@@ -57,9 +57,9 @@ def load_model_and_data(model_path: str, data_path: str, device: str = 'cpu') ->
     
     print(f"Created model with {len(model.blocks)} blocks, embedding_dim={model.embedding_dim}")
     
-    # Load state dict
+    # Load state dict with warnings for extra fields
     print("Loading state dict...")
-    model.load_state_dict(checkpoint['state_dict'])
+    model.load_state_dict_with_warnings(checkpoint['state_dict'], strict=False)
     
     converter = DataConverter(
         num_attributes=config['num_attributes'],
@@ -114,7 +114,25 @@ def run_logit_lens_analysis(model: MultiVariableImputer,
     return results
 
 
-def create_visualizations(results: LogitLensResults, output_dir: Path) -> None:
+def run_tuned_lens_analysis(model: MultiVariableImputer, 
+                          converter: DataConverter,
+                          train_variables: List[RankingData],
+                          test_variables: List[RankingData],
+                          device: str = 'cuda',
+                          config: Optional[TunedLensConfig] = None) -> LogitLensResults:
+    """Run tuned lens analysis."""
+    
+    print("Running Tuned Lens Analysis...")
+    
+    analyzer = TunedLensAnalyzer(model, converter, device, config)
+    results = analyzer.analyze_all_layers(train_variables, test_variables)
+    
+    print(f"Analysis complete. Analyzed {len(results.all_variables[0].layer_analyses)} layers.")
+    
+    return results
+
+
+def create_visualizations(results: LogitLensResults, output_dir: Path, analysis_type: str = "logit_lens") -> None:
     """Create and save visualizations."""
     
     print("Creating visualizations...")
@@ -125,6 +143,10 @@ def create_visualizations(results: LogitLensResults, output_dir: Path) -> None:
     visualizer.plot_train_performance(save_path=str(output_dir / "train_performance.png"))
     visualizer.plot_test_performance(save_path=str(output_dir / "test_performance.png"))
     visualizer.plot_all_performance(save_path=str(output_dir / "all_performance.png"))
+    
+    # For tuned lens, also create training curves
+    if analysis_type == "tuned_lens":
+        visualizer.plot_translator_training_curves(save_path=str(output_dir / "training_curves.png"))
     
     # Save results
     results_path = output_dir / "logit_lens_results.json"
@@ -147,6 +169,14 @@ def main():
                        help='Output directory for results and visualizations')
     parser.add_argument('--device', type=str, default='cuda',
                        help='Device to run analysis on')
+    parser.add_argument('--analysis_type', type=str, choices=['logit_lens', 'tuned_lens', 'both'],
+                       default='logit_lens', help='Type of analysis to run')
+    parser.add_argument('--tuned_lens_epochs', type=int, default=50,
+                       help='Number of epochs for tuned lens training')
+    parser.add_argument('--tuned_lens_lr', type=float, default=1e-3,
+                       help='Learning rate for tuned lens training')
+    parser.add_argument('--tuned_lens_target', type=str, choices=['ground_truth', 'final_logits'],
+                       default='ground_truth', help='Target type for tuned lens training')
     
     args = parser.parse_args()
     
@@ -165,10 +195,24 @@ def main():
     print(f"Test variables: {len(test_variables)}")
     
     # Run analysis
-    logit_results = run_logit_lens_analysis(
-        model, converter, train_variables, test_variables, args.device
-    )
-    create_visualizations(logit_results, output_dir)
+    if args.analysis_type in ['logit_lens', 'both']:
+        logit_results = run_logit_lens_analysis(
+            model, converter, train_variables, test_variables, args.device
+        )
+        create_visualizations(logit_results, output_dir / "logit_lens", "logit_lens")
+    
+    if args.analysis_type in ['tuned_lens', 'both']:
+        # Create tuned lens config
+        tuned_config = TunedLensConfig(
+            learning_rate=args.tuned_lens_lr,
+            epochs=args.tuned_lens_epochs,
+            target_type=args.tuned_lens_target
+        )
+        
+        tuned_results = run_tuned_lens_analysis(
+            model, converter, train_variables, test_variables, args.device, tuned_config
+        )
+        create_visualizations(tuned_results, output_dir / "tuned_lens", "tuned_lens")
     
     print("Analysis complete!")
 
