@@ -13,7 +13,7 @@ from imputer.eval import EvaluationEngine
 import sys
 sys.path.insert(0, "..")
 from stan.pipeline.bundle import GroundTruthBundle
-from stan.pipeline.io import new_run_dir, save_metrics, save_predictives
+from stan.pipeline.io import new_run_dir, save_test_metrics, save_predictives
 
 
 def _sizes_from_configs(configs: Dict[str, Any]) -> Dict[str, int]:
@@ -277,7 +277,7 @@ def main():
         "missing_metrics": results.missing_metrics,
         "masked_metrics": results.masked_metrics,
     }
-    save_metrics(run_dir, metrics_obj)
+    save_test_metrics(run_dir, metrics_obj)
 
     # Save predictives on test
     predictives = _build_predictives(model, test_all)

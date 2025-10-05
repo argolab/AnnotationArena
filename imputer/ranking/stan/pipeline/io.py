@@ -103,8 +103,8 @@ def save_predictives(run_dir: Path, predictives: dict) -> None:
     save_json(predictives, run_dir / "predictives.json")
 
 
-def save_metrics(run_dir: Path, metrics: dict) -> None:
-    save_json(metrics, run_dir / "metrics.json")
+def save_test_metrics(run_dir: Path, metrics: dict) -> None:
+    save_json(metrics, run_dir / "test_metrics.json")
 
 
 def save_fit_csvs(run_dir: Path, fit) -> None:
