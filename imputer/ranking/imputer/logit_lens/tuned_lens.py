@@ -11,6 +11,7 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import random
 import logging
+from tqdm import tqdm
 
 from imputer.data import RankingData, DataConverter
 from imputer.ranking_imputer import MultiVariableImputer
@@ -435,15 +436,18 @@ class TunedLensAnalyzer(LogitLensAnalyzer):
         best_eval_loss = float('inf')
         patience_counter = 0
         
-        for epoch in range(self.config.epochs):
+        # Create progress bar for epochs
+        epoch_pbar = tqdm(range(self.config.epochs), desc="Training Translators", unit="epoch")
+        
+        for epoch in epoch_pbar:
             # Training phase - process each instance separately
             train_losses = self._train_epoch(instance_variable_lists)
             
             # Evaluation phase - process each instance separately
             eval_losses = self._eval_epoch(instance_variable_lists)
             
-            # Track losses
-            self.training_history['epochs'].append(epoch)
+            # Track losses (use epoch+1 for actual epoch number)
+            self.training_history['epochs'].append(epoch + 1)
             for layer_idx in range(self.num_layers):
                 self.training_history['train_losses'][layer_idx].append(train_losses['total'][layer_idx])
                 self.training_history['eval_losses'][layer_idx].append(eval_losses['total'][layer_idx])
@@ -454,6 +458,15 @@ class TunedLensAnalyzer(LogitLensAnalyzer):
             
             # Early stopping based on average eval loss across layers
             avg_eval_loss = np.mean(eval_losses['total'])
+            avg_train_loss = np.mean(train_losses['total'])
+            
+            # Update progress bar with loss information
+            epoch_pbar.set_postfix({
+                'train_loss': f'{avg_train_loss:.2f}',
+                'eval_loss': f'{avg_eval_loss:.2f}',
+                'patience': patience_counter
+            })
+            
             if avg_eval_loss < best_eval_loss:
                 best_eval_loss = avg_eval_loss
                 patience_counter = 0
@@ -463,18 +476,6 @@ class TunedLensAnalyzer(LogitLensAnalyzer):
             if patience_counter >= self.config.early_stopping_patience:
                 logger.info(f"Early stopping at epoch {epoch+1}")
                 break
-            
-            # Logging
-            if (epoch + 1) % 10 == 0:
-                avg_train_loss = np.mean(train_losses['total'])
-                avg_train_rating = np.mean(train_losses['rating'])
-                avg_train_ranking = np.mean(train_losses['ranking'])
-                avg_eval_rating = np.mean(eval_losses['rating'])
-                avg_eval_ranking = np.mean(eval_losses['ranking'])
-                
-                logger.info(f"Epoch {epoch+1}/{self.config.epochs}: "
-                           f"Train Total: {avg_train_loss:.4f} (R: {avg_train_rating:.4f}, Rk: {avg_train_ranking:.4f}), "
-                           f"Eval Total: {avg_eval_loss:.4f} (R: {avg_eval_rating:.4f}, Rk: {avg_eval_ranking:.4f})")
         
         logger.info(f"Training complete after {len(self.training_history['epochs'])} epochs")
         return self.training_history

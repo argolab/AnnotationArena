@@ -149,7 +149,7 @@ def create_visualizations(results: LogitLensResults, output_dir: Path, analysis_
     
     # For tuned lens, also create training curves
     if analysis_type == "tuned_lens":
-        visualizer.plot_translator_training_curves(save_path=str(output_dir / "training_curves.png"))
+        visualizer.plot_translator_training_curves(save_path=str(output_dir / "translator_training_curves.png"))
     
     # Save results
     results_path = output_dir / "logit_lens_results.json"

@@ -183,7 +183,7 @@ class LogitLensVisualizer:
             print("No training epochs found in training history.")
             return
         
-        epochs = training_history['epochs']
+        epochs = training_history['epochs']  # These are now actual epoch numbers (1, 2, 3, ...)
         num_layers = len(training_history['train_losses'])
         
         # Create subplots - 3 rows: total, rating, ranking
@@ -191,7 +191,7 @@ class LogitLensVisualizer:
         if num_layers == 1:
             axes = axes.reshape(3, 1)
         
-        fig.suptitle('Tuned Lens Training Curves: Per-Layer Losses (Total, Rating, Ranking)', fontsize=16)
+        fig.suptitle('Translator Training Curves: Per-Layer Losses (Total, Rating, Ranking)', fontsize=16)
         
         for layer_idx in range(num_layers):
             # Total losses
