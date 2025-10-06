@@ -228,79 +228,67 @@ class PositionalEncoder(nn.Module):
 
 class TransformerLayer(nn.Module):
     """
-    Two-stream transformer layer with cross-stream interactions.
-    
-    Processes embedding stream with self-attention and updates parameter stream
-    using embedding context through cross-stream connections.
+    Two-stream transformer layer with joint attention over both streams.
+
+    Concatenates embedding and parameter streams, applies attention over combined stream,
+    then splits back. This allows both streams to communicate bidirectionally.
     """
 
-    def __init__(self, embedding_dim: int, parameter_dim: int, 
+    def __init__(self, embedding_dim: int, parameter_dim: int,
                  attention_heads: int, dropout: float = 0.1):
         super().__init__()
         self.embedding_dim = embedding_dim
         self.parameter_dim = parameter_dim
+        self.combined_dim = embedding_dim + parameter_dim
         self.attention_heads = attention_heads
-        
-        # Multi-head self-attention for embedding stream
+
+        # Multi-head self-attention over combined streams
         self.attention = nn.MultiheadAttention(
-            embedding_dim, attention_heads, dropout=dropout, batch_first=True
+            self.combined_dim, attention_heads, dropout=dropout, batch_first=True
         )
 
-        # Cross-stream integration: inject parameter stream into embedding stream
-        self.cross_stream_ff = FeedForward(embedding_dim + parameter_dim, dropout, output_dim=embedding_dim)
-
-        # Feed-forward for embedding stream
-        self.ff_embedding = FeedForward(embedding_dim, dropout)
-
-        # Cross-stream parameter update (embedding -> parameter)
-        self.parameter_update = nn.Linear(embedding_dim + parameter_dim, parameter_dim)
+        # Feed-forward for combined stream
+        self.ff_combined = FeedForward(self.combined_dim, dropout)
 
         # Normalization layers
-        self.norm1 = LayerNorm(embedding_dim)
-        self.norm2 = LayerNorm(embedding_dim)
-        self.norm3 = LayerNorm(embedding_dim)
-        self.norm4 = LayerNorm(parameter_dim)
-        
+        self.norm1 = LayerNorm(self.combined_dim)
+        self.norm2 = LayerNorm(self.combined_dim)
+
         # Dropout
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, embedding_stream: torch.Tensor, parameter_stream: torch.Tensor, 
-                mask: Optional[torch.Tensor] = None, 
+    def forward(self, embedding_stream: torch.Tensor, parameter_stream: torch.Tensor,
+                mask: Optional[torch.Tensor] = None,
                 return_attention: bool = False) -> Tuple[torch.Tensor, torch.Tensor]:
         """
-        Process both streams with attention and cross-stream updates.
-        
+        Process both streams with joint attention over combined stream.
+
         Args:
             embedding_stream: [batch, n_nodes, embedding_dim]
             parameter_stream: [batch, n_nodes, parameter_dim]
             mask: Optional attention mask for unobserved nodes
-            
+
         Returns:
             Tuple of (updated_embedding_stream, updated_parameter_stream)
         """
-        # Embedding stream processing
-        # 1. Multi-head self-attention with residual connection
-        embedding_norm = self.norm1(embedding_stream)
-        attn_out, attn_weights = self.attention(embedding_norm, embedding_norm, embedding_norm,
+        # Concatenate both streams
+        combined = torch.cat([embedding_stream, parameter_stream], dim=-1)  # [batch, n_nodes, combined_dim]
+
+        # 1. Multi-head self-attention over combined stream with residual connection
+        combined_norm = self.norm1(combined)
+        attn_out, attn_weights = self.attention(combined_norm, combined_norm, combined_norm,
                                                key_padding_mask=mask, average_attn_weights=False)
-        embedding_stream = embedding_stream + self.dropout(attn_out)
+        combined = combined + self.dropout(attn_out)
 
-        # 2. Cross-stream integration: inject parameter stream into embedding stream
-        embedding_norm = self.norm2(embedding_stream)
-        combined = torch.cat([embedding_norm, parameter_stream], dim=-1)
-        cross_out = self.cross_stream_ff(combined)
-        embedding_stream = embedding_stream + self.dropout(cross_out)
+        # 2. Feed-forward with residual connection
+        combined_norm = self.norm2(combined)
+        ff_out = self.ff_combined(combined_norm)
+        combined = combined + self.dropout(ff_out)
 
-        # 3. Feed-forward with residual connection
-        embedding_norm = self.norm3(embedding_stream)
-        ff_out = self.ff_embedding(embedding_norm)
-        embedding_stream = embedding_stream + self.dropout(ff_out)
+        # Split back into two streams
+        embedding_stream = combined[:, :, :self.embedding_dim]
+        parameter_stream = combined[:, :, self.embedding_dim:]
 
-        # 4. Parameter stream update using embedding context
-        parameter_norm = self.norm4(parameter_stream)
-        combined = torch.cat([embedding_stream, parameter_norm], dim=-1)
-        parameter_stream = self.parameter_update(combined)
-        
         return embedding_stream, parameter_stream
 
 
