@@ -90,6 +90,9 @@ class TransformerBlock(nn.Module):
         if attn_mask is not None:
             ff_out = ff_out * attn_mask.unsqueeze(-1).to(ff_out.dtype)
         feature_x = self.dropout_2(ff_out) + feature_x
+        # update param stream
         combined = torch.cat([feature_x, param_x], dim=-1)
-        param_x = self.param_update(combined)
+        param_update = self.param_update(combined)
+        # Residual connection: preserve known information from previous layer
+        param_x = param_x + param_update
         return feature_x, param_x
