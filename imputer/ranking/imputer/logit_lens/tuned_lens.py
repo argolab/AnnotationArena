@@ -165,8 +165,9 @@ class TunedLensAnalyzer(LogitLensAnalyzer):
         
         # Get dimensions from model
         self.feature_dim = self.model.embedding_dim
-        self.param_dim = self.model.embedding_provider.parameter_dimension - 1 #TODO: minus the masking bit, because we don't give it to the model.
-        self.num_layers = len(self.model.blocks) + 1  # +1 for final layer after norm
+        self.param_dim = self.model.embedding_provider.parameter_dimension  # Include mask bit now
+        # One snapshot for the initial embeddings plus one per transformer block
+        self.num_layers = len(self.model.blocks) + 1
         
         # Create translators for each layer
         self.translators = nn.ModuleList([
@@ -506,8 +507,8 @@ class TunedLensAnalyzer(LogitLensAnalyzer):
                 translated_params = self.translators[layer_idx](features, params)
                 
                 # Apply heads to translated params
-                rating_logits = self.model.apply_head('rating', translated_params)
-                ranking_logits = self.model.apply_head('ranking', translated_params)
+                rating_logits = self.model.read_prediction_logits_from_param('rating', translated_params)
+                ranking_logits = self.model.read_prediction_logits_from_param('ranking', translated_params)
                 
                 predictions = {
                     'rating': rating_logits,
@@ -565,8 +566,8 @@ class TunedLensAnalyzer(LogitLensAnalyzer):
                     translated_params = self.translators[layer_idx](features, params)
                     
                     # Apply heads to translated params
-                    rating_logits = self.model.apply_head('rating', translated_params)
-                    ranking_logits = self.model.apply_head('ranking', translated_params)
+                    rating_logits = self.model.read_prediction_logits_from_param('rating', translated_params)
+                    ranking_logits = self.model.read_prediction_logits_from_param('ranking', translated_params)
                     
                     predictions = {
                         'rating': rating_logits,
@@ -612,8 +613,8 @@ class TunedLensAnalyzer(LogitLensAnalyzer):
                 translated_params = self.translators[layer_idx](features_snapshot, params_snapshot)
                 
                 # Compute head logits from the translated params
-                rating_logits = self.model.apply_head('rating', translated_params)
-                ranking_logits = self.model.apply_head('ranking', translated_params)
+                rating_logits = self.model.read_prediction_logits_from_param('rating', translated_params)
+                ranking_logits = self.model.read_prediction_logits_from_param('ranking', translated_params)
 
                 layer_analyses.append(
                     LayerAnalysis(
