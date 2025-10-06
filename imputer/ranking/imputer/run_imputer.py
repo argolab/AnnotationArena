@@ -193,9 +193,9 @@ def main():
             "num_items": sizes["num_items"],
             "num_likert_classes": sizes["num_likert_classes"],
             "max_rank_size": args.max_rank_size,
-            "encoder_layers_num": 6,
-            "attention_heads": 8,
-            "embedding_dim": 128,
+            "encoder_layers_num": len(model.blocks),
+            "attention_heads": model.blocks[0].attention_heads,
+            "embedding_dim": model.embedding_dim,
             "embedding_type": "atom",
             "device": args.device,
             "include_sign_bit_in_params": True
