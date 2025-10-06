@@ -28,38 +28,50 @@ class FeedForward(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    """Single-stream transformer block over feature embeddings only with mask support.
+    """Unified-stream transformer block over concatenated feature+param with mask support.
 
-    attn_mask: optional bool tensor `[B, N]` where True marks valid tokens.
-    Padded tokens neither attend to others nor contribute to outputs.
+    - Multi-head attention operates on the concatenated stream `[features | params]`.
+    - No separate feature/param updates; a single FFN processes the unified stream.
+    - `attn_mask`: optional bool tensor `[B, N]` where True marks valid tokens.
+      Padded tokens neither attend to others nor contribute to outputs.
     """
 
     def __init__(self, feature_dim: int, param_dim: int, attention_heads: int, dropout: float = 0.3):
         super().__init__()
         self.feature_dim = feature_dim
+        self.param_dim = param_dim
+        self.total_dim = feature_dim + param_dim
         self.attention_heads = attention_heads
 
-        # Feature stream attention
-        self.Q = nn.Linear(feature_dim, feature_dim)
-        self.K = nn.Linear(feature_dim, feature_dim)
-        self.V = nn.Linear(feature_dim, feature_dim)
-        self.out = nn.Linear(feature_dim, feature_dim)
+        # Define an internal model dim that is a multiple of heads for MHAttention
+        self.model_dim = int(math.ceil(self.total_dim / attention_heads) * attention_heads)
 
-        self.norm_1 = NormLayer(feature_dim)
-        self.norm_2 = NormLayer(feature_dim)
+        # Projections to/from attention space when needed
+        self.proj_in = (nn.Identity() if self.model_dim == self.total_dim
+                        else nn.Linear(self.total_dim, self.model_dim))
+        self.proj_out = (nn.Identity() if self.model_dim == self.total_dim
+                         else nn.Linear(self.model_dim, self.total_dim))
+
+        # Unified stream attention over concatenated [feature | param] in model_dim space
+        self.Q = nn.Linear(self.model_dim, self.model_dim)
+        self.K = nn.Linear(self.model_dim, self.model_dim)
+        self.V = nn.Linear(self.model_dim, self.model_dim)
+        self.out = nn.Linear(self.model_dim, self.model_dim)
+
+        self.norm_1 = NormLayer(self.model_dim)
+        self.norm_2 = NormLayer(self.model_dim)
         self.dropout_1 = nn.Dropout(dropout)
         self.dropout_2 = nn.Dropout(dropout)
 
-        self.param_update = nn.Linear(feature_dim + param_dim, param_dim)
+        # Full FFN on unified stream in model_dim space
+        self.ff = FeedForward(self.model_dim, dropout=dropout)
 
-        self.ff = FeedForward(feature_dim + param_dim, dropout=dropout, output_dim=feature_dim)
-
-    def _multihead_attention(self, feature_x: torch.Tensor, batch_size: int, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
+    def _multihead_attention(self, combined_x: torch.Tensor, batch_size: int, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
         H = self.attention_heads
-        D = self.feature_dim // H
-        Q = self.Q(feature_x).view(batch_size, -1, H, D).transpose(1, 2)
-        K = self.K(feature_x).view(batch_size, -1, H, D).transpose(1, 2)
-        V = self.V(feature_x).view(batch_size, -1, H, D).transpose(1, 2)
+        D = self.model_dim // H
+        Q = self.Q(combined_x).view(batch_size, -1, H, D).transpose(1, 2)
+        K = self.K(combined_x).view(batch_size, -1, H, D).transpose(1, 2)
+        V = self.V(combined_x).view(batch_size, -1, H, D).transpose(1, 2)
 
         scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(D)
         if attn_mask is not None:
@@ -71,28 +83,30 @@ class TransformerBlock(nn.Module):
         scores = F.softmax(scores, dim=-1)
         scores = self.dropout_1(scores)
         scores = torch.matmul(scores, V)
-        scores = scores.transpose(1, 2).contiguous().view(batch_size, -1, self.feature_dim)
+        scores = scores.transpose(1, 2).contiguous().view(batch_size, -1, self.model_dim)
         return self.out(scores)
 
     def forward(self, feature_x: torch.Tensor, param_x: torch.Tensor, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
         batch_size = feature_x.shape[0]
 
-        feature_x_norm = self.norm_1(feature_x) # pre-norm before attention
-        attn_out = self._multihead_attention(feature_x_norm, batch_size, attn_mask)
-        if attn_mask is not None:
-            attn_out = attn_out * attn_mask.unsqueeze(-1).to(attn_out.dtype)
-        feature_x = feature_x + self.dropout_1(attn_out)
+        # Concatenate streams and apply unified attention + FFN with residuals
+        combined_total = torch.cat([feature_x, param_x], dim=-1)
+        z = self.proj_in(combined_total)
 
-        # Feed-Forward on concatenated [feature_x, param_x], update feature_x only
-        feature_x_ff = self.norm_2(feature_x)  # pre-norm before feed-forward
-        concat_x = torch.cat([feature_x_ff, param_x], dim=-1)
-        ff_out = self.ff(concat_x)
+        z_norm = self.norm_1(z)  # pre-norm before attention
+        attn_out = self._multihead_attention(z_norm, batch_size, attn_mask)
+        z = z + self.dropout_1(attn_out)
+
+        z_ff_in = self.norm_2(z)  # pre-norm before feed-forward
+        z_ff = self.ff(z_ff_in)
+        z = z + z_ff
+
+        back = self.proj_out(z)
         if attn_mask is not None:
-            ff_out = ff_out * attn_mask.unsqueeze(-1).to(ff_out.dtype)
-        feature_x = self.dropout_2(ff_out) + feature_x
-        # update param stream
-        combined = torch.cat([feature_x, param_x], dim=-1)
-        param_update = self.param_update(combined)
-        # Residual connection: preserve known information from previous layer
-        param_x = param_x + param_update
+            back = back * attn_mask.unsqueeze(-1).to(back.dtype)
+        combined_total = combined_total + self.dropout_2(back)
+
+        # Split back to feature and param streams for compatibility
+        feature_x = combined_total[:, :, :self.feature_dim]
+        param_x = combined_total[:, :, self.feature_dim:]
         return feature_x, param_x
