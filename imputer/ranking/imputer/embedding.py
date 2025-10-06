@@ -480,15 +480,18 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
         parameter = torch.zeros(self.parameter_dimension).to(self.device)
         if is_missing:
-            parameter[0] = 1.0
+            # Missing/masked items: encode uniform distribution (all zeros = uniform logits)
+            parameter[0] = 1.0  # Mask bit
+            # Leave remaining dimensions as zeros (uniform distribution)
         else:
+            # Observed items: encode the known rating value
             assert rating_value is not None and 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
-            parameter[rating_value + 1] = 1.0
+            parameter[0] = 0.0  # Not masked
+            parameter[rating_value + 1] = 20.0  # One-hot-like encoding of rating logit
         return torch.cat((attr_vec + annot_vec + item_vec, parameter), dim=-1)
 
     # Get embedding for ranking variables
     def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_missing: bool = False) -> torch.Tensor:
-        # print("WARNING: not using ranking order")
         attr_vec = torch.cat((torch.tensor([1, 0, 0]).to(self.device), self.attribute_embedding[attribute_id]), dim=-1)
         annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), self.annotator_embedding_learnable[annotator_id], self.annotator_embedding_random[annotator_id]), dim=-1)
 
@@ -498,20 +501,31 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         total_embedding = attr_vec + annot_vec  + item_embedding
         parameter = torch.zeros(self.parameter_dimension).to(self.device)
         if is_missing:
-            parameter[0] = 1.0
+            # Missing/masked items: encode uniform distribution (50-50 chance for pairwise)
+            parameter[0] = 1.0  # Mask bit
+            # Leave remaining dimensions as zeros (uniform distribution)
         else:
+            # Observed items: encode proper logit convention
             assert ranking_order is not None, "ranking_order cannot be None for observed rankings"
-            ranking_tensor = torch.tensor(ranking_order)
             assert len(ranking_order) == self.max_rank_size, f"ranking_order length {len(ranking_order)} must equal max_rank_size {self.max_rank_size}"
-            parameter[1:3] = ranking_tensor #TODO: fix this later on
+            parameter[0] = 0.0  # Not masked
+            
+            # Convert ranking order to logits: first item wins if ranking_order[0] < ranking_order[1]
+            # Higher logit = better ranking, so first item gets higher logit if it wins
+            if ranking_order[0] < ranking_order[1]:  # First item wins
+                parameter[1] = 1.0  # First item gets higher logit
+                parameter[2] = 0.0  # Second item gets lower logit
+            else:  # Second item wins
+                parameter[1] = 0.0  # First item gets lower logit
+                parameter[2] = 1.0  # Second item gets higher logit
         return torch.cat((total_embedding, parameter), dim=-1)
     
     def on_forward_start(self, variables: List[RankingData]):
         """Generate new random embeddings for all components at the start of each forward pass."""
+        if self.randomness:
+            self.partial_reset_embedding()
 
-        if not self.randomness:
-            return
-        self.partial_reset_embedding()
+        return
 
     def partial_reset_embedding(self):
         self.annotator_embedding_random = torch.rand(self.num_annotators, self.internal_dimension - self.internal_dimension // 2, device=self.device)
