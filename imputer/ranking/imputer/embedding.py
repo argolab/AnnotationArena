@@ -468,9 +468,8 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.annotator_embedding_learnable, mode='fan_out', nonlinearity='relu')
 
-    @property
-    def parameter_dimension(self):
-        return max(self.num_likert_classes, self.max_rank_size) + 1
+        # Class constant for the logit value
+        self.LOGIT_HIGH = getattr(self, "LOGIT_HIGH", 20.0)
 
     def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False) -> torch.Tensor:
         """Implementation for rating embeddings."""
@@ -487,7 +486,7 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
             # Observed items: encode the known rating value
             assert rating_value is not None and 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
             parameter[0] = 0.0  # Not masked
-            parameter[rating_value + 1] = 20.0  # One-hot-like encoding of rating logit
+            parameter[rating_value + 1] = self.LOGIT_HIGH  # One-hot-like encoding of rating logit
         return torch.cat((attr_vec + annot_vec + item_vec, parameter), dim=-1)
 
     # Get embedding for ranking variables
@@ -512,12 +511,13 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
             
             # Convert ranking order to logits: first item wins if ranking_order[0] < ranking_order[1]
             # Higher logit = better ranking, so first item gets higher logit if it wins
+            # Use a class constant for the logit value
             if ranking_order[0] < ranking_order[1]:  # First item wins
-                parameter[1] = 1.0  # First item gets higher logit
+                parameter[1] = self.LOGIT_HIGH  # First item gets higher logit
                 parameter[2] = 0.0  # Second item gets lower logit
             else:  # Second item wins
                 parameter[1] = 0.0  # First item gets lower logit
-                parameter[2] = 1.0  # Second item gets higher logit
+                parameter[2] = self.LOGIT_HIGH  # Second item gets higher logit
         return torch.cat((total_embedding, parameter), dim=-1)
     
     def on_forward_start(self, variables: List[RankingData]):
