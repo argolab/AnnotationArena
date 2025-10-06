@@ -88,8 +88,10 @@ class MultiVariableImputer(nn.Module):
             sys.exit()
             pass
         
+        # Use provider-declared parameter dimension (includes missing-status bit)
+        param_dim = self.embedding_provider.parameter_dimension
         self.blocks = nn.ModuleList([
-            TransformerBlock(embedding_dim, max(self.num_likert_classes, self.max_rank_size), attention_heads, dropout) # TODO, add 1 if we decide to give the masking bit to the model.
+            TransformerBlock(embedding_dim, param_dim, attention_heads, dropout)
             for _ in range(encoder_layers_num)
         ])
         # Final normalization removed - no longer needed
