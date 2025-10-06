@@ -111,12 +111,12 @@ class MultiVariableImputer(nn.Module):
             
         return missing_keys, unexpected_keys
 
-    def apply_head(self, head_key: str, hidden: torch.Tensor) -> torch.Tensor:
-        """Apply a named head to hidden states [B, N, D] -> logits [B, N, *]."""
+    def read_prediction_logits_from_param(self, head_key: str, hidden: torch.Tensor) -> torch.Tensor:
+        """Apply a named head to hidden states [B, N, D] -> logits [B, N, *]. Skip the missing-status bit."""
         if head_key == "rating":
-            return hidden
+            return hidden[:, :, 1:1 + self.num_likert_classes]
         else:
-            return hidden[:, :, :2]
+            return hidden[:, :, 1:1 + self.max_rank_size]
 
 
     def forward(self, ranking_data_list, attn_mask: torch.Tensor | None = None, return_intermediate: bool = False):
@@ -135,8 +135,8 @@ class MultiVariableImputer(nn.Module):
                 hidden_intermediates.append([features, params])
 
         logits = {
-            'rating': self.apply_head('rating', params),
-            'ranking': self.apply_head('ranking', params),
+            'rating': self.read_prediction_logits_from_param('rating', params),
+            'ranking': self.read_prediction_logits_from_param('ranking', params),
         }
         if return_intermediate:
             return logits, hidden_intermediates

@@ -111,14 +111,16 @@ class LogitLensAnalyzer:
         with torch.no_grad():
             # Run a single forward pass with intermediates captured
             logits_final, hidden_intermediates = self.model(all_variables, return_intermediate=True)
-            # hidden_intermediates is a list of [features, params] per transformer block,
-            # plus a final [features_normed, params] entry after normalization per model.forward
+            print("hidden_intermediates len", len(hidden_intermediates))
+            # hidden_intermediates is a list starting with the initial embedding snapshot
+            # [features, params], followed by one [features, params] per transformer block.
+            # There is no additional post-norm layer in the current model.
 
             layer_analyses: List[LayerAnalysis] = []
             for layer_idx, (features_snapshot, params_snapshot) in enumerate(hidden_intermediates):
                 # Compute head logits from the params snapshot at this layer
-                rating_logits = self.model.apply_head('rating', params_snapshot)
-                ranking_logits = self.model.apply_head('ranking', params_snapshot)
+                rating_logits = self.model.read_prediction_logits_from_param('rating', params_snapshot)
+                ranking_logits = self.model.read_prediction_logits_from_param('ranking', params_snapshot)
 
                 layer_analyses.append(
                     LayerAnalysis(
