@@ -15,7 +15,7 @@ class LogitLensVisualizer:
     def __init__(self, results: LogitLensResults):
         self.results = results
         self.num_layers = len(self.results.all_variables[0].layer_analyses) if self.results.all_variables else 0
-        self.layer_indices = list(range(self.num_layers - 1))  # Exclude last layer
+        self.layer_indices = list(range(self.num_layers))
         
     def _safe_mean(self, values: List[float]) -> float:
         """Compute mean of values, handling None and NaN."""
