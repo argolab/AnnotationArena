@@ -25,11 +25,15 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         self.max_rank_size = int(max_rank_size)
         self.embedding_dim = int(embedding_dim) # word_embedding dim
 
+    @property
+    def parameter_dimension(self):
+        return 1 + max(self.num_likert_classes, self.max_rank_size)  # 1 for the missing-status bit
+
     # Abstract hooks for subclasses
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value: Optional[int], is_masked: bool = False) -> torch.Tensor:
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value: Optional[int], is_missing: bool = False) -> torch.Tensor:
         raise NotImplementedError
 
-    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order: Optional[List[int]], is_masked: bool = False) -> torch.Tensor:
+    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order: Optional[List[int]], is_missing: bool = False) -> torch.Tensor:
         raise NotImplementedError
 
     @torch.no_grad()
@@ -52,24 +56,23 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         D = self.embedding_dim
         device = self._ensure_device()
 
-        feature_embeddings = torch.zeros(1, V, D + 1 + max(self.max_rank_size, self.num_likert_classes), device=device)
+        feature_embeddings = torch.zeros(1, V, D + self.parameter_dimension, device=device)
 
         for i, var in enumerate(variables):
-            # Determine if variable is masked (default to False if None)
-            is_masked = var.is_masked if var.is_masked is not None else False
-            is_missing = var.is_missing if var.is_missing is not None else False
-
-            is_masked = is_masked or is_missing
+            is_missing = var.is_missing or var.is_masked
+            assert not (var.is_missing and var.is_masked), "Variable cannot be both missing and masked"
+            assert var.is_missing is not None and var.is_masked is not None, "Variable must have missing or masked status"
 
             if var.is_listwise:
-                feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_masked)
+                feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_missing)
                 feature_embeddings[0, i] = feat
             else:
                 item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
-                feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_masked)
+                feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing)
                 feature_embeddings[0, i] = feat
 
-        return feature_embeddings[:, :, :D], feature_embeddings[:, :, D+1:]
+        # Return feature embeddings and full param stream including the missing-status bit
+        return feature_embeddings[:, :, :D], feature_embeddings[:, :, D:]
 
     def on_forward_start(self, variables: List[RankingData]):
         pass

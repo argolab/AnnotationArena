@@ -209,13 +209,13 @@ class OuterProductRankingEmbeddingProvider(BaseRankingEmbeddingProvider):
             nn.Linear(D * 2, D),
         )
 
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_masked: bool = False) -> torch.Tensor:
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False) -> torch.Tensor:
         """Implementation for rating embeddings."""
         attr_vec = self.attribute_embedding[attribute_id]
         annot_vec = self.annotator_embedding[annotator_id]
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
         parameter = torch.zeros(1 + self.num_likert_classes + self.max_rank_size).to(self.device)
-        if is_masked:
+        if is_missing:
             parameter[0] = 1.0
         else:
             assert rating_value is not None and 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
@@ -223,7 +223,7 @@ class OuterProductRankingEmbeddingProvider(BaseRankingEmbeddingProvider):
         return self.parameter_projection(torch.cat((attr_vec + annot_vec + self.item_embedding[item_id], parameter), dim=-1))
 
     # Get embedding for ranking variables
-    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_masked: bool = False) -> torch.Tensor:
+    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_missing: bool = False) -> torch.Tensor:
         # print("WARNING: not using ranking order")
         attr_vec = self.attribute_embedding[attribute_id]
         annot_vec = self.annotator_embedding[annotator_id]
@@ -236,7 +236,7 @@ class OuterProductRankingEmbeddingProvider(BaseRankingEmbeddingProvider):
                 total_outer += torch.outer(item_attr_embeddings[i], item_attr_embeddings[j])
 
         parameter = torch.zeros(1 + self.num_likert_classes + self.max_rank_size).to(self.device)
-        if is_masked:
+        if is_missing:
             parameter[0] = 1.0
         else:
             assert ranking_order is not None, "ranking_order cannot be None for observed rankings"
@@ -276,13 +276,13 @@ class CombineRandomTrainedEmbeddingProvider(BaseRankingEmbeddingProvider):
         self.pairwise_relation = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
 
 
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_masked: bool = False) -> torch.Tensor:
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False) -> torch.Tensor:
         """Implementation for rating embeddings."""
         attr_vec = torch.cat((torch.randn(self.embedding_dim // 2), self.attribute_embedding[attribute_id][self.embedding_dim // 2:]), dim=-1)
         annot_vec = torch.cat((torch.randn(self.embedding_dim // 2), self.annotator_embedding[annotator_id][self.embedding_dim // 2:]), dim=-1)
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
         parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to(self.device)
-        if is_masked:
+        if is_missing:
             parameter[0] = 1.0
         else:
             assert rating_value is not None and 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
@@ -291,7 +291,7 @@ class CombineRandomTrainedEmbeddingProvider(BaseRankingEmbeddingProvider):
         return self.parameter_projection(torch.cat((attr_vec + annot_vec + item_embedding, parameter), dim=-1))
 
     # Get embedding for ranking variables
-    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_masked: bool = False) -> torch.Tensor:
+    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_missing: bool = False) -> torch.Tensor:
         # print("WARNING: not using ranking order")
         attr_vec = torch.cat((torch.randn(self.embedding_dim // 2), self.attribute_embedding[attribute_id][self.embedding_dim // 2:]), dim=-1)
         annot_vec = torch.cat((torch.randn(self.embedding_dim // 2), self.annotator_embedding[annotator_id][self.embedding_dim // 2:]), dim=-1)
@@ -302,7 +302,7 @@ class CombineRandomTrainedEmbeddingProvider(BaseRankingEmbeddingProvider):
         item_embedding = item_embedding_1 + item_embedding_2 @ self.pairwise_relation
         total_embedding = attr_vec + annot_vec + item_embedding
         parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to(self.device)
-        if is_masked:
+        if is_missing:
             parameter[0] = 1.0
         else:
             assert ranking_order is not None, "ranking_order cannot be None for observed rankings"
@@ -341,13 +341,13 @@ class PairwiseRankingProjectionEmbeddingProvider(BaseRankingEmbeddingProvider):
         self.pairwise_relation = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
 
 
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_masked: bool = False) -> torch.Tensor:
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False) -> torch.Tensor:
         """Implementation for rating embeddings."""
         attr_vec = self.attribute_embedding[attribute_id]
         annot_vec = self.annotator_embedding[annotator_id]
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
         parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to(self.device)
-        if is_masked:
+        if is_missing:
             parameter[0] = 1.0
         else:
             assert rating_value is not None and 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
@@ -355,7 +355,7 @@ class PairwiseRankingProjectionEmbeddingProvider(BaseRankingEmbeddingProvider):
         return self.parameter_projection(torch.cat((attr_vec + annot_vec + self.item_embedding[item_id], parameter), dim=-1))
 
     # Get embedding for ranking variables
-    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_masked: bool = False) -> torch.Tensor:
+    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_missing: bool = False) -> torch.Tensor:
         # print("WARNING: not using ranking order")
         attr_vec = self.attribute_embedding[attribute_id]
         annot_vec = self.annotator_embedding[annotator_id]
@@ -366,7 +366,7 @@ class PairwiseRankingProjectionEmbeddingProvider(BaseRankingEmbeddingProvider):
         item_embedding = item_embedding_1 + item_embedding_2 @ self.pairwise_relation
         total_embedding = attr_vec + annot_vec + item_embedding
         parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to(self.device)
-        if is_masked:
+        if is_missing:
             parameter[0] = 1.0
         else:
             assert ranking_order is not None, "ranking_order cannot be None for observed rankings"
@@ -468,27 +468,29 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.annotator_embedding_learnable, mode='fan_out', nonlinearity='relu')
 
-    @property
-    def parameter_dimension(self):
-        return max(self.num_likert_classes, self.max_rank_size) + 1
+        # Class constant for the logit value
+        self.LOGIT_HIGH = getattr(self, "LOGIT_HIGH", 20.0)
 
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_masked: bool = False) -> torch.Tensor:
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False) -> torch.Tensor:
         """Implementation for rating embeddings."""
         attr_vec = torch.cat((torch.tensor([1, 0, 0]).to(self.device), self.attribute_embedding[attribute_id]), dim=-1)
         annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), self.annotator_embedding_learnable[annotator_id], self.annotator_embedding_random[annotator_id]), dim=-1)
         item_vec = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_id]), dim=-1)
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
         parameter = torch.zeros(self.parameter_dimension).to(self.device)
-        if is_masked:
-            parameter[0] = 1.0
+        if is_missing:
+            # Missing/masked items: encode uniform distribution (all zeros = uniform logits)
+            parameter[0] = 1.0  # Mask bit
+            # Leave remaining dimensions as zeros (uniform distribution)
         else:
+            # Observed items: encode the known rating value
             assert rating_value is not None and 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
-            parameter[rating_value + 1] = 1.0
+            parameter[0] = 0.0  # Not masked
+            parameter[rating_value + 1] = self.LOGIT_HIGH  # One-hot-like encoding of rating logit
         return torch.cat((attr_vec + annot_vec + item_vec, parameter), dim=-1)
 
     # Get embedding for ranking variables
-    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_masked: bool = False) -> torch.Tensor:
-        # print("WARNING: not using ranking order")
+    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_missing: bool = False) -> torch.Tensor:
         attr_vec = torch.cat((torch.tensor([1, 0, 0]).to(self.device), self.attribute_embedding[attribute_id]), dim=-1)
         annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), self.annotator_embedding_learnable[annotator_id], self.annotator_embedding_random[annotator_id]), dim=-1)
 
@@ -497,21 +499,33 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         item_embedding = item_embedding_1 + item_embedding_2 @ self.pairwise_relation
         total_embedding = attr_vec + annot_vec  + item_embedding
         parameter = torch.zeros(self.parameter_dimension).to(self.device)
-        if is_masked:
-            parameter[0] = 1.0
+        if is_missing:
+            # Missing/masked items: encode uniform distribution (50-50 chance for pairwise)
+            parameter[0] = 1.0  # Mask bit
+            # Leave remaining dimensions as zeros (uniform distribution)
         else:
+            # Observed items: encode proper logit convention
             assert ranking_order is not None, "ranking_order cannot be None for observed rankings"
-            ranking_tensor = torch.tensor(ranking_order)
             assert len(ranking_order) == self.max_rank_size, f"ranking_order length {len(ranking_order)} must equal max_rank_size {self.max_rank_size}"
-            parameter[1:3] = ranking_tensor #TODO: fix this later on
+            parameter[0] = 0.0  # Not masked
+            
+            # Convert ranking order to logits: first item wins if ranking_order[0] < ranking_order[1]
+            # Higher logit = better ranking, so first item gets higher logit if it wins
+            # Use a class constant for the logit value
+            if ranking_order[0] < ranking_order[1]:  # First item wins
+                parameter[1] = self.LOGIT_HIGH  # First item gets higher logit
+                parameter[2] = 0.0  # Second item gets lower logit
+            else:  # Second item wins
+                parameter[1] = 0.0  # First item gets lower logit
+                parameter[2] = self.LOGIT_HIGH  # Second item gets higher logit
         return torch.cat((total_embedding, parameter), dim=-1)
     
     def on_forward_start(self, variables: List[RankingData]):
         """Generate new random embeddings for all components at the start of each forward pass."""
+        if self.randomness:
+            self.partial_reset_embedding()
 
-        if not self.randomness:
-            return
-        self.partial_reset_embedding()
+        return
 
     def partial_reset_embedding(self):
         self.annotator_embedding_random = torch.rand(self.num_annotators, self.internal_dimension - self.internal_dimension // 2, device=self.device)
