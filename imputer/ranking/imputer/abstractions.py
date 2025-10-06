@@ -25,6 +25,10 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         self.max_rank_size = int(max_rank_size)
         self.embedding_dim = int(embedding_dim) # word_embedding dim
 
+    @property
+    def parameter_dimension(self):
+        return 1 + max(self.num_likert_classes, self.max_rank_size)  # 1 for the missing-status bit
+
     # Abstract hooks for subclasses
     def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value: Optional[int], is_missing: bool = False) -> torch.Tensor:
         raise NotImplementedError
@@ -52,7 +56,7 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         D = self.embedding_dim
         device = self._ensure_device()
 
-        feature_embeddings = torch.zeros(1, V, D + 1 + max(self.max_rank_size, self.num_likert_classes), device=device)
+        feature_embeddings = torch.zeros(1, V, D + self.parameter_dimension, device=device)
 
         for i, var in enumerate(variables):
             is_missing = var.is_missing or var.is_masked
@@ -67,7 +71,8 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
                 feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing)
                 feature_embeddings[0, i] = feat
 
-        return feature_embeddings[:, :, :D], feature_embeddings[:, :, D+1:]
+        # Return feature embeddings and full param stream including the missing-status bit
+        return feature_embeddings[:, :, :D], feature_embeddings[:, :, D:]
 
     def on_forward_start(self, variables: List[RankingData]):
         pass
