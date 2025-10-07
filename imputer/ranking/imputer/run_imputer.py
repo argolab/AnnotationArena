@@ -77,7 +77,7 @@ def main():
     parser.add_argument("--data-dir", required=True, help="Directory containing data_bundle.json and configs.json")
     parser.add_argument("--output-root", default="OUTPUT/IMPUTER", help="Root output directory")
     parser.add_argument("--epochs", type=int, default=50)
-    parser.add_argument("--masking-rate", type=float, default=0.15)
+    parser.add_argument("--masking-rate", type=float, default=0.50)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--max-rank-size", type=int, default=2)
@@ -122,6 +122,25 @@ def main():
     train_missing = converter.create_variables_from_bundle(bundle, partition="train", status="missing")
     test_observed = converter.create_variables_from_bundle(bundle, partition="test", status="observed")
     test_missing = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
+    
+    # EXPERIMENTAL: Convert all training missing to observed for fully observed training
+    # This allows us to artificially mask 50% of all training data
+    train_missing_as_observed = []
+    for var in train_missing:
+        # Create a copy with status=2 (observed) instead of status=0 (missing)
+        train_missing_as_observed.append(RankingData(
+            annotator_id=var.annotator_id,
+            attribute_id=var.attribute_id,
+            is_listwise=var.is_listwise,
+            item_ids=var.item_ids,
+            status=2,  # observed instead of missing
+            instance=var.instance,
+            rating_value=var.rating_value,
+            ranking_order=var.ranking_order,
+        ))
+    
+    # Use the converted missing data as additional observed training data
+    train_observed_full = train_observed + train_missing_as_observed
     train_all: List[RankingData] = train_observed + train_missing
     test_all: List[RankingData] = test_observed + test_missing
     if args.full_random:
@@ -171,7 +190,8 @@ def main():
             name="train_all_evaluation",
         )
     )
-    train_vars = train_observed
+    # Use fully observed training data (original observed + converted missing)
+    train_vars = train_observed_full
     if args.transductive_learning:
         print("Using transductive learning")
         train_vars += test_observed
@@ -226,10 +246,11 @@ def main():
         print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
     
     start_time = time.time()
-    # Train
+    # Train with fully observed training data and artificial masking
+    # Note: train_missing is now empty since we converted all missing to observed
     trainer.train(
         train_observed_vars=train_vars,
-        train_missing_vars=train_missing,
+        train_missing_vars=[],  # Empty since we converted all missing to observed
         masking_rate=args.masking_rate,
         epochs=args.epochs,
         call_callbacks_every=1,

@@ -225,7 +225,7 @@ class ImputerTrainer:
 
         # Append missing as-is (status=0)
         batch_list: List[RankingData] = []
-        batch_list.extend(masked_or_observed)
+        batch_list.extend(masked_or_observed) # we must make sure the first segment of batch_list corresponds to references. So append masked_or_observed first.
         for var in train_missing_vars:
             if not var.is_missing and not var.is_masked and not var.is_observed:
                 # Defensive: enforce valid status
@@ -253,7 +253,7 @@ class ImputerTrainer:
         predictions_full = adapt_batched_logits_to_predictions({'rating': rating_logits, 'ranking': ranking_logits})
         # Only take predictions corresponding to supervised refs (the first segment of the batch)
         num_supervised = len(supervised_refs)
-        predictions = predictions_full[:num_supervised]
+        predictions = predictions_full[:num_supervised] # we must make sure the first segment of predictions corresponds to references.
         references = supervised_refs
 
         losses = self.loss_strategy.compute(predictions, references)
