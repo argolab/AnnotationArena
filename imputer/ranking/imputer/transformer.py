@@ -17,14 +17,41 @@ class NormLayer(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self, d_model: int, d_ff: int = 512, dropout: float = 0.1, output_dim: int = None):
+    def __init__(
+        self,
+        d_model: int,
+        d_ff: int = 512,
+        dropout: float = 0.1,
+        output_dim: int | None = None,
+        num_layers: int = 2,
+    ):
         super().__init__()
-        self.linear_1 = nn.Linear(d_model, d_ff)
-        self.dropout = nn.Dropout(dropout)
-        self.linear_2 = nn.Linear(d_ff, d_model if output_dim is None else output_dim)
+
+        # Build a deeper MLP with ReLU non-linearities.
+        # Structure: [d_model -> d_ff] + (num_layers-2) x [d_ff -> d_ff] + [d_ff -> out_dim]
+        out_dim = d_model if output_dim is None else output_dim
+        hidden_layers = max(1, num_layers - 1)
+
+        layers: list[nn.Module] = []
+
+        # First layer projects from input to hidden width
+        layers.append(nn.Linear(d_model, d_ff))
+        layers.append(nn.ReLU())
+        layers.append(nn.Dropout(p=dropout))
+
+        # Middle hidden layers (if any)
+        for _ in range(hidden_layers - 1):
+            layers.append(nn.Linear(d_ff, d_ff))
+            layers.append(nn.ReLU())
+            layers.append(nn.Dropout(p=dropout))
+
+        # Final projection to output dimension (no activation)
+        layers.append(nn.Linear(d_ff, out_dim))
+
+        self.net = nn.Sequential(*layers)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.linear_2(self.dropout(F.relu(self.linear_1(x))))
+        return self.net(x)
 
 
 class TransformerBlock(nn.Module):
@@ -64,7 +91,7 @@ class TransformerBlock(nn.Module):
         self.dropout_2 = nn.Dropout(dropout)
 
         # Full FFN on unified stream in model_dim space
-        self.ff = FeedForward(self.model_dim, dropout=dropout)
+        self.ff = FeedForward(self.model_dim, dropout=dropout, num_layers=4)
 
     def _multihead_attention(self, combined_x: torch.Tensor, batch_size: int, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
         H = self.attention_heads
