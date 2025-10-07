@@ -293,13 +293,34 @@ class ImputerTrainer:
               epochs: int = 10,
               call_callbacks_every: int = 1,
               save_checkpoints_every: int = 10,
-              verbose: bool = True):
-        """Simple training loop using the new API."""
+              verbose: bool = True,
+              mask_augmentations: int = 1):
+        """Simple training loop using the new API.
+
+        Args:
+            mask_augmentations: Number of different masking patterns to generate per epoch.
+                               If > 1, creates data augmentation by training on multiple random
+                               masking patterns per epoch. Default: 1 (no augmentation).
+        """
         training_history = []
         callback_history = []
 
         for epoch in tqdm(range(epochs)):
-            loss_dict = self.train_step(train_observed_vars, train_missing_vars, masking_rate)
+            # Train with multiple masking patterns per epoch (data augmentation)
+            epoch_losses = []
+            for aug_idx in range(mask_augmentations):
+                # Each augmentation generates a fresh random masking pattern
+                loss_dict = self.train_step(train_observed_vars, train_missing_vars, masking_rate)
+                epoch_losses.append(loss_dict)
+
+            # Average losses across augmentations for logging
+            if mask_augmentations > 1:
+                loss_dict = {
+                    key: sum(d[key] for d in epoch_losses) / mask_augmentations
+                    for key in epoch_losses[0].keys()
+                }
+            else:
+                loss_dict = epoch_losses[0]
 
             training_history.append({'epoch': epoch, **loss_dict})
 

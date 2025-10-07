@@ -85,6 +85,23 @@ def main():
     parser.add_argument("--full_random", action="store_true")
     parser.add_argument("--save-checkpoints", action="store_true", help="Save model checkpoints during training")
     parser.add_argument("--checkpoint-every", type=int, default=10, help="Save checkpoint every N epochs")
+
+    # Model architecture arguments
+    parser.add_argument("--encoder-layers", type=int, default=6, help="Number of transformer encoder layers (default: 6)")
+    parser.add_argument("--attention-heads", type=int, default=8, help="Number of attention heads (default: 8)")
+    parser.add_argument("--embedding-dim", type=int, default=128, help="Embedding dimension (default: 128)")
+    parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate (default: 0.1)")
+
+    # Loss weighting arguments
+    parser.add_argument("--masked-loss-weight", type=float, default=8.0, help="Weight for masked entry loss (default: 8.0)")
+    parser.add_argument("--observed-loss-weight", type=float, default=1.0, help="Weight for observed entry loss (default: 1.0)")
+
+    # Architectural improvements
+    parser.add_argument("--use-gelu-after-attention", action="store_true", help="Apply GeLU activation after attention (before residual)")
+    parser.add_argument("--use-final-norm", action="store_true", default=True, help="Apply final LayerNorm after all transformer blocks (default: True, recommended for Pre-LN)")
+    parser.add_argument("--no-final-norm", dest="use_final_norm", action="store_false", help="Disable final LayerNorm (not recommended)")
+    parser.add_argument("--mask-augmentations", type=int, default=1, help="Number of different masking patterns per epoch (default: 1, no augmentation)")
+
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -136,10 +153,13 @@ def main():
         num_likert_classes=sizes["num_likert_classes"],
         max_rank_size=args.max_rank_size,
         device=args.device,
-        encoder_layers_num=6,
-        attention_heads=8,
-        embedding_dim=128,
-        randomness=random
+        encoder_layers_num=args.encoder_layers,
+        attention_heads=args.attention_heads,
+        embedding_dim=args.embedding_dim,
+        dropout=args.dropout,
+        randomness=random,
+        use_gelu_after_attention=args.use_gelu_after_attention,
+        use_final_norm=args.use_final_norm
     )
 
     # Trainer
@@ -147,6 +167,8 @@ def main():
         model=model,
         learning_rate=args.lr,
         device=args.device,
+        masked_loss_weight=args.masked_loss_weight,
+        observed_loss_weight=args.observed_loss_weight,
         checkpoint_dir=None,  # Will be set later if checkpoints are enabled
         save_checkpoints=False,  # Will be set later if checkpoints are enabled
     )
@@ -196,14 +218,20 @@ def main():
             "encoder_layers_num": len(model.blocks),
             "attention_heads": model.blocks[0].attention_heads,
             "embedding_dim": model.embedding_dim,
+            "dropout": args.dropout,
             "embedding_type": "atom",
             "device": args.device,
-            "include_sign_bit_in_params": True
+            "include_sign_bit_in_params": True,
+            "use_gelu_after_attention": args.use_gelu_after_attention,
+            "use_final_norm": args.use_final_norm
         },
         "training": {
             "epochs": args.epochs,
             "lr": args.lr,
             "masking_rate": args.masking_rate,
+            "masked_loss_weight": args.masked_loss_weight,
+            "observed_loss_weight": args.observed_loss_weight,
+            "mask_augmentations": args.mask_augmentations,
             "transductive_learning": bool(args.transductive_learning),
             "full_random": bool(args.full_random),
             "save_checkpoints": bool(args.save_checkpoints),
@@ -235,6 +263,7 @@ def main():
         call_callbacks_every=1,
         save_checkpoints_every=args.checkpoint_every,
         verbose=True,
+        mask_augmentations=args.mask_augmentations,
     )
 
     running_time = time.time() - start_time

@@ -36,12 +36,13 @@ class TransformerBlock(nn.Module):
       Padded tokens neither attend to others nor contribute to outputs.
     """
 
-    def __init__(self, feature_dim: int, param_dim: int, attention_heads: int, dropout: float = 0.3):
+    def __init__(self, feature_dim: int, param_dim: int, attention_heads: int, dropout: float = 0.3, use_gelu_after_attention: bool = False):
         super().__init__()
         self.feature_dim = feature_dim
         self.param_dim = param_dim
         self.total_dim = feature_dim + param_dim
         self.attention_heads = attention_heads
+        self.use_gelu_after_attention = use_gelu_after_attention
 
         # Define an internal model dim that is a multiple of heads for MHAttention
         self.model_dim = int(math.ceil(self.total_dim / attention_heads) * attention_heads)
@@ -95,6 +96,11 @@ class TransformerBlock(nn.Module):
 
         z_norm = self.norm_1(z)  # pre-norm before attention
         attn_out = self._multihead_attention(z_norm, batch_size, attn_mask)
+
+        # Optional GeLU activation after attention (before residual)
+        if self.use_gelu_after_attention:
+            attn_out = F.gelu(attn_out)
+
         z = z + self.dropout_1(attn_out)
 
         z_ff_in = self.norm_2(z)  # pre-norm before feed-forward

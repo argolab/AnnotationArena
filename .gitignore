@@ -269,3 +269,5 @@ imputer/ranking/stan/outputs/
 
 imputer/ranking/imputer/ranking/OUTPUT
 imputer/ranking/logit_lens_new_debug/
+imputer/ranking/models/iclr_data_generation
+imputer/ranking/CODEBASE_REFERENCE_DOCUMENTATION.md

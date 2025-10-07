@@ -48,7 +48,9 @@ class MultiVariableImputer(nn.Module):
                  dropout=0.1,
                  embedding_type="atom",
                  device="cuda",
-                 randomness=True):
+                 randomness=True,
+                 use_gelu_after_attention=False,
+                 use_final_norm=True):
         super().__init__()
         self.device = torch.device(device)
         # Defer moving to device until after all submodules are created
@@ -59,6 +61,8 @@ class MultiVariableImputer(nn.Module):
         self.max_rank_size = max_rank_size
         self.embedding_dim = embedding_dim
         self.embedding_type = embedding_type  # Store embedding type for checkpoint saving
+        self.use_gelu_after_attention = use_gelu_after_attention
+        self.use_final_norm = use_final_norm
 
         if embedding_type == "pairwise":
             self.embedding_provider = PairwiseRankingProjectionEmbeddingProvider(
@@ -91,11 +95,15 @@ class MultiVariableImputer(nn.Module):
         # Use provider-declared parameter dimension (includes missing-status bit)
         param_dim = self.embedding_provider.parameter_dimension
         self.blocks = nn.ModuleList([
-            TransformerBlock(embedding_dim, param_dim, attention_heads, dropout)
+            TransformerBlock(embedding_dim, param_dim, attention_heads, dropout, use_gelu_after_attention)
             for _ in range(encoder_layers_num)
         ])
-        # Final normalization removed - no longer needed
-        # Output heads removed - no longer used
+
+        # Final normalization for Pre-LN architecture (CRITICAL for stability, but optional for experiments)
+        if use_final_norm:
+            self.final_norm = _NormLayer(param_dim)
+        else:
+            self.final_norm = None
 
         self.to(self.device)
 
@@ -130,11 +138,15 @@ class MultiVariableImputer(nn.Module):
         if return_intermediate:
             # Add embeddings as the first entry
             hidden_intermediates.append([features, params])
-        
+
         for block in self.blocks:
             features, params = block(features, params, attn_mask=attn_mask)
             if return_intermediate:
                 hidden_intermediates.append([features, params])
+
+        # Apply final normalization (critical for Pre-LN transformer stability)
+        if self.final_norm is not None:
+            params = self.final_norm(params)
 
         logits = {
             'rating': self.read_prediction_logits_from_param('rating', params),
