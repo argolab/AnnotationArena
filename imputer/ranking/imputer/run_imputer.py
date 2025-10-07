@@ -197,7 +197,7 @@ def main():
         train_vars += test_observed
     
     # Create the main run directory first (before training)
-    run_dir = new_run_dir(Path(args.output_root))
+    run_dir = new_run_dir(Path(args.output_root), run_name=f"run_{''.join(__import__('random').choices('abcdefghijklmnopqrstuvwxyz0123456789', k=6))}")
 
     # Save train configuration snapshot next to outputs
     train_config = {
