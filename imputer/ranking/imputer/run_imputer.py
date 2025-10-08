@@ -145,8 +145,32 @@ def main():
     train_missing = converter.create_variables_from_bundle(bundle, partition="train", status="missing")
     test_observed = converter.create_variables_from_bundle(bundle, partition="test", status="observed")
     test_missing = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
+
+    ##### SUPER EXP CHANGE
+    # EXPERIMENTAL: Convert all training missing to observed for fully observed training
+    # This allows us to artificially mask 50% of all training data
+    train_missing_as_observed = []
+    for var in train_missing:
+        # Create a copy with status=2 (observed) instead of status=0 (missing)
+        train_missing_as_observed.append(RankingData(
+            annotator_id=var.annotator_id,
+            attribute_id=var.attribute_id,
+            is_listwise=var.is_listwise,
+            item_ids=var.item_ids,
+            status=2,  # observed instead of missing
+            instance=var.instance,
+            rating_value=var.rating_value,
+            ranking_order=var.ranking_order,
+        ))
+
+    # Use the converted missing data as additional observed training data
+    train_observed_full = train_observed + train_missing_as_observed
     train_all: List[RankingData] = train_observed + train_missing
     test_all: List[RankingData] = test_observed + test_missing
+    
+    # train_all: List[RankingData] = train_observed + train_missing
+    # test_all: List[RankingData] = test_observed + test_missing
+
     if args.full_random:
         random = True
     else:
@@ -199,7 +223,7 @@ def main():
             name="train_all_evaluation",
         )
     )
-    train_vars = train_observed
+    train_vars = train_observed_full
     if args.transductive_learning:
         print("Using transductive learning")
         train_vars += test_observed
@@ -280,7 +304,7 @@ def main():
     # Train
     trainer.train(
         train_observed_vars=train_vars,
-        train_missing_vars=train_missing,
+        train_missing_vars=[],
         masking_rate=args.masking_rate,
         epochs=args.epochs,
         call_callbacks_every=1,

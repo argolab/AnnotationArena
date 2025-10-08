@@ -91,30 +91,30 @@ def prepare_stan_data_for_inference(
         observed_ratings = bundle.observed_ratings
         observed_pairwise = bundle.observed_pairwise
         K = config.K_train + config.K_test
-    
+
     # Convert ratings to Stan format
     N_ratings = len(observed_ratings)
     rating_attributes = [r["attribute"] for r in observed_ratings]
     rating_annotators = [r["annotator"] for r in observed_ratings]
     rating_items = [r["item"] for r in observed_ratings]
     rating_values = [r["value"] for r in observed_ratings]
-    
+
     # Convert pairwise rankings to Stan format
     N_pairwise_rankings = len(observed_pairwise)
     pairwise_ranking_attributes = [p["attribute"] for p in observed_pairwise]
     pairwise_ranking_annotators = [p["annotator"] for p in observed_pairwise]
     pairwise_ranking_items = [p["items"] for p in observed_pairwise]
     pairwise_ranking_orders = [p["order"][0] for p in observed_pairwise]  # 1 if item1 > item2, 2 if item2 > item1
-    
+
     # Prepare missing variables (all missing ratings and pairwise)
     missing_ratings = bundle.missing_ratings
     missing_pairwise = bundle.missing_pairwise
-    
+
     N_missing_ratings = len(missing_ratings)
     missing_rating_attributes = [r["attribute"] for r in missing_ratings]
     missing_rating_annotators = [r["annotator"] for r in missing_ratings]
     missing_rating_items = [r["item"] for r in missing_ratings]
-    
+
     N_missing_pairwise_rankings = len(missing_pairwise)
     missing_pairwise_ranking_attributes = [p["attribute"] for p in missing_pairwise]
     missing_pairwise_ranking_annotators = [p["annotator"] for p in missing_pairwise]

@@ -233,6 +233,7 @@ class ImputerTrainer:
                    train_missing_vars: List[RankingData],
                    masking_rate: float) -> Dict[str, float]:
         """Single training step: mask subset of observed, append missing, compute loss on non-missing only."""
+        self.model.train()
         self.optimizer.zero_grad()
 
         # Validate inputs
