@@ -34,12 +34,15 @@ def _sizes_from_configs(configs: Dict[str, Any]) -> Dict[str, int]:
 
 
 def _build_predictives(model: MultiVariableImputer, variables: List[RankingData]) -> Dict[str, Any]:
-    """Create a serializable predictions dict for the given variables."""
+    """Create a serializable predictions dict for the given variables with probability distributions."""
     model.eval()
     with torch.no_grad():
         out = model(variables)
         rating_logits = out["rating"]
         ranking_logits = out["ranking"]
+
+        # Compute probability distributions
+        rating_probs = torch.softmax(rating_logits[0], dim=-1).cpu().numpy()  # [N, num_classes]
 
         preds: List[Dict[str, Any]] = []
         for i, var in enumerate(variables):
@@ -52,16 +55,23 @@ def _build_predictives(model: MultiVariableImputer, variables: List[RankingData]
                 "instance": var.instance,
             }
             if not var.is_listwise:
+                # Add argmax prediction
                 entry["predicted_rating_class"] = int(torch.argmax(rating_logits[0, i]).item())
+                # Add full probability distribution
+                entry["rating_probabilities"] = rating_probs[i].tolist()
                 if var.rating_value is not None:
                     entry["true_rating_class"] = int(var.rating_value)
             else:
                 scores = ranking_logits[0, i].cpu().numpy()
+                # Add raw logits for ranking
+                entry["ranking_logits"] = scores.tolist()
                 if (var.ranking_order or []) and len(var.ranking_order) == 2:
                     import numpy as np
                     probs = np.exp(scores[:2]) / np.exp(scores[:2]).sum()
                     pred_first_wins = probs[0] > probs[1]
                     pred_ranking = [1, 2] if pred_first_wins else [2, 1]
+                    # Add pairwise probabilities
+                    entry["ranking_probabilities"] = probs.tolist()
                 else:
                     pred_ranking = var.ranking_order
                 entry["predicted_ranking"] = pred_ranking
@@ -307,7 +317,7 @@ def main():
 
     start_time = time.time()
     # Train
-    trainer.train(
+    training_results = trainer.train(
         train_observed_vars=train_vars,
         train_missing_vars=[],
         masking_rate=args.masking_rate,
@@ -322,6 +332,19 @@ def main():
 
     running_time = time.time() - start_time
     print(running_time)
+
+    # Save training history - separate test and train metrics
+    callback_history = training_results.get('callback_history', [])
+    test_history = [entry for entry in callback_history if entry.get('name') == 'test_all_evaluation']
+    train_history = [entry for entry in callback_history if entry.get('name') == 'train_all_evaluation']
+
+    with open(run_dir / "test_training_history.json", "w") as f:
+        json.dump(test_history, f, indent=2)
+
+    with open(run_dir / "train_training_history.json", "w") as f:
+        json.dump(train_history, f, indent=2)
+
+    print(f"Saved training history to {run_dir}")
 
     # Evaluate
     results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device)
