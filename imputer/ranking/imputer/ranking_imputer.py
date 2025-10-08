@@ -51,7 +51,8 @@ class MultiVariableImputer(nn.Module):
                  randomness=True,
                  use_gelu_after_attention=False,
                  use_final_norm=True,
-                 normalize_parameter=False):
+                 normalize_parameter=False,
+                 num_ffn_layers=4):
         super().__init__()
         self.device = torch.device(device)
         # Defer moving to device until after all submodules are created
@@ -64,6 +65,7 @@ class MultiVariableImputer(nn.Module):
         self.embedding_type = embedding_type  # Store embedding type for checkpoint saving
         self.use_gelu_after_attention = use_gelu_after_attention
         self.use_final_norm = use_final_norm
+        self.num_ffn_layers = num_ffn_layers
 
         if embedding_type == "pairwise":
             self.embedding_provider = PairwiseRankingProjectionEmbeddingProvider(
@@ -96,7 +98,7 @@ class MultiVariableImputer(nn.Module):
         # Use provider-declared parameter dimension (includes missing-status bit)
         param_dim = self.embedding_provider.parameter_dimension
         self.blocks = nn.ModuleList([
-            TransformerBlock(embedding_dim, param_dim, attention_heads, dropout, use_gelu_after_attention, normalize_parameter=normalize_parameter)
+            TransformerBlock(embedding_dim, param_dim, attention_heads, dropout, use_gelu_after_attention, normalize_parameter=normalize_parameter, num_ffn_layers=num_ffn_layers)
             for _ in range(encoder_layers_num)
         ])
 

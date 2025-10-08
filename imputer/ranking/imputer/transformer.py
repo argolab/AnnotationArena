@@ -63,7 +63,8 @@ class TransformerBlock(nn.Module):
       Padded tokens neither attend to others nor contribute to outputs.
     """
 
-    def __init__(self, feature_dim: int, param_dim: int, attention_heads: int, dropout: float = 0.3, use_gelu_after_attention: bool = False, normalize_parameter: bool = False):
+    def __init__(self, feature_dim: int, param_dim: int, attention_heads: int, dropout: float = 0.3, use_gelu_after_attention: bool = False, 
+                 normalize_parameter: bool = False, num_ffn_layers: int = 4):
         super().__init__()
         self.feature_dim = feature_dim
         self.param_dim = param_dim
@@ -71,6 +72,7 @@ class TransformerBlock(nn.Module):
         self.attention_heads = attention_heads
         self.use_gelu_after_attention = use_gelu_after_attention
         self.normalize_parameter = normalize_parameter
+        self.num_ffn_layers = num_ffn_layers
         # Define an internal model dim that is a multiple of heads for MHAttention
 
         if normalize_parameter:
@@ -98,7 +100,7 @@ class TransformerBlock(nn.Module):
         self.dropout_2 = nn.Dropout(dropout)
 
         # Full FFN on unified stream in model_dim space
-        self.ff = FeedForward(self.model_dim, dropout=dropout, num_layers=4)
+        self.ff = FeedForward(self.model_dim, dropout=dropout, num_layers=self.num_ffn_layers)
 
     def _multihead_attention(self, combined_x: torch.Tensor, batch_size: int, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
         H = self.attention_heads

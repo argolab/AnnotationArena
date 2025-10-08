@@ -92,6 +92,7 @@ def main():
     parser.add_argument("--attention-heads", type=int, default=8, help="Number of attention heads (default: 8)")
     parser.add_argument("--embedding-dim", type=int, default=128, help="Embedding dimension (default: 128)")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate (default: 0.1)")
+    parser.add_argument("--num_ffn_layers", type=int, default=4, help="FFN Layers")
 
     # Loss weighting arguments
     parser.add_argument("--masked-loss-weight", type=float, default=8.0, help="Weight for masked entry loss (default: 8.0)")
@@ -192,7 +193,8 @@ def main():
         randomness=random,
         use_gelu_after_attention=args.use_gelu_after_attention,
         use_final_norm=args.use_final_norm,
-        normalize_parameter=args.normalize_parameter
+        normalize_parameter=args.normalize_parameter,
+        num_ffn_layers=args.num_ffn_layers
     )
 
     # Trainer
