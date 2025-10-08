@@ -50,7 +50,8 @@ class MultiVariableImputer(nn.Module):
                  device="cuda",
                  randomness=True,
                  use_gelu_after_attention=False,
-                 use_final_norm=True):
+                 use_final_norm=True,
+                 normalize_parameter=False):
         super().__init__()
         self.device = torch.device(device)
         # Defer moving to device until after all submodules are created
@@ -95,7 +96,7 @@ class MultiVariableImputer(nn.Module):
         # Use provider-declared parameter dimension (includes missing-status bit)
         param_dim = self.embedding_provider.parameter_dimension
         self.blocks = nn.ModuleList([
-            TransformerBlock(embedding_dim, param_dim, attention_heads, dropout, use_gelu_after_attention)
+            TransformerBlock(embedding_dim, param_dim, attention_heads, dropout, use_gelu_after_attention, normalize_parameter=normalize_parameter)
             for _ in range(encoder_layers_num)
         ])
 
