@@ -6,10 +6,10 @@ from typing import Dict, Any, List
 import torch
 import time
 
-from data import DataConverter, RankingData
-from ranking_imputer import MultiVariableImputer
-from trainer import ImputerTrainer, EvaluationCallback
-from eval import EvaluationEngine
+from imputer.data import DataConverter, RankingData
+from imputer.ranking_imputer import MultiVariableImputer
+from imputer.trainer import ImputerTrainer, EvaluationCallback, EarlyStopping
+from imputer.eval import EvaluationEngine
 import sys
 sys.path.insert(0, "..")
 from stan.pipeline.bundle import GroundTruthBundle
@@ -103,6 +103,13 @@ def main():
     parser.add_argument("--no-final-norm", dest="use_final_norm", action="store_false", help="Disable final LayerNorm (not recommended)")
     parser.add_argument("--mask-augmentations", type=int, default=1, help="Number of different masking patterns per epoch (default: 1, no augmentation)")
     parser.add_argument("--normalize-parameter", action="store_true", default=False, help="Whether to apply norm to parameter")
+
+    # Early stopping arguments
+    parser.add_argument("--early-stopping", action="store_true", help="Enable early stopping based on test missing metrics")
+    parser.add_argument("--early-stopping-metric", type=str, default="loss", choices=["loss", "accuracy"], help="Metric to monitor for early stopping: 'loss' (rating_loss) or 'accuracy' (rating_accuracy) (default: loss)")
+    parser.add_argument("--early-stopping-patience", type=int, default=10, help="Number of epochs with no improvement before stopping (default: 10)")
+    parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4, help="Minimum change to qualify as improvement (default: 1e-4)")
+
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -238,6 +245,10 @@ def main():
             "full_random": bool(args.full_random),
             "save_checkpoints": bool(args.save_checkpoints),
             "checkpoint_every": args.checkpoint_every,
+            "early_stopping": bool(args.early_stopping),
+            "early_stopping_metric": args.early_stopping_metric if args.early_stopping else None,
+            "early_stopping_patience": args.early_stopping_patience if args.early_stopping else None,
+            "early_stopping_min_delta": args.early_stopping_min_delta if args.early_stopping else None,
         },
         "run": {
             "run_dir": str(run_dir)
@@ -254,7 +265,20 @@ def main():
         trainer.checkpoint_dir = checkpoint_dir
         trainer.save_checkpoints = True
         print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
-    
+
+    # Set up early stopping if enabled
+    early_stopping = None
+    if args.early_stopping:
+        mode = "min" if args.early_stopping_metric == "loss" else "max"
+        early_stopping = EarlyStopping(
+            patience=args.early_stopping_patience,
+            min_delta=args.early_stopping_min_delta,
+            mode=mode
+        )
+        print(f"Early stopping enabled:")
+        print(f"  Metric: test_missing_{args.early_stopping_metric}")
+        print(f"  Mode: {mode} (patience={args.early_stopping_patience}, min_delta={args.early_stopping_min_delta})")
+
     start_time = time.time()
     # Train
     trainer.train(
@@ -266,6 +290,8 @@ def main():
         save_checkpoints_every=args.checkpoint_every,
         verbose=True,
         mask_augmentations=args.mask_augmentations,
+        early_stopping=early_stopping,
+        early_stopping_metric=args.early_stopping_metric,
     )
 
     running_time = time.time() - start_time

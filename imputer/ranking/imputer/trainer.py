@@ -48,20 +48,39 @@ class EvaluationCallback:
 
 
 class EarlyStopping:
-    """Early stopping utility for training."""
+    """Early stopping utility for training.
 
-    def __init__(self, patience: int = 5, min_delta: float = 1e-4):
+    Supports both minimization (e.g., loss) and maximization (e.g., accuracy) modes.
+    """
+
+    def __init__(self, patience: int = 5, min_delta: float = 1e-4, mode: str = "min"):
+        """
+        Args:
+            patience: Number of epochs with no improvement before stopping
+            min_delta: Minimum change to qualify as improvement
+            mode: "min" for loss (lower is better), "max" for accuracy (higher is better)
+        """
         self.patience = patience
         self.min_delta = min_delta
-        self.best_loss = float('inf')
+        self.mode = mode
+
+        if mode == "min":
+            self.best_score = float('inf')
+            self.is_better = lambda current, best: current < best - self.min_delta
+        elif mode == "max":
+            self.best_score = float('-inf')
+            self.is_better = lambda current, best: current > best + self.min_delta
+        else:
+            raise ValueError(f"mode must be 'min' or 'max', got {mode}")
+
         self.epochs_without_improvement = 0
         self.best_model_state = None
         self.early_stopped = False
 
-    def should_stop(self, current_loss: float, model) -> bool:
+    def should_stop(self, current_score: float, model) -> bool:
         """Check if training should stop and save best model state."""
-        if current_loss < self.best_loss - self.min_delta:
-            self.best_loss = current_loss
+        if self.is_better(current_score, self.best_score):
+            self.best_score = current_score
             self.epochs_without_improvement = 0
             self.best_model_state = copy.deepcopy(model.state_dict())
             return False
@@ -294,13 +313,17 @@ class ImputerTrainer:
               call_callbacks_every: int = 1,
               save_checkpoints_every: int = 10,
               verbose: bool = True,
-              mask_augmentations: int = 1):
+              mask_augmentations: int = 1,
+              early_stopping: Optional[EarlyStopping] = None,
+              early_stopping_metric: str = "loss"):
         """Simple training loop using the new API.
 
         Args:
             mask_augmentations: Number of different masking patterns to generate per epoch.
                                If > 1, creates data augmentation by training on multiple random
                                masking patterns per epoch. Default: 1 (no augmentation).
+            early_stopping: EarlyStopping object for early termination based on validation metrics.
+            early_stopping_metric: Metric to monitor: "loss" (rating_loss) or "accuracy" (rating_accuracy).
         """
         training_history = []
         callback_history = []
@@ -335,6 +358,34 @@ class ImputerTrainer:
                     import json
                     print(json.dumps(callback_results, indent=2, sort_keys=True))
                     callback_history.extend(callback_results)
+
+                    # Early stopping based on test missing metrics
+                    if early_stopping is not None:
+                        # Look for test_all_evaluation callback results
+                        test_results = [r for r in callback_results if r.get('name') == 'test_all_evaluation']
+                        if test_results:
+                            missing_metrics = test_results[0].get('missing_metrics', {})
+
+                            # Extract the monitored metric
+                            if early_stopping_metric == "loss":
+                                metric_value = missing_metrics.get('rating_loss', float('inf'))
+                                metric_name = "missing_rating_loss"
+                            elif early_stopping_metric == "accuracy":
+                                metric_value = missing_metrics.get('rating_accuracy', 0.0)
+                                # Handle None case
+                                if metric_value is None:
+                                    metric_value = 0.0
+                                metric_name = "missing_rating_accuracy"
+                            else:
+                                raise ValueError(f"Unknown early_stopping_metric: {early_stopping_metric}")
+
+                            # Check if we should stop
+                            if early_stopping.should_stop(metric_value, self.model):
+                                print(f"\nEarly stopping triggered at epoch {epoch + 1}")
+                                print(f"Best {metric_name}: {early_stopping.best_score:.4f}")
+                                print(f"Restoring best model weights...")
+                                early_stopping.restore_best_model(self.model)
+                                break
 
             if verbose and (epoch + 1) % max(1, epochs // 10) == 0:
                 total_loss = loss_dict.get('total_loss', 0.0)
