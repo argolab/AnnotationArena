@@ -27,8 +27,8 @@ python imputer/run_imputer.py --data-dir /export/fs06/psingh54/StanExps/imputer/
 python imputer/run_imputer.py --data-dir /export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/generated_data/run_20251007_011136 --epochs 300 --device cuda \
  --masking-rate 0.50 --transductive_learning --masked-loss-weight 15 --observed-loss-weight 1 --no-final-norm --mask-augmentations 5 --lr 5e-4  --full_random
 
- python imputer/run_imputer.py --data-dir /export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/generated_data/run_20251007_011136 --epochs 300 --device cuda \
- --masking-rate 0.50 --masked-loss-weight 15 --observed-loss-weight 1 --no-final-norm --mask-augmentations 5 --lr 5e-4 --normalize-parameter --full_random
+python imputer/run_imputer.py --data-dir /export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/generated_data/run_20251007_011136 --epochs 300 --device cuda \
+ --masking-rate 0.50 --transductive_learning --masked-loss-weight 15 --observed-loss-weight 1 --no-final-norm --mask-augmentations 5 --lr 5e-4 --num_ffn_layers 8 --full_random
 
 python imputer/run_imputer.py --data-dir /export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/generated_data/run_20251007_011136 --epochs 300 --device cuda \
- --masking-rate 0.50 --masked-loss-weight 15 --observed-loss-weight 1 --no-final-norm --mask-augmentations 5 --lr 5e-4  --full_random
+ --masking-rate 0.50 --transductive_learning --masked-loss-weight 15 --observed-loss-weight 1 --no-final-norm --mask-augmentations 5 --lr 5e-4 --num_ffn_layers 2 --full_random
