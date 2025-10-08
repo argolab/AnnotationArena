@@ -6,10 +6,10 @@ from typing import Dict, Any, List
 import torch
 import time
 
-from imputer.data import DataConverter, RankingData
-from imputer.ranking_imputer import MultiVariableImputer
-from imputer.trainer import ImputerTrainer, EvaluationCallback
-from imputer.eval import EvaluationEngine
+from data import DataConverter, RankingData
+from ranking_imputer import MultiVariableImputer
+from trainer import ImputerTrainer, EvaluationCallback
+from eval import EvaluationEngine
 import sys
 sys.path.insert(0, "..")
 from stan.pipeline.bundle import GroundTruthBundle
@@ -78,13 +78,14 @@ def main():
     parser.add_argument("--output-root", default="OUTPUT/IMPUTER", help="Root output directory")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--masking-rate", type=float, default=0.15)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--max-rank-size", type=int, default=2)
     parser.add_argument("--transductive_learning", action="store_true")
     parser.add_argument("--full_random", action="store_true")
     parser.add_argument("--save-checkpoints", action="store_true", help="Save model checkpoints during training")
     parser.add_argument("--checkpoint-every", type=int, default=10, help="Save checkpoint every N epochs")
+    
 
     # Model architecture arguments
     parser.add_argument("--encoder-layers", type=int, default=6, help="Number of transformer encoder layers (default: 6)")
@@ -101,7 +102,7 @@ def main():
     parser.add_argument("--use-final-norm", action="store_true", default=True, help="Apply final LayerNorm after all transformer blocks (default: True, recommended for Pre-LN)")
     parser.add_argument("--no-final-norm", dest="use_final_norm", action="store_false", help="Disable final LayerNorm (not recommended)")
     parser.add_argument("--mask-augmentations", type=int, default=1, help="Number of different masking patterns per epoch (default: 1, no augmentation)")
-
+    parser.add_argument("--normalize-parameter", action="store_true", default=False, help="Whether to apply norm to parameter")
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -159,7 +160,8 @@ def main():
         dropout=args.dropout,
         randomness=random,
         use_gelu_after_attention=args.use_gelu_after_attention,
-        use_final_norm=args.use_final_norm
+        use_final_norm=args.use_final_norm,
+        normalize_parameter=args.normalize_parameter
     )
 
     # Trainer
