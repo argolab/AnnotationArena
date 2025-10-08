@@ -62,8 +62,10 @@ class TransformerBlock(nn.Module):
         self.K = nn.Linear(self.model_dim, self.model_dim)
         self.V = nn.Linear(self.model_dim, self.model_dim)
         self.out = nn.Linear(self.model_dim, self.model_dim)
-
-        self.norm_1 = NormLayer(self.feature_dim)
+        if normalize_parameter:
+            self.norm_1 = NormLayer(self.model_dim)
+        else:
+            self.norm_1 = NormLayer(self.feature_dim)
         self.norm_2 = NormLayer(self.model_dim)
         self.dropout_1 = nn.Dropout(dropout)
         self.dropout_2 = nn.Dropout(dropout)
