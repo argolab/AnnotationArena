@@ -51,7 +51,7 @@ class AnnotationArena:
         self.visible_ratio = 0.5
         self.masking_lambda = 0.5
         
-        #logger.info(f"AnnotationArena initialized with model: {type(model).__name__}")
+        logger.info(f"AnnotationArena initialized with model: {type(model).__name__}")
     
     def set_dataset(self, dataset):
         """
@@ -66,7 +66,7 @@ class AnnotationArena:
         self.dataset = dataset
         # CRITICAL: Provide dataset reference to the model
         self.model.set_dataset(dataset)
-        #logger.info(f"Dataset set with {len(dataset)} examples")
+        logger.info(f"Dataset set with {len(dataset)} examples")
         return True
     
     def set_dynamic_masking_params(self, num_patterns_per_example=5, visible_ratio=0.5, masking_lambda=0.1):
@@ -305,7 +305,7 @@ class AnnotationArena:
         logger.debug(f"Observed position {position} in example {example_idx}: {true_value}")
         return success
     
-    def train(self, training_type='basic', epochs=1, batch_size=8, lr=1e-4, revisit_examples=False):
+    def train(self, training_type='basic', epochs=1, batch_size=8, lr=1e-4, revisit_examples=False, alignment_scores=None, validation_gradient=None):
         """
         Train the model using the current prediction history.
         
@@ -375,6 +375,35 @@ class AnnotationArena:
                 lr=lr,
                 num_patterns_per_example=self.num_patterns_per_example,
                 visible_ratio=self.visible_ratio
+            )
+        elif training_type == 'dynamic_masking_new':
+            epoch_losses = self.model.train_on_examples_dynamic_masking_new(
+                examples_indices=examples_to_train,
+                epochs=epochs,
+                batch_size=batch_size,
+                lr=lr,
+                num_patterns_per_example=self.num_patterns_per_example,
+                visible_ratio=self.visible_ratio,
+                alignment_scores=alignment_scores
+            )
+        elif training_type == 'dynamic_masking_imputed':
+            epoch_losses = self.model.train_on_examples_dynamic_masking_imputed(
+                examples_indices=examples_to_train,
+                epochs=epochs,
+                batch_size=batch_size,
+                lr=lr,
+                num_patterns_per_example=self.num_patterns_per_example,
+                visible_ratio=self.visible_ratio
+            )
+        elif training_type == 'dynamic_masking_imputed_weights':
+            epoch_losses = self.model.train_on_examples_dynamic_masking_gradient_weighted(
+                examples_indices=examples_to_train,
+                epochs=epochs,
+                batch_size=batch_size,
+                lr=lr,
+                num_patterns_per_example=self.num_patterns_per_example,
+                visible_ratio=self.visible_ratio,
+                validation_gradient=validation_gradient
             )
         else:
             raise ValueError(f"Unknown training type: {training_type}")

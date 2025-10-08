@@ -1,0 +1,79 @@
+{
+  "data_config": {
+    "num_instances": 10,
+    "train_test_split": 0.8,
+    "K": 30,
+    "I": 7,
+    "J": 5,
+    "C": 5,
+    "D": 64,
+    "sigma_annotator": 0.00000001,
+    "sigma_measurement": 0.00000001,
+    "alpha_dirichlet": 2.0,
+    "temperature": 0.5,
+    "sigma_embedding_prior": 0.5,
+    "sigma_preference_prior": 0.5,
+    "max_pairs_per_tied_group": 10,
+    "min_group_size": 2,
+    "max_group_size": 6,
+    "rankings_per_annotator_attribute": 10
+  },
+  "model_config": {
+    "encoder_layers": 4,
+    "attention_heads": 8,
+    "embedding_dim": 64,
+    "dropout": 0.1,
+    "embedding_type": "pairwise",
+    "max_rank_size": 2,
+    "masked_loss_weight": 2.0,
+    "observed_loss_weight": 1.0
+  },
+  "pretraining_config": {
+    "strategy": "sequential",
+    "total_batches": 100,
+    "batch_size": 16,
+    "learning_rate": 1e-4,
+    "train_heldout_split": 0.8,
+    "eval_frequency": 1,
+    "masking_rates": [
+      0.5
+    ]
+  },
+  "finetuning_config": {
+    "finetuning_steps": 100,
+    "batch_size": 16,
+    "learning_rate": 1e-4,
+    "train_heldout_split": 0.8,
+    "eval_frequency": 1,
+    "test_masking_rate": 0.5,
+    "masking_rates": [
+      0.5
+    ]
+  },
+  "domain_config": {
+    "chains": 1,
+    "iter_warmup": 100,
+    "iter_sampling": 500,
+    "adapt_delta": 0.8,
+    "max_treedepth": 10,
+    "sample_counts": [
+      50,100
+    ]
+  },
+  "evaluation_config": {
+    "test_masking_rate": 0.5
+  },
+  "enabled_strategies": [
+    "Pretrained_Imputer",
+    "Pretrain_Finetuned_Imputer",
+    "Finetuned_Imputer",
+    "Domain_Model"
+  ],
+  "output_dir": "experiment_results",
+  "save_models": true,
+  "save_training_histories": true,
+  "log_wall_times": true,
+  "experiment_name": "long_exp",
+  "random_seed": 42,
+  "device": "cpu"
+}

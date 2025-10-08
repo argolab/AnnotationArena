@@ -6,7 +6,7 @@
 
 #SBATCH --job-name=ActiveLearner
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=12GB
+#SBATCH --mem-per-cpu=18GB
 #SBATCH --gpus=1
 #SBATCH --partition=gpu-a100
 #SBATCH --account=a100acct
@@ -17,4 +17,18 @@ module load cuda/12.1
 
 conda activate llm_rubric_env
 
-python src/analysis/post_rmse_analysis.py --model_path /export/fs06/psingh54/ActiveRubric-Internal/src/output/models/15_CYCLES_DM-3-0.5_50-Examples-5-Features_Comparision_gradient_voi_q0_human_20250625_141037.pth
+cd /export/fs06/psingh54/StanExps/imputer/ranking
+
+export PYTHONPATH=.
+
+python imputer/run_imputer.py --data-dir /export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/generated_data/run_20251007_011136 --epochs 300 --device cuda \
+ --masking-rate 0.50 --transductive_learning --masked-loss-weight 15 --observed-loss-weight 1 --no-final-norm --mask-augmentations 5 --lr 5e-4 --normalize-parameter --full_random
+
+python imputer/run_imputer.py --data-dir /export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/generated_data/run_20251007_011136 --epochs 300 --device cuda \
+ --masking-rate 0.50 --transductive_learning --masked-loss-weight 15 --observed-loss-weight 1 --no-final-norm --mask-augmentations 5 --lr 5e-4  --full_random
+
+python imputer/run_imputer.py --data-dir /export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/generated_data/run_20251007_011136 --epochs 300 --device cuda \
+ --masking-rate 0.50 --transductive_learning --masked-loss-weight 15 --observed-loss-weight 1 --no-final-norm --mask-augmentations 5 --lr 5e-4 --num_ffn_layers 8 --full_random
+
+python imputer/run_imputer.py --data-dir /export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/generated_data/run_20251007_011136 --epochs 300 --device cuda \
+ --masking-rate 0.50 --transductive_learning --masked-loss-weight 15 --observed-loss-weight 1 --no-final-norm --mask-augmentations 5 --lr 5e-4 --num_ffn_layers 2 --full_random

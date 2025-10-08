@@ -91,7 +91,7 @@ class ModelEvaluator:
     
     def evaluate_model(self, model, dataset: AnnotationDataset, dataset_name: str = "unknown", 
                       target_questions: Optional[List[int]] = None, split_type: str = "test", 
-                      compute_calibration: bool = True) -> Dict[str, Any]:
+                      compute_calibration: bool = False) -> Dict[str, Any]:
         """Comprehensive model evaluation on a dataset."""
         
         logger.info(f"Evaluating model on {dataset_name} {split_type} set ({len(dataset)} examples)")
@@ -139,7 +139,7 @@ class ModelEvaluator:
                         embeddings = torch.zeros(1, seq_len, 384).to(self.device)
                     
                     # Get model predictions
-                    outputs = model(inputs, annotators_tensor, questions_tensor, embeddings)
+                    outputs, _ = model(inputs, annotators_tensor, questions_tensor, embeddings)
                     
                     # Process each position
                     for pos in range(len(data_entry['questions'])):
@@ -162,10 +162,10 @@ class ModelEvaluator:
                             true_class = torch.argmax(torch.tensor(data_entry['answers'][pos])).item()
                         true_score = true_class + 1
                         
-                        # Store calibration data if requested and position is known
-                        if compute_calibration:
-                            all_pred_probs.append(pred_probs.cpu().numpy())
-                            all_true_labels.append(true_class)
+                        '''# Store calibration data if requested and position is known
+                        if compute_calibration and known_questions[pos].item() == 0:'''
+                        all_pred_probs.append(pred_probs.cpu().numpy())
+                        all_true_labels.append(true_class)
                         
                         # Compute loss
                         loss = F.cross_entropy(
@@ -284,7 +284,7 @@ class ModelEvaluator:
             feature_selection_type = 'voi'
             eval_target_questions = list(range(7))
 
-        eval_target_questions = experiment_config.get("target_questions", list(range(1, 7)))
+        eval_target_questions = list(range(7))
         
         logger.info(f"\n-- Evaluating model on {dataset_name} {split_type} set ({len(dataset)} examples) with {feature_selection_type} feature selection --")
         

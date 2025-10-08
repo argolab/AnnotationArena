@@ -27,7 +27,7 @@ from config import Config, ModelConfig, DefaultHyperparams
 from utils import AnnotationDataset, DataManager, compute_metrics, resample_validation_dataset, get_experiment_config
 from annotationArena import AnnotationArena
 # ABLATION CHANGE: Use ablation version of imputer
-from imputerExpandedAblation import ImputerEmbedding
+from imputer import ImputerEmbedding
 from selection import (
     SelectionFactory, 
     VOISelectionStrategy, 
@@ -55,8 +55,8 @@ np.random.seed(90)
 os.environ.update({"TRANSFORMERS_OFFLINE": "1", "HF_DATASETS_OFFLINE": "1", "HF_HUB_OFFLINE": "1"})
 
 # Change Based on Usage.
-model = SentenceTransformer("all-MiniLM-L6-v2")
-# model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
+#model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer('C:\\Users\\stone\\.cache\\huggingface\\hub\\models--sentence-transformers--all-MiniLM-L6-v2\\snapshots\\c9745ed1d9f207416be6d2e6f8de32d1f16199bf')
 
 def extract_embeddings_features(dataset_entries, model_name='all-MiniLM-L6-v2'):
     """Extract sentence transformer embeddings for K-centers algorithm."""
@@ -104,12 +104,12 @@ def extract_model_embeddings(dataset, example_indices, model, device):
         text_embeddings = torch.tensor(entry['text_embedding'], dtype=torch.float32).unsqueeze(0).to(device)
         
         with torch.no_grad():
-            feature_x, param_x = model.encoder.position_encoder(inputs, annotators, questions, text_embeddings)
+            feature_x, param_x, query_x = model.encoder.position_encoder(inputs, annotators, questions, text_embeddings)
             
             mask = inputs[:, :, 0]
             
             for layer in model.encoder.layers:
-                feature_x, param_x = layer(feature_x, param_x, questions, mask)
+                feature_x, param_x, query_x = layer(feature_x, param_x, query_x, questions, mask)
                 
             embedding = feature_x.mean(dim=1).squeeze().cpu().numpy()
             embeddings.append(embedding)
@@ -345,7 +345,7 @@ def run_enhanced_experiment(
             total_features_needed = examples_per_cycle * features_per_example
             num_variables_to_request = min(total_features_needed * 3, len(active_subset) * 10)
 
-            selected_variables, scores = variable_selector.select_examples(
+            selected_variables, scores, alignment_scores, validation_gradient = variable_selector.select_examples( #potential change: use alignment score as supervision for weight
                 active_subset_dataset,
                 num_to_select=num_variables_to_request,
                 val_dataset=dataset_val,
@@ -519,7 +519,7 @@ def run_enhanced_experiment(
             arena.set_dynamic_masking_params(num_patterns_per_example, visible_ratio)
         
         logger.info(f"Training model for {epochs_per_cycle} epochs...")
-        arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, training_type=training_type)
+        arena.train(epochs=epochs_per_cycle, batch_size=batch_size, lr=lr, training_type=training_type, alignment_scores=alignment_scores, validation_gradient=validation_gradient)
 
         # NEW: Export pattern logs every 5 cycles
         if cycle_count % 3 == 0 and config:
@@ -703,7 +703,7 @@ def main():
                        help="Size of active subset selected by K-centers each cycle")
     parser.add_argument("--validation_set_size", type=int, default=DefaultHyperparams.VALIDATION_SET_SIZE, 
                        help="Fixed size for validation set")
-    parser.add_argument("--train_option", choices=['basic', 'random_masking', 'dynamic_masking'], 
+    parser.add_argument("--train_option", choices=['basic', 'random_masking', 'dynamic_masking', 'dynamic_masking_new'], 
                        default=DefaultHyperparams.TRAIN_OPTION,
                        help="Type of Training to Use - basic / random_masking / dynamic masking")
     parser.add_argument("--gradient_top_only", type=bool, default=DefaultHyperparams.GRADIENT_TOP_ONLY, 
@@ -785,13 +785,7 @@ def main():
     experiments_to_run = []
     if args.experiment == "ablation_all":
         experiments_to_run = [
-            "var_grad_base_training", 
-            "var_grad_random_masking",
-            "var_grad_dynamic_masking",
-            "var_grad_dynamic_masking_hist_only",
-            "var_grad_dynamic_masking_inf_only",
-            "var_grad_dynamic_masking_70_30",
-            "var_grad_dynamic_masking_30_70"
+            "var_grad_dynamic_masking_hist_only"
         ]
     elif args.experiment == "ablation_comparison":
         experiments_to_run = [
@@ -852,6 +846,9 @@ def main():
             elif experiment == "var_grad_dynamic_masking_30_70":
                 model_copy.historical_weight = 0.7
                 model_copy.influence_weight = 0.3
+            elif experiment == "var_grad_dynamic_masking_50_50":
+                model_copy.historical_weight = 0.5
+                model_copy.influence_weight = 0.5
             else:
                 model_copy.historical_weight = args.historical_weight
                 model_copy.influence_weight = args.influence_weight
@@ -936,18 +933,47 @@ def main():
                 example_strategy="combine", feature_strategy="gradient", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
                 loss_type=args.loss_type,
-                training_type='dynamic_masking_simple',
+                training_type='dynamic_masking',
                 **common_kwargs
             )
 
         elif experiment in ["var_grad_dynamic_masking_hist_only", "var_grad_dynamic_masking_inf_only", 
-                          "var_grad_dynamic_masking_70_30", "var_grad_dynamic_masking_30_70"]:
+                          "var_grad_dynamic_masking_70_30", "var_grad_dynamic_masking_30_70", "var_grad_dynamic_masking_50_50"]:
             results = run_enhanced_experiment(
                 active_pool_dataset, val_dataset, test_dataset,
                 example_strategy="combine", feature_strategy="gradient", model=model_copy,
                 observe_all_features=False, features_per_example=args.features_per_example,
                 loss_type=args.loss_type,
                 training_type='dynamic_masking',
+                **common_kwargs
+            )
+        
+        elif experiment == "var_grad_weight_loss":
+            results = run_enhanced_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="combine", feature_strategy="gradient", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                loss_type=args.loss_type,
+                training_type='dynamic_masking_new',
+                **common_kwargs
+            )
+        elif experiment == "var_grad_imputed_loss":
+            results = run_enhanced_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="combine", feature_strategy="gradient", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                loss_type=args.loss_type,
+                training_type='dynamic_masking_imputed',
+                **common_kwargs
+            )
+
+        elif experiment == "var_grad_imputed_weights":
+            results = run_enhanced_experiment(
+                active_pool_dataset, val_dataset, test_dataset,
+                example_strategy="combine", feature_strategy="gradient", model=model_copy,
+                observe_all_features=False, features_per_example=args.features_per_example,
+                loss_type=args.loss_type,
+                training_type='dynamic_masking_imputed_weights',
                 **common_kwargs
             )
 

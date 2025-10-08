@@ -6,7 +6,7 @@
 
 #SBATCH --job-name=ActiveLearner
 #SBATCH --nodes=1
-#SBATCH --mem-per-cpu=12GB
+#SBATCH --mem-per-cpu=18GB
 #SBATCH --gpus=1
 #SBATCH --partition=gpu-a100
 #SBATCH --account=a100acct
@@ -17,30 +17,16 @@ module load cuda/12.1
 
 conda activate llm_rubric_env
 
-wandb login
+cd /export/fs06/psingh54/StanExps/imputer/ranking
 
-python /export/fs06/psingh54/ActiveRubric-Internal/src/ablationRunner.py \
-    --examples_per_cycle 50 \
-    --experiment ablation_all \
-    --loss_type cross_entropy \
-    --resample_validation \
-    --dataset hanna \
-    --runner prabhav \
-    --use_embedding True \
-    --cold_start True \
-    --cycles 6 \
-    --validation_set_size 50 \
-    --active_set_size 100 \
-    --epochs_per_cycle 10 \
-    --train_option dynamic_masking \
-    --gradient_top_only True \
-    --num_patterns_per_example 3 \
-    --visible_ratio 0.5 \
-    --features_per_example 5 \
-    --historical_weight 0.3 \
-    --influence_weight 0.7 \
-    --experiment_name AblationStudy_VarGrad_3Patterns_0.5_Ratio \
-    --log_level INFO \
-    --use_wandb \
-    --wandb_project active-learning-hanna \
-    --wandb_entity prabhavsingh55221-johns-hopkins-university
+export PYTHONPATH=.
+
+# NORMALIZE, 4 FFN
+python imputer/run_imputer.py --data-dir /export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/generated_data/run_20251007_011136 --epochs 300 --device cuda \
+ --masking-rate 0.50 --transductive_learning --masked-loss-weight 15 --observed-loss-weight 1 --no-final-norm --mask-augmentations 5 --lr 5e-4 --normalize-parameter
+
+python imputer/run_imputer.py --data-dir /export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/generated_data/run_20251007_011136 --epochs 300 --device cuda \
+ --masking-rate 0.50 --transductive_learning --masked-loss-weight 15 --observed-loss-weight 1 --no-final-norm --mask-augmentations 5 --lr 5e-4 --num_ffn_layers 8 --normalize-parameter
+
+python imputer/run_imputer.py --data-dir /export/fs06/psingh54/StanExps/imputer/ranking/OUTPUT/generated_data/run_20251007_011136 --epochs 300 --device cuda \
+ --masking-rate 0.50 --transductive_learning --masked-loss-weight 15 --observed-loss-weight 1 --no-final-norm --mask-augmentations 5 --lr 5e-4 --num_ffn_layers 2 --normalize-parameter

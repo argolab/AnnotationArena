@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Integrated script for Human Q0 evaluation workflow with position-specific statistical significance testing.
-For each position selection, dynamically computes calibration data from the same observed positions.
+Integrated script for Human Q0 evaluation workflow with prediction confidence interval-based stopping.
+For each position selection, dynamically computes calibration data from prediction errors on the same observed positions.
 """
 
 import os
@@ -36,11 +36,11 @@ def save_cache_to_disk(cache_file_path: str):
         # Convert frozenset keys to tuples for JSON serialization compatibility
         serializable_cache = {}
         for key, value in _calibration_cache.items():
-            if isinstance(key, tuple) and len(key) == 3:
-                observed_positions, next_position, target_question = key
+            if isinstance(key, tuple) and len(key) == 2:
+                observed_positions, target_question = key
                 # Convert frozenset to sorted tuple
                 if isinstance(observed_positions, frozenset):
-                    serializable_key = (tuple(sorted(observed_positions)), next_position, target_question)
+                    serializable_key = (tuple(sorted(observed_positions)), target_question)
                 else:
                     serializable_key = key
                 serializable_cache[serializable_key] = value
@@ -78,10 +78,10 @@ def load_cache_from_disk(cache_file_path: str) -> bool:
         # Convert back to frozenset keys
         _calibration_cache = {}
         for key, value in loaded_cache.items():
-            if isinstance(key, tuple) and len(key) == 3:
-                observed_positions_tuple, next_position, target_question = key
+            if isinstance(key, tuple) and len(key) == 2:
+                observed_positions_tuple, target_question = key
                 # Convert tuple back to frozenset
-                frozenset_key = (frozenset(observed_positions_tuple), next_position, target_question)
+                frozenset_key = (frozenset(observed_positions_tuple), target_question)
                 _calibration_cache[frozenset_key] = value
             else:
                 _calibration_cache[key] = value
@@ -103,45 +103,44 @@ def clear_cache():
 # Global cache for dynamic calibration computations
 _calibration_cache = {}
 
-def compute_voi_p_value(predicted_voi: float, observed_positions: Set[int], 
-                       next_position: int, model, calibration_dataset, 
-                       target_question: int, device: str) -> Tuple[float, int]:
+def compute_prediction_confidence_interval(observed_positions: Set[int], 
+                                         model, calibration_dataset, 
+                                         target_question: int, device: str,
+                                         confidence_level: float = 0.95) -> Tuple[float, float, int]:
     """
-    Compute p-value for VOI prediction using dynamically computed position-specific calibration data.
+    Compute prediction confidence interval using dynamically computed position-specific calibration data.
     
     Args:
-        predicted_voi: The VOI prediction to test
         observed_positions: Set of positions already observed
-        next_position: The position being considered
         model: The model
         calibration_dataset: The calibration dataset
         target_question: Target question index
         device: Device for computation
+        confidence_level: Confidence level for the interval (default 0.95)
     
     Returns:
-        Tuple of (p_value, sample_size)
+        Tuple of (interval_width, mean_error, sample_size)
     """
     global _calibration_cache
     
-    # Create cache key
-    cache_key = (frozenset(observed_positions), next_position, target_question)
+    # Create cache key (no longer need next_position since we're looking at current prediction)
+    cache_key = (frozenset(observed_positions), target_question)
     
     # Check if we already computed calibration data for this configuration
     if cache_key in _calibration_cache:
-        calibration_errors = _calibration_cache[cache_key]
+        prediction_errors = _calibration_cache[cache_key]
     else:
         # Dynamically compute calibration data
-        calibration_errors = []
+        prediction_errors = []
         
-        logger.debug(f"Computing calibration for observed={observed_positions}, next={next_position}")
+        logger.debug(f"Computing calibration for observed={observed_positions}, target_q={target_question}")
         
         # Process each example in calibration dataset
-        for cal_example_idx in tqdm(range(len(calibration_dataset))):
+        for cal_example_idx in tqdm(range(len(calibration_dataset)), desc="Computing calibration"):
             # Create fresh copy for this calibration example
             cal_dataset_copy = copy.deepcopy(calibration_dataset)
             cal_arena = AnnotationArena(model, device)
             cal_arena.set_dataset(cal_dataset_copy)
-            cal_feature_selector = SelectionFactory.create_feature_strategy('voi', model, device)
             
             # Step 1: Observe all the positions in observed_positions for this calibration example
             valid_example = True
@@ -159,101 +158,99 @@ def compute_voi_p_value(predicted_voi: float, observed_positions: Set[int],
                     break
             
             if not valid_example:
-                print("here")
                 continue
                 
-            # Step 2: Check if next_position is available and valid
-            cal_data_entry = cal_dataset_copy.get_data_entry(cal_example_idx)
-            if next_position >= len(cal_data_entry['questions']):
+            # Step 2: Get current prediction for target question
+            try:
+                cal_data_entry = cal_dataset_copy.get_data_entry(cal_example_idx)
+                known_questions, inputs, answers, annotators, questions, embeddings = cal_dataset_copy[cal_example_idx]
+                
+                inputs = inputs.unsqueeze(0).to(device)
+                annotators_tensor = annotators.unsqueeze(0).to(device)
+                questions_tensor = questions.unsqueeze(0).to(device)
+                
+                if embeddings is not None:
+                    embeddings = embeddings.unsqueeze(0).to(device)
+                else:
+                    seq_len = inputs.shape[1]
+                    embeddings = torch.zeros(1, seq_len, 384).to(device)
+                
+                with torch.no_grad():
+                    outputs = model(inputs, annotators_tensor, questions_tensor, embeddings)
+                    
+                    # Get prediction for target question
+                    pred_probs = F.softmax(outputs[0, target_question], dim=0)
+                    pred_class = 1 * pred_probs[0] + 2 * pred_probs[1] + 3 * pred_probs[2] + 4 * pred_probs[3] + 5 * pred_probs[4]
+                    pred_score = pred_class.cpu().item()
+                    
+                    # Get true label for target question
+                    if 'true_answers' in cal_data_entry and cal_data_entry['true_answers']:
+                        true_class = torch.argmax(torch.tensor(cal_data_entry['true_answers'][target_question])).item()
+                    else:
+                        true_class = torch.argmax(torch.tensor(cal_data_entry['answers'][target_question])).item()
+                    true_score = true_class + 1
+                    
+                    # Compute prediction error
+                    prediction_error = pred_score - true_score
+                    prediction_errors.append(prediction_error)
+                    
+            except Exception as e:
+                logger.debug(f"Error processing calibration example {cal_example_idx}: {e}")
                 continue
-                
-            # Check if next_position would be selected by VOI
-            current_voi_ranking = cal_feature_selector.select_features(
-                cal_example_idx, cal_dataset_copy,
-                num_to_select=14 - len(observed_positions),
-                loss_type="cross_entropy",
-                target_questions=[0]
-            )
-            
-            if not current_voi_ranking:
-                print("VOI error")
-                continue
-                
-            # Find next_position in the ranking and get its VOI
-            position_voi = None
-            for feature_info in current_voi_ranking:
-                if feature_info[0] == next_position:
-                    position_voi = feature_info[1]
-                    break
-            
-            if position_voi is None:
-                continue  # next_position not in VOI ranking
-                
-            # Step 3: Compute actual loss reduction for next_position
-            # Get loss before observing next_position
-            loss_before = compute_example_loss(model, cal_dataset_copy, cal_example_idx, target_question, device)
-            
-            # Observe next_position
-            success = cal_arena.observe_position(cal_example_idx, next_position)
-            if not success:
-                continue
-                
-            # Get loss after observing next_position
-            loss_after = compute_example_loss(model, cal_dataset_copy, cal_example_idx, target_question, device)
-            actual_loss_reduction = loss_before - loss_after
-            
-            # Step 4: Compute non-conformity score
-            non_conformity_score = position_voi - actual_loss_reduction
-            calibration_errors.append(non_conformity_score)
         
         # Cache the result
-        _calibration_cache[cache_key] = calibration_errors
-        logger.debug(f"Cached {len(calibration_errors)} calibration errors for key {cache_key}")
+        _calibration_cache[cache_key] = prediction_errors
+        logger.debug(f"Cached {len(prediction_errors)} prediction errors for key {cache_key}")
+        save_cache_to_disk("cache1.pik")
+    
+    if len(prediction_errors) == 0:
+        return float('inf'), 0.0, 0
+    
+    # Compute confidence interval using empirical percentiles
+    errors = np.array(prediction_errors)
+    mean_error = np.mean(errors)
+    
+    # Calculate confidence interval using empirical percentiles
+    alpha = 1 - confidence_level
+    n = len(errors)
+    
+    if n < 2:
+        return float('inf'), mean_error, n
+    
+    # Compute empirical percentiles
+    lower_percentile = (alpha / 2) * 100
+    upper_percentile = (1 - alpha / 2) * 100
+    
+    lower_bound = np.percentile(errors, lower_percentile)
+    upper_bound = np.percentile(errors, upper_percentile)
+    
+    interval_width = upper_bound - lower_bound
+    
+    return interval_width, mean_error, n
 
-        save_cache_to_disk("cache.pik")
-    
-    if len(calibration_errors) == 0:
-        return 1.0, 0
-    
-    # Perform statistical test
-    # One-sample t-test: H0: predicted_voi = 0 vs H1: predicted_voi != 0
-    # We test if the predicted VOI is significantly different from the distribution of errors
-    
-    errors = np.array(calibration_errors)
-    
-    # Test if predicted_voi is significantly different from the mean of calibration errors
-    # H0: predicted_voi is drawn from the same distribution as calibration errors
-    # H1: predicted_voi is significantly different
-
-    if predicted_voi > 0:
-        more_extreme = np.sum(errors >= predicted_voi) / 120
-        p_value = more_extreme
-    else:
-        p_value = np.sum(errors <= predicted_voi) / 120
-    
-    return p_value, len(calibration_errors)
-
-def evaluate_human_q0_workflow_with_statistical_stopping(model, dataset, calibration_dataset,
-                                                        dataset_name: str = "unknown", 
-                                                        split_type: str = "test",
-                                                        target_question: int = 7,
-                                                        significance_level: float = 0.05,
-                                                        min_selections_before_stop: int = 3,
-                                                        min_calibration_samples: int = 5,
-                                                        device: str = "cuda") -> Dict[str, Any]:
+def evaluate_human_q0_workflow_with_confidence_intervals(model, dataset, calibration_dataset,
+                                                       dataset_name: str = "unknown", 
+                                                       split_type: str = "test",
+                                                       target_question: int = 7,
+                                                       max_interval_width: float = 0.5,
+                                                       min_selections_before_stop: int = 3,
+                                                       min_calibration_samples: int = 5,
+                                                       confidence_level: float = 0.95,
+                                                       device: str = "cuda") -> Dict[str, Any]:
     """
-    Evaluate model with statistical significance-based stopping decisions using dynamic calibration.
+    Evaluate model with confidence interval-based stopping decisions using dynamic calibration.
     
     Args:
         model: The model to evaluate
         dataset: The dataset to evaluate on
-        calibration_dataset: The calibration dataset for computing p-values
+        calibration_dataset: The calibration dataset for computing confidence intervals
         dataset_name: Name of the dataset
         split_type: Type of split (test, val, etc.)
         target_question: Target question index
-        significance_level: P-value threshold for stopping (default 0.05)
+        max_interval_width: Maximum allowed confidence interval width for stopping
         min_selections_before_stop: Minimum number of selections before considering stopping
-        min_calibration_samples: Minimum calibration samples required for reliable p-value
+        min_calibration_samples: Minimum calibration samples required for reliable interval
+        confidence_level: Confidence level for intervals (default 0.95)
         device: Device to run evaluation on
     
     Returns:
@@ -261,13 +258,14 @@ def evaluate_human_q0_workflow_with_statistical_stopping(model, dataset, calibra
     """
     
     logger.info(f"\n{'='*60}")
-    logger.info(f"Human Q0 Evaluation with Dynamic Statistical Stopping")
+    logger.info(f"Human Q0 Evaluation with Confidence Interval-Based Stopping")
     logger.info(f"Dataset: {dataset_name} ({split_type})")
     logger.info(f"Calibration dataset size: {len(calibration_dataset)}")
     logger.info(f"Target question: {target_question}")
-    logger.info(f"Significance level: {significance_level}")
+    logger.info(f"Max interval width: {max_interval_width}")
     logger.info(f"Min selections before stop: {min_selections_before_stop}")
     logger.info(f"Min calibration samples: {min_calibration_samples}")
+    logger.info(f"Confidence level: {confidence_level}")
     logger.info(f"{'='*60}")
     
     model.eval()
@@ -282,14 +280,15 @@ def evaluate_human_q0_workflow_with_statistical_stopping(model, dataset, calibra
         'dataset_name': dataset_name,
         'split_type': split_type,
         'target_question': target_question,
-        'significance_level': significance_level,
+        'max_interval_width': max_interval_width,
         'min_selections_before_stop': min_selections_before_stop,
         'min_calibration_samples': min_calibration_samples,
+        'confidence_level': confidence_level,
         'individual_phase': {
             'per_example_results': {},
             'total_features_selected': 0,
             'early_stop_count': 0,
-            'statistical_stops': 0,
+            'interval_width_stops': 0,
             'insufficient_calibration_stops': 0,
             'final_rmse': None
         }
@@ -298,14 +297,17 @@ def evaluate_human_q0_workflow_with_statistical_stopping(model, dataset, calibra
     # Get initial RMSE
     initial_rmse, initial_smece = evaluate_model_q0_only(model, dataset, target_question, device)
     logger.info(f"Initial Q{target_question} RMSE: {initial_rmse:.4f}")
-    if os.path.exists("cache.pik"):
-        load_cache_from_disk("cache.pik")
+    if os.path.exists("cache1.pik"):
+        load_cache_from_disk("cache1.pik")
+    
     # =================================================================
     # PHASE 1: INDIVIDUAL EXAMPLE STOPPING DECISIONS
     # =================================================================
     logger.info(f"\n=== Phase 1: Individual Example Processing ===")
     
     for example_idx in tqdm(range(len(dataset)), desc="Processing examples"):
+        if example_idx == 100:
+            break
         # Create fresh copy for this example
         dataset_copy = copy.deepcopy(dataset)
         arena = AnnotationArena(model, device)
@@ -315,7 +317,8 @@ def evaluate_human_q0_workflow_with_statistical_stopping(model, dataset, calibra
         # Initialize per-example tracking
         example_results = {
             'voi_scores': [],
-            'p_values': [],
+            'interval_widths': [],
+            'mean_errors': [],
             'calibration_sample_sizes': [],
             'selected_positions': [],
             'observed_positions_history': [],
@@ -352,7 +355,6 @@ def evaluate_human_q0_workflow_with_statistical_stopping(model, dataset, calibra
                 question_idx = data_entry['questions'][pos]
                 annotator_idx = data_entry['annotators'][pos]
                 
-                
                 # Skip human Q0 unless it's the only remaining feature
                 if question_idx == target_question and annotator_idx != -1 and features_selected < 13:
                     continue
@@ -368,32 +370,36 @@ def evaluate_human_q0_workflow_with_statistical_stopping(model, dataset, calibra
             top_feature = filtered_ranking[0]
             next_position, voi_score = top_feature[0], top_feature[1]
             
-            # Compute p-value using dynamic calibration
-            p_value, calibration_size = compute_voi_p_value(
-                voi_score, observed_positions, next_position, 
-                model, calibration_dataset, target_question, device
+            # Compute confidence interval using dynamic calibration
+            interval_width, mean_error, calibration_size = compute_prediction_confidence_interval(
+                observed_positions, model, calibration_dataset, target_question, device, confidence_level
             )
             
             # Store results
             example_results['voi_scores'].append(voi_score)
-            example_results['p_values'].append(p_value)
+            example_results['interval_widths'].append(interval_width)
+            example_results['mean_errors'].append(mean_error)
             example_results['calibration_sample_sizes'].append(calibration_size)
             example_results['observed_positions_history'].append(list(observed_positions))
             
             logger.info(f"Example {example_idx}, Step {features_selected}: "
-                        f"VOI={voi_score:.4f}, p={p_value:.4f}, "
+                        f"VOI={voi_score:.4f}, interval_width={interval_width:.4f}, "
                         f"cal_size={calibration_size}")
             
             # Check stopping conditions after minimum selections
             if features_selected >= min_selections_before_stop:
+                # Check if we have enough calibration samples
+                if calibration_size < min_calibration_samples:
+                    logger.debug(f"  ⚠️  Insufficient calibration samples ({calibration_size} < {min_calibration_samples})")
+                    workflow_results['individual_phase']['insufficient_calibration_stops'] += 1
                 
-                # Check statistical significance
-                if (p_value > significance_level and voi_score > 0) or (p_value < significance_level and voi_score < 0):
-                    # VOI is not statistically significant, stop
+                # Check confidence interval width
+                elif interval_width <= max_interval_width:
+                    # Prediction is sufficiently confident, stop
                     example_results['stopped_early'] = True
-                    example_results['stop_reason'] = "not_statistically_significant"
-                    workflow_results['individual_phase']['statistical_stops'] += 1
-                    logger.debug(f"  🛑 Stopping: not significant (p={p_value:.4f} > {significance_level})")
+                    example_results['stop_reason'] = "confident_prediction"
+                    workflow_results['individual_phase']['interval_width_stops'] += 1
+                    logger.debug(f"  🛑 Stopping: confident prediction (width={interval_width:.4f} <= {max_interval_width})")
                     break
             
             # Select and observe the feature
@@ -434,11 +440,114 @@ def evaluate_human_q0_workflow_with_statistical_stopping(model, dataset, calibra
     logger.info(f"\n=== Results Summary ===")
     logger.info(f"Average features per example: {avg_features:.2f}")
     logger.info(f"Early stops: {workflow_results['individual_phase']['early_stop_count']}/{total_examples}")
-    logger.info(f"Statistical stops: {workflow_results['individual_phase']['statistical_stops']}")
+    logger.info(f"Interval width stops: {workflow_results['individual_phase']['interval_width_stops']}")
     logger.info(f"Insufficient calibration stops: {workflow_results['individual_phase']['insufficient_calibration_stops']}")
     logger.info(f"Final RMSE: {final_rmse:.4f}")
     logger.info(f"Final smECE: {final_smece:.4f}")
     logger.info(f"Cache entries created: {len(_calibration_cache)}")
+    plot_features_histogram(workflow_results)
+
+    # Additional evaluation for comparison
+    experiment_config = {"feature_selection_strategy": "voi", "target_questions": [0]}
+    
+    # Extract configuration from experiment_config
+    if experiment_config:
+        feature_selection_type = experiment_config.get('feature_selection_strategy', 'voi')
+    else:
+        feature_selection_type = 'voi'
+        eval_target_questions = list(range(7))
+
+    eval_target_questions = experiment_config.get("target_questions", list(range(1, 7)))
+    
+    logger.info(f"\n-- Evaluating model on {dataset_name} {split_type} set ({len(dataset)} examples) with {feature_selection_type} feature selection --")
+    
+    all_results = []
+    model.eval()
+    
+    # Create deep copy of dataset to avoid state persistence between cycles
+    dataset_copy = copy.deepcopy(dataset)
+    
+    # Initialize arena and feature selector
+    arena = AnnotationArena(model, "cuda")
+    arena.set_dataset(dataset_copy)
+    feature_selector = SelectionFactory.create_feature_strategy(feature_selection_type, model, "cuda")
+    
+    # Initialize metrics tracking
+    metrics_trends = {
+        'rmse': [],
+        'pearson': [],
+        'spearman': [],
+        'kendall': [],
+        'accuracy': [],
+        'mae': [],
+        'avg_expected_loss': [],
+        'smECE_overall': [],
+        'smECE_class_0': [],
+        'smECE_class_1': [],
+        'smECE_class_2': [],
+        'smECE_class_3': [],
+        'smECE_class_4': []
+    }
+    
+    # Count total features across all examples
+    total_features = 14 * len(dataset_copy)
+    
+    logger.info(f"Starting evaluation with {total_features} total features to collect")
+    
+    # Initial evaluation with no features observed (all positions unknown) - with calibration
+    initial_eval = evaluate_model_q0_only(model, dataset_copy, target_question, device)
+    
+    logger.info(f"Initial evaluation (0 features): RMSE={initial_eval[0]:.4f}, "
+                f"smECE={initial_eval[1]:.4f}")
+    
+    # Iteratively select and observe features
+    features_collected = 0
+    while features_collected < total_features:
+        # For each example, select one feature if available
+        features_selected_this_round = 0
+        
+        for example_idx in tqdm(range(len(dataset_copy))):
+            # Select features for this example (limit to 1 per round)
+            selected_features = feature_selector.select_features(
+                example_idx, dataset_copy, 
+                num_to_select=2,
+                loss_type="cross_entropy",
+                target_questions=eval_target_questions
+            )
+            
+            # Observe selected features
+            for feature_info in selected_features:
+                pos = feature_info[0]  # Position index
+                if len(selected_features) > 1:
+                    if pos == 0:
+                        continue
+                success_criteria = arena.observe_position(example_idx, pos)
+                features_selected_this_round += 1
+                features_collected += 1
+                
+                logger.debug(f"Observed feature at example {example_idx}, position {pos} (total collected: {features_collected}). Success - {success_criteria}")
+                
+                # Break after selecting one feature per example per round
+                break
+        
+        # If no features were selected this round, break
+        if features_selected_this_round == 0:
+            logger.info("No more features available for selection")
+            break
+        
+        # Evaluate model with newly observed features - including calibration
+        current_eval = evaluate_model_q0_only(model, dataset_copy, target_question, device)
+        all_results.append(current_eval)
+        
+        logger.info(f"After {features_collected} features: RMSE={current_eval[0]:.4f}, "
+                f"smECE={current_eval[1]:.4f}, "
+                f"Features selected this round: {features_selected_this_round}")
+        
+        # Early termination if all features have been collected
+        if features_collected >= total_features:
+            break
+    
+    logger.info(f"Evaluation completed: {len(metrics_trends['rmse'])} evaluation steps from 0 to {features_collected} features")
     
     return workflow_results
 
@@ -452,11 +561,8 @@ def plot_features_histogram(workflow_results, save_path=None):
     
     plt.figure(figsize=(12, 8))
     
-    # Create subplot layout
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 10))
-    
-    # Plot 1: Features histogram
-    n, bins, patches = ax1.hist(features_per_example, 
+    # Plot features histogram only
+    n, bins, patches = plt.hist(features_per_example, 
                                bins=range(0, 16),
                                alpha=0.7, 
                                color='skyblue', 
@@ -466,59 +572,16 @@ def plot_features_histogram(workflow_results, save_path=None):
     mean_features = np.mean(features_per_example)
     median_features = np.median(features_per_example)
     
-    ax1.axvline(mean_features, color='red', linestyle='--', linewidth=2, 
+    plt.axvline(mean_features, color='red', linestyle='--', linewidth=2, 
                label=f'Mean: {mean_features:.2f}')
-    ax1.axvline(median_features, color='orange', linestyle='--', linewidth=2, 
+    plt.axvline(median_features, color='orange', linestyle='--', linewidth=2, 
                label=f'Median: {median_features:.2f}')
     
-    ax1.set_xlabel('Number of Features Selected per Example')
-    ax1.set_ylabel('Frequency')
-    ax1.set_title('Distribution of Features Selected (Dynamic Statistical Stopping)')
-    ax1.legend()
-    ax1.grid(axis='y', alpha=0.3)
-    
-    # Plot 2: Stop reasons
-    stop_reasons = {}
-    for results in workflow_results['individual_phase']['per_example_results'].values():
-        reason = results.get('stop_reason', 'completed_all_features')
-        stop_reasons[reason] = stop_reasons.get(reason, 0) + 1
-    
-    if stop_reasons:
-        reasons, counts = zip(*stop_reasons.items())
-        ax2.pie(counts, labels=reasons, autopct='%1.1f%%', startangle=90)
-        ax2.set_title('Stop Reasons Distribution')
-    
-    # Plot 3: P-values distribution (if available)
-    all_p_values = []
-    for results in workflow_results['individual_phase']['per_example_results'].values():
-        all_p_values.extend(results.get('p_values', []))
-    
-    if all_p_values:
-        ax3.hist(all_p_values, bins=20, alpha=0.7, color='lightgreen', edgecolor='black')
-        ax3.axvline(workflow_results.get('significance_level', 0.05), 
-                   color='red', linestyle='--', label='Significance Level')
-        ax3.set_xlabel('P-values')
-        ax3.set_ylabel('Frequency')
-        ax3.set_title('Distribution of P-values')
-        ax3.legend()
-        ax3.grid(axis='y', alpha=0.3)
-    
-    # Plot 4: Calibration sample sizes
-    all_cal_sizes = []
-    for results in workflow_results['individual_phase']['per_example_results'].values():
-        all_cal_sizes.extend(results.get('calibration_sample_sizes', []))
-    
-    if all_cal_sizes:
-        ax4.hist(all_cal_sizes, bins=20, alpha=0.7, color='lightcoral', edgecolor='black')
-        ax4.axvline(workflow_results.get('min_calibration_samples', 5), 
-                   color='red', linestyle='--', label='Min Required')
-        ax4.set_xlabel('Calibration Sample Size')
-        ax4.set_ylabel('Frequency')
-        ax4.set_title('Distribution of Calibration Sample Sizes')
-        ax4.legend()
-        ax4.grid(axis='y', alpha=0.3)
-    
-    plt.tight_layout()
+    plt.xlabel('Number of Features Selected per Example')
+    plt.ylabel('Frequency')
+    plt.title('Distribution of Features Selected (Confidence Interval-Based Stopping)')
+    plt.legend()
+    plt.grid(axis='y', alpha=0.3)
     
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches='tight')
@@ -561,6 +624,8 @@ def evaluate_model_q0_only(model, dataset, target_question: int, device) -> tupl
     
     with torch.no_grad():
         for example_idx in range(len(dataset)):
+            if example_idx == 100:
+                break
             try:
                 data_entry = dataset.get_data_entry(example_idx)
                 known_questions, inputs, answers, annotators, questions, embeddings = dataset[example_idx]
@@ -658,10 +723,11 @@ def compute_calibration_metrics(all_pred_probs, all_true_labels):
 def main():
     from imputer import ImputerEmbedding
     
-    parser = argparse.ArgumentParser(description='Human Q0 Evaluation with Dynamic Statistical Stopping')
-    parser.add_argument('--significance_level', type=float, default=0.5, help='P-value threshold for stopping')
+    parser = argparse.ArgumentParser(description='Human Q0 Evaluation with Confidence Interval-Based Stopping')
+    parser.add_argument('--max_interval_width', type=float, default=0.5, help='Maximum allowed confidence interval width for stopping')
     parser.add_argument('--min_selections', type=int, default=0, help='Minimum selections before stop check')
-    parser.add_argument('--min_calibration_samples', type=int, default=5, help='Minimum calibration samples for reliable p-value')
+    parser.add_argument('--min_calibration_samples', type=int, default=5, help='Minimum calibration samples for reliable interval')
+    parser.add_argument('--confidence_level', type=float, default=0.95, help='Confidence level for intervals')
     parser.add_argument('--target_question', type=int, default=7, help='Target question index')
     parser.add_argument('--output_dir', type=str, default='./results', help='Output directory')
     parser.add_argument('--device', type=str, default='cuda', help='Device (cuda/cpu)')
@@ -678,25 +744,26 @@ def main():
     model.load_state_dict(torch.load("C:\\Users\\stone\\Projects\\AnnotationArena\\src\\output\\models\\HANNA_NEW_DM_variable_gradient_comparison_20250706_090905.pth"))
     model.to(args.device)
     
-    # Evaluate with dynamic statistical stopping
-    logger.info("Evaluating with dynamic statistical stopping...")
-    results = evaluate_human_q0_workflow_with_statistical_stopping(
+    # Evaluate with confidence interval-based stopping
+    logger.info("Evaluating with confidence interval-based stopping...")
+    results = evaluate_human_q0_workflow_with_confidence_intervals(
         model=model,
         dataset=test_dataset,
         calibration_dataset=calibration_dataset,
         dataset_name="test",
         target_question=args.target_question,
-        significance_level=args.significance_level,
+        max_interval_width=args.max_interval_width,
         min_selections_before_stop=args.min_selections,
         min_calibration_samples=args.min_calibration_samples,
+        confidence_level=args.confidence_level,
         device=args.device
     )
     
     # Generate plots and save results
-    plot_path = os.path.join(args.output_dir, 'dynamic_statistical_workflow_plots.png')
+    plot_path = os.path.join(args.output_dir, 'confidence_interval_workflow_plots.png')
     plot_features_histogram(results, plot_path)
     
-    results_path = os.path.join(args.output_dir, 'dynamic_statistical_workflow_results.json')
+    results_path = os.path.join(args.output_dir, 'confidence_interval_workflow_results.json')
     with open(results_path, 'w') as f:
         json.dump(results, f, indent=2, default=str)
     
