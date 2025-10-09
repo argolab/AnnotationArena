@@ -316,7 +316,9 @@ class ImputerTrainer:
               verbose: bool = True,
               mask_augmentations: int = 1,
               early_stopping: Optional[EarlyStopping] = None,
-              early_stopping_metric: str = "loss"):
+              early_stopping_metric: str = "loss",
+              test_observed_vars=None,
+              stop_completely=True):
         """Simple training loop using the new API.
 
         Args:
@@ -382,11 +384,16 @@ class ImputerTrainer:
 
                             # Check if we should stop
                             if early_stopping.should_stop(metric_value, self.model):
-                                print(f"\nEarly stopping triggered at epoch {epoch + 1}")
-                                print(f"Best {metric_name}: {early_stopping.best_score:.4f}")
-                                print(f"Restoring best model weights...")
-                                early_stopping.restore_best_model(self.model)
-                                break
+                                if not stop_completely:
+                                    print("Switching to train with test portion only")
+                                    train_observed_vars = test_observed_vars
+                                else:
+                                    print(f"\nEarly stopping triggered at epoch {epoch + 1}")
+                                    print(f"Best {metric_name}: {early_stopping.best_score:.4f}")
+                                    print(f"Restoring best model weights...")
+                                    early_stopping.restore_best_model(self.model)
+                                    break
+
 
             if verbose and (epoch + 1) % max(1, epochs // 10) == 0:
                 total_loss = loss_dict.get('total_loss', 0.0)

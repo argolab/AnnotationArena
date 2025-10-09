@@ -6,10 +6,10 @@ from typing import Dict, Any, List
 import torch
 import time
 
-from imputer.data import DataConverter, RankingData
-from imputer.ranking_imputer import MultiVariableImputer
-from imputer.trainer import ImputerTrainer, EvaluationCallback, EarlyStopping
-from imputer.eval import EvaluationEngine
+from data import DataConverter, RankingData
+from ranking_imputer import MultiVariableImputer
+from trainer import ImputerTrainer, EvaluationCallback, EarlyStopping
+from eval import EvaluationEngine
 import sys
 sys.path.insert(0, "..")
 from stan.pipeline.bundle import GroundTruthBundle
@@ -118,11 +118,13 @@ def main():
     # Early stopping arguments
     parser.add_argument("--early-stopping", action="store_true", help="Enable early stopping based on test missing metrics")
     parser.add_argument("--early-stopping-metric", type=str, default="loss", choices=["loss", "accuracy"], help="Metric to monitor for early stopping: 'loss' (rating_loss) or 'accuracy' (rating_accuracy) (default: loss)")
-    parser.add_argument("--early-stopping-patience", type=int, default=10, help="Number of epochs with no improvement before stopping (default: 10)")
+    parser.add_argument("--early-stopping-patience", type=int, default=3, help="Number of epochs with no improvement before stopping (default: 10)")
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4, help="Minimum change to qualify as improvement (default: 1e-4)")
+    parser.add_argument("--stop-completely", action="store_true", help="if set true training will immediately stop, otherwise continue training on test vars")
 
     args = parser.parse_args()
-
+    if not args.stop_completely:
+        print("Will continue train with test only when overfits")
     data_dir = Path(args.data_dir)
     bundle_path = data_dir / "data_bundle.json"
     if not bundle_path.exists():
@@ -316,7 +318,7 @@ def main():
         print(f"  Mode: {mode} (patience={args.early_stopping_patience}, min_delta={args.early_stopping_min_delta})")
 
     start_time = time.time()
-    # Train
+   
     training_results = trainer.train(
         train_observed_vars=train_vars,
         train_missing_vars=[],
@@ -328,6 +330,8 @@ def main():
         mask_augmentations=args.mask_augmentations,
         early_stopping=early_stopping,
         early_stopping_metric=args.early_stopping_metric,
+        test_observed_vars=test_observed,
+        stop_completely=args.stop_completely
     )
 
     running_time = time.time() - start_time
