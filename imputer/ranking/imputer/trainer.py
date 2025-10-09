@@ -316,7 +316,9 @@ class ImputerTrainer:
               verbose: bool = True,
               mask_augmentations: int = 1,
               early_stopping: Optional[EarlyStopping] = None,
-              early_stopping_metric: str = "loss"):
+              early_stopping_metric: str = "loss",
+              decay_observed_weight: bool = False,
+              decay_observed_epochs: int = 20):
         """Simple training loop using the new API.
 
         Args:
@@ -325,11 +327,33 @@ class ImputerTrainer:
                                masking patterns per epoch. Default: 1 (no augmentation).
             early_stopping: EarlyStopping object for early termination based on validation metrics.
             early_stopping_metric: Metric to monitor: "loss" (rating_loss) or "accuracy" (rating_accuracy).
+            decay_observed_weight: If True, linearly decay observed_loss_weight from initial value to 0.
+            decay_observed_epochs: Number of epochs over which to decay observed weight (default: 20).
         """
         training_history = []
         callback_history = []
 
+        # Store initial weights for decay schedule
+        initial_observed_weight = self.loss_strategy.observed_loss_weight
+        initial_masked_weight = self.loss_strategy.masked_loss_weight
+
         for epoch in tqdm(range(epochs)):
+            # Update loss weights if decay is enabled
+            if decay_observed_weight:
+                # Linear decay from initial_observed_weight to 0 over decay_observed_epochs
+                if epoch < decay_observed_epochs:
+                    current_observed_weight = initial_observed_weight * (1.0 - epoch / decay_observed_epochs)
+                else:
+                    current_observed_weight = 0.0
+
+                # Update the loss strategy weights
+                self.loss_strategy.update_weights(
+                    masked_loss_weight=initial_masked_weight,
+                    observed_loss_weight=current_observed_weight
+                )
+
+                if verbose and epoch % max(1, epochs // 10) == 0:
+                    print(f"Epoch {epoch}: observed_weight={current_observed_weight:.4f}, masked_weight={initial_masked_weight:.4f}")
             # Train with multiple masking patterns per epoch (data augmentation)
             epoch_losses = []
             for aug_idx in range(mask_augmentations):

@@ -107,6 +107,8 @@ def main():
     # Loss weighting arguments
     parser.add_argument("--masked-loss-weight", type=float, default=8.0, help="Weight for masked entry loss (default: 8.0)")
     parser.add_argument("--observed-loss-weight", type=float, default=1.0, help="Weight for observed entry loss (default: 1.0)")
+    parser.add_argument("--decay-observed-weight", action="store_true", help="Enable linear decay of observed loss weight to 0")
+    parser.add_argument("--decay-observed-epochs", type=int, default=20, help="Number of epochs to decay observed weight over (default: 20)")
 
     # Architectural improvements
     parser.add_argument("--use-gelu-after-attention", action="store_true", help="Apply GeLU activation after attention (before residual)")
@@ -114,6 +116,9 @@ def main():
     parser.add_argument("--no-final-norm", dest="use_final_norm", action="store_false", help="Disable final LayerNorm (not recommended)")
     parser.add_argument("--mask-augmentations", type=int, default=1, help="Number of different masking patterns per epoch (default: 1, no augmentation)")
     parser.add_argument("--normalize-parameter", action="store_true", default=False, help="Whether to apply norm to parameter")
+
+    # Temperature scaling for calibration
+    parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for scaling logits (T > 1 softens predictions, default: 1.0)")
 
     # Early stopping arguments
     parser.add_argument("--early-stopping", action="store_true", help="Enable early stopping based on test missing metrics")
@@ -204,8 +209,15 @@ def main():
         use_gelu_after_attention=args.use_gelu_after_attention,
         use_final_norm=args.use_final_norm,
         normalize_parameter=args.normalize_parameter,
-        num_ffn_layers=args.num_ffn_layers
+        num_ffn_layers=args.num_ffn_layers,
+        temperature=args.temperature
     )
+
+    # Print temperature scaling status
+    if args.temperature != 1.0:
+        print(f"Temperature scaling enabled: T = {args.temperature:.2f} (T > 1 softens predictions, T < 1 sharpens)")
+    else:
+        print("Temperature scaling disabled (T = 1.0)")
 
     # Trainer
     trainer = ImputerTrainer(
@@ -268,7 +280,8 @@ def main():
             "device": args.device,
             "include_sign_bit_in_params": True,
             "use_gelu_after_attention": args.use_gelu_after_attention,
-            "use_final_norm": args.use_final_norm
+            "use_final_norm": args.use_final_norm,
+            "temperature": args.temperature
         },
         "training": {
             "epochs": args.epochs,
@@ -276,6 +289,8 @@ def main():
             "masking_rate": args.masking_rate,
             "masked_loss_weight": args.masked_loss_weight,
             "observed_loss_weight": args.observed_loss_weight,
+            "decay_observed_weight": bool(args.decay_observed_weight),
+            "decay_observed_epochs": args.decay_observed_epochs if args.decay_observed_weight else None,
             "mask_augmentations": args.mask_augmentations,
             "transductive_learning": bool(args.transductive_learning),
             "full_random": bool(args.full_random),
@@ -328,6 +343,8 @@ def main():
         mask_augmentations=args.mask_augmentations,
         early_stopping=early_stopping,
         early_stopping_metric=args.early_stopping_metric,
+        decay_observed_weight=args.decay_observed_weight,
+        decay_observed_epochs=args.decay_observed_epochs,
     )
 
     running_time = time.time() - start_time

@@ -232,7 +232,7 @@ class DefaultLossStrategy(LossStrategyBase):
 
         total_loss = (self.masked_loss_weight * masked_total_loss +
                      self.observed_loss_weight * observed_total_loss)
-        
+
         total_unweighted_loss = masked_total_loss + observed_total_loss
 
         # For backward compatibility, also compute unweighted component losses
@@ -254,6 +254,10 @@ class DefaultLossStrategy(LossStrategyBase):
             '_total_loss_tensor': total_loss,
         }
 
+    def update_weights(self, masked_loss_weight: float, observed_loss_weight: float):
+        """Update loss weights dynamically during training."""
+        self.masked_loss_weight = masked_loss_weight
+        self.observed_loss_weight = observed_loss_weight
 
 # Structured adapters for predictions
 @dataclass

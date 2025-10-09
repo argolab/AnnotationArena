@@ -52,7 +52,8 @@ class MultiVariableImputer(nn.Module):
                  use_gelu_after_attention=False,
                  use_final_norm=True,
                  normalize_parameter=False,
-                 num_ffn_layers=4):
+                 num_ffn_layers=4,
+                 temperature=1.0):
         super().__init__()
         self.device = torch.device(device)
         # Defer moving to device until after all submodules are created
@@ -66,6 +67,7 @@ class MultiVariableImputer(nn.Module):
         self.use_gelu_after_attention = use_gelu_after_attention
         self.use_final_norm = use_final_norm
         self.num_ffn_layers = num_ffn_layers
+        self.temperature = temperature
 
         if embedding_type == "pairwise":
             self.embedding_provider = PairwiseRankingProjectionEmbeddingProvider(
@@ -151,9 +153,14 @@ class MultiVariableImputer(nn.Module):
         if self.final_norm is not None:
             params = self.final_norm(params)
 
+        # Read logits from parameters
+        rating_logits = self.read_prediction_logits_from_param('rating', params)
+        ranking_logits = self.read_prediction_logits_from_param('ranking', params)
+
+        # Apply temperature scaling to soften/sharpen predictions
         logits = {
-            'rating': self.read_prediction_logits_from_param('rating', params),
-            'ranking': self.read_prediction_logits_from_param('ranking', params),
+            'rating': rating_logits / self.temperature,
+            'ranking': ranking_logits / self.temperature,
         }
         if return_intermediate:
             return logits, hidden_intermediates
