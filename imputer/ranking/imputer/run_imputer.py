@@ -95,7 +95,9 @@ def main():
     parser.add_argument("--full_random", action="store_true")
     parser.add_argument("--save-checkpoints", action="store_true", help="Save model checkpoints during training")
     parser.add_argument("--checkpoint-every", type=int, default=10, help="Save checkpoint every N epochs")
-    
+    parser.add_argument("--train-all-observed", action="store_true",
+                        help="Convert all training missing to observed for artificial masking (more training data)")
+
 
     # Model architecture arguments
     parser.add_argument("--encoder-layers", type=int, default=6, help="Number of transformer encoder layers (default: 6)")
@@ -164,30 +166,32 @@ def main():
     test_observed = converter.create_variables_from_bundle(bundle, partition="test", status="observed")
     test_missing = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
 
-    ##### SUPER EXP CHANGE
-    # EXPERIMENTAL: Convert all training missing to observed for fully observed training
-    # This allows us to artificially mask 50% of all training data
-    train_missing_as_observed = []
-    for var in train_missing:
-        # Create a copy with status=2 (observed) instead of status=0 (missing)
-        train_missing_as_observed.append(RankingData(
-            annotator_id=var.annotator_id,
-            attribute_id=var.attribute_id,
-            is_listwise=var.is_listwise,
-            item_ids=var.item_ids,
-            status=2,  # observed instead of missing
-            instance=var.instance,
-            rating_value=var.rating_value,
-            ranking_order=var.ranking_order,
-        ))
+    # EXPERIMENTAL: Optionally convert all training missing to observed for fully observed training
+    # This allows us to artificially mask more of the training data
+    if args.train_all_observed:
+        print("Converting all training missing to observed (train-all-observed mode)")
+        train_missing_as_observed = []
+        for var in train_missing:
+            # Create a copy with status=2 (observed) instead of status=0 (missing)
+            train_missing_as_observed.append(RankingData(
+                annotator_id=var.annotator_id,
+                attribute_id=var.attribute_id,
+                is_listwise=var.is_listwise,
+                item_ids=var.item_ids,
+                status=2,  # observed instead of missing
+                instance=var.instance,
+                rating_value=var.rating_value,
+                ranking_order=var.ranking_order,
+            ))
+        train_observed_full = train_observed + train_missing_as_observed
+        train_missing_for_trainer = []  # Empty since we converted them to observed
+    else:
+        print("Using standard training (only originally observed data for masking)")
+        train_observed_full = train_observed
+        train_missing_for_trainer = train_missing
 
-    # Use the converted missing data as additional observed training data
-    train_observed_full = train_observed + train_missing_as_observed
     train_all: List[RankingData] = train_observed + train_missing
     test_all: List[RankingData] = test_observed + test_missing
-    
-    # train_all: List[RankingData] = train_observed + train_missing
-    # test_all: List[RankingData] = test_observed + test_missing
 
     if args.full_random:
         random = True
@@ -287,6 +291,7 @@ def main():
             "epochs": args.epochs,
             "lr": args.lr,
             "masking_rate": args.masking_rate,
+            "train_all_observed": bool(args.train_all_observed),
             "masked_loss_weight": args.masked_loss_weight,
             "observed_loss_weight": args.observed_loss_weight,
             "decay_observed_weight": bool(args.decay_observed_weight),
@@ -334,7 +339,7 @@ def main():
     # Train
     training_results = trainer.train(
         train_observed_vars=train_vars,
-        train_missing_vars=[],
+        train_missing_vars=train_missing_for_trainer,
         masking_rate=args.masking_rate,
         epochs=args.epochs,
         call_callbacks_every=1,
