@@ -95,7 +95,9 @@ def main():
     parser.add_argument("--full_random", action="store_true")
     parser.add_argument("--save-checkpoints", action="store_true", help="Save model checkpoints during training")
     parser.add_argument("--checkpoint-every", type=int, default=10, help="Save checkpoint every N epochs")
-    
+    parser.add_argument("--train-all-observed", action="store_true",
+                        help="Convert all training missing to observed for artificial masking (more training data)")
+
 
     # Model architecture arguments
     parser.add_argument("--encoder-layers", type=int, default=6, help="Number of transformer encoder layers (default: 6)")
@@ -107,6 +109,8 @@ def main():
     # Loss weighting arguments
     parser.add_argument("--masked-loss-weight", type=float, default=8.0, help="Weight for masked entry loss (default: 8.0)")
     parser.add_argument("--observed-loss-weight", type=float, default=1.0, help="Weight for observed entry loss (default: 1.0)")
+    parser.add_argument("--decay-observed-weight", action="store_true", help="Enable linear decay of observed loss weight to 0")
+    parser.add_argument("--decay-observed-epochs", type=int, default=20, help="Number of epochs to decay observed weight over (default: 20)")
 
     # Architectural improvements
     parser.add_argument("--use-gelu-after-attention", action="store_true", help="Apply GeLU activation after attention (before residual)")
@@ -114,6 +118,9 @@ def main():
     parser.add_argument("--no-final-norm", dest="use_final_norm", action="store_false", help="Disable final LayerNorm (not recommended)")
     parser.add_argument("--mask-augmentations", type=int, default=1, help="Number of different masking patterns per epoch (default: 1, no augmentation)")
     parser.add_argument("--normalize-parameter", action="store_true", default=False, help="Whether to apply norm to parameter")
+
+    # Temperature scaling for calibration
+    parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for scaling logits (T > 1 softens predictions, default: 1.0)")
 
     # Early stopping arguments
     parser.add_argument("--early-stopping", action="store_true", help="Enable early stopping based on test missing metrics")
@@ -159,30 +166,32 @@ def main():
     test_observed = converter.create_variables_from_bundle(bundle, partition="test", status="observed")
     test_missing = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
 
-    ##### SUPER EXP CHANGE
-    # EXPERIMENTAL: Convert all training missing to observed for fully observed training
-    # This allows us to artificially mask 50% of all training data
-    train_missing_as_observed = []
-    for var in train_missing:
-        # Create a copy with status=2 (observed) instead of status=0 (missing)
-        train_missing_as_observed.append(RankingData(
-            annotator_id=var.annotator_id,
-            attribute_id=var.attribute_id,
-            is_listwise=var.is_listwise,
-            item_ids=var.item_ids,
-            status=2,  # observed instead of missing
-            instance=var.instance,
-            rating_value=var.rating_value,
-            ranking_order=var.ranking_order,
-        ))
+    # EXPERIMENTAL: Optionally convert all training missing to observed for fully observed training
+    # This allows us to artificially mask more of the training data
+    if args.train_all_observed:
+        print("Converting all training missing to observed (train-all-observed mode)")
+        train_missing_as_observed = []
+        for var in train_missing:
+            # Create a copy with status=2 (observed) instead of status=0 (missing)
+            train_missing_as_observed.append(RankingData(
+                annotator_id=var.annotator_id,
+                attribute_id=var.attribute_id,
+                is_listwise=var.is_listwise,
+                item_ids=var.item_ids,
+                status=2,  # observed instead of missing
+                instance=var.instance,
+                rating_value=var.rating_value,
+                ranking_order=var.ranking_order,
+            ))
+        train_observed_full = train_observed + train_missing_as_observed
+        train_missing_for_trainer = []  # Empty since we converted them to observed
+    else:
+        print("Using standard training (only originally observed data for masking)")
+        train_observed_full = train_observed
+        train_missing_for_trainer = train_missing
 
-    # Use the converted missing data as additional observed training data
-    train_observed_full = train_observed + train_missing_as_observed
     train_all: List[RankingData] = train_observed + train_missing
     test_all: List[RankingData] = test_observed + test_missing
-    
-    # train_all: List[RankingData] = train_observed + train_missing
-    # test_all: List[RankingData] = test_observed + test_missing
 
     if args.full_random:
         random = True
@@ -204,8 +213,15 @@ def main():
         use_gelu_after_attention=args.use_gelu_after_attention,
         use_final_norm=args.use_final_norm,
         normalize_parameter=args.normalize_parameter,
-        num_ffn_layers=args.num_ffn_layers
+        num_ffn_layers=args.num_ffn_layers,
+        temperature=args.temperature
     )
+
+    # Print temperature scaling status
+    if args.temperature != 1.0:
+        print(f"Temperature scaling enabled: T = {args.temperature:.2f} (T > 1 softens predictions, T < 1 sharpens)")
+    else:
+        print("Temperature scaling disabled (T = 1.0)")
 
     # Trainer
     trainer = ImputerTrainer(
@@ -268,14 +284,18 @@ def main():
             "device": args.device,
             "include_sign_bit_in_params": True,
             "use_gelu_after_attention": args.use_gelu_after_attention,
-            "use_final_norm": args.use_final_norm
+            "use_final_norm": args.use_final_norm,
+            "temperature": args.temperature
         },
         "training": {
             "epochs": args.epochs,
             "lr": args.lr,
             "masking_rate": args.masking_rate,
+            "train_all_observed": bool(args.train_all_observed),
             "masked_loss_weight": args.masked_loss_weight,
             "observed_loss_weight": args.observed_loss_weight,
+            "decay_observed_weight": bool(args.decay_observed_weight),
+            "decay_observed_epochs": args.decay_observed_epochs if args.decay_observed_weight else None,
             "mask_augmentations": args.mask_augmentations,
             "transductive_learning": bool(args.transductive_learning),
             "full_random": bool(args.full_random),
@@ -319,7 +339,7 @@ def main():
     # Train
     training_results = trainer.train(
         train_observed_vars=train_vars,
-        train_missing_vars=[],
+        train_missing_vars=train_missing_for_trainer,
         masking_rate=args.masking_rate,
         epochs=args.epochs,
         call_callbacks_every=1,
@@ -328,6 +348,8 @@ def main():
         mask_augmentations=args.mask_augmentations,
         early_stopping=early_stopping,
         early_stopping_metric=args.early_stopping_metric,
+        decay_observed_weight=args.decay_observed_weight,
+        decay_observed_epochs=args.decay_observed_epochs,
     )
 
     running_time = time.time() - start_time
