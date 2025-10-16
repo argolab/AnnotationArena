@@ -42,7 +42,7 @@ def main():
                        help="Disable pairwise rankings (ablation)")
     
     # Generation parameters
-    parser.add_argument("--pairwise-cap-per-item", type=int, default=10, 
+    parser.add_argument("--pairwise-cap-per-item", type=int, default=10,
                        help="Max pairwise comparisons per item")
     parser.add_argument("--sigma-annotator", type=float, default=0.3,
                        help="Annotator preference noise")
@@ -53,6 +53,13 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.5,
                        help="Temperature for pairwise ranking generation")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+
+    # Observation protocol
+    parser.add_argument("--observation-protocol", type=str, default="tie_breaking",
+                       choices=["tie_breaking", "mar", "extended_rankings"],
+                       help="Observation protocol: tie_breaking (current), mar (random missing), extended_rankings (pairwise for all pairs)")
+    parser.add_argument("--mar-missing-rate", type=float, default=0.5,
+                       help="Missing rate for MAR protocol (default: 0.5 = 50%% missing)")
     
     # Output
     parser.add_argument("--output-dir", type=str, default="OUTPUT/generated_data",
@@ -66,7 +73,7 @@ def main():
     
     # Handle ablation flags
     enable_pairwise_rankings = args.enable_pairwise_rankings and not args.disable_pairwise_rankings
-    
+
     # Create configuration
     config = DataGenConfig(
         K_train=args.K_train,
@@ -81,6 +88,8 @@ def main():
         sigma_measurement=args.sigma_measurement,
         alpha_dirichlet=args.alpha_dirichlet,
         temperature=args.temperature,
+        observation_protocol=args.observation_protocol,
+        mar_missing_rate=args.mar_missing_rate,
         seed=args.seed
     )
     

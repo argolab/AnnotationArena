@@ -20,6 +20,10 @@ class DataGenConfig:
     alpha_dirichlet: float = 2.0
     temperature: float = 0.5
 
+    # Observation protocol
+    observation_protocol: str = "tie_breaking"  # "tie_breaking", "mar", "extended_rankings"
+    mar_missing_rate: float = 0.5  # Missing rate for MAR protocol
+
     seed: Optional[int] = None
 
 
