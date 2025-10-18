@@ -18,12 +18,6 @@ from torch.utils.data import DataLoader, Subset
 import matplotlib.pyplot as plt
 import torch.nn.functional as F
 
-# Set environment variables for offline mode
-os.environ.update({
-    "TRANSFORMERS_OFFLINE": "1", 
-    "HF_DATASETS_OFFLINE": "1", 
-    "HF_HUB_OFFLINE": "1"
-})
 
 # Import your existing modules
 from config import Config, ModelConfig, DefaultHyperparams
@@ -403,7 +397,7 @@ def main():
                        help="Dataset to use")
     parser.add_argument("--runner", type=str, default="local", 
                        help="Runner identifier for config")
-    parser.add_argument("--use_embedding", action="store_true", default=True,
+    parser.add_argument("--use_embedding", action="store_true", default=False,
                        help="Use text embeddings")
     
     # Training arguments
@@ -503,16 +497,15 @@ def main():
     
     data_manager.prepare_data(
         num_partition=num_partition, 
-        initial_train_ratio=0.95, 
+        initial_train_ratio=0.9, 
         dataset=args.dataset,
         cold_start=False,  # We want observed data for training
-        use_embedding=True
+        use_embedding=False
     )
     # Load datasets
     train_dataset = AnnotationDataset(data_manager.paths['train'])
     val_dataset = AnnotationDataset(data_manager.paths['validation'])
     test_dataset = AnnotationDataset(data_manager.paths['test'])
-    train_test_dataset = AnnotationDataset("/home/stone/AnnotationArena/src/test.json")
     
     logger.info(f"Loaded datasets: Train={len(train_dataset)}, Val={len(val_dataset)}, Test={len(test_dataset)}")
     
@@ -541,13 +534,6 @@ def main():
             patience=args.patience,
             loss_type=args.loss_type
         )
-    
-        # Evaluate on test set
-        logger.info("Evaluating on train_test set...")
-        test_metrics = evaluate_model(model, train_test_dataset, device, args.batch_size, args.loss_type)
-        logger.info(f"Train Test Results: Loss={test_metrics['avg_expected_loss']:.4f}, "
-                f"RMSE={test_metrics['rmse']:.4f}, Pearson={test_metrics['pearson']:.4f}, "
-                f"Accuracy={test_metrics['accuracy']:.4f}")
         
         logger.info("Evaluating on test set...")
         test_metrics = evaluate_model(model, test_dataset, device, args.batch_size, args.loss_type)
