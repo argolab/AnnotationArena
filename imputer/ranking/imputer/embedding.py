@@ -462,11 +462,12 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         # Embeddings for each component (learned parameters)
         self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, self.internal_dimension))
         self.annotator_embedding_learnable = nn.Parameter(torch.randn(num_annotators, self.internal_dimension // 2))
-        self.annotator_embedding_random = torch.rand(num_annotators, self.internal_dimension - self.internal_dimension // 2, device=self.device)
+        self.annotator_embedding_random = torch.randn(num_annotators, self.internal_dimension - self.internal_dimension // 2, device=self.device) * 1e-3
         self.item_embedding = torch.rand(num_items, self.internal_dimension, device=self.device)
 
-        torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
-        torch.nn.init.kaiming_normal_(self.annotator_embedding_learnable, mode='fan_out', nonlinearity='relu')
+        # Initialize all learnable parameters with N(0, 1e-3) for near-zero initialization
+        torch.nn.init.normal_(self.attribute_embedding, mean=0.0, std=1e-3)
+        torch.nn.init.normal_(self.annotator_embedding_learnable, mean=0.0, std=1e-3)
 
         # Class constant for the logit value
         self.LOGIT_HIGH = getattr(self, "LOGIT_HIGH", 20.0)
@@ -528,6 +529,8 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         return
 
     def partial_reset_embedding(self):
-        self.annotator_embedding_random = torch.rand(self.num_annotators, self.internal_dimension - self.internal_dimension // 2, device=self.device)
+        # Regenerate annotator random part with N(0, 1e-3)
+        self.annotator_embedding_random = torch.randn(self.num_annotators, self.internal_dimension - self.internal_dimension // 2, device=self.device) * 1e-3
+        # Regenerate item embeddings with uniform [0, 1] for distinctness (object IDs)
         self.item_embedding = torch.rand(self.num_items, self.internal_dimension, device=self.device)
 

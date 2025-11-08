@@ -86,6 +86,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run imputer training/evaluation on a data bundle")
     parser.add_argument("--data-dir", required=True, help="Directory containing data_bundle.json and configs.json")
     parser.add_argument("--output-root", default="OUTPUT/IMPUTER", help="Root output directory")
+    parser.add_argument("--run-name", type=str, default=None, help="Custom run name (default: auto-generated timestamp)")
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--masking-rate", type=float, default=0.15)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -97,7 +98,8 @@ def main():
     parser.add_argument("--checkpoint-every", type=int, default=10, help="Save checkpoint every N epochs")
     parser.add_argument("--train-all-observed", action="store_true",
                         help="Convert all training missing to observed for artificial masking (more training data)")
-
+    parser.add_argument("--test-only-training", action="store_true",
+                        help="Train only on test_observed, evaluate on test_missing (ignore training set completely)")
 
     # Model architecture arguments
     parser.add_argument("--encoder-layers", type=int, default=6, help="Number of transformer encoder layers (default: 6)")
@@ -129,6 +131,10 @@ def main():
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4, help="Minimum change to qualify as improvement (default: 1e-4)")
 
     args = parser.parse_args()
+
+    # Check for mutually exclusive flags
+    if args.test_only_training and args.transductive_learning:
+        raise ValueError("--test-only-training and --transductive-learning are mutually exclusive")
 
     data_dir = Path(args.data_dir)
     bundle_path = data_dir / "data_bundle.json"
@@ -166,31 +172,41 @@ def main():
     test_observed = converter.create_variables_from_bundle(bundle, partition="test", status="observed")
     test_missing = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
 
-    # EXPERIMENTAL: Optionally convert all training missing to observed for fully observed training
-    # This allows us to artificially mask more of the training data
-    if args.train_all_observed:
-        print("Converting all training missing to observed (train-all-observed mode)")
-        train_missing_as_observed = []
-        for var in train_missing:
-            # Create a copy with status=2 (observed) instead of status=0 (missing)
-            train_missing_as_observed.append(RankingData(
-                annotator_id=var.annotator_id,
-                attribute_id=var.attribute_id,
-                is_listwise=var.is_listwise,
-                item_ids=var.item_ids,
-                status=2,  # observed instead of missing
-                instance=var.instance,
-                rating_value=var.rating_value,
-                ranking_order=var.ranking_order,
-            ))
-        train_observed_full = train_observed + train_missing_as_observed
-        train_missing_for_trainer = []  # Empty since we converted them to observed
+    # Test-only training mode: use test set for training, ignore training set
+    if args.test_only_training:
+        print("Test-only training mode: Training on test_observed, evaluating on test_missing")
+        print("Training set will be completely ignored")
+        train_vars_for_training = test_observed
+        train_missing_for_trainer = test_missing
+        train_all = None  # Not used in test-only mode
     else:
-        print("Using standard training (only originally observed data for masking)")
-        train_observed_full = train_observed
-        train_missing_for_trainer = train_missing
+        # EXPERIMENTAL: Optionally convert all training missing to observed for fully observed training
+        # This allows us to artificially mask more of the training data
+        if args.train_all_observed:
+            print("Converting all training missing to observed (train-all-observed mode)")
+            train_missing_as_observed = []
+            for var in train_missing:
+                # Create a copy with status=2 (observed) instead of status=0 (missing)
+                train_missing_as_observed.append(RankingData(
+                    annotator_id=var.annotator_id,
+                    attribute_id=var.attribute_id,
+                    is_listwise=var.is_listwise,
+                    item_ids=var.item_ids,
+                    status=2,  # observed instead of missing
+                    instance=var.instance,
+                    rating_value=var.rating_value,
+                    ranking_order=var.ranking_order,
+                ))
+            train_observed_full = train_observed + train_missing_as_observed
+            train_missing_for_trainer = []  # Empty since we converted them to observed
+        else:
+            print("Using standard training (only originally observed data for masking)")
+            train_observed_full = train_observed
+            train_missing_for_trainer = train_missing
 
-    train_all: List[RankingData] = train_observed + train_missing
+        train_vars_for_training = train_observed_full
+        train_all = train_observed + train_missing
+
     test_all: List[RankingData] = test_observed + test_missing
 
     if args.full_random:
@@ -245,22 +261,31 @@ def main():
             name="test_all_evaluation",
         )
     )
-    trainer.register_callback(
-        EvaluationCallback(
-            eval_engine=eval_engine,
-            test_variables=train_all,
-            converter=converter,
-            device=args.device,
-            name="train_all_evaluation",
+
+    # Only register train_all evaluation if not in test-only mode
+    if not args.test_only_training:
+        trainer.register_callback(
+            EvaluationCallback(
+                eval_engine=eval_engine,
+                test_variables=train_all,
+                converter=converter,
+                device=args.device,
+                name="train_all_evaluation",
+            )
         )
-    )
-    train_vars = train_observed_full
-    if args.transductive_learning:
-        print("Using transductive learning")
-        train_vars += test_observed
+
+    # Set up training variables
+    if args.test_only_training:
+        # Already set above: train_vars_for_training = test_observed
+        train_vars = train_vars_for_training
+    else:
+        train_vars = train_vars_for_training
+        if args.transductive_learning:
+            print("Using transductive learning")
+            train_vars += test_observed
     
     # Create the main run directory first (before training)
-    run_dir = new_run_dir(Path(args.output_root))
+    run_dir = new_run_dir(Path(args.output_root), run_name=args.run_name)
 
     # Save train configuration snapshot next to outputs
     train_config = {
@@ -292,6 +317,7 @@ def main():
             "lr": args.lr,
             "masking_rate": args.masking_rate,
             "train_all_observed": bool(args.train_all_observed),
+            "test_only_training": bool(args.test_only_training),
             "masked_loss_weight": args.masked_loss_weight,
             "observed_loss_weight": args.observed_loss_weight,
             "decay_observed_weight": bool(args.decay_observed_weight),
@@ -358,13 +384,15 @@ def main():
     # Save training history - separate test and train metrics
     callback_history = training_results.get('callback_history', [])
     test_history = [entry for entry in callback_history if entry.get('name') == 'test_all_evaluation']
-    train_history = [entry for entry in callback_history if entry.get('name') == 'train_all_evaluation']
 
     with open(run_dir / "test_training_history.json", "w") as f:
         json.dump(test_history, f, indent=2)
 
-    with open(run_dir / "train_training_history.json", "w") as f:
-        json.dump(train_history, f, indent=2)
+    # Only save train_training_history if not in test-only mode
+    if not args.test_only_training:
+        train_history = [entry for entry in callback_history if entry.get('name') == 'train_all_evaluation']
+        with open(run_dir / "train_training_history.json", "w") as f:
+            json.dump(train_history, f, indent=2)
 
     print(f"Saved training history to {run_dir}")
 

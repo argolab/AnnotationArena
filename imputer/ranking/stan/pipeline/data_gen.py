@@ -71,10 +71,15 @@ def generate_data(config: DataGenConfig, stan_file: Optional[str] = None) -> Gro
     # Extract generated quantities
     bundle = extract_bundle_from_stan_output(fit, config)
 
-    # Apply MAR protocol if specified
-    if config.observation_protocol == "mar":
-        print(f"\nApplying MAR protocol with missing rate: {config.mar_missing_rate:.2%}")
-        bundle = apply_mar_protocol(bundle, config.mar_missing_rate, seed=config.seed)
+    # Apply MCAR protocol if specified
+    if config.observation_protocol == "mcar":
+        print(f"\nApplying MCAR protocol with missing rate: {config.mcar_missing_rate:.2%}")
+        bundle = apply_mcar_protocol(bundle, config.mcar_missing_rate, seed=config.seed)
+
+    # Apply pairwise observation rate if specified (for tie_breaking protocol)
+    if config.observation_protocol == "tie_breaking" and config.pairwise_observation_rate < 1.0:
+        print(f"\nApplying pairwise observation rate: {config.pairwise_observation_rate:.2%}")
+        bundle = apply_pairwise_observation_rate(bundle, config.pairwise_observation_rate, seed=config.seed)
 
     return bundle
 
@@ -285,12 +290,12 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     )
 
 
-def apply_mar_protocol(bundle: GroundTruthBundle, missing_rate: float, seed: Optional[int] = None) -> GroundTruthBundle:
+def apply_mcar_protocol(bundle: GroundTruthBundle, missing_rate: float, seed: Optional[int] = None) -> GroundTruthBundle:
     """
-    Apply Missing At Random (MAR) protocol to a bundle.
+    Apply Missing Completely At Random (MCAR) protocol to a bundle.
 
     Randomly selects missing_rate% of all ratings to mark as missing, regardless of
-    the original observation protocol. This creates a completely random missingness pattern.
+    the original observation protocol. This creates a completely random missingness pattern (IID).
 
     Args:
         bundle: GroundTruthBundle with original observation protocol
@@ -298,7 +303,7 @@ def apply_mar_protocol(bundle: GroundTruthBundle, missing_rate: float, seed: Opt
         seed: Random seed for reproducibility
 
     Returns:
-        New GroundTruthBundle with MAR observation pattern
+        New GroundTruthBundle with MCAR observation pattern
     """
     import random
 
@@ -380,14 +385,14 @@ def apply_mar_protocol(bundle: GroundTruthBundle, missing_rate: float, seed: Opt
         "observation_rate": actual_observed_rate,
         "train_observation_rate": len(train_observed) / len(train_ratings) if train_ratings else 0,
         "test_observation_rate": len(test_observed) / len(test_ratings) if test_ratings else 0,
-        "protocol": "MAR",
-        "mar_missing_rate": missing_rate,
+        "protocol": "MCAR",
+        "mcar_missing_rate": missing_rate,
     }
 
     # Create missing_ratings_indexes_in_test_instance
     missing_ratings_indexes_in_test_instance = [i for i, rating in enumerate(missing_ratings) if rating["instance"] == "test"]
 
-    # Create new bundle with MAR observation pattern
+    # Create new bundle with MCAR observation pattern
     return GroundTruthBundle(
         embeddings=bundle.embeddings,
         mean_preferences=bundle.mean_preferences,
@@ -401,6 +406,93 @@ def apply_mar_protocol(bundle: GroundTruthBundle, missing_rate: float, seed: Opt
         observed_ratings=observed_ratings,
         missing_ratings=missing_ratings,
         missing_ratings_indexes_in_test_instance=missing_ratings_indexes_in_test_instance,
+        observed_pairwise=observed_pairwise,
+        missing_pairwise=missing_pairwise,
+        stats=stats,
+        train_posterior_rating_probs=bundle.train_posterior_rating_probs,
+        test_posterior_rating_probs=bundle.test_posterior_rating_probs,
+    )
+
+
+def apply_pairwise_observation_rate(bundle: GroundTruthBundle, observation_rate: float, seed: Optional[int] = None) -> GroundTruthBundle:
+    """
+    Apply observation rate to missing pairwise rankings.
+
+    Takes missing pairwise rankings and randomly marks observation_rate% of them as observed.
+    This allows partial observation of pairwise comparisons in tie_breaking protocol.
+
+    Args:
+        bundle: GroundTruthBundle with original tie_breaking observation protocol
+        observation_rate: Fraction of missing pairwise rankings to mark as observed (e.g., 0.3 for 30%)
+        seed: Random seed for reproducibility
+
+    Returns:
+        New GroundTruthBundle with updated pairwise observation pattern
+    """
+    import random
+
+    # Set seed for reproducibility
+    if seed is not None:
+        random.seed(seed + 1000)  # Offset to avoid overlap with other random operations
+
+    # Get current pairwise rankings
+    observed_pairwise = list(bundle.observed_pairwise)
+    missing_pairwise = list(bundle.missing_pairwise)
+
+    n_missing = len(missing_pairwise)
+    if n_missing == 0:
+        print("  No missing pairwise rankings to apply observation rate to")
+        return bundle
+
+    # Calculate how many to newly observe
+    n_to_observe = int(n_missing * observation_rate)
+
+    print(f"  Missing pairwise rankings: {n_missing}")
+    print(f"  Newly observing: {n_to_observe} ({observation_rate:.2%})")
+
+    # Randomly select indices to mark as observed
+    missing_indices = list(range(n_missing))
+    random.shuffle(missing_indices)
+    observe_indices = set(missing_indices[:n_to_observe])
+
+    # Split missing pairwise into newly observed and still missing
+    newly_observed = []
+    still_missing = []
+
+    for idx, pairwise in enumerate(missing_pairwise):
+        if idx in observe_indices:
+            newly_observed.append(pairwise)
+        else:
+            still_missing.append(pairwise)
+
+    # Update observed and missing lists
+    observed_pairwise.extend(newly_observed)
+    missing_pairwise = still_missing
+
+    # Verify
+    print(f"  Final observed pairwise: {len(observed_pairwise)}")
+    print(f"  Final missing pairwise: {len(missing_pairwise)}")
+
+    # Update statistics
+    stats = dict(bundle.stats)
+    stats["observed_pairwise"] = len(observed_pairwise)
+    stats["missing_pairwise"] = len(missing_pairwise)
+    stats["pairwise_observation_rate"] = observation_rate
+
+    # Create new bundle with updated pairwise observation pattern
+    return GroundTruthBundle(
+        embeddings=bundle.embeddings,
+        mean_preferences=bundle.mean_preferences,
+        annotator_preferences=bundle.annotator_preferences,
+        rating_probs=bundle.rating_probs,
+        rating_cumprobs=bundle.rating_cumprobs,
+        rating_thresholds_z=bundle.rating_thresholds_z,
+        base_scores=bundle.base_scores,
+        all_ratings=bundle.all_ratings,
+        all_pairwise=bundle.all_pairwise,
+        observed_ratings=bundle.observed_ratings,
+        missing_ratings=bundle.missing_ratings,
+        missing_ratings_indexes_in_test_instance=bundle.missing_ratings_indexes_in_test_instance,
         observed_pairwise=observed_pairwise,
         missing_pairwise=missing_pairwise,
         stats=stats,

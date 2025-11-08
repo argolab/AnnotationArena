@@ -21,8 +21,9 @@ class DataGenConfig:
     temperature: float = 0.5
 
     # Observation protocol
-    observation_protocol: str = "tie_breaking"  # "tie_breaking", "mar", "extended_rankings"
-    mar_missing_rate: float = 0.5  # Missing rate for MAR protocol
+    observation_protocol: str = "tie_breaking"  # "tie_breaking", "mcar", "extended_rankings"
+    mcar_missing_rate: float = 0.5  # Missing rate for MCAR protocol (was mar_missing_rate)
+    pairwise_observation_rate: float = 1.0  # For tie_breaking: fraction of missing pairwise rankings to observe (0.0-1.0)
 
     seed: Optional[int] = None
 

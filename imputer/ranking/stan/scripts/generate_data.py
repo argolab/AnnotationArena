@@ -44,7 +44,7 @@ def main():
     # Generation parameters
     parser.add_argument("--pairwise-cap-per-item", type=int, default=10,
                        help="Max pairwise comparisons per item")
-    parser.add_argument("--sigma-annotator", type=float, default=0.3,
+    parser.add_argument("--sigma-annotator", type=float, default=0.5,
                        help="Annotator preference noise")
     parser.add_argument("--sigma-measurement", type=float, default=0.1,
                        help="Measurement noise standard deviation")
@@ -56,10 +56,12 @@ def main():
 
     # Observation protocol
     parser.add_argument("--observation-protocol", type=str, default="tie_breaking",
-                       choices=["tie_breaking", "mar", "extended_rankings"],
-                       help="Observation protocol: tie_breaking (current), mar (random missing), extended_rankings (pairwise for all pairs)")
-    parser.add_argument("--mar-missing-rate", type=float, default=0.5,
-                       help="Missing rate for MAR protocol (default: 0.5 = 50%% missing)")
+                       choices=["tie_breaking", "mcar", "extended_rankings"],
+                       help="Observation protocol: tie_breaking (sequential MAR), mcar (IID missing completely at random), extended_rankings (pairwise for all pairs)")
+    parser.add_argument("--mcar-missing-rate", type=float, default=0.5,
+                       help="Missing rate for MCAR protocol (default: 0.5 = 50%% missing)")
+    parser.add_argument("--pairwise-observation-rate", type=float, default=1.0,
+                       help="For tie_breaking: fraction of missing pairwise rankings to observe (default: 1.0 = all missing remain missing, 0.3 = 30%% of missing become observed)")
     
     # Output
     parser.add_argument("--output-dir", type=str, default="OUTPUT/generated_data",
@@ -89,7 +91,8 @@ def main():
         alpha_dirichlet=args.alpha_dirichlet,
         temperature=args.temperature,
         observation_protocol=args.observation_protocol,
-        mar_missing_rate=args.mar_missing_rate,
+        mcar_missing_rate=args.mcar_missing_rate,
+        pairwise_observation_rate=args.pairwise_observation_rate,
         seed=args.seed
     )
     

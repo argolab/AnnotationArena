@@ -37,6 +37,7 @@ def main():
     # Required arguments
     parser.add_argument("--data-bundle", required=True, help="Path to data bundle JSON file")
     parser.add_argument("--output-dir", default="OUTPUT/domain_model/runs", help="Output directory for results")
+    parser.add_argument("--run-name", type=str, default=None, help="Custom run name (default: auto-generated timestamp)")
     
     # Data configuration
     parser.add_argument("--use-train-only", action="store_true", help="Use only training instance data")
@@ -82,7 +83,7 @@ def main():
     logger.info(f"Loaded bundle with {len(bundle.missing_ratings)} missing ratings and {len(bundle.missing_pairwise)} missing pairwise")
     
     # Create output directory
-    output_dir = new_run_dir(args.output_dir)
+    output_dir = new_run_dir(args.output_dir, run_name=args.run_name)
     logger.info(f"Created output directory: {output_dir}")
     print(f"Output directory: {output_dir}")
     
