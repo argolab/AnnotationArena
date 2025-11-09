@@ -462,11 +462,12 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         # Embeddings for each component (learned parameters)
         self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, self.internal_dimension))
         self.annotator_embedding_learnable = nn.Parameter(torch.randn(num_annotators, self.internal_dimension // 2))
-        # Sample random annotator embedding, then normalize to lie on the unit sphere (uniform on unit sphere)
+        # Sample random annotator embedding, then apply explicit L2 normalization (unit norm per row)
         annot_emb_raw = torch.randn(num_annotators, self.internal_dimension - self.internal_dimension // 2, device=self.device)
-        self.annotator_embedding_random = annot_emb_raw / annot_emb_raw.norm(dim=-1, keepdim=True)
+        self.annotator_embedding_random = F.normalize(annot_emb_raw, p=2, dim=-1)
+
         item_emb_raw = torch.randn(num_items, self.internal_dimension, device=self.device)
-        self.item_embedding = item_emb_raw / item_emb_raw.norm(dim=-1, keepdim=True)
+        self.item_embedding = F.normalize(item_emb_raw, p=2, dim=-1)
 
         # Initialize all learnable parameters with N(0, 1e-3) for near-zero initialization
         torch.nn.init.normal_(self.attribute_embedding, mean=0.0, std=1e-3)
