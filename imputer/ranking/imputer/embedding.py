@@ -462,8 +462,11 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         # Embeddings for each component (learned parameters)
         self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, self.internal_dimension))
         self.annotator_embedding_learnable = nn.Parameter(torch.randn(num_annotators, self.internal_dimension // 2))
-        self.annotator_embedding_random = torch.randn(num_annotators, self.internal_dimension - self.internal_dimension // 2, device=self.device) * 1e-3
-        self.item_embedding = torch.rand(num_items, self.internal_dimension, device=self.device)
+        # Sample random annotator embedding, then normalize to lie on the unit sphere (uniform on unit sphere)
+        annot_emb_raw = torch.randn(num_annotators, self.internal_dimension - self.internal_dimension // 2, device=self.device)
+        self.annotator_embedding_random = annot_emb_raw / annot_emb_raw.norm(dim=-1, keepdim=True)
+        item_emb_raw = torch.randn(num_items, self.internal_dimension, device=self.device)
+        self.item_embedding = item_emb_raw / item_emb_raw.norm(dim=-1, keepdim=True)
 
         # Initialize all learnable parameters with N(0, 1e-3) for near-zero initialization
         torch.nn.init.normal_(self.attribute_embedding, mean=0.0, std=1e-3)
@@ -529,8 +532,11 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         return
 
     def partial_reset_embedding(self):
-        # Regenerate annotator random part with N(0, 1e-3)
-        self.annotator_embedding_random = torch.randn(self.num_annotators, self.internal_dimension - self.internal_dimension // 2, device=self.device) * 1e-3
-        # Regenerate item embeddings with uniform [0, 1] for distinctness (object IDs)
-        self.item_embedding = torch.rand(self.num_items, self.internal_dimension, device=self.device)
+        # Regenerate annotator random part as uniform unit sphere (L2 normalized random direction)
+        annot_dim = self.internal_dimension - self.internal_dimension // 2
+        annot_random = torch.randn(self.num_annotators, annot_dim, device=self.device)
+        self.annotator_embedding_random = F.normalize(annot_random, p=2, dim=-1)
+        # Regenerate item embeddings as uniform unit sphere (L2 normalized random direction)
+        item_random = torch.randn(self.num_items, self.internal_dimension, device=self.device)
+        self.item_embedding = F.normalize(item_random, p=2, dim=-1)
 
