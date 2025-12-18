@@ -436,7 +436,8 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         num_likert_classes: int,
         max_rank_size: int,
         device: str,
-        randomness: bool
+        randomness: bool,
+        use_concat_embedding: bool = False,
     ):
 
         super().__init__(
@@ -444,20 +445,33 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
             max_rank_size=max_rank_size,
             embedding_dim=embedding_dim
         )
-        self.pairwise_relation = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
-        self.W_I = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
-        self.W_J = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
-        self.W_K = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
-        self.W_K1 = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
-
+        self.use_concat_embedding = use_concat_embedding
+        
         self.num_attributes = num_attributes
         self.num_annotators = num_annotators
         self.num_items = num_items
         self.device = device
-        self.internal_dimension = embedding_dim - 3
         self.randomness = randomness
 
-        print(f"Randomness set to {self.randomness}")
+        # Dimension scaling for concat mode: each component vector should be embedding_dim // 3
+        # to ensure concatenation yields embedding_dim
+        if self.use_concat_embedding:
+            # Each component vector dimension: 3 (one-hot) + internal_dimension = embedding_dim // 3
+            self.component_dim = embedding_dim // 3
+            self.internal_dimension = self.component_dim - 3
+            assert embedding_dim % 3 == 0, f"embedding_dim must be divisible by 3 for concat mode, got {embedding_dim}"
+        else:
+            # Non-concat mode: use learned weight matrices, keep original dimension logic
+            self.component_dim = embedding_dim
+            self.internal_dimension = embedding_dim - 3
+            self.W_I = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
+            self.W_J = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
+            self.W_K = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
+        
+        # Pairwise relation matrix dimension matches component dimension
+        self.pairwise_relation = nn.Parameter(torch.randn(self.component_dim, self.component_dim))
+
+        print(f"Randomness set to {self.randomness}, use_concat_embedding: {self.use_concat_embedding}")
 
         # Embeddings for each component (learned parameters)
         self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, self.internal_dimension))
@@ -482,6 +496,13 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), self.annotator_embedding_learnable[annotator_id], self.annotator_embedding_random[annotator_id]), dim=-1)
         item_vec = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_id]), dim=-1)
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
+        
+        # Combine embeddings based on use_concat_embedding flag
+        if self.use_concat_embedding:
+            total_embedding = torch.cat([attr_vec, annot_vec, item_vec], dim=-1)
+        else:
+            total_embedding = self.W_I @ attr_vec + self.W_J @ annot_vec + self.W_K @ item_vec
+        
         parameter = torch.zeros(self.parameter_dimension).to(self.device)
         if is_missing:
             # Missing/masked items: encode uniform distribution (all zeros = uniform logits)
@@ -492,7 +513,7 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
             assert rating_value is not None and 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
             parameter[0] = 0.0  # Not masked
             parameter[rating_value + 1] = self.LOGIT_HIGH  # One-hot-like encoding of rating logit
-        return torch.cat((attr_vec + annot_vec + item_vec, parameter), dim=-1)
+        return torch.cat((total_embedding, parameter), dim=-1)
 
     # Get embedding for ranking variables
     def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_missing: bool = False) -> torch.Tensor:
@@ -502,7 +523,13 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         item_embedding_1 = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_ids[0]]), dim=-1)
         item_embedding_2 = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_ids[1]]), dim=-1)
         item_embedding = item_embedding_1 + item_embedding_2 @ self.pairwise_relation
-        total_embedding = attr_vec + annot_vec  + item_embedding
+        
+        # Combine embeddings based on use_concat_embedding flag
+        if self.use_concat_embedding:
+            total_embedding = torch.cat([attr_vec, annot_vec, item_embedding], dim=-1)
+        else:
+            total_embedding = self.W_I @ attr_vec + self.W_J @ annot_vec + self.W_K @ item_embedding
+        
         parameter = torch.zeros(self.parameter_dimension).to(self.device)
         if is_missing:
             # Missing/masked items: encode uniform distribution (50-50 chance for pairwise)
