@@ -32,6 +32,7 @@ def main():
     parser.add_argument("--output-dir", default="OUTPUT/domain_model/eval", help="Output directory for evaluation results")
     
     # Optional arguments
+    parser.add_argument("--run-name", type=str, default=None, help="Custom run name (default: auto-generated)")
     parser.add_argument("--csv-pattern", default="domain_model-*.csv", help="Pattern for MCMC CSV files")
     parser.add_argument("--verbose", action="store_true", help="Print detailed results")
     
@@ -45,7 +46,7 @@ def main():
     bundle = GroundTruthBundle.from_dict(bundle_data)
     
     # Create output directory
-    output_dir = new_run_dir(args.output_dir)
+    output_dir = new_run_dir(args.output_dir, run_name=args.run_name)
     print(f"Output directory: {output_dir}")
     
     # Load MCMC fit

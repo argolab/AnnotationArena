@@ -53,7 +53,8 @@ class MultiVariableImputer(nn.Module):
                  use_final_norm=True,
                  normalize_parameter=False,
                  num_ffn_layers=4,
-                 temperature=1.0):
+                 temperature=1.0,
+                 use_concat_embedding: bool = False):
         super().__init__()
         self.device = torch.device(device)
         # Defer moving to device until after all submodules are created
@@ -68,6 +69,7 @@ class MultiVariableImputer(nn.Module):
         self.use_final_norm = use_final_norm
         self.num_ffn_layers = num_ffn_layers
         self.temperature = temperature
+        self.use_concat_embedding = use_concat_embedding
 
         if embedding_type == "pairwise":
             self.embedding_provider = PairwiseRankingProjectionEmbeddingProvider(
@@ -90,7 +92,15 @@ class MultiVariableImputer(nn.Module):
             )
         elif embedding_type == "atom":
             self.embedding_provider = AtomCompositonalEmbeddingProvider(
-                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device, randomness
+                num_attributes,
+                num_annotators,
+                num_items,
+                embedding_dim,
+                num_likert_classes,
+                max_rank_size,
+                self.device,
+                randomness,
+                use_concat_embedding=use_concat_embedding,
             )
         else:
             print("WARNING - You shouldn't be here also!")

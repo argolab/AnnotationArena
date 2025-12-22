@@ -42,16 +42,39 @@ def main():
                        help="Disable pairwise rankings (ablation)")
     
     # Generation parameters
-    parser.add_argument("--pairwise-cap-per-item", type=int, default=10,
-                       help="Max pairwise comparisons per item")
-    parser.add_argument("--sigma-annotator", type=float, default=0.5,
-                       help="Annotator preference noise")
-    parser.add_argument("--sigma-measurement", type=float, default=0.1,
-                       help="Measurement noise standard deviation")
-    parser.add_argument("--alpha-dirichlet", type=float, default=2.0,
-                       help="Dirichlet concentration parameter")
-    parser.add_argument("--temperature", type=float, default=0.5,
-                       help="Temperature for pairwise ranking generation")
+    parser.add_argument(
+        "--pairwise-cap-per-item",
+        type=int,
+        default=10,
+        help="Max pairwise comparisons per item",
+    )
+    parser.add_argument(
+        "--sigma-annotator",
+        type=float,
+        default=0.5,
+        help="Annotator preference noise",
+    )
+    parser.add_argument(
+        "--sigma-measurement",
+        type=float,
+        default=0.1,
+        help="Measurement noise standard deviation",
+    )
+    # Legacy name was --alpha-dirichlet; keep it as a deprecated alias for backward compatibility.
+    parser.add_argument(
+        "--kappa",
+        "--alpha-dirichlet",
+        dest="kappa",
+        type=float,
+        default=2.0,
+        help="Dirichlet concentration parameter (previously --alpha-dirichlet)",
+    )
+    parser.add_argument(
+        "--temperature",
+        type=float,
+        default=0.5,
+        help="Temperature for pairwise ranking generation",
+    )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
     # Observation protocol
@@ -88,7 +111,7 @@ def main():
         pairwise_cap_per_item=args.pairwise_cap_per_item,
         sigma_annotator=args.sigma_annotator,
         sigma_measurement=args.sigma_measurement,
-        alpha_dirichlet=args.alpha_dirichlet,
+        alpha_dirichlet=args.kappa,
         temperature=args.temperature,
         observation_protocol=args.observation_protocol,
         mcar_missing_rate=args.mcar_missing_rate,

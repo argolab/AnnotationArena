@@ -120,6 +120,12 @@ def main():
     parser.add_argument("--no-final-norm", dest="use_final_norm", action="store_false", help="Disable final LayerNorm (not recommended)")
     parser.add_argument("--mask-augmentations", type=int, default=1, help="Number of different masking patterns per epoch (default: 1, no augmentation)")
     parser.add_argument("--normalize-parameter", action="store_true", default=False, help="Whether to apply norm to parameter")
+    parser.add_argument(
+        "--use-concat-embedding",
+        action="store_true",
+        default=False,
+        help="Use concatenation-based AtomCompositional embedding instead of projection mixing",
+    )
 
     # Temperature scaling for calibration
     parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for scaling logits (T > 1 softens predictions, default: 1.0)")
@@ -230,7 +236,8 @@ def main():
         use_final_norm=args.use_final_norm,
         normalize_parameter=args.normalize_parameter,
         num_ffn_layers=args.num_ffn_layers,
-        temperature=args.temperature
+        temperature=args.temperature,
+        use_concat_embedding=bool(args.use_concat_embedding),
     )
 
     # Print temperature scaling status
