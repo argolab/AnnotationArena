@@ -178,6 +178,17 @@ def main():
     test_observed = converter.create_variables_from_bundle(bundle, partition="test", status="observed")
     test_missing = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
 
+    def print_counts(name, data):
+        total = len(data)
+        rating_count = sum(1 for var in data if not var.is_listwise)
+        ranking_count = sum(1 for var in data if var.is_listwise)
+        print(f"{name}: total={total} (ratings={rating_count}, rankings={ranking_count})")
+
+    print_counts("train_observed", train_observed)
+    print_counts("train_missing", train_missing)
+    print_counts("test_observed", test_observed)
+    print_counts("test_missing", test_missing)
+
     # Test-only training mode: use test set for training, ignore training set
     if args.test_only_training:
         print("Test-only training mode: Training on test_observed, evaluating on test_missing")
@@ -369,6 +380,8 @@ def main():
         print(f"  Mode: {mode} (patience={args.early_stopping_patience}, min_delta={args.early_stopping_min_delta})")
 
     start_time = time.time()
+
+    ###################################################################################################
     # Train
     training_results = trainer.train(
         train_observed_vars=train_vars,
@@ -384,6 +397,7 @@ def main():
         decay_observed_weight=args.decay_observed_weight,
         decay_observed_epochs=args.decay_observed_epochs,
     )
+    ###################################################################################################
 
     running_time = time.time() - start_time
     print(running_time)
