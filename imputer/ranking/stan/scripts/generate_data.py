@@ -159,6 +159,7 @@ def main():
         "missing_ratings": bundle.missing_ratings,
         "observed_pairwise": bundle.observed_pairwise,
         "missing_pairwise": bundle.missing_pairwise,
+        "missing_ratings_indexes_in_test_instance": bundle.missing_ratings_indexes_in_test_instance,
         "stats": bundle.stats,
         "train_posterior_rating_probs": (bundle.train_posterior_rating_probs.tolist() if bundle.train_posterior_rating_probs is not None else None),
         "test_posterior_rating_probs": (bundle.test_posterior_rating_probs.tolist() if bundle.test_posterior_rating_probs is not None else None),
