@@ -292,6 +292,9 @@ generated quantities {
     // ===== TRAINING INSTANCE OBSERVATION PROTOCOL =====
     for (k in 1:K_train) {  // for each training item
         // Sample 4 different annotators from training set
+        if ((train_annotator_end - train_annotator_start + 1) < 4) {
+            reject("Number of available training annotators is less than 4");
+        }
         array[4] int selected_annotators;
         int num_selected = 0;
         
@@ -329,6 +332,9 @@ generated quantities {
     // ===== TEST INSTANCE OBSERVATION PROTOCOL =====
     for (k in 1:K_test) {
         // Sample 4 different annotators from test set
+        if ((test_annotator_end - test_annotator_start + 1) < 4) {
+            reject("Number of available test annotators is less than 4");
+        }
         array[4] int selected_annotators;
         int num_selected = 0;
         
