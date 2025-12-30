@@ -147,14 +147,23 @@ class MultiVariableImputer(nn.Module):
     def forward(self, ranking_data_list, attn_mask: torch.Tensor | None = None, return_intermediate: bool = False):
         # Support both structured list inputs and legacy tensor inputs
         
-        # Debug: Count tokens by type
-        # total_tokens = len(ranking_data_list)
-        # rating_tokens = sum(1 for var in ranking_data_list if not var.is_listwise)
-        # pairwise_tokens = sum(1 for var in ranking_data_list if var.is_listwise)
-        # print(f"[DEBUG] Forward pass: {total_tokens} total tokens ({rating_tokens} ratings, {pairwise_tokens} pairwise rankings)")
+        # Debug: Count tokens by type and status
+        total_tokens = len(ranking_data_list)
+        rating_tokens = sum(1 for var in ranking_data_list if not var.is_listwise)
+        pairwise_tokens = sum(1 for var in ranking_data_list if var.is_listwise)
+        status_counts = {0: 0, 1: 0, 2: 0}
+        for var in ranking_data_list:
+            if var.status in status_counts:
+                status_counts[var.status] += 1
+        print(
+            f"\033[96m[DEBUG] Forward pass: {total_tokens} total tokens "
+            f"({rating_tokens} ratings, {pairwise_tokens} pairwise rankings) | "
+            f"by status: missing={status_counts[0]}, masked={status_counts[1]}, observed={status_counts[2]}"
+            f"\033[0m"
+        )
         # import traceback
         # stack = traceback.format_stack(limit=5)
-        # print("[DEBUG] Stack Trace (most recent call last):")
+        # print("\033[96m[DEBUG] Stack Trace (most recent call last):\033[0m")
         # for line in stack:
         #     print(f"\033[96m{line.strip()}\033[0m")
 

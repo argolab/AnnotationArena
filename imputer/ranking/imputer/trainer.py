@@ -242,7 +242,7 @@ class ImputerTrainer:
 
         # Apply masking to observed
         masked_or_observed = self._apply_training_mask(train_observed_vars, masking_rate)
-        print(f"[DEBUG] Number of masked or observed training variables: {len(masked_or_observed)}")
+        # print(f"[DEBUG] Number of masked or observed training variables: {len(masked_or_observed)}")
 
         # Append missing as-is (status=0)
         batch_list: List[RankingData] = []
@@ -253,7 +253,7 @@ class ImputerTrainer:
                 raise ValueError("train_missing_vars contains an entry that is not missing")
             batch_list.append(var)
 
-        print(f"[DEBUG] Number of training variables in batch (now include missing variables): {len(batch_list)}")
+        # print(f"[DEBUG] Number of training variables in batch (now include missing variables): {len(batch_list)}")
 
         # Forward
         out = self.model(batch_list)
