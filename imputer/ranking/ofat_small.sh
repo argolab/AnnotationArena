@@ -5,7 +5,7 @@
 
 # Fixed base parameters for all experiments (SMALL SCALE)
 BASE_I=3
-BASE_J=6
+BASE_J=9
 BASE_C=5
 BASE_K_TRAIN=5
 BASE_K_TEST=5
@@ -22,18 +22,20 @@ BASE_USE_CONCAT=0  # 0 = disabled, 1 = enabled for AtomCompositional embeddings
 # Marformer hyperparameters (fixed across all experiments)
 MARFORMER_EPOCHS=70
 MARFORMER_LR=1e-4
-MARFORMER_MASKING_RATE=0.50
+MARFORMER_MASKING_RATE=1
 MARFORMER_MASKED_LOSS_WEIGHT=15
 MARFORMER_OBSERVED_LOSS_WEIGHT=1
 MARFORMER_MASK_AUGMENTATIONS=5  # what is this?
-MARFORMER_EARLY_STOPPING_PATIENCE=5
+MARFORMER_EARLY_STOPPING_PATIENCE=3
 MARFORMER_DEVICE="cuda"
 
 # Stan hyperparameters - TWO configurations per experiment
 STAN_4C_CHAINS=4
 STAN_1C_CHAINS=1
-STAN_1C_ITER_SAMPLING=300
-STAN_1C_WARMUP=100
+STAN_1C_ITER_SAMPLING=30
+STAN_1C_WARMUP=10
+STAN_4C_ITER_SAMPLING=30
+STAN_4C_WARMUP=10
 
 # Function to run complete experiment pipeline
 run_experiment() {
@@ -54,7 +56,8 @@ run_experiment() {
     local uc_str=$use_concat_embedding
 
     # Construct run name
-    local run_name="updated_ofat_small_${varied_param}_D${d_str}_sa${sa_str}_sm${sm_str}_kp${kp_str}_uc${uc_str}_${protocol_code}"
+    # local run_name="updated_ofat_small_${varied_param}_D${d_str}_sa${sa_str}_sm${sm_str}_kp${kp_str}_uc${uc_str}_${protocol_code}"
+    local run_name="smoke_ofat_run_all_${varied_param}_D${d_str}_sa${sa_str}_sm${sm_str}_kp${kp_str}_uc${uc_str}_${protocol_code}"
 
     echo ""
     echo "=========================================="
@@ -91,6 +94,7 @@ run_experiment() {
         --sigma-measurement $sigma_measurement \
         --kappa $kappa \
         --run-name $run_name \
+        --overwrite-existing-data \
         $protocol_args </dev/null
 
     if [ $? -ne 0 ]; then
@@ -103,6 +107,8 @@ run_experiment() {
     python imputer/run_imputer.py \
         --data-dir OUTPUT/generated_data/${run_name} \
         --run-name ${run_name}_marformer \
+        --overwrite-existing-data \
+        --embedding-dim $((D * 3)) \
         --epochs $MARFORMER_EPOCHS \
         --lr $MARFORMER_LR \
         --masking-rate $MARFORMER_MASKING_RATE \
@@ -115,6 +121,7 @@ run_experiment() {
         --transductive_learning \
         --no-final-norm \
         --normalize-parameter \
+        --full_random \
         --device $MARFORMER_DEVICE \
         $concat_flag </dev/null
 
@@ -128,7 +135,10 @@ run_experiment() {
     python stan/scripts/run_inference.py \
         --data-bundle OUTPUT/generated_data/${run_name}/data_bundle.json \
         --chains $STAN_4C_CHAINS \
-        --run-name ${run_name}_stan4c </dev/null
+        --iter-sampling $STAN_4C_ITER_SAMPLING \
+        --iter-warmup $STAN_4C_WARMUP \
+        --run-name ${run_name}_stan4c \
+        --overwrite-existing-data </dev/null
 
     if [ $? -ne 0 ]; then
         echo "ERROR: Stan inference (4 chains) failed for $run_name"
@@ -142,7 +152,8 @@ run_experiment() {
         --chains $STAN_1C_CHAINS \
         --iter-sampling $STAN_1C_ITER_SAMPLING \
         --iter-warmup $STAN_1C_WARMUP \
-        --run-name ${run_name}_stan1c </dev/null
+        --run-name ${run_name}_stan1c \
+        --overwrite-existing-data </dev/null
 
     if [ $? -ne 0 ]; then
         echo "ERROR: Stan inference (1 chain) failed for $run_name"
@@ -154,7 +165,8 @@ run_experiment() {
     python stan/scripts/evaluate_predictions.py \
         --data-bundle OUTPUT/generated_data/${run_name}/data_bundle.json \
         --mcmc-dir OUTPUT/domain_model/runs/${run_name}_stan4c \
-        --run-name ${run_name}_stan4c_eval </dev/null
+        --run-name ${run_name}_stan4c_eval \
+        --overwrite-existing-data </dev/null
 
     if [ $? -ne 0 ]; then
         echo "ERROR: Stan evaluation (4 chains) failed for $run_name"
@@ -166,7 +178,8 @@ run_experiment() {
     python stan/scripts/evaluate_predictions.py \
         --data-bundle OUTPUT/generated_data/${run_name}/data_bundle.json \
         --mcmc-dir OUTPUT/domain_model/runs/${run_name}_stan1c \
-        --run-name ${run_name}_stan1c_eval </dev/null
+        --run-name ${run_name}_stan1c_eval \
+        --overwrite-existing-data </dev/null
 
     if [ $? -ne 0 ]; then
         echo "ERROR: Stan evaluation (1 chain) failed for $run_name"
@@ -208,7 +221,7 @@ echo "  κ=$BASE_KAPPA"
 echo "  Protocol=$BASE_PROTOCOL (SMAR)"
 echo "  use_concat_embedding=$BASE_USE_CONCAT"
 echo ""
-echo "Total experiments: 14"
+echo "Total experiments: 15"
 echo "  Center: 1"
 echo "  Vary D: 2 (4, 16)"
 echo "  Vary σ_annotator: 3 (0.1, 0.7, 1.0)"
@@ -239,17 +252,17 @@ if [ $? -ne 0 ]; then
 fi
 ((TOTAL_EXPERIMENTS++))
 
-# # ===== OFAT: Vary D (embedding dimension) =====
-# echo "======================================"
-# echo "OFAT SET 1: Varying D"
-# echo "======================================"
-# for D in 4 16; do
-#     run_experiment "varyD" $D $BASE_SIGMA_ANNOTATOR $BASE_SIGMA_MEASUREMENT $BASE_KAPPA $BASE_PROTOCOL $BASE_PROTOCOL_CODE $BASE_USE_CONCAT
-#     if [ $? -ne 0 ]; then
-#         ((FAILED_EXPERIMENTS++))
-#     fi
-#     ((TOTAL_EXPERIMENTS++))
-# done
+# ===== OFAT: Vary D (embedding dimension) =====
+echo "======================================"
+echo "OFAT SET 1: Varying D"
+echo "======================================"
+for D in 4 16; do
+    run_experiment "varyD" $D $BASE_SIGMA_ANNOTATOR $BASE_SIGMA_MEASUREMENT $BASE_KAPPA $BASE_PROTOCOL $BASE_PROTOCOL_CODE $BASE_USE_CONCAT
+    if [ $? -ne 0 ]; then
+        ((FAILED_EXPERIMENTS++))
+    fi
+    ((TOTAL_EXPERIMENTS++))
+done
 
 # # ===== OFAT: Vary sigma_annotator =====
 # echo "======================================"
@@ -287,36 +300,36 @@ fi
 #     ((TOTAL_EXPERIMENTS++))
 # done
 
-# # ===== OFAT: Vary Protocol =====
-# echo "======================================"
-# echo "OFAT SET 5: Varying Protocol"
-# echo "======================================"
+# ===== OFAT: Vary Protocol =====
+echo "======================================"
+echo "OFAT SET 5: Varying Protocol"
+echo "======================================"
 
-# # SMAR-Extended (extended_rankings with 20% additional pairwise)
-# run_experiment "varyProtocol" $BASE_D $BASE_SIGMA_ANNOTATOR $BASE_SIGMA_MEASUREMENT $BASE_KAPPA "extended_rankings" "smarext" $BASE_USE_CONCAT
-# if [ $? -ne 0 ]; then
-#     ((FAILED_EXPERIMENTS++))
-# fi
-# ((TOTAL_EXPERIMENTS++))
+# SMAR-Extended (extended_rankings with 20% additional pairwise)
+run_experiment "varyProtocol" $BASE_D $BASE_SIGMA_ANNOTATOR $BASE_SIGMA_MEASUREMENT $BASE_KAPPA "extended_rankings" "smarext" $BASE_USE_CONCAT
+if [ $? -ne 0 ]; then
+    ((FAILED_EXPERIMENTS++))
+fi
+((TOTAL_EXPERIMENTS++))
 
-# # MCAR_0.5 (mcar with 50% missing rate)
-# run_experiment "varyProtocol" $BASE_D $BASE_SIGMA_ANNOTATOR $BASE_SIGMA_MEASUREMENT $BASE_KAPPA "mcar" "mcar05" $BASE_USE_CONCAT
-# if [ $? -ne 0 ]; then
-#     ((FAILED_EXPERIMENTS++))
-# fi
-# ((TOTAL_EXPERIMENTS++))
+# MCAR_0.5 (mcar with 50% missing rate)
+run_experiment "varyProtocol" $BASE_D $BASE_SIGMA_ANNOTATOR $BASE_SIGMA_MEASUREMENT $BASE_KAPPA "mcar" "mcar05" $BASE_USE_CONCAT
+if [ $? -ne 0 ]; then
+    ((FAILED_EXPERIMENTS++))
+fi
+((TOTAL_EXPERIMENTS++))
 
-# # ===== OFAT: Vary use_concat_embedding =====
-# echo "======================================"
-# echo "OFAT SET 6: Varying use_concat_embedding"
-# echo "======================================"
-# for UC in 0 1; do
-#     run_experiment "varyConcat" $BASE_D $BASE_SIGMA_ANNOTATOR $BASE_SIGMA_MEASUREMENT $BASE_KAPPA $BASE_PROTOCOL $BASE_PROTOCOL_CODE $UC
-#     if [ $? -ne 0 ]; then
-#         ((FAILED_EXPERIMENTS++))
-#     fi
-#     ((TOTAL_EXPERIMENTS++))
-# done
+# ===== OFAT: Vary use_concat_embedding =====
+echo "======================================"
+echo "OFAT SET 6: Varying use_concat_embedding"
+echo "======================================"
+for UC in 0 1; do
+    run_experiment "varyConcat" $BASE_D $BASE_SIGMA_ANNOTATOR $BASE_SIGMA_MEASUREMENT $BASE_KAPPA $BASE_PROTOCOL $BASE_PROTOCOL_CODE $UC
+    if [ $? -ne 0 ]; then
+        ((FAILED_EXPERIMENTS++))
+    fi
+    ((TOTAL_EXPERIMENTS++))
+done
 
 # # ===== Summary =====
 # echo ""

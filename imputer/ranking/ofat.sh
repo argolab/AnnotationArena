@@ -12,7 +12,7 @@ BASE_K_TRAIN=10
 BASE_K_TEST=10
 
 # Baseline hyperparameter values (center of OFAT space)
-BASE_D=64
+BASE_D=16
 BASE_SIGMA_ANNOTATOR=0.5
 BASE_SIGMA_MEASUREMENT=0.1
 BASE_KAPPA=1.0
@@ -23,11 +23,11 @@ BASE_USE_CONCAT=0  # 0 = disabled, 1 = enabled for AtomCompositional embeddings
 # Marformer hyperparameters (fixed across all experiments)
 MARFORMER_EPOCHS=70
 MARFORMER_LR=1e-4
-MARFORMER_MASKING_RATE=0.50
+MARFORMER_MASKING_RATE=0.15
 MARFORMER_MASKED_LOSS_WEIGHT=15
 MARFORMER_OBSERVED_LOSS_WEIGHT=1
 MARFORMER_MASK_AUGMENTATIONS=5
-MARFORMER_EARLY_STOPPING_PATIENCE=5
+MARFORMER_EARLY_STOPPING_PATIENCE=10
 MARFORMER_DEVICE="cuda"
 
 # Stan hyperparameters - TWO configurations per experiment
@@ -35,6 +35,8 @@ STAN_4C_CHAINS=4
 STAN_1C_CHAINS=1
 STAN_1C_ITER_SAMPLING=3000
 STAN_1C_WARMUP=1000
+STAN_4C_ITER_SAMPLING=3000
+STAN_4C_WARMUP=1000
 
 # Function to run complete experiment pipeline
 run_experiment() {
@@ -79,7 +81,7 @@ run_experiment() {
     fi
 
     # Step 1: Generate data
-    echo "[Step 1/5] Generating data..."
+    echo "[Step 1/6] Generating data..."
     python stan/scripts/generate_data.py \
         --K-train $BASE_K_TRAIN \
         --K-test $BASE_K_TEST \
@@ -92,6 +94,7 @@ run_experiment() {
         --sigma-measurement $sigma_measurement \
         --kappa $kappa \
         --run-name $run_name \
+        --overwrite-existing-data \
         $protocol_args </dev/null
 
     if [ $? -ne 0 ]; then
@@ -100,10 +103,12 @@ run_experiment() {
     fi
 
     # Step 2: Run Marformer
-    echo "[Step 2/5] Running Marformer..."
+    echo "[Step 2/6] Running Marformer..."
     python imputer/run_imputer.py \
         --data-dir OUTPUT/generated_data/${run_name} \
         --run-name ${run_name}_marformer \
+        --overwrite-existing-data \
+        --embedding-dim $((D * 3)) \
         --epochs $MARFORMER_EPOCHS \
         --lr $MARFORMER_LR \
         --masking-rate $MARFORMER_MASKING_RATE \
@@ -125,11 +130,14 @@ run_experiment() {
     fi
 
     # Step 3: Run Stan inference (4 chains)
-    echo "[Step 3/5] Running Stan inference (4 chains)..."
+    echo "[Step 3/6] Running Stan inference (4 chains)..."
     python stan/scripts/run_inference.py \
         --data-bundle OUTPUT/generated_data/${run_name}/data_bundle.json \
         --chains $STAN_4C_CHAINS \
-        --run-name ${run_name}_stan4c </dev/null
+        --iter-sampling $STAN_4C_ITER_SAMPLING \
+        --iter-warmup $STAN_4C_WARMUP \
+        --run-name ${run_name}_stan4c \
+        --overwrite-existing-data </dev/null
 
     if [ $? -ne 0 ]; then
         echo "ERROR: Stan inference (4 chains) failed for $run_name"
@@ -137,13 +145,14 @@ run_experiment() {
     fi
 
     # Step 4: Run Stan inference (1 chain, long)
-    echo "[Step 4/5] Running Stan inference (1 chain, long)..."
+    echo "[Step 4/6] Running Stan inference (1 chain, long)..."
     python stan/scripts/run_inference.py \
         --data-bundle OUTPUT/generated_data/${run_name}/data_bundle.json \
         --chains $STAN_1C_CHAINS \
         --iter-sampling $STAN_1C_ITER_SAMPLING \
         --iter-warmup $STAN_1C_WARMUP \
-        --run-name ${run_name}_stan1c </dev/null
+        --run-name ${run_name}_stan1c \
+        --overwrite-existing-data </dev/null
 
     if [ $? -ne 0 ]; then
         echo "ERROR: Stan inference (1 chain) failed for $run_name"
@@ -151,11 +160,12 @@ run_experiment() {
     fi
 
     # Step 5: Evaluate Stan predictions (4-chain version)
-    echo "[Step 5/5] Evaluating Stan predictions (4 chains)..."
+    echo "[Step 5/6] Evaluating Stan predictions (4 chains)..."
     python stan/scripts/evaluate_predictions.py \
         --data-bundle OUTPUT/generated_data/${run_name}/data_bundle.json \
         --mcmc-dir OUTPUT/domain_model/runs/${run_name}_stan4c \
-        --run-name ${run_name}_stan4c_eval </dev/null
+        --run-name ${run_name}_stan4c_eval \
+        --overwrite-existing-data </dev/null
 
     if [ $? -ne 0 ]; then
         echo "ERROR: Stan evaluation (4 chains) failed for $run_name"
@@ -163,15 +173,28 @@ run_experiment() {
     fi
 
     # Step 5b: Evaluate Stan predictions (1-chain version)
-    echo "[Step 5b/5] Evaluating Stan predictions (1 chain)..."
+    echo "[Step 5b/6] Evaluating Stan predictions (1 chain)..."
     python stan/scripts/evaluate_predictions.py \
         --data-bundle OUTPUT/generated_data/${run_name}/data_bundle.json \
         --mcmc-dir OUTPUT/domain_model/runs/${run_name}_stan1c \
-        --run-name ${run_name}_stan1c_eval </dev/null
+        --run-name ${run_name}_stan1c_eval \
+        --overwrite-existing-data </dev/null
 
     if [ $? -ne 0 ]; then
         echo "ERROR: Stan evaluation (1 chain) failed for $run_name"
         return 1
+    fi
+
+    # Step 6: Generate visualization plots
+    echo "[Step 6/6] Generating visualization plots..."
+    python utils/visualize.py \
+        --run-dir OUTPUT/IMPUTER/${run_name}_marformer \
+        --stan-metrics OUTPUT/domain_model/eval/${run_name}_stan4c_eval/predictive_metrics.json </dev/null
+
+    if [ $? -ne 0 ]; then
+        echo "WARNING: Visualization failed for $run_name (continuing anyway)"
+    else
+        echo "  - Plots saved to OUTPUT/IMPUTER/${run_name}_marformer/plots/"
     fi
 
     echo ""
@@ -196,9 +219,9 @@ echo "  κ=$BASE_KAPPA"
 echo "  Protocol=$BASE_PROTOCOL (SMAR)"
 echo "  use_concat_embedding=$BASE_USE_CONCAT"
 echo ""
-echo "Total experiments: 14"
+echo "Total experiments: 17"
 echo "  Center: 1"
-echo "  Vary D: 2 (32, 128)"
+echo "  Vary D: 3 (8, 32, 64)"
 echo "  Vary σ_annotator: 3 (0.1, 0.7, 1.0)"
 echo "  Vary σ_measurement: 2 (0.5, 0.7)"
 echo "  Vary κ: 2 (0.5, 2.0)"
@@ -209,6 +232,7 @@ echo "Each experiment runs:"
 echo "  - 1 Marformer training"
 echo "  - 1 Stan (4 chains)"
 echo "  - 1 Stan (1 chain, 3000 samples)"
+echo "  - 1 Visualization (learning curves + calibration)"
 echo "=============================================="
 echo ""
 
@@ -230,7 +254,7 @@ fi
 echo "======================================"
 echo "OFAT SET 1: Varying D"
 echo "======================================"
-for D in 32 128; do
+for D in 8 32 64; do
     run_experiment "varyD" $D $BASE_SIGMA_ANNOTATOR $BASE_SIGMA_MEASUREMENT $BASE_KAPPA $BASE_PROTOCOL $BASE_PROTOCOL_CODE $BASE_USE_CONCAT
     if [ $? -ne 0 ]; then
         ((FAILED_EXPERIMENTS++))
