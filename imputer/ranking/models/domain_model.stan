@@ -72,8 +72,9 @@ transformed parameters {
     // Rating thresholds: q_ij = Φ⁻¹(cumsum(p_ij))
     array[I*J] vector[C+1] rating_thresholds;
     
-    // Total standard deviation per annotator-criterion for rating binning
-    array[I*J] real total_std;  // sqrt(||v_ij||^2 + sigma_measurement^2)
+    // Preference norm per annotator-criterion for rating binning
+    // Binning is based on base score distribution (std = pref_norm), not including measurement noise
+    array[I*J] real pref_norm;  // ||v_ij||
     
     // Compute base scores: z_ij_k = v_ij · e_k  
     for (i in 1:I) {
@@ -98,12 +99,12 @@ transformed parameters {
         rating_thresholds[ij][C+1] = positive_infinity();  // +∞ for category C
     }
     
-    // Compute total_std per ij for rating likelihood standardization
+    // Compute pref_norm per ij for rating likelihood standardization
+    // Binning is based on base score distribution (std = pref_norm), measurement noise is Bayesian variation
     for (i in 1:I) {
         for (j in 1:J) {
             int ij_idx = (i-1)*J + j;
-            real pref_norm = sqrt(dot_self(annotator_preferences[ij_idx]));
-            total_std[ij_idx] = sqrt(pref_norm^2 + square(sigma_measurement));
+            pref_norm[ij_idx] = sqrt(dot_self(annotator_preferences[ij_idx]));
         }
     }
 
@@ -129,7 +130,7 @@ model {
     for (i in 1:I) {
         mean_preferences[i] ~ normal(0, 1);
     }
-    
+
     // Annotator preferences: v_ij ~ N(v_i, σ_a²I)
     for (i in 1:I) {
         for (j in 1:J) {
@@ -146,6 +147,8 @@ model {
     // ===== LIKELIHOODS =====
     
     // 1. RATING LIKELIHOOD
+    // Measurement noise is Bayesian variation: noisy_score = base_score + epsilon, epsilon ~ N(0, sigma_measurement^2)
+    // After standardization by pref_norm: standardized_noisy_score ~ N(base_score/pref_norm, (sigma_measurement/pref_norm)^2)
     for (n in 1:N_ratings) {
         int i = rating_attributes[n];
         int j = rating_annotators[n]; 
@@ -153,28 +156,28 @@ model {
         int c = rating_values[n];
         int ij_idx = (i-1)*J + j;
         
-        // Base score: z_ijk = v_ij · e_k
         real base_score = base_scores[ij_idx, k];
+        real upper_threshold = rating_thresholds[ij_idx][c+1];  // threshold in z-space (standardized by pref_norm)
+        real lower_threshold = rating_thresholds[ij_idx][c];  // threshold in z-space
         
-        // Rating likelihood: P(rating = c) = Φ((Q_c - z)/σ_m) - Φ((Q_{c-1} - z)/σ_m)
-        // where Q_c are the thresholds and ε ~ N(0, σ_m²)
-        real upper_threshold = rating_thresholds[ij_idx][c+1];
-        real lower_threshold = rating_thresholds[ij_idx][c];
+        // Compute P(category c | base_score) accounting for measurement noise
+        // Standardized noisy score: (base_score + epsilon) / pref_norm
+        // Mean: base_score/pref_norm, Std: sigma_measurement/pref_norm
+        real mean_std = base_score / pref_norm[ij_idx];
+        real noise_std = sigma_measurement / pref_norm[ij_idx];
         
         real upper_prob, lower_prob;
         
         if (upper_threshold == positive_infinity()) {
             upper_prob = 1.0;
         } else {
-            // Standardize by total_std to match data generation binning
-            upper_prob = Phi((upper_threshold - base_score) / total_std[ij_idx]);
+            upper_prob = Phi((upper_threshold - mean_std) / noise_std);
         }
         
         if (lower_threshold == negative_infinity()) {
             lower_prob = 0.0;
         } else {
-            // Standardize by total_std to match data generation binning
-            lower_prob = Phi((lower_threshold - base_score) / total_std[ij_idx]);
+            lower_prob = Phi((lower_threshold - mean_std) / noise_std);
         }
         
         real bin_prob = upper_prob - lower_prob;
@@ -196,7 +199,7 @@ model {
         // Pairwise comparison: [item1, item2] with order 1 or 2
         int item1 = pairwise_ranking_items[n, 1];
         int item2 = pairwise_ranking_items[n, 2];
-        int order = pairwise_ranking_orders[n];  // 1 if item1 > item2, 2 if item2 > item1
+        int order = pairwise_ranking_orders[n];  // 1 if item1 > item2, 2 if item2 > item1 TODO: double check this convention.
         
         // Base scores scaled by temperature: z_ijk/T
         real score1 = base_scores[ij_idx, item1] / temperature;
@@ -206,8 +209,11 @@ model {
         // This is equivalent to log_inv_logit(score1 - score2)
         if (order == 1) {  // item1 > item2
             target += log_inv_logit(score1 - score2);
-        } else {  // item2 > item1
+        } else if (order==2) {  // item2 > item1
             target += log_inv_logit(score2 - score1);
+        }
+        else {
+            reject("Error: pairwise_ranking_orders[n] must be 1 or 2.");
         }
     }
 }
@@ -238,18 +244,22 @@ generated quantities {
         real upper_threshold = rating_thresholds[ij_idx][c+1];
         real lower_threshold = rating_thresholds[ij_idx][c];
         
+        // Compute P(category c | base_score) accounting for measurement noise (same as model block)
+        real mean_std = base_score / pref_norm[ij_idx];
+        real noise_std = sigma_measurement / pref_norm[ij_idx];
+        
         real upper_prob, lower_prob;
         
         if (upper_threshold == positive_infinity()) {
             upper_prob = 1.0;
         } else {
-            upper_prob = Phi((upper_threshold - base_score) / total_std[ij_idx]);
+            upper_prob = Phi((upper_threshold - mean_std) / noise_std);
         }
         
         if (lower_threshold == negative_infinity()) {
             lower_prob = 0.0;
         } else {
-            lower_prob = Phi((lower_threshold - base_score) / total_std[ij_idx]);
+            lower_prob = Phi((lower_threshold - mean_std) / noise_std);
         }
         
         real bin_prob = upper_prob - lower_prob;
@@ -336,6 +346,10 @@ generated quantities {
         real base_score = base_scores[ij_idx, k];
         
         // Compute predicted probability distribution over Likert scale
+        // Account for measurement noise: noisy_score = base_score + epsilon, epsilon ~ N(0, sigma_measurement^2)
+        real mean_std = base_score / pref_norm[ij_idx];
+        real noise_std = sigma_measurement / pref_norm[ij_idx];
+        
         for (c in 1:C) {
             real upper_threshold = rating_thresholds[ij_idx][c+1];
             real lower_threshold = rating_thresholds[ij_idx][c];
@@ -345,21 +359,22 @@ generated quantities {
             if (upper_threshold == positive_infinity()) {
                 upper_prob = 1.0;
             } else {
-                upper_prob = Phi((upper_threshold - base_score) / total_std[ij_idx]);
+                upper_prob = Phi((upper_threshold - mean_std) / noise_std);
             }
             
             if (lower_threshold == negative_infinity()) {
                 lower_prob = 0.0;
             } else {
-                lower_prob = Phi((lower_threshold - base_score) / total_std[ij_idx]);
+                lower_prob = Phi((lower_threshold - mean_std) / noise_std);
             }
             
             missing_rating_probs[n][c] = upper_prob - lower_prob;
         }
         
         // Sample a rating from the predicted distribution
+        // Generate noisy score and standardize for binning
         real noisy_score = base_score + normal_rng(0, sigma_measurement);
-        real standardized_score = noisy_score / total_std[ij_idx];
+        real standardized_score = noisy_score / pref_norm[ij_idx];
         int rating = 1;
         for (c in 1:C) {
             if (standardized_score <= rating_thresholds[ij_idx][c+1]) {
@@ -398,7 +413,7 @@ generated quantities {
         missing_pairwise_logits[n] = score1 - score2;
         
         // Sample ranking using Gumbel noise (same as in data generation)
-        real gumbel1 = -log(-log(uniform_rng(0, 1)));  // Gumbel noise G1
+        real gumbel1 = -log(-log(uniform_rng(0, 1)));  // Gumbel noise G1, standard normal since we already normalized.
         real gumbel2 = -log(-log(uniform_rng(0, 1)));  // Gumbel noise G2
         
         real utility1 = score1 + gumbel1;  // U1 = z_ijk1/T + G1

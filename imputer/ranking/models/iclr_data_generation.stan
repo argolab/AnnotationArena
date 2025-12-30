@@ -24,6 +24,7 @@ generated quantities {
     // Debug printing flag (0 = off, 1 = on). Toggle here.
     int DEBUG_PRINT;
     DEBUG_PRINT = 1;
+    
     matrix[I, D] mean_preferences;              // Global criteria embeddings v_i
     matrix[I*J, D] annotator_preferences;      // All annotator preferences v_ij
     array[I*J] simplex[C] rating_probs;        // Rating probabilities p_ij
@@ -151,10 +152,10 @@ generated quantities {
             int idx = (i-1)*J + j;
             for (k in 1:K_train) {
                 // Generate rating with noise and binning: x_ijk_train = Bin(z_ijk_train + ε_ijk, σ_measurement)
+                // Noise is added to base score, but binning is based on distribution of base scores (std = pref_norm)
                 real noisy_score = train_base_scores[idx, k] + normal_rng(0, sigma_measurement);
                 real pref_norm = sqrt(dot_self(annotator_preferences[idx]));
-                real total_std = sqrt(pref_norm^2 + sigma_measurement^2);
-                real standardized_score = noisy_score / total_std;
+                real standardized_score = noisy_score / pref_norm;   // Standardize by preference norm only (base score distribution)
                 real cdf_val = Phi(standardized_score);
                 
                 // Bin into rating categories using cumulative probabilities q_ij
@@ -177,10 +178,10 @@ generated quantities {
             int idx = (i-1)*J + j;
             for (k in 1:K_test) {
                 // Generate rating with noise and binning: x_ijk_test = Bin(z_ijk_test + ε_ijk, σ_measurement)
+                // Noise is added to base score, but binning is based on distribution of base scores (std = pref_norm)
                 real noisy_score = test_base_scores[idx, k] + normal_rng(0, sigma_measurement);
                 real pref_norm = sqrt(dot_self(annotator_preferences[idx]));
-                real total_std = sqrt(pref_norm^2 + sigma_measurement^2);
-                real standardized_score = noisy_score / total_std;
+                real standardized_score = noisy_score / pref_norm;   // Standardize by preference norm only (base score distribution)
                 real cdf_val = Phi(standardized_score);
                 
                 // Bin into rating categories using cumulative probabilities q_ij
@@ -209,13 +210,13 @@ generated quantities {
                 // True base score: z_ijk_train = v_ij · e_k_train
                 real true_base_score = train_base_scores[idx, k];
 
-                // Precompute scaling terms
+                // Precompute scaling terms - binning based on base score distribution (std = pref_norm)
                 real pref_norm = sqrt(dot_self(annotator_preferences[idx]));
-                real total_std_val = sqrt(pref_norm^2 + sigma_measurement^2);
-                real mean_std = true_base_score / total_std_val;
+                real mean_std = true_base_score / pref_norm;  // Standardize mean by preference norm only
 
                 // Compute bin probabilities against z-cutpoints
-                real noise_sd = (sigma_measurement == 0) ? 0 : sigma_measurement / total_std_val;
+                // Noise is added to base score, but standardization uses only pref_norm
+                real noise_sd = (sigma_measurement == 0) ? 0 : sigma_measurement / pref_norm;
                 if (noise_sd == 0) {
                     // Deterministic: assign by cutpoints in z-space
                     int one_c = 1;
@@ -249,13 +250,13 @@ generated quantities {
                 // True base score: z_ijk_test = v_ij · e_k_test
                 real true_base_score = test_base_scores[idx, k];
 
-                // Precompute scaling terms
+                // Precompute scaling terms - binning based on base score distribution (std = pref_norm)
                 real pref_norm = sqrt(dot_self(annotator_preferences[idx]));
-                real total_std_val = sqrt(pref_norm^2 + sigma_measurement^2);
-                real mean_std = true_base_score / total_std_val;
+                real mean_std = true_base_score / pref_norm;  // Standardize mean by preference norm only
 
                 // Compute bin probabilities against z-cutpoints
-                real noise_sd = (sigma_measurement == 0) ? 0 : sigma_measurement / total_std_val;
+                // Noise is added to base score, but standardization uses only pref_norm
+                real noise_sd = (sigma_measurement == 0) ? 0 : sigma_measurement / pref_norm;
                 if (noise_sd == 0) {
                     // Deterministic: assign by cutpoints in z-space
                     int one_c = 1;
@@ -513,17 +514,27 @@ generated quantities {
     }
     
     // ===== DEBUG: print a few posterior rating probabilities =====
+
+    if (DEBUG_PRINT == 1) {
+        print("alpha_dirichlet=", alpha_dirichlet);
+        print("rating_probs[1]=", rating_probs[1]);
+        print("rating_cumprobs[1]=", rating_cumprobs[1]);
+        print("rating_thresholds_z[1]=", rating_thresholds_z[1]);
+    }
+
+
     if (DEBUG_PRINT == 1) {
         int max_i = (I < 1) ? I : 1;
         int max_j = (J < 2) ? J : 2;
-        int max_k_train = (K_train < 2) ? K_train : 2;
-        int max_k_test = (K_test < 2) ? K_test : 2;
+        int max_k_train = (K_train < 10) ? K_train : 10;
+        int max_k_test = (K_test < 30) ? K_test : 30;
         for (i in 1:max_i) {
             for (j in 1:max_j) {
                 int ij_idx = (i-1)*J + j;
                 for (k in 1:max_k_train) {
                     print("[DEBUG TRAIN POST] i=", i, " j=", j, " k=", k,
                           " probs=", train_posterior_rating_probs[ij_idx, k]);
+                    
                 }
                 for (k in 1:max_k_test) {
                     print("[DEBUG TEST POST]  i=", i, " j=", j, " k=", k,
