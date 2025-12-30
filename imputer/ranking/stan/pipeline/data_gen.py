@@ -84,6 +84,77 @@ def generate_data(config: DataGenConfig, stan_file: Optional[str] = None) -> Gro
     return bundle
 
 
+def _is_cross_instance(annotator: int, item: int, config: DataGenConfig) -> bool:
+    """
+    Check if a rating is cross-instance.
+    
+    For tie_breaking protocol:
+    - Train-only annotators: 1..J/3 (can only rate train items)
+    - Overlap annotators: J/3+1..2J/3 (can rate both train and test items)
+    - Test-only annotators: 2J/3+1..J (can only rate test items)
+    
+    Cross-instance means:
+    - Train-only annotator (1..J/3) rating test item (item > K_train)
+    - Test-only annotator (2J/3+1..J) rating train item (item <= K_train)
+    
+    Overlap annotators (J/3+1..2J/3) rating either train or test items are NOT cross-instance.
+    """
+    if config.observation_protocol != "tie_breaking":
+        return False
+    
+    if item < 1 or item > (config.K_train + config.K_test):
+        raise ValueError(f"Item index {item} is out of range (1-{config.K_train + config.K_test})")
+    
+    train_only_end = config.J // 3
+    test_only_start = (2 * config.J) // 3 + 1
+    
+    is_train_only_annotator = annotator <= train_only_end
+    is_test_only_annotator = annotator >= test_only_start
+    is_train_item = item <= config.K_train
+    is_test_item = item > config.K_train
+    
+    # Cross-instance: train-only annotator rating test item OR test-only annotator rating train item
+    return (is_train_only_annotator and is_test_item) or (is_test_only_annotator and is_train_item)
+
+
+def _is_cross_instance_pairwise(annotator: int, items: List[int], config: DataGenConfig) -> bool:
+    """
+    Check if a pairwise ranking is cross-instance.
+    
+    For tie_breaking protocol:
+    - Train-only annotators: 1..J/3 (can only rate train items)
+    - Overlap annotators: J/3+1..2J/3 (can rate both train and test items)
+    - Test-only annotators: 2J/3+1..J (can only rate test items)
+    
+    Cross-instance means:
+    - Train-only annotator (1..J/3) with test items (all items > K_train)
+    - Test-only annotator (2J/3+1..J) with train items (all items <= K_train)
+    - Items spanning both instances (some <= K_train, some > K_train) - invalid case
+    
+    NOT cross-instance:
+    - Train-only annotator with train items
+    - Test-only annotator with test items
+    - Overlap annotator (J/3+1..2J/3) with either train or test items
+    """
+    if config.observation_protocol != "tie_breaking":
+        return False
+    
+    train_only_end = config.J // 3
+    test_only_start = (2 * config.J) // 3 + 1
+    
+    is_train_only_annotator = annotator <= train_only_end
+    is_test_only_annotator = annotator >= test_only_start
+    
+    # Check if items are train, test, or span both instances
+    for item in items:
+        if item < 1 or item > (config.K_train + config.K_test):
+            raise ValueError(f"Item index {item} is out of range (1-{config.K_train + config.K_test})")
+    
+    # Cross-instance: train-only annotator with any test items OR test-only annotator with any train items
+    return (is_train_only_annotator and any(item > config.K_train for item in items)) or \
+           (is_test_only_annotator and any(item <= config.K_train for item in items))
+
+
 def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenConfig) -> GroundTruthBundle:
     """Extract GroundTruthBundle from Stan output."""
     
@@ -145,11 +216,17 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     for i in range(config.I):
         for j in range(config.J):
             ij_idx = i * config.J + j
+            annotator = j + 1
             for k in range(config.K_train):
+                item = k + 1
+                # Skip cross-instance: test-only annotator rating train item
+                if _is_cross_instance(annotator, item, config):
+                    continue
+                
                 rating_dict = {
                     "attribute": i + 1,
-                    "annotator": j + 1,
-                    "item": k + 1,
+                    "annotator": annotator,
+                    "item": item,
                     "value": int(train_rating_values[ij_idx, k]),
                     "instance": "train"
                 }
@@ -168,11 +245,17 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     for i in range(config.I):
         for j in range(config.J):
             ij_idx = i * config.J + j
+            annotator = j + 1
             for k in range(config.K_test):
+                item = k + 1 + config.K_train  # Offset by training items
+                # Skip cross-instance: train-only annotator rating test item
+                if _is_cross_instance(annotator, item, config):
+                    continue
+                
                 rating_dict = {
                     "attribute": i + 1,
-                    "annotator": j + 1,
-                    "item": k + 1 + config.K_train,  # Offset by training items
+                    "annotator": annotator,
+                    "item": item,
                     "value": int(test_rating_values[ij_idx, k]),
                     "instance": "test"
                 }
@@ -194,10 +277,16 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     train_missing_pairwise = []
     
     for n in range(num_train_pairwise):
+        annotator = int(train_pairwise_annotators[n])
+        items = [int(train_pairwise_items[n, 0]), int(train_pairwise_items[n, 1])]
+        # Skip cross-instance pairwise rankings
+        if _is_cross_instance_pairwise(annotator, items, config):
+            continue
+        
         pairwise_dict = {
             "attribute": int(train_pairwise_attributes[n]),
-            "annotator": int(train_pairwise_annotators[n]),
-            "items": [int(train_pairwise_items[n, 0]), int(train_pairwise_items[n, 1])],
+            "annotator": annotator,
+            "items": items,
             "order": [1, 2] if train_pairwise_orders[n] == 1 else [2, 1],
             "tied_rating": int(train_pairwise_tied_ratings[n]),
             "instance": "train"
@@ -215,11 +304,17 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     test_missing_pairwise = []
     
     for n in range(num_test_pairwise):
+        annotator = int(test_pairwise_annotators[n])
+        items = [int(test_pairwise_items[n, 0]) + config.K_train, 
+                 int(test_pairwise_items[n, 1]) + config.K_train]  # Offset by training items
+        # Skip cross-instance pairwise rankings
+        if _is_cross_instance_pairwise(annotator, items, config):
+            continue
+        
         pairwise_dict = {
             "attribute": int(test_pairwise_attributes[n]),
-            "annotator": int(test_pairwise_annotators[n]),
-            "items": [int(test_pairwise_items[n, 0]) + config.K_train, 
-                     int(test_pairwise_items[n, 1]) + config.K_train],  # Offset by training items
+            "annotator": annotator,
+            "items": items,
             "order": [1, 2] if test_pairwise_orders[n] == 1 else [2, 1],
             "tied_rating": int(test_pairwise_tied_ratings[n]),
             "instance": "test"
