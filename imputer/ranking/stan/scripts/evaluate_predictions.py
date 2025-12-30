@@ -88,16 +88,7 @@ def main():
             "temperature": datagen_config.get("temperature", 1.0),
         }
     else:
-        # Fallback to bundle stats if configs.json not found
-        config = {
-            "K_train": bundle.stats["K_train"],
-            "K_test": bundle.stats["K_test"],
-            "I": 3,  # Fallback defaults
-            "J": 6,
-            "D": 8,
-            "C": 5,
-            "temperature": 1.0,
-        }
+        raise ValueError(f"Configs file not found at {configs_path}")
     
     print(f"\nConfiguration:")
     print(f"  K_train: {config['K_train']}")

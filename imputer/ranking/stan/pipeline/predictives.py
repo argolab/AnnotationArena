@@ -91,10 +91,11 @@ def evaluate_rating_predictions(
     """
     C = config["C"]
     n_samples, n_missing = predictions.shape
-    
+
     # Convert ground truth to array
     gt_ratings = np.array([r["value"] for r in ground_truth])
-    
+    assert gt_ratings.shape == (n_missing,), f"gt_ratings shape mismatch: {gt_ratings.shape} != {n_missing}"
+
     # Compute accuracy (mode of posterior predictions)
     posterior_mode = np.zeros(n_missing, dtype=int)
     for i in range(n_missing):
@@ -108,10 +109,14 @@ def evaluate_rating_predictions(
     mae = np.mean(np.abs(predictions - gt_ratings[np.newaxis, :]))
     
     # Compute log-likelihood of ground truth under posterior (average per rating)
+    # probabilities is [n_samples, n_missing_ratings, C]
+    assert probabilities.shape == (n_samples, n_missing, C), f"probabilities shape mismatch: {probabilities.shape} != {n_samples, n_missing, C}"
     log_lik = 0.0
     for i, gt_rating in enumerate(gt_ratings):
-        # Average log probability across samples
-        avg_log_prob = np.mean(np.log(probabilities[:, i, gt_rating - 1] + 1e-10))
+        # Compute log of mean probability (correct way to aggregate MCMC samples)
+        # Use mean probability first, then take log (not mean of logs, which is incorrect due to Jensen's inequality)
+        avg_prob = np.mean(probabilities[:, i, gt_rating - 1])
+        avg_log_prob = np.log(avg_prob + 1e-10)
         log_lik += avg_log_prob
     
     # Normalize per rating to report average log-likelihood
@@ -122,16 +127,12 @@ def evaluate_rating_predictions(
     # For each rating category, check if predicted probabilities are well-calibrated
     calibration_errors = []
     for c in range(C):
-        mask = gt_ratings == (c + 1)
-        if np.sum(mask) > 0:
-            # Average predicted probability for this category
-            avg_pred_prob = np.mean(probabilities[:, mask, c])
-            # Actual frequency
-            actual_freq = np.mean(mask)
-            calibration_errors.append(abs(avg_pred_prob - actual_freq))
+        mask = gt_ratings == (c + 1)  # shape: [n_missing,]
+        avg_pred_prob = np.mean(probabilities[:, mask, c])
+        actual_freq = np.mean(mask)
+        calibration_errors.append(abs(avg_pred_prob - actual_freq))
     
     mean_calibration_error = np.mean(calibration_errors) if calibration_errors else 0.0
-    
     return {
         "rating_accuracy": accuracy,
         "rating_mae": mae,
@@ -277,6 +278,8 @@ def evaluate_predictives(
     all_metrics = {**rating_missing_metrics, **pairwise_missing_metrics}
     
     # Add log-likelihood metrics
+    # NOTE: log_lik_ratings_obs from Stan is a SUM across all observed ratings (not per-rating)
+    # So log_lik_ratings_obs_mean is the mean of TOTALS across MCMC samples
     all_metrics.update({
         "log_lik_ratings_obs_mean": np.mean(predictives["log_lik_ratings_obs"]),
         "log_lik_ratings_obs_std": np.std(predictives["log_lik_ratings_obs"]),
@@ -287,6 +290,7 @@ def evaluate_predictives(
     })
 
     # Normalized observed log-likelihoods (per observation)
+    # This converts the TOTAL log-likelihood to per-rating average
     n_obs_ratings = max(1, len(bundle.observed_ratings))
     n_obs_pairwise = max(1, len(bundle.observed_pairwise))
     all_metrics.update({

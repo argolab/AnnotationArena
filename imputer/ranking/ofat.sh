@@ -2,7 +2,7 @@
 # OFAT (One Factor At a Time) Hyperparameter Sensitivity Experiments
 # Updated design with center baseline and protocol variations
 
-set -e  # Exit on error
+# set -e  # Exit on error
 
 # Fixed base parameters for all experiments
 BASE_I=10
@@ -28,7 +28,7 @@ MARFORMER_MASKED_LOSS_WEIGHT=15
 MARFORMER_OBSERVED_LOSS_WEIGHT=1
 MARFORMER_MASK_AUGMENTATIONS=5
 MARFORMER_EARLY_STOPPING_PATIENCE=5
-MARFORMER_DEVICE="cpu"
+MARFORMER_DEVICE="cuda"
 
 # Stan hyperparameters - TWO configurations per experiment
 STAN_4C_CHAINS=4

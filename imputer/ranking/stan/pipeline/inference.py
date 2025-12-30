@@ -229,7 +229,7 @@ def run_mcmc_inference(
     # Compile model
     model = compile_domain_model(stan_file)
     
-    # Prepare Stan data
+    # Prepare Stan data (model hyperparameters and observed data)
     stan_data = prepare_stan_data_for_inference(bundle, config, use_train_only, use_test_only)
     
     # Prepare initialization

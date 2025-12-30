@@ -170,6 +170,7 @@ def main():
     logger.info("Starting MCMC inference")
     print(f"\nStarting MCMC inference...")
     try:
+        #########################################################
         fit = run_mcmc_inference(
             bundle=bundle,
             config=data_config,
@@ -178,6 +179,7 @@ def main():
             use_train_only=args.use_train_only,
             use_test_only=args.use_test_only
         )
+        #########################################################
         
         logger.info("MCMC inference completed successfully")
         print("MCMC inference completed successfully!")
