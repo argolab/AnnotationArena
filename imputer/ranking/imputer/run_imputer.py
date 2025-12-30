@@ -1,5 +1,6 @@
 import argparse
 import json
+import shutil
 from pathlib import Path
 from typing import Dict, Any, List
 
@@ -135,6 +136,7 @@ def main():
     parser.add_argument("--early-stopping-metric", type=str, default="loss", choices=["loss", "accuracy"], help="Metric to monitor for early stopping: 'loss' (rating_loss) or 'accuracy' (rating_accuracy) (default: loss)")
     parser.add_argument("--early-stopping-patience", type=int, default=10, help="Number of epochs with no improvement before stopping (default: 10)")
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4, help="Minimum change to qualify as improvement (default: 1e-4)")
+    parser.add_argument("--overwrite-existing-data", action="store_true", help="Overwrite existing output directory if it exists")
 
     args = parser.parse_args()
 
@@ -200,7 +202,7 @@ def main():
         # EXPERIMENTAL: Optionally convert all training missing to observed for fully observed training
         # This allows us to artificially mask more of the training data
         if args.train_all_observed:
-            print("Converting all training missing to observed (train-all-observed mode)")
+            print("\033[91mConverting all training missing to observed (train-all-observed mode)\033[0m")
             train_missing_as_observed = []
             for var in train_missing:
                 # Create a copy with status=2 (observed) instead of status=0 (missing)
@@ -303,7 +305,17 @@ def main():
             train_vars += test_observed
     
     # Create the main run directory first (before training)
-    run_dir = new_run_dir(Path(args.output_root), run_name=args.run_name)
+    output_root = Path(args.output_root)
+    output_root.mkdir(parents=True, exist_ok=True)
+    
+    # Handle --overwrite-existing-data flag: remove existing directory if it exists
+    if args.run_name:
+        potential_run_dir = output_root / args.run_name
+        if potential_run_dir.exists() and args.overwrite_existing_data:
+            print("\033[91mWARNING: Overwriting existing output directory: {}\033[0m".format(potential_run_dir))
+            shutil.rmtree(potential_run_dir)
+    
+    run_dir = new_run_dir(output_root, run_name=args.run_name)
 
     # Save train configuration snapshot next to outputs
     train_config = {

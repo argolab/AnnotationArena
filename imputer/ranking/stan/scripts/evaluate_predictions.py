@@ -11,6 +11,7 @@ It use the bundle to get the missing attributes, then use the mcmc-dir to get th
 import argparse
 import json
 import pandas as pd
+import shutil
 from pathlib import Path
 import sys
 
@@ -35,6 +36,7 @@ def main():
     parser.add_argument("--run-name", type=str, default=None, help="Custom run name (default: auto-generated)")
     parser.add_argument("--csv-pattern", default="domain_model-*.csv", help="Pattern for MCMC CSV files")
     parser.add_argument("--verbose", action="store_true", help="Print detailed results")
+    parser.add_argument("--overwrite-existing-data", action="store_true", help="Overwrite existing output directory if it exists")
     
     args = parser.parse_args()
     
@@ -44,6 +46,15 @@ def main():
         bundle_data = json.load(f)
     
     bundle = GroundTruthBundle.from_dict(bundle_data)
+    
+    # Handle --overwrite-existing-data flag: remove existing directory if it exists
+    output_root = Path(args.output_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
+    if args.run_name:
+        potential_run_dir = output_root / args.run_name
+        if potential_run_dir.exists() and args.overwrite_existing_data:
+            print("\033[91mWARNING: Overwriting existing output directory: {}\033[0m".format(potential_run_dir))
+            shutil.rmtree(potential_run_dir)
     
     # Create output directory
     output_dir = new_run_dir(args.output_dir, run_name=args.run_name)

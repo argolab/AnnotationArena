@@ -9,6 +9,7 @@ Usage:
 import argparse
 import json
 import logging
+import shutil
 from pathlib import Path
 import sys
 
@@ -61,6 +62,7 @@ def main():
     
     # Other options
     parser.add_argument("--no-progress", action="store_true", help="Disable progress bar")
+    parser.add_argument("--overwrite-existing-data", action="store_true", help="Overwrite existing output directory if it exists")
     
     args = parser.parse_args()
     
@@ -83,7 +85,17 @@ def main():
     logger.info(f"Loaded bundle with {len(bundle.missing_ratings)} missing ratings and {len(bundle.missing_pairwise)} missing pairwise")
     
     # Create output directory
-    output_dir = new_run_dir(args.output_dir, run_name=args.run_name)
+    output_root = Path(args.output_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
+    
+    # Handle --overwrite-existing-data flag: remove existing directory if it exists
+    if args.run_name:
+        potential_run_dir = output_root / args.run_name
+        if potential_run_dir.exists() and args.overwrite_existing_data:
+            print("\033[91mWARNING: Overwriting existing output directory: {}\033[0m".format(potential_run_dir))
+            shutil.rmtree(potential_run_dir)
+    
+    output_dir = new_run_dir(output_root, run_name=args.run_name)
     logger.info(f"Created output directory: {output_dir}")
     print(f"Output directory: {output_dir}")
     

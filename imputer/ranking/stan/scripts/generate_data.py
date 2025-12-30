@@ -12,6 +12,7 @@ Usage:
 
 import argparse
 import json
+import shutil
 from pathlib import Path
 
 from stan.pipeline.configs import DataGenConfig
@@ -93,6 +94,8 @@ def main():
                        help="Custom run name (default: auto-generated)")
     parser.add_argument("--stan-file", type=str, default=None,
                        help="Path to iclr_data_generation.stan (default: models/iclr_data_generation.stan)")
+    parser.add_argument("--overwrite-existing-data", action="store_true",
+                       help="Overwrite existing output directory if it exists")
     
     args = parser.parse_args()
     
@@ -121,6 +124,15 @@ def main():
     
     # Create output directory
     output_path = Path(args.output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    
+    # Handle --overwrite-existing-data flag: remove existing directory if it exists
+    if args.run_name:
+        potential_run_dir = output_path / args.run_name
+        if potential_run_dir.exists() and args.overwrite_existing_data:
+            print("\033[91mWARNING: Overwriting existing data directory: {}\033[0m".format(potential_run_dir))
+            shutil.rmtree(potential_run_dir)
+    
     run_dir = new_run_dir(output_path, run_name=args.run_name)
     
     print(f"Generating data with config: {config}")
