@@ -72,9 +72,9 @@ transformed parameters {
     // Rating thresholds: q_ij = Φ⁻¹(cumsum(p_ij))
     array[I*J] vector[C+1] rating_thresholds;
     
-    // Preference norm per annotator-criterion for rating binning
-    // Binning is based on base score distribution (std = pref_norm), not including measurement noise
-    array[I*J] real pref_norm;  // ||v_ij||
+    // Total standard deviation per annotator-criterion for rating binning
+    // Binning is based on distribution of v*e + epsilon with std = sqrt(||v||^2 + sigma_measurement^2)
+    array[I*J] real total_std;  // sqrt(||v_ij||^2 + sigma_measurement^2)
     
     // Compute base scores: z_ij_k = v_ij · e_k  
     for (i in 1:I) {
@@ -99,12 +99,13 @@ transformed parameters {
         rating_thresholds[ij][C+1] = positive_infinity();  // +∞ for category C
     }
     
-    // Compute pref_norm per ij for rating likelihood standardization
-    // Binning is based on base score distribution (std = pref_norm), measurement noise is Bayesian variation
+    // Compute total_std per ij for rating binning
+    // Binning is based on distribution of v*e + epsilon with std = sqrt(||v||^2 + sigma_measurement^2)
     for (i in 1:I) {
         for (j in 1:J) {
             int ij_idx = (i-1)*J + j;
-            pref_norm[ij_idx] = sqrt(dot_self(annotator_preferences[ij_idx]));
+            real pref_norm_sq = dot_self(annotator_preferences[ij_idx]);
+            total_std[ij_idx] = sqrt(pref_norm_sq + sigma_measurement * sigma_measurement);
         }
     }
 
@@ -147,8 +148,9 @@ model {
     // ===== LIKELIHOODS =====
     
     // 1. RATING LIKELIHOOD
-    // Measurement noise is Bayesian variation: noisy_score = base_score + epsilon, epsilon ~ N(0, sigma_measurement^2)
-    // After standardization by pref_norm: standardized_noisy_score ~ N(base_score/pref_norm, (sigma_measurement/pref_norm)^2)
+    // Binning is based on distribution of v*e + epsilon with std = sqrt(||v||^2 + sigma_measurement^2)
+    // Conditional distribution: v*e + epsilon | v, e ~ N(v*e, sigma_measurement^2)
+    // Standardize to match binning space: mean = (v*e) / total_std, std = sigma_measurement / total_std
     for (n in 1:N_ratings) {
         int i = rating_attributes[n];
         int j = rating_annotators[n]; 
@@ -157,27 +159,27 @@ model {
         int ij_idx = (i-1)*J + j;
         
         real base_score = base_scores[ij_idx, k];
-        real upper_threshold = rating_thresholds[ij_idx][c+1];  // threshold in z-space (standardized by pref_norm)
+        real upper_threshold = rating_thresholds[ij_idx][c+1];  // threshold in z-space (standardized by total_std)
         real lower_threshold = rating_thresholds[ij_idx][c];  // threshold in z-space
         
-        // Compute P(category c | base_score) accounting for measurement noise
-        // Standardized noisy score: (base_score + epsilon) / pref_norm
-        // Mean: base_score/pref_norm, Std: sigma_measurement/pref_norm
-        real mean_std = base_score / pref_norm[ij_idx];
-        real noise_std = sigma_measurement / pref_norm[ij_idx];
+        // Compute P(category c | base_score) using conditional distribution
+        // Conditional: v*e + epsilon | v, e ~ N(v*e, sigma_measurement^2)
+        // Standardized: mean = base_score / total_std, std = sigma_measurement / total_std
+        real mean_std = base_score / total_std[ij_idx];
+        real cond_std = sigma_measurement / total_std[ij_idx];
         
         real upper_prob, lower_prob;
         
         if (upper_threshold == positive_infinity()) {
             upper_prob = 1.0;
         } else {
-            upper_prob = Phi((upper_threshold - mean_std) / noise_std);
+            upper_prob = Phi((upper_threshold - mean_std) / cond_std);
         }
         
         if (lower_threshold == negative_infinity()) {
             lower_prob = 0.0;
         } else {
-            lower_prob = Phi((lower_threshold - mean_std) / noise_std);
+            lower_prob = Phi((lower_threshold - mean_std) / cond_std);
         }
         
         real bin_prob = upper_prob - lower_prob;
@@ -244,22 +246,22 @@ generated quantities {
         real upper_threshold = rating_thresholds[ij_idx][c+1];
         real lower_threshold = rating_thresholds[ij_idx][c];
         
-        // Compute P(category c | base_score) accounting for measurement noise (same as model block)
-        real mean_std = base_score / pref_norm[ij_idx];
-        real noise_std = sigma_measurement / pref_norm[ij_idx];
+        // Compute P(category c | base_score) using conditional distribution (same as model block)
+        real mean_std = base_score / total_std[ij_idx];
+        real cond_std = sigma_measurement / total_std[ij_idx];
         
         real upper_prob, lower_prob;
         
         if (upper_threshold == positive_infinity()) {
             upper_prob = 1.0;
         } else {
-            upper_prob = Phi((upper_threshold - mean_std) / noise_std);
+            upper_prob = Phi((upper_threshold - mean_std) / cond_std);
         }
         
         if (lower_threshold == negative_infinity()) {
             lower_prob = 0.0;
         } else {
-            lower_prob = Phi((lower_threshold - mean_std) / noise_std);
+            lower_prob = Phi((lower_threshold - mean_std) / cond_std);
         }
         
         real bin_prob = upper_prob - lower_prob;
@@ -346,9 +348,10 @@ generated quantities {
         real base_score = base_scores[ij_idx, k];
         
         // Compute predicted probability distribution over Likert scale
-        // Account for measurement noise: noisy_score = base_score + epsilon, epsilon ~ N(0, sigma_measurement^2)
-        real mean_std = base_score / pref_norm[ij_idx];
-        real noise_std = sigma_measurement / pref_norm[ij_idx];
+        // Conditional distribution: v*e + epsilon | v, e ~ N(v*e, sigma_measurement^2)
+        // Standardize to match binning space: mean = base_score / total_std, std = sigma_measurement / total_std
+        real mean_std = base_score / total_std[ij_idx];
+        real cond_std = sigma_measurement / total_std[ij_idx];
         
         for (c in 1:C) {
             real upper_threshold = rating_thresholds[ij_idx][c+1];
@@ -359,22 +362,22 @@ generated quantities {
             if (upper_threshold == positive_infinity()) {
                 upper_prob = 1.0;
             } else {
-                upper_prob = Phi((upper_threshold - mean_std) / noise_std);
+                upper_prob = Phi((upper_threshold - mean_std) / cond_std);
             }
             
             if (lower_threshold == negative_infinity()) {
                 lower_prob = 0.0;
             } else {
-                lower_prob = Phi((lower_threshold - mean_std) / noise_std);
+                lower_prob = Phi((lower_threshold - mean_std) / cond_std);
             }
             
             missing_rating_probs[n][c] = upper_prob - lower_prob;
         }
         
         // Sample a rating from the predicted distribution
-        // Generate noisy score and standardize for binning
+        // Generate noisy score and standardize for binning using total_std
         real noisy_score = base_score + normal_rng(0, sigma_measurement);
-        real standardized_score = noisy_score / pref_norm[ij_idx];
+        real standardized_score = noisy_score / total_std[ij_idx];
         int rating = 1;
         for (c in 1:C) {
             if (standardized_score <= rating_thresholds[ij_idx][c+1]) {
