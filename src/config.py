@@ -104,22 +104,22 @@ class ModelConfig:
     HANNA = {
         'question_num': 7,
         'max_choices': 5,
-        'encoder_layers_num': 2,
+        'encoder_layers_num': 6,
         'attention_heads': 4,
         'hidden_dim': 32,
         'num_annotator': 18,
-        'annotator_embedding_dim': 32,
+        'annotator_embedding_dim': 128,
         'dropout': 0.1
     }
     
     LLM_RUBRIC = {
         'question_num': 9,
         'max_choices': 4,
-        'encoder_layers_num': 6,
+        'encoder_layers_num': 2,
         'attention_heads': 4,
         'hidden_dim': 64,
         'num_annotator': 24,
-        'annotator_embedding_dim': 24,
+        'annotator_embedding_dim': 32,
         'dropout': 0.1
     }
     

@@ -261,6 +261,7 @@ def train_with_dynamic_masking(model, train_dataset, val_dataset=None,
             
             logger.info(f"Epoch {epoch+1}: Train Loss: {avg_train_loss:.4f}, "
                        f"Val Loss: {val_loss:.4f}, RMSE: {val_metrics['rmse']:.4f}, "
+                       f"Spearman: {val_metrics['spearman']:.4f}, Kendall: {val_metrics['kendall']:.4f}"
                        f"Pearson: {val_metrics['pearson']:.4f}, Acc: {val_metrics['accuracy']:.4f}")
             
             # Early stopping and model saving
@@ -392,7 +393,7 @@ def main():
     parser = argparse.ArgumentParser(description="Standalone training for ImputerEmbedding")
     
     # Data arguments
-    parser.add_argument("--dataset", type=str, default="hanna", 
+    parser.add_argument("--dataset", type=str, default="llm_rubric", 
                        choices=["hanna", "llm_rubric"],
                        help="Dataset to use")
     parser.add_argument("--runner", type=str, default="local", 
@@ -401,7 +402,7 @@ def main():
                        help="Use text embeddings")
     
     # Training arguments
-    parser.add_argument("--epochs", type=int, default=100, 
+    parser.add_argument("--epochs", type=int, default=40, 
                        help="Number of training epochs")
     parser.add_argument("--batch_size", type=int, default=16, 
                        help="Batch size for training")
@@ -538,7 +539,7 @@ def main():
         logger.info("Evaluating on test set...")
         test_metrics = evaluate_model(model, test_dataset, device, args.batch_size, args.loss_type)
         logger.info(f"Test Results: Loss={test_metrics['avg_expected_loss']:.4f}, "
-                f"RMSE={test_metrics['rmse']:.4f}, Pearson={test_metrics['pearson']:.4f}, "
+                f"RMSE={test_metrics['rmse']:.4f}, Pearson={test_metrics['pearson']:.4f}, Spearman={test_metrics['spearman']:.4f}, Kendall={test_metrics['kendall']:.4f}, "
                 f"Accuracy={test_metrics['accuracy']:.4f}")
     
     # Save training history

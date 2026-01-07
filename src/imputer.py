@@ -164,8 +164,8 @@ class Positional_Encoder(nn.Module):
             
         # Combine all embeddings
         combined_embeds = question_embeds + annotator_embeds
-        feature_x = torch.cat((combined_embeds, embeddings), dim=-1)
-        param_x = torch.cat((embeddings, x[:,:,1:]), dim=-1)
+        feature_x = combined_embeds
+        param_x = x[:,:,1:]
         
         return feature_x, param_x
 
@@ -176,21 +176,21 @@ class EncoderLayer(nn.Module):
     def __init__(self, feature_dim, param_dim, attention_heads, num_question_types, dropout=0.3):
         """Initialize encoder layer."""
         super().__init__()
-        self.feature_dim = feature_dim + 384
-        self.param_dim = param_dim + 384
+        self.feature_dim = feature_dim
+        self.param_dim = param_dim
         self.attention_heads = attention_heads
         
-        self.Q = nn.Linear(self.feature_dim, self.feature_dim)
-        self.K = nn.Linear(self.feature_dim, self.feature_dim)
-        self.V = nn.Linear(self.feature_dim, self.feature_dim)
-        self.out = nn.Linear(self.feature_dim, self.feature_dim)
+        self.Q = nn.Linear(self.feature_dim + param_dim, self.feature_dim + param_dim)
+        self.K = nn.Linear(self.feature_dim + param_dim, self.feature_dim + param_dim)
+        self.V = nn.Linear(self.feature_dim + param_dim, self.feature_dim + param_dim)
+        self.out = nn.Linear(self.feature_dim + param_dim, self.feature_dim + param_dim)
         
-        self.norm_1 = NormLayer(self.feature_dim)
-        self.norm_2 = NormLayer(self.feature_dim)
+        self.norm_1 = NormLayer(self.feature_dim + param_dim)
+        self.norm_2 = NormLayer(self.feature_dim + param_dim)
         self.dropout_1 = nn.Dropout(dropout)
         self.dropout_2 = nn.Dropout(dropout)
         
-        self.ff = FeedForward(self.feature_dim, dropout=dropout)
+        self.ff = FeedForward(self.feature_dim + param_dim, dropout=dropout)
         self.param_update = nn.Linear(self.feature_dim + self.param_dim, self.param_dim)
 
         # Add smoothing layer
@@ -202,36 +202,62 @@ class EncoderLayer(nn.Module):
         )
 
     def multihead_attention(self, feature_x, batch_size):
-        """Apply multi-head attention to the features."""
-        Q = self.Q(feature_x).view(batch_size, -1, self.attention_heads, self.feature_dim // self.attention_heads).transpose(1, 2)
-        K = self.K(feature_x).view(batch_size, -1, self.attention_heads, self.feature_dim // self.attention_heads).transpose(1, 2)
-        V = self.V(feature_x).view(batch_size, -1, self.attention_heads, self.feature_dim // self.attention_heads).transpose(1, 2)
-        scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.feature_dim // self.attention_heads)
-        scores = F.softmax(scores, dim=-1)
-        scores = self.dropout_1(scores)
-        scores = torch.matmul(scores, V)
-        scores = scores.transpose(1, 2).contiguous().view(batch_size, -1, self.feature_dim)
+        """Apply multi-head attention to the features with flexible head dimensions."""
+        
+        # Calculate head dimension, allowing for remainder
+        base_head_dim = (self.feature_dim + self.param_dim) // self.attention_heads
+        remainder = (self.feature_dim + self.param_dim) % self.attention_heads
+        
+        # Create head dimensions - distribute remainder across first few heads
+        head_dims = [base_head_dim + (1 if i < remainder else 0) for i in range(self.attention_heads)]
+        
+        # Split the feature dimension for Q, K, V
+        Q = self.Q(feature_x)  # [batch_size, seq_len, feature_dim]
+        K = self.K(feature_x)  # [batch_size, seq_len, feature_dim]
+        V = self.V(feature_x)  # [batch_size, seq_len, feature_dim]
+        
+        # Process each head separately since they have different dimensions
+        attention_outputs = []
+        start_idx = 0
+        
+        for i in range(self.attention_heads):
+            head_dim = head_dims[i]
+            
+            # Extract head-specific portions
+            Q_head = Q[:, :, start_idx:start_idx + head_dim]  # [batch_size, seq_len, head_dim]
+            K_head = K[:, :, start_idx:start_idx + head_dim]  # [batch_size, seq_len, head_dim]
+            V_head = V[:, :, start_idx:start_idx + head_dim]  # [batch_size, seq_len, head_dim]
+            
+            # Compute attention scores for this head
+            scores = torch.matmul(Q_head, K_head.transpose(-2, -1)) / math.sqrt(head_dim)
+            scores = F.softmax(scores, dim=-1)
+            scores = self.dropout_1(scores)
+            
+            # Apply attention to values
+            attended = torch.matmul(scores, V_head)  # [batch_size, seq_len, head_dim]
+            attention_outputs.append(attended)
+            
+            start_idx += head_dim
+        
+        # Concatenate all head outputs back together
+        scores = torch.cat(attention_outputs, dim=-1)  # [batch_size, seq_len, feature_dim]
+        # Apply output projection
         output = self.out(scores)
         return output
 
     def forward(self, feature_x, param_x, questions, mask):
         """Process features through attention, feed-forward, and smoothing."""
         batch_size = feature_x.shape[0]
-        
+        token = torch.cat((feature_x, param_x), dim=-1)
         # Standard transformer processing
-        feature_x = self.norm_1(feature_x)
-        attention_output = self.multihead_attention(feature_x, batch_size)
-        feature_x = feature_x + self.dropout_1(attention_output)
+        token = self.norm_1(token)
+        attention_output = self.multihead_attention(token, batch_size)
+        token = token + self.dropout_1(attention_output)
         
-        feature_x_ff = self.norm_2(feature_x)
-        feature_x = feature_x + self.dropout_2(self.ff(feature_x_ff))
+        token = self.norm_2(token)
+        token = token + self.dropout_2(self.ff(token))
         
-        # Update parameters
-        combined = torch.cat([feature_x, param_x], dim=-1)
-        param_x = self.param_update(combined)
-        
-        
-        return feature_x, param_x
+        return token[:, :, :self.feature_dim], token[:, :, self.feature_dim:]
 
 
 class Encoder(nn.Module):
@@ -312,7 +338,7 @@ class ImputerEmbedding(nn.Module):
     def forward(self, x, annotators, questions, embeddings):
         """Forward pass through the model."""
         param_x = self.encoder(x, annotators, questions, embeddings)
-        return param_x[:, :, 384:]
+        return param_x
     
     def replace_training_queue_entry(self, new_entry, clear_buffer_size=1):
         old_indices = [i for i in range(len(self.unique_examples)) if not self.recent_indicators[i]] #avoid recent examples
@@ -530,7 +556,6 @@ class ImputerEmbedding(nn.Module):
                 outputs = self(batch_inputs, batch_annotators, batch_questions, batch_embeddings)
                 # Compute loss only for originally observed AND currently visible positions
                 batch_size_actual, seq_len, num_classes = outputs.shape
-                num_classes = 5
                 outputs_flat = outputs.view(-1, num_classes)
                 targets_flat = batch_targets.view(-1, num_classes)
 
