@@ -49,6 +49,7 @@ class MultiVariableImputer(nn.Module):
                  embedding_type="atom",
                  device="cuda",
                  randomness=True,
+                 embedding_dropout: float | None = None,
                  use_gelu_after_attention=False,
                  use_final_norm=True,
                  normalize_parameter=False,
@@ -70,6 +71,8 @@ class MultiVariableImputer(nn.Module):
         self.num_ffn_layers = num_ffn_layers
         self.temperature = temperature
         self.use_concat_embedding = use_concat_embedding
+        if embedding_dropout is None:
+            embedding_dropout = dropout
 
         if embedding_type == "pairwise":
             self.embedding_provider = PairwiseRankingProjectionEmbeddingProvider(
@@ -100,6 +103,7 @@ class MultiVariableImputer(nn.Module):
                 max_rank_size,
                 self.device,
                 randomness,
+                embedding_dropout=embedding_dropout,
                 use_concat_embedding=use_concat_embedding,
             )
         else:

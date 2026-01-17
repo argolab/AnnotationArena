@@ -265,6 +265,11 @@ class ImputerTrainer:
         self.model.train()
         self.optimizer.zero_grad()
 
+        # Enable full_dropout for training (if embedding provider supports it)
+        embed = getattr(self.model, "embedding_provider", None)
+        if embed is not None and hasattr(embed, "set_full_dropout"):
+            embed.set_full_dropout(True)
+
         # Validate inputs
         if train_observed_vars is None or train_missing_vars is None:
             raise ValueError("train_observed_vars and train_missing_vars must be provided")
@@ -294,6 +299,11 @@ class ImputerTrainer:
         if total_loss_tensor is not None:
             total_loss_tensor.backward()
             self.optimizer.step()
+
+
+        # Disable full_dropout after training step
+        if embed is not None and hasattr(embed, "set_full_dropout"):
+            embed.set_full_dropout(False)
 
         return {k: v for k, v in total_losses.items() if not k.startswith('_')}
 

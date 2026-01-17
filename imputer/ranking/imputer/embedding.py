@@ -437,7 +437,9 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         max_rank_size: int,
         device: str,
         randomness: bool,
+        embedding_dropout: float = 0.0,
         use_concat_embedding: bool = False,
+        enable_full_dropout: bool = False,
     ):
 
         super().__init__(
@@ -452,6 +454,8 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         self.num_items = num_items
         self.device = device
         self.randomness = randomness
+        self.embedding_dropout_p = float(embedding_dropout)
+        self.enable_full_dropout = enable_full_dropout
 
         # Dimension scaling for concat mode: each component vector should be embedding_dim // 3
         # to ensure concatenation yields embedding_dim
@@ -490,10 +494,27 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         # Class constant for the logit value
         self.LOGIT_HIGH = getattr(self, "LOGIT_HIGH", 20.0)
 
+    def _full_dropout(self, x: torch.Tensor) -> torch.Tensor:
+        if self.embedding_dropout_p <= 0.0 or not self.enable_full_dropout:
+            return x
+        keep_prob = 1.0 - self.embedding_dropout_p
+        if keep_prob <= 0.0:
+            return torch.zeros_like(x)
+        mask = torch.rand((), device=x.device) < keep_prob
+        if not mask:
+            return torch.zeros_like(x)
+        return x / keep_prob
+    
+    def set_full_dropout(self, enabled: bool):
+        """Enable or disable full dropout. Should be True during training, False during evaluation."""
+        self.enable_full_dropout = enabled
+
     def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False) -> torch.Tensor:
         """Implementation for rating embeddings."""
-        attr_vec = torch.cat((torch.tensor([1, 0, 0]).to(self.device), self.attribute_embedding[attribute_id]), dim=-1)
-        annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), self.annotator_embedding_learnable[annotator_id], self.annotator_embedding_random[annotator_id]), dim=-1)
+        attr_core = self._full_dropout(self.attribute_embedding[attribute_id])
+        annot_core = self._full_dropout(self.annotator_embedding_learnable[annotator_id])
+        attr_vec = torch.cat((torch.tensor([1, 0, 0]).to(self.device), attr_core), dim=-1)
+        annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), annot_core, self.annotator_embedding_random[annotator_id]), dim=-1)
         item_vec = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_id]), dim=-1)
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
         
@@ -517,8 +538,10 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
 
     # Get embedding for ranking variables
     def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_missing: bool = False) -> torch.Tensor:
-        attr_vec = torch.cat((torch.tensor([1, 0, 0]).to(self.device), self.attribute_embedding[attribute_id]), dim=-1)
-        annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), self.annotator_embedding_learnable[annotator_id], self.annotator_embedding_random[annotator_id]), dim=-1)
+        attr_core = self._full_dropout(self.attribute_embedding[attribute_id])
+        annot_core = self._full_dropout(self.annotator_embedding_learnable[annotator_id])
+        attr_vec = torch.cat((torch.tensor([1, 0, 0]).to(self.device), attr_core), dim=-1)
+        annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), annot_core, self.annotator_embedding_random[annotator_id]), dim=-1)
 
         item_embedding_1 = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_ids[0]]), dim=-1)
         item_embedding_2 = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_ids[1]]), dim=-1)
@@ -567,4 +590,3 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         # Regenerate item embeddings as uniform unit sphere (L2 normalized random direction)
         item_random = torch.randn(self.num_items, self.internal_dimension, device=self.device)
         self.item_embedding = F.normalize(item_random, p=2, dim=-1)
-

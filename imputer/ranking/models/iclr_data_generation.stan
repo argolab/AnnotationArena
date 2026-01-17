@@ -220,7 +220,7 @@ generated quantities {
                 // Standardize to match binning space: mean = (v*e) / total_std, std = sigma_measurement / total_std
                 real mean_std = true_base_score / total_std;
                 real cond_std = sigma_measurement / total_std;
-                
+
                 // Compute bin probabilities against z-cutpoints
                 if (cond_std == 0) {
                     // Deterministic: assign by cutpoints in z-space
@@ -263,7 +263,7 @@ generated quantities {
                 // Standardize to match binning space: mean = (v*e) / total_std, std = sigma_measurement / total_std
                 real mean_std = true_base_score / total_std;
                 real cond_std = sigma_measurement / total_std;
-                
+
                 // Compute bin probabilities against z-cutpoints
                 if (cond_std == 0) {
                     // Deterministic: assign by cutpoints in z-space

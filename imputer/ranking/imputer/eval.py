@@ -48,6 +48,11 @@ class EvaluationEngine:
             raise ValueError("DataConverter required for evaluation")
 
         model.eval()
+        # Disable full_dropout for evaluation (if embedding provider supports it)
+        embed = getattr(model, "embedding_provider", None)
+        if embed is not None and hasattr(embed, "set_full_dropout"):
+            embed.set_full_dropout(False)
+        
         ref_variables = copy.deepcopy(variables)
 
         with torch.no_grad():
