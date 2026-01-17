@@ -56,7 +56,9 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         D = self.embedding_dim
         device = self._ensure_device()
 
-        feature_embeddings = torch.zeros(1, V, D + self.parameter_dimension, device=device)
+        # Collect embeddings in a list to preserve gradient flow
+        # Using in-place assignment into a zero tensor breaks autograd graph
+        embedding_list = []
 
         for i, var in enumerate(variables):
             is_missing = var.is_missing or var.is_masked
@@ -65,11 +67,15 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
 
             if var.is_listwise:
                 feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_missing)
-                feature_embeddings[0, i] = feat
             else:
                 item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
                 feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing)
-                feature_embeddings[0, i] = feat
+            
+            embedding_list.append(feat)
+
+        # Stack embeddings to preserve gradient flow from embedding parameters
+        # Shape: [V, D + parameter_dimension] -> [1, V, D + parameter_dimension]
+        feature_embeddings = torch.stack(embedding_list, dim=0).unsqueeze(0)
 
         # Return feature embeddings and full param stream including the missing-status bit
         return feature_embeddings[:, :, :D], feature_embeddings[:, :, D:]
