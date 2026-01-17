@@ -96,7 +96,9 @@ def main():
     parser.add_argument("--transductive_learning", action="store_true")
     parser.add_argument("--full_random", action="store_true")
     parser.add_argument("--save-checkpoints", action="store_true", help="Save model checkpoints during training")
-    parser.add_argument("--checkpoint-every", type=int, default=10, help="Save checkpoint every N epochs")
+    parser.add_argument("--checkpoint-every", type=int, default=5, help="Save checkpoint every N epochs (default: 5)")
+    parser.add_argument("--save-model-every", type=int, default=None, help="Save model.pt every N epochs (default: None, only at end)")
+    parser.add_argument("--save-best-model", action="store_true", help="Save best model when early stopping is enabled")
     parser.add_argument("--train-all-observed", action="store_true",
                         help="Convert all training missing to observed for artificial masking (more training data)")
     parser.add_argument("--test-only-training", action="store_true",
@@ -377,6 +379,14 @@ def main():
         trainer.checkpoint_dir = checkpoint_dir
         trainer.save_checkpoints = True
         print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
+    
+    # Set up model saving directory if periodic model saving or best model saving is enabled
+    if args.save_model_every is not None or args.save_best_model:
+        trainer.model_save_dir = str(run_dir)
+        if args.save_model_every is not None:
+            print(f"Model saving enabled. Models will be saved every {args.save_model_every} epochs to: {run_dir}")
+        if args.save_best_model:
+            print(f"Best model saving enabled. Best model will be saved when early stopping finds improvements.")
 
     # Set up early stopping if enabled
     early_stopping = None
@@ -402,6 +412,8 @@ def main():
         epochs=args.epochs,
         call_callbacks_every=1,
         save_checkpoints_every=args.checkpoint_every,
+        save_model_every=args.save_model_every,
+        save_best_model=args.save_best_model,
         verbose=True,
         mask_augmentations=args.mask_augmentations,
         early_stopping=early_stopping,

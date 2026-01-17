@@ -115,7 +115,8 @@ class ImputerTrainer:
 
     def __init__(self, model, learning_rate=1e-3, device='cuda', embedding_anchor_reg: float = 0.0, callbacks=None,
                  masked_loss_weight: float = 8.0, observed_loss_weight: float = 1.0, 
-                 checkpoint_dir: Optional[str] = None, save_checkpoints: bool = False):
+                 checkpoint_dir: Optional[str] = None, save_checkpoints: bool = False,
+                 model_save_dir: Optional[str] = None):
         self.model = model.to(device)
         self.device = device
         self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
@@ -129,6 +130,9 @@ class ImputerTrainer:
         self.save_checkpoints = save_checkpoints
         if self.save_checkpoints and self.checkpoint_dir is None:
             raise ValueError("checkpoint_dir must be provided when save_checkpoints=True")
+        
+        # Model saving configuration
+        self.model_save_dir = model_save_dir
 
     def register_callback(self, callback):
         """Register an evaluation callback."""
@@ -191,6 +195,31 @@ class ImputerTrainer:
             "loss_dict": loss_dict,
             "model_config": self._extract_model_config(),
         }, latest_file)
+    
+    def _save_model(self, epoch: int, suffix: str = ""):
+        """Save model.pt file (final model format) if model saving is enabled."""
+        if self.model_save_dir is None:
+            return
+        
+        from pathlib import Path
+        
+        # Create model save directory if it doesn't exist
+        model_path = Path(self.model_save_dir)
+        model_path.mkdir(parents=True, exist_ok=True)
+        
+        # Save model in the same format as final model.pt
+        if suffix:
+            model_file = model_path / f"model_epoch_{epoch:04d}{suffix}.pt"
+        else:
+            model_file = model_path / f"model_epoch_{epoch:04d}.pt"
+        
+        torch.save({
+            "state_dict": self.model.state_dict(),
+            "model_config": self._extract_model_config(),
+            "epoch": epoch
+        }, model_file)
+        
+        print(f"Saved model to {model_file}")
 
     def _call_epoch_end_callbacks(self, epoch):
         """Call all registered callbacks at epoch end."""
@@ -316,6 +345,8 @@ class ImputerTrainer:
               epochs: int = 10,
               call_callbacks_every: int = 1,
               save_checkpoints_every: int = 10,
+              save_model_every: Optional[int] = None,
+              save_best_model: bool = False,
               verbose: bool = True,
               mask_augmentations: int = 1,
               early_stopping: Optional[EarlyStopping] = None,
@@ -378,6 +409,10 @@ class ImputerTrainer:
             # Save checkpoint if enabled and at specified intervals
             if self.save_checkpoints and (epoch + 1) % save_checkpoints_every == 0:
                 self._save_checkpoint(epoch, loss_dict)
+            
+            # Save model.pt if enabled and at specified intervals
+            if save_model_every is not None and (epoch + 1) % save_model_every == 0:
+                self._save_model(epoch + 1)
 
             if (epoch + 1) % call_callbacks_every == 0:
                 callback_results = self._call_epoch_end_callbacks(epoch)
@@ -407,13 +442,22 @@ class ImputerTrainer:
                             else:
                                 raise ValueError(f"Unknown early_stopping_metric: {early_stopping_metric}")
 
+                            # Check if this is a better model before calling should_stop
+                            is_better = early_stopping.is_better(metric_value, early_stopping.best_score)
+                            
                             # Check if we should stop
                             if early_stopping.should_stop(metric_value, self.model):
                                 print(f"\nEarly stopping triggered at epoch {epoch + 1}")
                                 print(f"Best {metric_name}: {early_stopping.best_score:.4f}")
                                 print(f"Restoring best model weights...")
                                 early_stopping.restore_best_model(self.model)
+                                # Save best model if enabled
+                                if save_best_model:
+                                    self._save_model(epoch + 1, suffix="_best")
                                 break
+                            elif is_better and save_best_model:
+                                # Save best model whenever we find a better one
+                                self._save_model(epoch + 1, suffix="_best")
 
             if verbose and (epoch + 1) % max(1, epochs // 10) == 0:
                 total_loss = loss_dict.get('total_loss', 0.0)
