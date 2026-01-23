@@ -55,7 +55,9 @@ class MultiVariableImputer(nn.Module):
                  normalize_parameter=False,
                  num_ffn_layers=4,
                  temperature=1.0,
-                 use_concat_embedding: bool = False):
+                 use_concat_embedding: bool = False,
+                 use_random_as_key: bool = False,
+                 fresh_random_batch_size: int = 1):
         super().__init__()
         self.device = torch.device(device)
         # Defer moving to device until after all submodules are created
@@ -71,6 +73,10 @@ class MultiVariableImputer(nn.Module):
         self.num_ffn_layers = num_ffn_layers
         self.temperature = temperature
         self.use_concat_embedding = use_concat_embedding
+        self.use_random_as_key = use_random_as_key
+        self.fresh_random_batch_size = fresh_random_batch_size
+        # use_random_as_key requires concat mode since non-concat mode doesn't have clear division between random/learnable dims
+        assert not use_random_as_key or use_concat_embedding, "use_random_as_key=True requires use_concat_embedding=True"
         if embedding_dropout is None:
             embedding_dropout = dropout
 
@@ -113,8 +119,16 @@ class MultiVariableImputer(nn.Module):
         
         # Use provider-declared parameter dimension (includes missing-status bit)
         param_dim = self.embedding_provider.parameter_dimension
+        
+        # Compute random dims mask if use_random_as_key is enabled and embedding provider supports it
+        random_dims_mask = None
+        if use_random_as_key and hasattr(self.embedding_provider, 'get_random_dims_mask'):
+            random_dims_mask = self.embedding_provider.get_random_dims_mask(embedding_dim)
+        
         self.blocks = nn.ModuleList([
-            TransformerBlock(embedding_dim, param_dim, attention_heads, dropout, use_gelu_after_attention, normalize_parameter=normalize_parameter, num_ffn_layers=num_ffn_layers)
+            TransformerBlock(embedding_dim, param_dim, attention_heads, dropout, use_gelu_after_attention, 
+                           normalize_parameter=normalize_parameter, num_ffn_layers=num_ffn_layers,
+                           use_random_as_key=use_random_as_key, random_dims_mask=random_dims_mask)
             for _ in range(encoder_layers_num)
         ])
 
@@ -171,7 +185,7 @@ class MultiVariableImputer(nn.Module):
         # for line in stack:
         #     print(f"\033[96m{line.strip()}\033[0m")
 
-        features, params = self.embedding_provider(ranking_data_list)
+        features, params = self.embedding_provider(ranking_data_list, fresh_random_batch_size=self.fresh_random_batch_size)
 
         hidden_intermediates = []
         if return_intermediate:

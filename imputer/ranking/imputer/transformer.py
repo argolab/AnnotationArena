@@ -64,7 +64,7 @@ class TransformerBlock(nn.Module):
     """
 
     def __init__(self, feature_dim: int, param_dim: int, attention_heads: int, dropout: float = 0.3, use_gelu_after_attention: bool = False, 
-                 normalize_parameter: bool = False, num_ffn_layers: int = 4):
+                 normalize_parameter: bool = False, num_ffn_layers: int = 4, use_random_as_key: bool = False, random_dims_mask: torch.Tensor | None = None):
         super().__init__()
         self.feature_dim = feature_dim
         self.param_dim = param_dim
@@ -73,6 +73,15 @@ class TransformerBlock(nn.Module):
         self.use_gelu_after_attention = use_gelu_after_attention
         self.normalize_parameter = normalize_parameter
         self.num_ffn_layers = num_ffn_layers
+        self.use_random_as_key = use_random_as_key
+        # Mask for random dimensions: True for random dims (to be zeroed in V), False for learnable dims
+        # Shape: [feature_dim] - applies to feature stream only
+        if use_random_as_key:
+            assert random_dims_mask is not None, "random_dims_mask must be provided when use_random_as_key=True"
+            assert random_dims_mask.shape == (feature_dim,), f"random_dims_mask shape {random_dims_mask.shape} != (feature_dim={feature_dim},)"
+            self.register_buffer('random_dims_mask', random_dims_mask.bool())
+        else:
+            self.register_buffer('random_dims_mask', None)
         # Define an internal model dim that is a multiple of heads for MHAttention
 
         if normalize_parameter:
@@ -95,12 +104,59 @@ class TransformerBlock(nn.Module):
             self.norm_1 = NormLayer(self.model_dim)
         else:
             self.norm_1 = NormLayer(self.feature_dim)
+            # Add learnable scale factor for parameter stream to balance with normalized feature stream
+            # This prevents the unnormalized parameter stream (values like 20.0 or 0.0) from dominating attention
+            self.param_scale = nn.Parameter(torch.ones(1) * 0.01)  # Small initial scale
         self.norm_2 = NormLayer(self.model_dim)
         self.dropout_1 = nn.Dropout(dropout)
         self.dropout_2 = nn.Dropout(dropout)
 
         # Full FFN on unified stream in model_dim space
         self.ff = FeedForward(self.model_dim, dropout=dropout, num_layers=self.num_ffn_layers)
+
+        # Optional: collect attention distribution statistics for logging/debugging.
+        # When enabled, the latest forward pass stats are stored in `last_attention_stats`.
+        self.collect_attention_stats: bool = False
+        self.last_attention_stats: dict[str, torch.Tensor] | None = None
+
+    @staticmethod
+    def _masked_mean(x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
+        mask_f = mask.to(dtype=x.dtype)
+        denom = mask_f.sum().clamp_min(1.0)
+        return (x * mask_f).sum() / denom
+
+    def _attention_stats(self, attn_probs: torch.Tensor, attn_mask: torch.Tensor | None) -> dict[str, torch.Tensor]:
+        """Compute summary stats over attention probabilities [B, N, N]."""
+        eps = 1e-12
+        B, N, _ = attn_probs.shape
+        if attn_mask is None:
+            query_mask = torch.ones((B, N), dtype=torch.bool, device=attn_probs.device)
+            valid_fraction = torch.tensor(1.0, device=attn_probs.device)
+            valid_tokens_mean = torch.tensor(float(N), device=attn_probs.device)
+        else:
+            if attn_mask.dtype != torch.bool:
+                attn_mask = attn_mask.bool()
+            query_mask = attn_mask
+            valid_fraction = attn_mask.to(dtype=attn_probs.dtype).mean()
+            valid_tokens_mean = attn_mask.to(dtype=attn_probs.dtype).sum(dim=-1).mean()
+
+        # Query-level distributions over keys.
+        entropy = -(attn_probs * torch.log(attn_probs.clamp_min(eps))).sum(dim=-1)  # [B, N]
+        max_prob = attn_probs.max(dim=-1).values  # [B, N]
+        k = min(5, N)
+        topk_mass = attn_probs.topk(k, dim=-1).values.sum(dim=-1)  # [B, N]
+        effective_n = 1.0 / attn_probs.pow(2).sum(dim=-1).clamp_min(eps)  # [B, N]
+        frac_gt_1pct = (attn_probs > 0.01).to(dtype=attn_probs.dtype).mean(dim=-1)  # [B, N]
+
+        return {
+            "valid_fraction": valid_fraction.detach(),
+            "valid_tokens_mean": valid_tokens_mean.detach(),
+            "entropy_mean": self._masked_mean(entropy, query_mask).detach(),
+            "max_prob_mean": self._masked_mean(max_prob, query_mask).detach(),
+            "top5_mass_mean": self._masked_mean(topk_mass, query_mask).detach(),
+            "effective_n_mean": self._masked_mean(effective_n, query_mask).detach(),
+            "frac_gt_0p01_mean": self._masked_mean(frac_gt_1pct, query_mask).detach(),
+        }
 
     def _multihead_attention(self, combined_x: torch.Tensor, batch_size: int, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
         H = self.attention_heads
@@ -113,13 +169,25 @@ class TransformerBlock(nn.Module):
         head_dims = [base_head_dim + (1 if i < remainder else 0) for i in range(H)]
         
         # Split the feature dimension for Q, K, V
+        # For Q/K: use full input (random dims included for "pointer" behavior)
+        # For V: use masked input (random dims zeroed) if use_random_as_key is enabled
         Q = self.Q(combined_x)
         K = self.K(combined_x)
-        V = self.V(combined_x)
+        
+        if self.use_random_as_key:
+            # Concat mode only: mask random dims in final embedding space
+            # random_dims_mask is guaranteed to be not None due to assertion in __init__
+            combined_x_masked = combined_x.clone()
+            # Apply mask to feature dimensions (first feature_dim dims)
+            combined_x_masked[:, :, :self.feature_dim] = combined_x_masked[:, :, :self.feature_dim] * (~self.random_dims_mask).unsqueeze(0).unsqueeze(0)
+            V = self.V(combined_x_masked)
+        else:
+            V = self.V(combined_x)
         
         # Process each head separately since they have different dimensions
         attention_outputs = []
         start_idx = 0
+        attn_stats_sum: dict[str, torch.Tensor] | None = {} if self.collect_attention_stats else None
         
         for i in range(H):
             head_dim = head_dims[i]
@@ -130,26 +198,35 @@ class TransformerBlock(nn.Module):
             V_head = V[:, :, start_idx:start_idx + head_dim]
             
             # Compute attention scores for this head
-            scores = torch.matmul(Q_head, K_head.transpose(-2, -1)) / math.sqrt(head_dim)
+            raw_scores = torch.matmul(Q_head, K_head.transpose(-2, -1)) / math.sqrt(head_dim)
             if attn_mask is not None:
                 if attn_mask.dtype != torch.bool:
                     attn_mask = attn_mask.bool()
                 # Mask keys: broadcast [B, N] -> [B, 1, N]
                 key_mask = attn_mask[:, None, :]
-                scores = scores.masked_fill(~key_mask, torch.finfo(scores.dtype).min)
-            scores = F.softmax(scores, dim=-1)
-            scores = self.dropout_1(scores)
+                raw_scores = raw_scores.masked_fill(~key_mask, torch.finfo(raw_scores.dtype).min)
+            attn_probs = F.softmax(raw_scores, dim=-1)
+
+            if attn_stats_sum is not None:
+                with torch.no_grad():
+                    head_stats = self._attention_stats(attn_probs, attn_mask)
+                    for k, v in head_stats.items():
+                        attn_stats_sum[k] = attn_stats_sum.get(k, torch.zeros_like(v)) + v
+
+            attn_probs = self.dropout_1(attn_probs)
             
             # Apply attention to values
-            attended = torch.matmul(scores, V_head)
+            attended = torch.matmul(attn_probs, V_head)
             attention_outputs.append(attended)
             
             start_idx += head_dim
         
         # Concatenate all head outputs back together
         scores = torch.cat(attention_outputs, dim=-1)
-        
+
         # Apply output projection
+        if attn_stats_sum is not None:
+            self.last_attention_stats = {k: (v / float(H)).detach() for k, v in attn_stats_sum.items()}
         return self.out(scores)
 
     def forward(self, feature_x: torch.Tensor, param_x: torch.Tensor, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
@@ -162,12 +239,22 @@ class TransformerBlock(nn.Module):
         if self.normalize_parameter:
             z_norm = self.norm_1(z)
         else:
-            z_norm = torch.cat((self.norm_1(z[:, :, :self.feature_dim]), z[:, :, self.feature_dim:]), dim=-1)
+            # Scale parameter stream to balance with normalized feature stream
+            # This allows attention to work properly despite scale mismatch
+            z_norm = torch.cat((self.norm_1(z[:, :, :self.feature_dim]), 
+                               self.param_scale * z[:, :, self.feature_dim:]), dim=-1)
         attn_out = self._multihead_attention(z_norm, batch_size, attn_mask)
 
         # Optional GeLU activation after attention (before residual)
         if self.use_gelu_after_attention:
             attn_out = F.gelu(attn_out)
+
+        # Unscale parameter stream part of attention output before adding to z
+        if not self.normalize_parameter:
+            attn_out_feat = attn_out[:, :, :self.feature_dim]
+            attn_out_param = attn_out[:, :, self.feature_dim:]
+            attn_out_param_unscaled = attn_out_param / (self.param_scale + 1e-8)
+            attn_out = torch.cat([attn_out_feat, attn_out_param_unscaled], dim=-1)
 
         z = z + self.dropout_1(attn_out)
 

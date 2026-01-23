@@ -4,6 +4,7 @@ import numpy as np
 import torch.optim as optim
 import copy
 import random
+from pathlib import Path
 
 from imputer.losses import DefaultLossStrategy, adapt_batched_logits_to_predictions, TopLayerPredictionResult
 from imputer.data import RankingData
@@ -116,14 +117,28 @@ class ImputerTrainer:
     def __init__(self, model, learning_rate=1e-3, device='cuda', embedding_anchor_reg: float = 0.0, callbacks=None,
                  masked_loss_weight: float = 8.0, observed_loss_weight: float = 1.0, 
                  checkpoint_dir: Optional[str] = None, save_checkpoints: bool = False,
-                 model_save_dir: Optional[str] = None):
+                 model_save_dir: Optional[str] = None, weight_decay: float = 0.0,
+                 run_dir: Optional[str] = None, eval_engine=None, test_variables=None, converter=None,
+                 build_predictives_fn=None, gradient_clip_val: float = 0.0, 
+                 use_cosine_schedule: bool = False, warmup_steps: int = 100, max_epochs: int = 50):
         self.model = model.to(device)
         self.device = device
-        self.optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+        self.learning_rate = learning_rate
+        self.optimizer = optim.AdamW(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
         self.loss_strategy = DefaultLossStrategy(masked_loss_weight=masked_loss_weight,
                                                observed_loss_weight=observed_loss_weight)
         # Callback system
         self.callbacks = callbacks or []
+        
+        # Gradient clipping
+        self.gradient_clip_val = gradient_clip_val
+        
+        # Learning rate scheduler
+        self.use_cosine_schedule = use_cosine_schedule
+        self.warmup_steps = warmup_steps
+        self.max_epochs = max_epochs
+        self.scheduler = None
+        self.current_step = 0
         
         # Checkpoint saving configuration
         self.checkpoint_dir = checkpoint_dir
@@ -133,10 +148,37 @@ class ImputerTrainer:
         
         # Model saving configuration
         self.model_save_dir = model_save_dir
+        
+        # History and predictives saving configuration
+        self.run_dir = run_dir
+        self.eval_engine = eval_engine
+        self.test_variables = test_variables
+        self.converter = converter
+        self.build_predictives_fn = build_predictives_fn
 
     def register_callback(self, callback):
         """Register an evaluation callback."""
         self.callbacks.append(callback)
+    
+    def _setup_scheduler(self, total_steps: int):
+        """Setup warmup + cosine scheduler."""
+        if not self.use_cosine_schedule:
+            return
+        
+        from torch.optim.lr_scheduler import LambdaLR
+        import math
+        
+        def lr_lambda(current_step: int) -> float:
+            # Warmup phase
+            if current_step < self.warmup_steps:
+                return float(current_step) / float(max(1, self.warmup_steps))
+            
+            # Cosine annealing phase
+            progress = float(current_step - self.warmup_steps) / float(max(1, total_steps - self.warmup_steps))
+            return max(0.0, 0.5 * (1.0 + math.cos(math.pi * progress)))
+        
+        self.scheduler = LambdaLR(self.optimizer, lr_lambda)
+        print(f"Setup warmup+cosine scheduler: warmup_steps={self.warmup_steps}, total_steps={total_steps}")
     
     def _extract_model_config(self) -> Dict[str, Any]:
         """Extract model configuration for checkpoint saving."""
@@ -170,6 +212,7 @@ class ImputerTrainer:
             return
             
         import os
+        import json
         from pathlib import Path
         
         # Create checkpoint directory if it doesn't exist
@@ -195,6 +238,16 @@ class ImputerTrainer:
             "loss_dict": loss_dict,
             "model_config": self._extract_model_config(),
         }, latest_file)
+        
+        # Save predictives if function is provided
+        if self.build_predictives_fn is not None and self.test_variables is not None:
+            try:
+                predictives = self.build_predictives_fn(self.model, self.test_variables)
+                predictives_file = checkpoint_path / f"predictives_epoch_{epoch:04d}.json"
+                with open(predictives_file, "w") as f:
+                    json.dump(predictives, f, indent=2)
+            except Exception as e:
+                print(f"Warning: Failed to save predictives at epoch {epoch}: {e}")
     
     def _save_model(self, epoch: int, suffix: str = ""):
         """Save model.pt file (final model format) if model saving is enabled."""
@@ -297,9 +350,86 @@ class ImputerTrainer:
         total_loss_tensor = total_losses.get('_total_loss_tensor')
 
         if total_loss_tensor is not None:
-            total_loss_tensor.backward()
-            self.optimizer.step()
+            # Snapshot params for delta tracking
+            embed = getattr(self.model, "embedding_provider", None)
+            attr_before = None
+            anno_before = None
+            params_before = None
+            if embed is not None:
+                attr_before = embed.attribute_embedding.detach().clone()
+                anno_before = embed.annotator_embedding_learnable.detach().clone()
+            params_before = {
+                name: p.detach().clone()
+                for name, p in self.model.named_parameters()
+                if p.requires_grad
+            }
 
+            total_loss_tensor.backward()
+            
+            # Apply gradient clipping if enabled
+            if self.gradient_clip_val > 0:
+                torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.gradient_clip_val)
+            
+            # Debug: gradient norms for embedding params to verify backprop flow
+            try:
+                if embed is not None:
+                    attr_grad = getattr(embed.attribute_embedding, "grad", None)
+                    anno_grad = getattr(embed.annotator_embedding_learnable, "grad", None)
+                    def _grad_norm(g):
+                        return float(g.norm().item()) if g is not None else None
+                    print(
+                        f"[DEBUG] grad_norms: attribute={_grad_norm(attr_grad)}, "
+                        f"annotator={_grad_norm(anno_grad)}"
+                    )
+            except Exception as e:
+                print(f"[DEBUG] grad_norms: failed to read embedding grads: {e}")
+            
+            self.optimizer.step()
+            
+            # Step scheduler if enabled
+            if self.scheduler is not None:
+                self.scheduler.step()
+                self.current_step += 1
+
+            # Debug: parameter delta norms after optimizer step
+            try:
+                if embed is not None and attr_before is not None and anno_before is not None:
+                    attr_delta = embed.attribute_embedding.detach() - attr_before
+                    anno_delta = embed.annotator_embedding_learnable.detach() - anno_before
+                    attr_norm = float(embed.attribute_embedding.detach().norm().item())
+                    anno_norm = float(embed.annotator_embedding_learnable.detach().norm().item())
+                    print(
+                        f"[DEBUG] embed_delta_norms: attribute={float(attr_delta.norm().item())}, "
+                        f"annotator={float(anno_delta.norm().item())}"
+                    )
+                    print(
+                        f"[DEBUG] embed_norms: attribute={attr_norm}, annotator={anno_norm}"
+                    )
+                    attr_rel = float(attr_delta.norm().item()) / attr_norm if attr_norm > 0 else None
+                    anno_rel = float(anno_delta.norm().item()) / anno_norm if anno_norm > 0 else None
+                    print(
+                        f"[DEBUG] embed_rel_update: attribute={attr_rel}, annotator={anno_rel}"
+                    )
+            except Exception as e:
+                print(f"[DEBUG] embed_delta_norms: failed to compute deltas: {e}")
+
+            # Debug: full parameter delta norms and relative updates (all trainable params)
+            try:
+                if params_before is not None:
+                    for name, p in self.model.named_parameters():
+                        if not p.requires_grad:
+                            continue
+                        before = params_before.get(name)
+                        if before is None:
+                            continue
+                        delta = p.detach() - before
+                        delta_norm = float(delta.norm().item())
+                        param_norm = float(p.detach().norm().item())
+                        rel_update = (delta_norm / param_norm) if param_norm > 0 else None
+                        print(f"[DEBUG] param_delta_norm: {name}={delta_norm}")
+                        print(f"[DEBUG] param_rel_update: {name}={rel_update}")
+            except Exception as e:
+                print(f"[DEBUG] param_delta_norm: failed to compute deltas: {e}")
 
         # Disable full_dropout after training step
         if embed is not None and hasattr(embed, "set_full_dropout"):
@@ -377,6 +507,11 @@ class ImputerTrainer:
         training_history = []
         callback_history = []
 
+        # Setup scheduler if enabled
+        total_steps = epochs * mask_augmentations
+        if self.use_cosine_schedule:
+            self._setup_scheduler(total_steps)
+        
         # Store initial weights for decay schedule
         initial_observed_weight = self.loss_strategy.observed_loss_weight
         initial_masked_weight = self.loss_strategy.masked_loss_weight
@@ -431,6 +566,58 @@ class ImputerTrainer:
                     import json
                     print(json.dumps(callback_results, indent=2, sort_keys=True))
                     callback_history.extend(callback_results)
+                    
+                    # Save training history and test metrics at every epoch
+                    if self.run_dir is not None:
+                        try:
+                            from pathlib import Path
+                            run_path = Path(self.run_dir)
+                            
+                            # Separate test and train callback results
+                            test_history = [entry for entry in callback_history if entry.get('name') == 'test_all_evaluation']
+                            train_history = [entry for entry in callback_history if entry.get('name') == 'train_all_evaluation']
+                            
+                            # Save test history
+                            if test_history:
+                                with open(run_path / "test_training_history.json", "w") as f:
+                                    json.dump(test_history, f, indent=2)
+                            
+                            # Save train history
+                            if train_history:
+                                with open(run_path / "train_training_history.json", "w") as f:
+                                    json.dump(train_history, f, indent=2)
+                            
+                            # Save test metrics from latest test evaluation
+                            if test_history and self.eval_engine is not None and self.test_variables is not None:
+                                try:
+                                    # Re-evaluate to get full metrics
+                                    results = self.eval_engine.evaluate_model(
+                                        model=self.model,
+                                        variables=self.test_variables,
+                                        converter=self.converter,
+                                        device=self.device
+                                    )
+                                    metrics_obj = {
+                                        "epoch": epoch,
+                                        "total_loss": results.total_loss,
+                                        "rating_loss": results.rating_loss,
+                                        "ranking_loss": results.ranking_loss,
+                                        "num_rating_evaluations": results.num_rating_evaluations,
+                                        "num_ranking_evaluations": results.num_ranking_evaluations,
+                                        "observed_metrics": results.observed_metrics,
+                                        "missing_metrics": results.missing_metrics,
+                                        "masked_metrics": results.masked_metrics,
+                                    }
+                                    # Save as epoch-specific metrics file
+                                    with open(run_path / f"test_metrics_epoch_{epoch:04d}.json", "w") as f:
+                                        json.dump(metrics_obj, f, indent=2)
+                                    # Also update latest test_metrics.json
+                                    with open(run_path / "test_metrics.json", "w") as f:
+                                        json.dump(metrics_obj, f, indent=2)
+                                except Exception as e:
+                                    print(f"Warning: Failed to save test metrics at epoch {epoch}: {e}")
+                        except Exception as e:
+                            print(f"Warning: Failed to save training history at epoch {epoch}: {e}")
 
                     # Early stopping based on test missing metrics
                     if early_stopping is not None:
