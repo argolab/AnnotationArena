@@ -7,17 +7,17 @@
 # ============================================
 
 # Data dimensions
-BASE_I=10
+BASE_I=3
 BASE_J=12
 BASE_C=5
 BASE_K_TRAIN=10
 BASE_K_TEST=10
 
 # Data generation hyperparameters
-BASE_D=16
+BASE_D=4
 BASE_SIGMA_ANNOTATOR=0.5
 BASE_SIGMA_MEASUREMENT=0.1
-BASE_KAPPA=1.0
+BASE_KAPPA=1
 BASE_PROTOCOL="tie_breaking"  # Options: "tie_breaking", "mcar", "extended_rankings"
 BASE_PROTOCOL_CODE="smar"     # For naming: "smar", "mcar05", "smarext"
 BASE_USE_CONCAT=0             # 0 = disabled, 1 = enabled for AtomCompositional embeddings
@@ -35,9 +35,10 @@ MARFORMER_OBSERVED_LOSS_WEIGHT=1
 MARFORMER_MASK_AUGMENTATIONS=5
 MARFORMER_EARLY_STOPPING_PATIENCE=10
 MARFORMER_DEVICE="cuda"
-MARFORMER_EARLY_STOPPING=true  # true = enable, false = disable
+MARFORMER_EARLY_STOPPING=false  # true = enable, false = disable (disabled for experiment: fix early stopping metric)
 MARFORMER_EARLY_STOPPING_METRIC="loss"  # "loss" or "accuracy"
-MARFORMER_FULL_RANDOM=0         # 0 = disable randomness, 1 = enable randomness
+MARFORMER_FULL_RANDOM=1         # 0 = disable randomness, 1 = enable randomness
+MARFORMER_DROPOUT=0.1
 
 # Stan hyperparameters
 STAN_4C_CHAINS=4
@@ -48,7 +49,7 @@ STAN_4C_ITER_SAMPLING=300
 STAN_4C_WARMUP=100
 
 # Run name (auto-generated if empty)
-RUN_NAME="no_random_marformer"  # Leave empty for auto-generated name, or specify custom name
+RUN_NAME="marformer_kappa01_full_random"  # Leave empty for auto-generated name, or specify custom name
 
 # ============================================
 # EXPERIMENT PIPELINE
@@ -156,6 +157,8 @@ MARFORMER_ARGS="--data-dir OUTPUT/generated_data/${RUN_NAME} \
         --no-final-norm \
         --normalize-parameter \
         --device $MARFORMER_DEVICE \
+        --save-model-every 5 \
+        --dropout $MARFORMER_DROPOUT \
     $EARLY_STOPPING_FLAGS \
     $FULL_RANDOM_FLAG \
     $CONCAT_FLAG"
@@ -249,4 +252,85 @@ echo "  - Stan (4c) Eval: OUTPUT/domain_model/eval/${RUN_NAME}_stan4c_eval"
 echo "  - Stan (1c): OUTPUT/domain_model/runs/${RUN_NAME}_stan1c"
 echo "  - Stan (1c) Eval: OUTPUT/domain_model/eval/${RUN_NAME}_stan1c_eval"
 echo "  - Plots: OUTPUT/IMPUTER/${RUN_NAME}_marformer/plots/"
+echo "=============================================="
+echo ""
+echo "=============================================="
+echo "COMMANDS SUMMARY (for easy copy/paste)"
+echo "=============================================="
+echo ""
+echo "# [Step 1] Generate data:"
+echo "python stan/scripts/generate_data.py \\"
+echo "    --K-train $BASE_K_TRAIN \\"
+echo "    --K-test $BASE_K_TEST \\"
+echo "    --I $BASE_I \\"
+echo "    --J $BASE_J \\"
+echo "    --D $BASE_D \\"
+echo "    --C $BASE_C \\"
+echo "    --observation-protocol $BASE_PROTOCOL \\"
+echo "    --sigma-annotator $BASE_SIGMA_ANNOTATOR \\"
+echo "    --sigma-measurement $BASE_SIGMA_MEASUREMENT \\"
+echo "    --kappa $BASE_KAPPA \\"
+echo "    --run-name $RUN_NAME \\"
+echo "    --overwrite-existing-data \\"
+echo "    $PROTOCOL_ARGS"
+echo ""
+echo "# [Step 2] Train Marformer:"
+echo "python imputer/run_imputer.py \\"
+echo "    --data-dir OUTPUT/generated_data/${RUN_NAME} \\"
+echo "    --run-name ${RUN_NAME}_marformer \\"
+echo "    --overwrite-existing-data \\"
+echo "    --embedding-dim $((BASE_D * 3)) \\"
+echo "    --epochs $MARFORMER_EPOCHS \\"
+echo "    --lr $MARFORMER_LR \\"
+echo "    --masking-rate $MARFORMER_MASKING_RATE \\"
+echo "    --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \\"
+echo "    --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \\"
+echo "    --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \\"
+echo "    --transductive_learning \\"
+echo "    --no-final-norm \\"
+echo "    --normalize-parameter \\"
+echo "    --device $MARFORMER_DEVICE \\"
+echo "    --save-model-every 5 \\"
+echo "    --dropout $MARFORMER_DROPOUT \\"
+echo "    $EARLY_STOPPING_FLAGS \\"
+echo "    $FULL_RANDOM_FLAG \\"
+echo "    $CONCAT_FLAG"
+echo ""
+echo "# [Step 3] Stan inference (4 chains):"
+echo "python stan/scripts/run_inference.py \\"
+echo "    --data-bundle OUTPUT/generated_data/${RUN_NAME}/data_bundle.json \\"
+echo "    --chains $STAN_4C_CHAINS \\"
+echo "    --iter-sampling $STAN_4C_ITER_SAMPLING \\"
+echo "    --iter-warmup $STAN_4C_WARMUP \\"
+echo "    --run-name ${RUN_NAME}_stan4c \\"
+echo "    --overwrite-existing-data"
+echo ""
+echo "# [Step 4] Stan inference (1 chain):"
+echo "python stan/scripts/run_inference.py \\"
+echo "    --data-bundle OUTPUT/generated_data/${RUN_NAME}/data_bundle.json \\"
+echo "    --chains $STAN_1C_CHAINS \\"
+echo "    --iter-sampling $STAN_1C_ITER_SAMPLING \\"
+echo "    --iter-warmup $STAN_1C_WARMUP \\"
+echo "    --run-name ${RUN_NAME}_stan1c \\"
+echo "    --overwrite-existing-data"
+echo ""
+echo "# [Step 5] Evaluate Stan (4 chains):"
+echo "python stan/scripts/evaluate_predictions.py \\"
+echo "    --data-bundle OUTPUT/generated_data/${RUN_NAME}/data_bundle.json \\"
+echo "    --mcmc-dir OUTPUT/domain_model/runs/${RUN_NAME}_stan4c \\"
+echo "    --run-name ${RUN_NAME}_stan4c_eval \\"
+echo "    --overwrite-existing-data"
+echo ""
+echo "# [Step 5b] Evaluate Stan (1 chain):"
+echo "python stan/scripts/evaluate_predictions.py \\"
+echo "    --data-bundle OUTPUT/generated_data/${RUN_NAME}/data_bundle.json \\"
+echo "    --mcmc-dir OUTPUT/domain_model/runs/${RUN_NAME}_stan1c \\"
+echo "    --run-name ${RUN_NAME}_stan1c_eval \\"
+echo "    --overwrite-existing-data"
+echo ""
+echo "# [Step 6] Generate visualizations:"
+echo "python utils/visualize.py \\"
+echo "    --run-dir OUTPUT/IMPUTER/${RUN_NAME}_marformer \\"
+echo "    --stan-metrics OUTPUT/domain_model/eval/${RUN_NAME}_stan4c_eval/predictive_metrics.json"
+echo ""
 echo "=============================================="
