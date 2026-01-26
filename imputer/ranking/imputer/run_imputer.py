@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Dict, Any, List
@@ -31,6 +32,7 @@ def main():
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=0.01, help="AdamW weight decay (L2 regularization, default: 0.01)")
     parser.add_argument("--device", default="cuda", help="Device: 'cuda' (uses all available GPUs automatically) or 'cpu'")
+    parser.add_argument("--devices", type=int, default=None, help="Number of devices to use (None = auto-detect all available, 1 = single device, default: None)")
     parser.add_argument("--max-rank-size", type=int, default=2)
     parser.add_argument("--transductive_learning", action="store_true")
     parser.add_argument("--save-checkpoints", action="store_true", help="Save model checkpoints during training")
@@ -89,6 +91,11 @@ def main():
                         help="Batch size for training (1=no batching, >1=batch different masking patterns, default: 1)")
 
     args = parser.parse_args()
+
+    # PyTorch Lightning DDP re-runs this script in each worker process.
+    # Gate filesystem side-effects (mkdir/rmtree/writes/most prints) to rank 0 to avoid races and spam.
+    local_rank = int(os.environ.get("LOCAL_RANK", "0"))
+    is_rank0 = (local_rank == 0)
 
     # Check for mutually exclusive flags
     if args.test_only_training and args.transductive_learning:
@@ -244,15 +251,48 @@ def main():
     # Create the main run directory first (before training)
     output_root = Path(args.output_root)
     output_root.mkdir(parents=True, exist_ok=True)
-    
-    # Handle --overwrite-existing-data flag: remove existing directory if it exists
-    if args.run_name:
-        potential_run_dir = output_root / args.run_name
-        if potential_run_dir.exists() and args.overwrite_existing_data:
-            print("\033[91mWARNING: Overwriting existing output directory: {}\033[0m".format(potential_run_dir))
-            shutil.rmtree(potential_run_dir)
-    
-    run_dir = new_run_dir(output_root, run_name=args.run_name)
+
+    # Determine a single shared run_name across DDP ranks.
+    # - If user passes --run-name, use it.
+    # - Otherwise, only rank 0 generates a timestamped name and writes it for other ranks to read.
+    run_name_path = output_root / ".imputer_current_run_name.txt"
+    if is_rank0:
+        run_name_final = args.run_name
+        if run_name_final is None:
+            run_name_final = f"run_{time.strftime('%Y%m%d_%H%M%S')}"
+        run_name_path.write_text(run_name_final)
+    else:
+        # Wait for rank 0 to publish the chosen run name
+        wait_s = 0.0
+        while not run_name_path.exists():
+            time.sleep(0.05)
+            wait_s += 0.05
+            if wait_s > 30.0:
+                raise RuntimeError(
+                    f"Timed out waiting for run name from rank 0 at {run_name_path}. "
+                    f"Is the rank-0 process stuck?"
+                )
+        run_name_final = run_name_path.read_text().strip()
+
+    # Handle --overwrite-existing-data flag and directory creation (rank 0 only)
+    run_dir = output_root / run_name_final
+    if is_rank0:
+        if run_dir.exists() and args.overwrite_existing_data:
+            print("\033[91mWARNING: Overwriting existing output directory: {}\033[0m".format(run_dir))
+            shutil.rmtree(run_dir)
+        # Create directory once; other ranks will wait for it to exist
+        run_dir = new_run_dir(output_root, run_name=run_name_final)
+    else:
+        # Wait for run_dir to be created by rank 0
+        wait_s = 0.0
+        while not run_dir.exists():
+            time.sleep(0.05)
+            wait_s += 0.05
+            if wait_s > 30.0:
+                raise RuntimeError(
+                    f"Timed out waiting for run directory from rank 0 at {run_dir}. "
+                    f"Is the rank-0 process stuck?"
+                )
 
     # Save train configuration snapshot immediately after creating run_dir
     # This ensures config is saved even if training fails early
@@ -312,9 +352,10 @@ def main():
             "run_dir": str(run_dir)
         }
     }
-    with open(run_dir / "train_config.json", "w") as f:
-        json.dump(train_config, f, indent=2)
-    print(f"Saved train_config.json to {run_dir / 'train_config.json'}")
+    if is_rank0:
+        with open(run_dir / "train_config.json", "w") as f:
+            json.dump(train_config, f, indent=2)
+        print(f"Saved train_config.json to {run_dir / 'train_config.json'}")
     
     # Initialize evaluation engine
     eval_engine = EvaluationEngine()
@@ -361,14 +402,16 @@ def main():
         train_instance_callback=train_instance_callback,
         test_instance_callback=test_instance_callback,
     )
-    # Lightning automatically detects and uses all available GPUs when accelerator="gpu".
-    # For CPU, we pin to a single device.
+    # Device / strategy configuration
     trainer_kwargs: Dict[str, Any] = {}
     if args.device == "cuda":
         accelerator = "gpu"
-        # Let Lightning decide devices/strategy automatically
+        # If --devices is specified, use it; otherwise let Lightning auto-detect
+        if args.devices is not None:
+            trainer_kwargs["devices"] = args.devices
     else:
         accelerator = "cpu"
+        # CPU always uses 1 device
         trainer_kwargs["devices"] = 1
 
     lightning_trainer = create_lightning_trainer(

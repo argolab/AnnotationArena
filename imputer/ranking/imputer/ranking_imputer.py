@@ -103,7 +103,9 @@ class MultiVariableImputer(nn.Module):
         else:
             self.final_norm = None
 
-        self.to(self.device)
+        # NOTE: Do not call self.to(self.device) here. When using PyTorch Lightning with DDP,
+        # Lightning handles device placement automatically. Calling .to() here causes CUDA conflicts
+        # when multiple processes try to initialize the model simultaneously.
 
     def load_state_dict_with_warnings(self, state_dict, strict=True):
         """Load state dict with warnings for extra/missing keys."""
