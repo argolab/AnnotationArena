@@ -25,12 +25,12 @@ from experiment_config import ExperimentConfig
 from iclr_data_generator import ICLRDataGenerator, ICLRDatasetConfig
 from imputer.data import DataConverter
 from imputer.ranking_imputer import MultiVariableImputer
-from imputer.multi_instance_trainer import SequentialMIT, MixedMIT, GeneralMIT
+from imputer.legacy.multi_instance_trainer import SequentialMIT, MixedMIT, GeneralMIT
 from imputer.eval import EvaluationEngine
 from domain_model_trainer import DomainModelTrainer
 
 # Import Timer and ExperimentRunner from the original file
-from new_experiment_runner import Timer, ExperimentRunner
+from legacy.new_experiment_runner import Timer, ExperimentRunner
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
@@ -142,7 +142,6 @@ class PartialExperimentRunner:
                 attention_heads=self.config.model_config.attention_heads,
                 embedding_dim=self.config.model_config.embedding_dim,
                 dropout=self.config.model_config.dropout,
-                embedding_type=self.config.model_config.embedding_type,
                 device=self.config.device
             )
 
@@ -302,7 +301,6 @@ class PartialExperimentRunner:
             attention_heads=self.config.model_config.attention_heads,
             embedding_dim=self.config.model_config.embedding_dim,
             dropout=self.config.model_config.dropout,
-            embedding_type=self.config.model_config.embedding_type,
             device=self.config.device
         )
         
@@ -354,7 +352,6 @@ class PartialExperimentRunner:
                 attention_heads=self.config.model_config.attention_heads,
                 embedding_dim=self.config.model_config.embedding_dim,
                 dropout=self.config.model_config.dropout,
-                embedding_type=self.config.model_config.embedding_type,
                 device=self.config.device
             )
             model.load_state_dict(pretrained_model.state_dict())
@@ -395,7 +392,6 @@ class PartialExperimentRunner:
                 attention_heads=self.config.model_config.attention_heads,
                 embedding_dim=self.config.model_config.embedding_dim,
                 dropout=self.config.model_config.dropout,
-                embedding_type=self.config.model_config.embedding_type,
                 device=self.config.device
             )
 

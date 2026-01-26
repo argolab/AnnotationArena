@@ -24,7 +24,7 @@ from experiment_config import ExperimentConfig
 from iclr_data_generator import ICLRDataGenerator, ICLRDatasetConfig
 from imputer.data import DataConverter
 from imputer.ranking_imputer import MultiVariableImputer
-from imputer.multi_instance_trainer import SequentialMIT, MixedMIT, GeneralMIT
+from imputer.legacy.multi_instance_trainer import SequentialMIT, MixedMIT, GeneralMIT
 from imputer.eval import EvaluationEngine
 from domain_model_trainer import DomainModelTrainer
 
@@ -209,7 +209,6 @@ class ExperimentRunner:
                 attention_heads=self.config.model_config.attention_heads,
                 embedding_dim=self.config.model_config.embedding_dim,
                 dropout=self.config.model_config.dropout,
-                embedding_type=self.config.model_config.embedding_type,
                 device=self.config.device
             )
 
@@ -295,7 +294,6 @@ class ExperimentRunner:
                 attention_heads=self.config.model_config.attention_heads,
                 embedding_dim=self.config.model_config.embedding_dim,
                 dropout=self.config.model_config.dropout,
-                embedding_type=self.config.model_config.embedding_type,
                 device=self.config.device
             )
             model.load_state_dict(pretrained_model.state_dict())
@@ -336,7 +334,6 @@ class ExperimentRunner:
                 attention_heads=self.config.model_config.attention_heads,
                 embedding_dim=self.config.model_config.embedding_dim,
                 dropout=self.config.model_config.dropout,
-                embedding_type=self.config.model_config.embedding_type,
                 device=self.config.device
             )
 

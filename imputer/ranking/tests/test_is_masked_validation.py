@@ -22,9 +22,9 @@ sys.path.append('imputer')
 
 from imputer.data import RankingData, DataConverter
 from imputer.losses import DefaultLossStrategy, TopLayerPredictionResult, adapt_batched_logits_to_predictions
-from imputer.multi_instance_trainer import SequentialMIT
+from imputer.legacy.multi_instance_trainer import SequentialMIT
 from imputer.eval import EvaluationEngine
-from imputer.trainer import ImputerTrainer
+from imputer.legacy.trainer import ImputerTrainer
 from experiment_config import ModelConfig
 
 

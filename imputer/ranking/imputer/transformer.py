@@ -64,7 +64,7 @@ class TransformerBlock(nn.Module):
     """
 
     def __init__(self, feature_dim: int, param_dim: int, attention_heads: int, dropout: float = 0.3, use_gelu_after_attention: bool = False, 
-                 normalize_parameter: bool = False, num_ffn_layers: int = 4, use_random_as_key: bool = False, random_dims_mask: torch.Tensor | None = None):
+                 normalize_parameter: bool = False, num_ffn_layers: int = 4, enable_pointer_mechanism: bool = True):
         super().__init__()
         self.feature_dim = feature_dim
         self.param_dim = param_dim
@@ -73,15 +73,7 @@ class TransformerBlock(nn.Module):
         self.use_gelu_after_attention = use_gelu_after_attention
         self.normalize_parameter = normalize_parameter
         self.num_ffn_layers = num_ffn_layers
-        self.use_random_as_key = use_random_as_key
-        # Mask for random dimensions: True for random dims (to be zeroed in V), False for learnable dims
-        # Shape: [feature_dim] - applies to feature stream only
-        if use_random_as_key:
-            assert random_dims_mask is not None, "random_dims_mask must be provided when use_random_as_key=True"
-            assert random_dims_mask.shape == (feature_dim,), f"random_dims_mask shape {random_dims_mask.shape} != (feature_dim={feature_dim},)"
-            self.register_buffer('random_dims_mask', random_dims_mask.bool())
-        else:
-            self.register_buffer('random_dims_mask', None)
+        self.enable_pointer_mechanism = enable_pointer_mechanism
         # Define an internal model dim that is a multiple of heads for MHAttention
 
         if normalize_parameter:
@@ -96,7 +88,11 @@ class TransformerBlock(nn.Module):
                          else nn.Linear(self.model_dim, self.total_dim))
 
         # Unified stream attention over concatenated [feature | param] in model_dim space
-        self.Q = nn.Linear(self.model_dim, self.model_dim)
+        # Q gets +3 dimensions for pointer mechanism, K and V stay same size
+        if enable_pointer_mechanism:
+            self.Q = nn.Linear(self.model_dim, self.model_dim + 3)
+        else:
+            self.Q = nn.Linear(self.model_dim, self.model_dim)
         self.K = nn.Linear(self.model_dim, self.model_dim)
         self.V = nn.Linear(self.model_dim, self.model_dim)
         self.out = nn.Linear(self.model_dim, self.model_dim)
@@ -158,7 +154,7 @@ class TransformerBlock(nn.Module):
             "frac_gt_0p01_mean": self._masked_mean(frac_gt_1pct, query_mask).detach(),
         }
 
-    def _multihead_attention(self, combined_x: torch.Tensor, batch_size: int, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
+    def _multihead_attention(self, combined_x: torch.Tensor, batch_size: int, attn_mask: torch.Tensor | None = None, K_aug: torch.Tensor | None = None) -> torch.Tensor:
         H = self.attention_heads
         
         # Calculate head dimension, allowing for remainder
@@ -168,21 +164,19 @@ class TransformerBlock(nn.Module):
         # Create head dimensions - distribute remainder across first few heads
         head_dims = [base_head_dim + (1 if i < remainder else 0) for i in range(H)]
         
-        # Split the feature dimension for Q, K, V
-        # For Q/K: use full input (random dims included for "pointer" behavior)
-        # For V: use masked input (random dims zeroed) if use_random_as_key is enabled
-        Q = self.Q(combined_x)
-        K = self.K(combined_x)
+        # Compute Q, K, V projections
+        Q_full = self.Q(combined_x)  # [B, N, model_dim + 3] if pointer enabled, else [B, N, model_dim]
+        K = self.K(combined_x)  # [B, N, model_dim]
+        V = self.V(combined_x)  # [B, N, model_dim]
         
-        if self.use_random_as_key:
-            # Concat mode only: mask random dims in final embedding space
-            # random_dims_mask is guaranteed to be not None due to assertion in __init__
-            combined_x_masked = combined_x.clone()
-            # Apply mask to feature dimensions (first feature_dim dims)
-            combined_x_masked[:, :, :self.feature_dim] = combined_x_masked[:, :, :self.feature_dim] * (~self.random_dims_mask).unsqueeze(0).unsqueeze(0)
-            V = self.V(combined_x_masked)
+        # Split Q into base and pointer parts if pointer mechanism is enabled
+        if self.enable_pointer_mechanism:
+            Q_base = Q_full[:, :, :self.model_dim]  # [B, N, model_dim]
+            Q_ptr = Q_full[:, :, self.model_dim:]  # [B, N, 3]
+            assert Q_ptr.shape[-1] == 3, "Q_ptr should have 3 dimensions"
         else:
-            V = self.V(combined_x)
+            Q_base = Q_full
+            Q_ptr = None
         
         # Process each head separately since they have different dimensions
         attention_outputs = []
@@ -193,12 +187,22 @@ class TransformerBlock(nn.Module):
             head_dim = head_dims[i]
             
             # Extract head-specific portions
-            Q_head = Q[:, :, start_idx:start_idx + head_dim]
-            K_head = K[:, :, start_idx:start_idx + head_dim]
-            V_head = V[:, :, start_idx:start_idx + head_dim]
+            Q_head = Q_base[:, :, start_idx:start_idx + head_dim]  # [B, N, head_dim]
+            K_head = K[:, :, start_idx:start_idx + head_dim]  # [B, N, head_dim]
+            V_head = V[:, :, start_idx:start_idx + head_dim]  # [B, N, head_dim]
             
-            # Compute attention scores for this head
-            raw_scores = torch.matmul(Q_head, K_head.transpose(-2, -1)) / math.sqrt(head_dim)
+            # Compute base attention scores for this head
+            raw_scores = torch.matmul(Q_head, K_head.transpose(-2, -1)) / math.sqrt(head_dim)  # [B, N, N]
+            
+            # Add pointer mechanism if enabled
+            if self.enable_pointer_mechanism and K_aug is not None:
+                # K_aug is [B, N, N, 3] where [b, i, j, :] = [attr_match, annot_match, item_match] for query i and key j
+                # Q_ptr is [B, N, 3]
+                # We want: ptr_additions[b, i, j] = Q_ptr[b, i] @ K_aug[b, i, j]
+                # This is: (Q_ptr.unsqueeze(2) * K_aug).sum(dim=-1) where Q_ptr is [B, N, 1, 3] and K_aug is [B, N, N, 3]
+                ptr_additions = (Q_ptr.unsqueeze(2) * K_aug).sum(dim=-1)  # [B, N, N]
+                raw_scores = raw_scores + ptr_additions
+            
             if attn_mask is not None:
                 if attn_mask.dtype != torch.bool:
                     attn_mask = attn_mask.bool()
@@ -229,7 +233,7 @@ class TransformerBlock(nn.Module):
             self.last_attention_stats = {k: (v / float(H)).detach() for k, v in attn_stats_sum.items()}
         return self.out(scores)
 
-    def forward(self, feature_x: torch.Tensor, param_x: torch.Tensor, attn_mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, feature_x: torch.Tensor, param_x: torch.Tensor, attn_mask: torch.Tensor | None = None, K_aug: torch.Tensor | None = None) -> torch.Tensor:
         batch_size = feature_x.shape[0]
 
         # Concatenate streams and apply unified attention + FFN with residuals
@@ -243,7 +247,7 @@ class TransformerBlock(nn.Module):
             # This allows attention to work properly despite scale mismatch
             z_norm = torch.cat((self.norm_1(z[:, :, :self.feature_dim]), 
                                self.param_scale * z[:, :, self.feature_dim:]), dim=-1)
-        attn_out = self._multihead_attention(z_norm, batch_size, attn_mask)
+        attn_out = self._multihead_attention(z_norm, batch_size, attn_mask, K_aug=K_aug)
 
         # Optional GeLU activation after attention (before residual)
         if self.use_gelu_after_attention:

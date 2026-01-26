@@ -5,425 +5,10 @@ from typing import List, Tuple
 
 from imputer.abstractions import RankingEmbeddingProviderBase
 from imputer.data import RankingData
-import random
 import logging
 
 logger = logging.getLogger(__name__)
 
-
-class BaseRankingEmbeddingProvider(RankingEmbeddingProviderBase):
-    """Intermediate base class that manages common embedding initialization and utilities.
-    
-    This class handles the common functionality shared between different ranking embedding
-    providers, including embedding initialization, parameter projection, and the _from_true_embedding
-    factory method.
-    """
-
-    def __init__(
-        self,
-        num_attributes: int,
-        num_annotators: int,
-        num_items: int,
-        embedding_dim: int,
-        num_likert_classes: int,
-        max_rank_size: int,
-        device: str = "cpu",
-    ):
-        super().__init__(
-            num_likert_classes=num_likert_classes,
-            max_rank_size=max_rank_size,
-            embedding_dim=embedding_dim,
-        )
-        self.num_attributes = num_attributes
-        self.num_annotators = num_annotators
-        self.num_items = num_items
-        self.device = torch.device(device)
-
-        # Embeddings for each component (learned parameters)
-        self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, embedding_dim))
-        self.annotator_embedding = nn.Parameter(torch.randn(num_annotators, embedding_dim))
-        self.item_embedding = nn.Parameter(torch.randn(num_items, embedding_dim))
-
-        torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
-        torch.nn.init.kaiming_normal_(self.annotator_embedding, mode='fan_out', nonlinearity='relu')
-        torch.nn.init.kaiming_normal_(self.item_embedding, mode='fan_out', nonlinearity='relu')
-
-    def reset_embedding(self, num_attributes: int, num_annotators: int, num_items: int, embedding_dim: int):
-        """Reset embeddings to random values with specified dimensions."""
-        self.num_attributes = num_attributes
-        self.num_annotators = num_annotators
-        self.num_items = num_items
-        self.embedding_dim = embedding_dim
-        
-        # Reinitialize embeddings with new random values
-        self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, embedding_dim))
-        self.annotator_embedding = nn.Parameter(torch.randn(num_annotators, embedding_dim))
-        self.item_embedding = nn.Parameter(torch.randn(num_items, embedding_dim))
-        
-        # Apply kaiming initialization
-        torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
-        torch.nn.init.kaiming_normal_(self.annotator_embedding, mode='fan_out', nonlinearity='relu')
-        torch.nn.init.kaiming_normal_(self.item_embedding, mode='fan_out', nonlinearity='relu')
-        
-        # Set embeddings as non-trainable for randomized providers
-        self.attribute_embedding.requires_grad = False
-        self.annotator_embedding.requires_grad = False
-        self.item_embedding.requires_grad = False
-
-    @classmethod
-    def _from_true_embedding(
-        cls,
-        attribute_embedding=None,
-        annotator_embedding=None,
-        item_embedding=None,
-        *,
-        attribute_embedding_size: tuple | None = None,
-        annotator_embedding_size: tuple | None = None,
-        item_embedding_size: tuple | None = None,
-        num_likert_classes: int,
-        max_rank_size: int,
-        freeze: bool | dict = False,
-        device: str = "cuda",
-    ) -> "BaseRankingEmbeddingProvider":
-        f"""Factory: build a provider from ground-truth embedding matrices.
-
-        Accepts any subset of the three matrices. Shapes are [count, D]. For any
-        component not provided, pass its (count, D) via the corresponding *_embedding_size.
-        All components must agree on D.
-
-        Example:
-            provider = BaseRankingEmbeddingProvider._from_true_embedding(
-                attribute_embedding=attr_gt,            # [A, D]
-                annotator_embedding_size=(U, D),      # if embedding not provided, give sizes
-                item_embedding=item_gt,                 # [I, D]
-                num_likert_classes=5,
-                max_rank_size=3,
-                freeze={'attribute': True, 'item': False, 'annotator': False}, # freeze only attribute embeddings
-            )
-        """
-        # Convert to tensors to infer shapes and dtypes
-        def to_tensor(x):
-            if x is None:
-                return None
-            return x if torch.is_tensor(x) else torch.as_tensor(x)
-
-        # assert either size or embedding is provided
-        assert attribute_embedding_size is not None or attribute_embedding is not None, "attribute_embedding_size must be provided when attribute_embedding is None"
-        assert annotator_embedding_size is not None or annotator_embedding is not None, "annotator_embedding_size must be provided when annotator_embedding is None"
-        assert item_embedding_size is not None or item_embedding is not None, "item_embedding_size must be provided when item_embedding is None"
-
-        attr = to_tensor(attribute_embedding)
-        anno = to_tensor(annotator_embedding)
-        item = to_tensor(item_embedding)
-
-        def infer_shape(name: str, t: torch.Tensor | None, size_tuple: tuple | None):
-            if t is not None:
-                assert t.ndim == 2, f"{name} must be rank-2"
-                return int(t.shape[0]), int(t.shape[1])
-            assert size_tuple is not None and len(size_tuple) == 2, (
-                f"{name}_size=(count, dim) must be provided when {name} is None"
-            )
-            return int(size_tuple[0]), int(size_tuple[1])
-
-        A, D_attr = infer_shape('attribute_embedding', attr, attribute_embedding_size)
-        U, D_anno = infer_shape('annotator_embedding', anno, annotator_embedding_size)
-        I, D_item = infer_shape('item_embedding', item, item_embedding_size)
-
-        # Validate and choose embedding dimension
-        if not (D_attr == D_anno == D_item):
-            raise ValueError(f"Inconsistent embedding dims: attr={D_attr}, annot={D_anno}, item={D_item}")
-        D = int(D_attr)
-
-        # Debug logs of inferred sizes
-        logger.info(f"[EmbeddingProvider] attribute: count={A}, dim={D_attr}, provided={'yes' if attr is not None else 'no'}")
-        logger.info(f"[EmbeddingProvider] annotator: count={U}, dim={D_anno}, provided={'yes' if anno is not None else 'no'}")
-        logger.info(f"[EmbeddingProvider] item: count={I}, dim={D_item}, provided={'yes' if item is not None else 'no'}")
-        logger.info(f"[EmbeddingProvider] final embedding_dim={D}")
-
-        provider = cls(
-            num_attributes=int(A),
-            num_annotators=int(U),
-            num_items=int(I),
-            embedding_dim=D,
-            num_likert_classes=int(num_likert_classes),
-            max_rank_size=int(max_rank_size),
-            device=device,
-        )
-
-        # Move tensors to provider device/dtype and copy (only if provided)
-        with torch.no_grad():
-            if attr is not None:
-                provider.attribute_embedding.copy_(attr.to(device=provider.attribute_embedding.device, dtype=provider.attribute_embedding.dtype))
-            if anno is not None:
-                provider.annotator_embedding.copy_(anno.to(device=provider.annotator_embedding.device, dtype=provider.annotator_embedding.dtype))
-            if item is not None:
-                provider.item_embedding.copy_(item.to(device=provider.item_embedding.device, dtype=provider.item_embedding.dtype))
-
-        # Handle optional freezing
-        def get_flag(key: str) -> bool:
-            if isinstance(freeze, dict):
-                return bool(freeze.get(key, False))
-            return bool(freeze)
-
-        if get_flag('attribute'):
-            provider.attribute_embedding.requires_grad = False
-        if get_flag('annotator'):
-            provider.annotator_embedding.requires_grad = False
-        if get_flag('item'):
-            provider.item_embedding.requires_grad = False
-
-        return provider
-
-
-class OuterProductRankingEmbeddingProvider(BaseRankingEmbeddingProvider):
-    """Embedding provider using sum of outer products for rankings.
-
-    Implements get_rating_embedding/get_ranking_embedding and inherits the forward(List[RankingData])
-    from RankingEmbeddingProviderBase.
-    """
-
-    def __init__(
-        self,
-        num_attributes: int,
-        num_annotators: int,
-        num_items: int,
-        embedding_dim: int,
-        num_likert_classes: int,
-        max_rank_size: int,
-        device: str,
-    ):
-        super().__init__(
-            num_attributes=num_attributes,
-            num_annotators=num_annotators,
-            num_items=num_items,
-            embedding_dim=embedding_dim,
-            num_likert_classes=num_likert_classes,
-            max_rank_size=max_rank_size,
-            device=device,
-        )
-        self.parameter_projection = nn.Linear(embedding_dim + 1 + self.num_likert_classes + self.max_rank_size, embedding_dim)
-        D = embedding_dim
-        self.ranking_projection = nn.Sequential(
-            nn.Linear(D * D, D * 2),
-            nn.ReLU(),
-            nn.Linear(D * 2, D),
-        )
-
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False) -> torch.Tensor:
-        """Implementation for rating embeddings."""
-        attr_vec = self.attribute_embedding[attribute_id]
-        annot_vec = self.annotator_embedding[annotator_id]
-        assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
-        parameter = torch.zeros(1 + self.num_likert_classes + self.max_rank_size).to(self.device)
-        if is_missing:
-            parameter[0] = 1.0
-        else:
-            assert rating_value is not None and 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
-            parameter[rating_value + 1] = 1.0
-        return self.parameter_projection(torch.cat((attr_vec + annot_vec + self.item_embedding[item_id], parameter), dim=-1))
-
-    # Get embedding for ranking variables
-    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_missing: bool = False) -> torch.Tensor:
-        # print("WARNING: not using ranking order")
-        attr_vec = self.attribute_embedding[attribute_id]
-        annot_vec = self.annotator_embedding[annotator_id]
-        valid = [i for i in item_ids if 0 <= i < self.num_items]
-        assert len(valid) > 1, "At least two valid items are required for ranking"
-        item_attr_embeddings: List[torch.Tensor] = [attr_vec + annot_vec + self.item_embedding[i] for i in valid]
-        total_outer = torch.zeros(self.embedding_dim, self.embedding_dim, device=attr_vec.device)
-        for i in range(len(item_attr_embeddings)):
-            for j in range(i + 1, len(item_attr_embeddings)):
-                total_outer += torch.outer(item_attr_embeddings[i], item_attr_embeddings[j])
-
-        parameter = torch.zeros(1 + self.num_likert_classes + self.max_rank_size).to(self.device)
-        if is_missing:
-            parameter[0] = 1.0
-        else:
-            assert ranking_order is not None, "ranking_order cannot be None for observed rankings"
-            ranking_tensor = torch.tensor(ranking_order)
-            assert len(ranking_order) == self.max_rank_size, f"ranking_order length {len(ranking_order)} must equal max_rank_size {self.max_rank_size}"
-            parameter[self.num_likert_classes + 1:] = ranking_tensor
-        return self.parameter_projection(torch.cat((self.ranking_projection(total_outer.flatten()), parameter), dim=-1))
-    
-
-class CombineRandomTrainedEmbeddingProvider(BaseRankingEmbeddingProvider):
-    """Embedding provider using pairwise relations for rankings.
-
-    Implements get_rating_embedding/get_ranking_embedding and inherits the forward(List[RankingData])
-    from RankingEmbeddingProviderBase.
-    """
-
-    def __init__(
-        self,
-        num_attributes: int,
-        num_annotators: int,
-        num_items: int,
-        embedding_dim: int,
-        num_likert_classes: int,
-        max_rank_size: int,
-        device: str,
-    ):
-        super().__init__(
-            num_attributes=num_attributes,
-            num_annotators=num_annotators,
-            num_items=num_items,
-            embedding_dim=embedding_dim,
-            num_likert_classes=num_likert_classes,
-            max_rank_size=max_rank_size,
-            device=device,
-        )
-        self.parameter_projection = nn.Linear(embedding_dim + self.num_likert_classes + self.max_rank_size + 1, embedding_dim)
-        self.pairwise_relation = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
-
-
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False) -> torch.Tensor:
-        """Implementation for rating embeddings."""
-        attr_vec = torch.cat((torch.randn(self.embedding_dim // 2), self.attribute_embedding[attribute_id][self.embedding_dim // 2:]), dim=-1)
-        annot_vec = torch.cat((torch.randn(self.embedding_dim // 2), self.annotator_embedding[annotator_id][self.embedding_dim // 2:]), dim=-1)
-        assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
-        parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to(self.device)
-        if is_missing:
-            parameter[0] = 1.0
-        else:
-            assert rating_value is not None and 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
-            parameter[rating_value + 1] = 1.0
-        item_embedding =torch.cat((torch.randn(self.embedding_dim // 2), self.item_embedding[item_id][self.embedding_dim // 2:]), dim=-1)
-        return self.parameter_projection(torch.cat((attr_vec + annot_vec + item_embedding, parameter), dim=-1))
-
-    # Get embedding for ranking variables
-    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_missing: bool = False) -> torch.Tensor:
-        # print("WARNING: not using ranking order")
-        attr_vec = torch.cat((torch.randn(self.embedding_dim // 2), self.attribute_embedding[attribute_id][self.embedding_dim // 2:]), dim=-1)
-        annot_vec = torch.cat((torch.randn(self.embedding_dim // 2), self.annotator_embedding[annotator_id][self.embedding_dim // 2:]), dim=-1)
-        assert len(item_ids) == 2, "Pairwise Ranking Embedding Provider only support two items ranking"
-
-        item_embedding_1 = torch.cat((torch.randn(self.embedding_dim // 2), self.item_embedding[item_ids[0]][self.embedding_dim // 2:]), dim=-1)
-        item_embedding_2 = torch.cat((torch.randn(self.embedding_dim // 2), self.item_embedding[item_ids[1]][self.embedding_dim // 2:]), dim=-1)
-        item_embedding = item_embedding_1 + item_embedding_2 @ self.pairwise_relation
-        total_embedding = attr_vec + annot_vec + item_embedding
-        parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to(self.device)
-        if is_missing:
-            parameter[0] = 1.0
-        else:
-            assert ranking_order is not None, "ranking_order cannot be None for observed rankings"
-            ranking_tensor = torch.tensor(ranking_order)
-            assert len(ranking_order) == self.max_rank_size, f"ranking_order length {len(ranking_order)} must equal max_rank_size {self.max_rank_size}"
-            parameter[self.num_likert_classes + 1:] = ranking_tensor
-        return self.parameter_projection(torch.cat((total_embedding, parameter), dim=-1))
-
-class PairwiseRankingProjectionEmbeddingProvider(BaseRankingEmbeddingProvider):
-    """Embedding provider using pairwise relations for rankings.
-
-    Implements get_rating_embedding/get_ranking_embedding and inherits the forward(List[RankingData])
-    from RankingEmbeddingProviderBase.
-    """
-
-    def __init__(
-        self,
-        num_attributes: int,
-        num_annotators: int,
-        num_items: int,
-        embedding_dim: int,
-        num_likert_classes: int,
-        max_rank_size: int,
-        device: str,
-    ):
-        super().__init__(
-            num_attributes=num_attributes,
-            num_annotators=num_annotators,
-            num_items=num_items,
-            embedding_dim=embedding_dim,
-            num_likert_classes=num_likert_classes,
-            max_rank_size=max_rank_size,
-            device=device,
-        )
-        self.parameter_projection = nn.Linear(embedding_dim + self.num_likert_classes + self.max_rank_size + 1, embedding_dim)
-        self.pairwise_relation = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
-
-
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False) -> torch.Tensor:
-        """Implementation for rating embeddings."""
-        attr_vec = self.attribute_embedding[attribute_id]
-        annot_vec = self.annotator_embedding[annotator_id]
-        assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
-        parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to(self.device)
-        if is_missing:
-            parameter[0] = 1.0
-        else:
-            assert rating_value is not None and 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
-            parameter[rating_value + 1] = 1.0
-        return self.parameter_projection(torch.cat((attr_vec + annot_vec + self.item_embedding[item_id], parameter), dim=-1))
-
-    # Get embedding for ranking variables
-    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_missing: bool = False) -> torch.Tensor:
-        # print("WARNING: not using ranking order")
-        attr_vec = self.attribute_embedding[attribute_id]
-        annot_vec = self.annotator_embedding[annotator_id]
-        assert len(item_ids) == 2, "Pairwise Ranking Embedding Provider only support two items ranking"
-
-        item_embedding_1 = self.item_embedding[item_ids[0]]
-        item_embedding_2 = self.item_embedding[item_ids[1]]
-        item_embedding = item_embedding_1 + item_embedding_2 @ self.pairwise_relation
-        total_embedding = attr_vec + annot_vec + item_embedding
-        parameter = torch.zeros(self.num_likert_classes + self.max_rank_size + 1).to(self.device)
-        if is_missing:
-            parameter[0] = 1.0
-        else:
-            assert ranking_order is not None, "ranking_order cannot be None for observed rankings"
-            ranking_tensor = torch.tensor(ranking_order)
-            assert len(ranking_order) == self.max_rank_size, f"ranking_order length {len(ranking_order)} must equal max_rank_size {self.max_rank_size}"
-            parameter[self.num_likert_classes + 1:] = ranking_tensor
-        return self.parameter_projection(torch.cat((total_embedding, parameter), dim=-1))
-
-
-class FullyRandomizedEmbeddingProvider(PairwiseRankingProjectionEmbeddingProvider):
-    """Fully randomized embedding provider that generates new random embeddings for each forward pass.
-    
-    This class extends PairwiseRankingProjectionEmbeddingProvider but overrides on_forward_start
-    to generate completely random embeddings for all attributes, annotators, and items at the
-    beginning of each forward pass. The get_rating_embedding and get_ranking_embedding methods
-    remain the same as the parent class.
-    """
-
-    def __init__(
-        self,
-        num_attributes: int,
-        num_annotators: int,
-        num_items: int,
-        embedding_dim: int,
-        num_likert_classes: int,
-        max_rank_size: int,
-        device: str,
-    ):
-        super().__init__(
-            num_attributes=num_attributes,
-            num_annotators=num_annotators,
-            num_items=num_items,
-            embedding_dim=embedding_dim,
-            num_likert_classes=num_likert_classes,
-            max_rank_size=max_rank_size,
-            device=device,
-        )
-
-    def on_forward_start(self, variables: List[RankingData]):
-        """Generate new random embeddings for all components at the start of each forward pass."""
-        # Calculate the required dimensions based on the variables in this batch
-        max_attribute_id = max(var.attribute_id for var in variables) if variables else 0
-        max_annotator_id = max(var.annotator_id for var in variables) if variables else 0
-        max_item_id = max(max(var.item_ids) if var.item_ids else 0 for var in variables) if variables else 0
-        
-        # Add 1 to convert from 0-based indexing to count
-        required_attributes = max_attribute_id + 1
-        required_annotators = max_annotator_id + 1
-        required_items = max_item_id + 1
-        
-        # Reset embeddings with the required dimensions
-        self.reset_embedding(
-            num_attributes=required_attributes,
-            num_annotators=required_annotators,
-            num_items=required_items,
-            embedding_dim=self.embedding_dim
-        )
 
 class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
 
@@ -436,7 +21,6 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         num_likert_classes: int,
         max_rank_size: int,
         device: str,
-        randomness: bool,
         embedding_dropout: float = 0.0,
         use_concat_embedding: bool = False,
         enable_full_dropout: bool = False,
@@ -453,7 +37,6 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         self.num_annotators = num_annotators
         self.num_items = num_items
         self.device = device
-        self.randomness = randomness
         self.embedding_dropout_p = float(embedding_dropout)
         self.enable_full_dropout = enable_full_dropout
 
@@ -476,94 +59,21 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         # Initialize to near negative identity
         self.pairwise_relation = nn.Parameter(-torch.eye(self.component_dim) + 1e-3 * torch.randn(self.component_dim, self.component_dim))
 
-        print(f"Randomness set to {self.randomness}, use_concat_embedding: {self.use_concat_embedding}")
+        print(f"use_concat_embedding: {self.use_concat_embedding}")
 
-        # Embeddings for each component (learned parameters)
+        # Embeddings for each component (all learnable parameters)
         self.attribute_embedding = nn.Parameter(torch.randn(num_attributes, self.internal_dimension))
-        self.annotator_embedding_learnable = nn.Parameter(torch.randn(num_annotators, self.internal_dimension // 2))
-        # Sample random annotator embedding, then apply explicit L2 normalization (unit norm per row)
-        # Register as buffer so it moves with the model when .to(device) is called
-        annot_emb_raw = torch.randn(num_annotators, self.internal_dimension - self.internal_dimension // 2, device=self.device)
-        annot_emb_normalized = F.normalize(annot_emb_raw, p=2, dim=-1)
-        self.register_buffer('annotator_embedding_random', annot_emb_normalized)
+        self.annotator_embedding = nn.Parameter(torch.randn(num_annotators, self.internal_dimension))
+        self.item_embedding = nn.Parameter(torch.randn(num_items, self.internal_dimension))
 
-        # Register as buffer so it moves with the model when .to(device) is called
-        item_emb_raw = torch.randn(num_items, self.internal_dimension, device=self.device)
-        item_emb_normalized = F.normalize(item_emb_raw, p=2, dim=-1)
-        self.register_buffer('item_embedding', item_emb_normalized)
-
-        # Initialize all learnable parameters with N(0, 1e-3) for near-zero initialization
-        torch.nn.init.normal_(self.attribute_embedding, mean=0.0, std=1e-3)
-        torch.nn.init.normal_(self.annotator_embedding_learnable, mean=0.0, std=1e-3)
+        # Initialize all learnable parameters with Kaiming normal initialization
+        torch.nn.init.kaiming_normal_(self.attribute_embedding, mode='fan_out', nonlinearity='relu')
+        torch.nn.init.kaiming_normal_(self.annotator_embedding, mode='fan_out', nonlinearity='relu')
+        torch.nn.init.kaiming_normal_(self.item_embedding, mode='fan_out', nonlinearity='relu')
 
         # Class constant for the logit value
         self.LOGIT_HIGH = getattr(self, "LOGIT_HIGH", 20.0)
 
-    def get_random_dims_mask(self, embedding_dim: int) -> torch.Tensor:
-        """Compute a mask indicating which dimensions in the feature stream are random.
-        
-        Returns a boolean mask [embedding_dim] where True indicates random dimensions.
-        Random dims are included in Q/K (for pointer behavior) but zeroed in V (to not carry content).
-        
-        Args:
-            embedding_dim: The embedding dimension to create mask for
-            
-        Returns:
-            Boolean tensor [embedding_dim] with True for random dims, False for learnable dims
-        """
-        # NOTE: `self.randomness` controls whether we REFRESH the random components each forward.
-        # The random components (half of annotator + all of item embedding) are ALWAYS random in content.
-        # So the random-dims mask should NOT depend on `self.randomness`.
-        # This method is only called when use_random_as_key=True, which requires use_concat_embedding=True.
-        assert self.use_concat_embedding, "get_random_dims_mask requires use_concat_embedding=True"
-        
-        mask = torch.zeros(embedding_dim, dtype=torch.bool, device=self.device)
-        
-        # Concat mode: [attr_vec | annot_vec | item_vec], each of size component_dim
-        # attr_vec: [1,0,0] + attr_core (all learnable)
-        # annot_vec: [0,1,0] + annot_core + annotator_embedding_random (ALWAYS random; refresh optional)
-        # item_vec: [0,0,1] + item_embedding (ALWAYS random; refresh optional)
-        
-        # Component dim: each vector is component_dim = embedding_dim // 3
-        component_dim = embedding_dim // 3
-        one_hot_size = 3
-        
-        # Annotator vector: random dims start after one_hot + annot_core
-        annot_core_size = self.internal_dimension // 2
-        annot_random_start = one_hot_size + annot_core_size
-        annot_random_end = component_dim
-        # Annotator vector spans [component_dim : 2*component_dim]
-        mask[component_dim + annot_random_start : component_dim + annot_random_end] = True
-        
-        # Item vector: random dims start after one_hot
-        item_random_start = one_hot_size
-        item_random_end = component_dim
-        # Item vector spans [2*component_dim : 3*component_dim]
-        mask[2*component_dim + item_random_start : 2*component_dim + item_random_end] = True
-        
-        return mask
-    
-    def get_component_random_masks(self):
-        """Get masks for random parts in component vectors (before projection in non-concat mode).
-        
-        Returns:
-            dict with keys:
-            - 'annot_mask': bool tensor [component_dim] where True = random part of annot_vec
-            - 'item_mask': bool tensor [component_dim] where True = random part of item_vec
-        """
-        component_dim = self.component_dim
-        one_hot_size = 3
-        
-        # Annotator vector mask: random part is after one_hot + annot_core
-        annot_core_size = self.internal_dimension // 2
-        annot_mask = torch.zeros(component_dim, dtype=torch.bool, device=self.device)
-        annot_mask[one_hot_size + annot_core_size : component_dim] = True
-        
-        # Item vector mask: random part is after one_hot
-        item_mask = torch.zeros(component_dim, dtype=torch.bool, device=self.device)
-        item_mask[one_hot_size : component_dim] = True
-        
-        return {'annot_mask': annot_mask, 'item_mask': item_mask}
 
     def _full_dropout(self, x: torch.Tensor) -> torch.Tensor:
         if self.embedding_dropout_p <= 0.0 or not self.enable_full_dropout:
@@ -580,25 +90,15 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         """Enable or disable full dropout. Should be True during training, False during evaluation."""
         self.enable_full_dropout = enabled
 
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False, mask_random: bool = False) -> torch.Tensor:
-        """Implementation for rating embeddings.
-        
-        Args:
-            mask_random: If True, zero out random parts in annot_vec and item_vec before projection (for V computation).
-        """
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False) -> torch.Tensor:
+        """Implementation for rating embeddings."""
         attr_core = self._full_dropout(self.attribute_embedding[attribute_id])
-        annot_core = self._full_dropout(self.annotator_embedding_learnable[annotator_id])
+        annot_core = self._full_dropout(self.annotator_embedding[annotator_id])
         attr_vec = torch.cat((torch.tensor([1, 0, 0]).to(self.device), attr_core), dim=-1)
         
-        # Build annot_vec and item_vec, optionally masking random parts
-        annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), annot_core, self.annotator_embedding_random[annotator_id]), dim=-1)
+        # Build annot_vec and item_vec (all learnable now)
+        annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), annot_core), dim=-1)
         item_vec = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_id]), dim=-1)
-        
-        if mask_random:
-            # Zero out random parts in component vectors before projection
-            component_masks = self.get_component_random_masks()
-            annot_vec = annot_vec * (~component_masks['annot_mask'])
-            item_vec = item_vec * (~component_masks['item_mask'])
         
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
         
@@ -621,29 +121,16 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         return torch.cat((total_embedding, parameter), dim=-1)
 
     # Get embedding for ranking variables
-    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_missing: bool = False, mask_random: bool = False) -> torch.Tensor:
-        """Implementation for ranking embeddings.
-        
-        Args:
-            mask_random: If True, zero out random parts in annot_vec and item_vec before projection (for V computation).
-        """
+    def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order, is_missing: bool = False) -> torch.Tensor:
+        """Implementation for ranking embeddings."""
         attr_core = self._full_dropout(self.attribute_embedding[attribute_id])
-        annot_core = self._full_dropout(self.annotator_embedding_learnable[annotator_id])
+        annot_core = self._full_dropout(self.annotator_embedding[annotator_id])
         attr_vec = torch.cat((torch.tensor([1, 0, 0]).to(self.device), attr_core), dim=-1)
-        annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), annot_core, self.annotator_embedding_random[annotator_id]), dim=-1)
+        annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), annot_core), dim=-1)
 
         item_embedding_1 = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_ids[0]]), dim=-1)
         item_embedding_2 = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_ids[1]]), dim=-1)
         item_embedding = item_embedding_1 + item_embedding_2 @ self.pairwise_relation
-        
-        if mask_random:
-            # Zero out random parts in component vectors before projection
-            component_masks = self.get_component_random_masks()
-            annot_vec = annot_vec * (~component_masks['annot_mask'])
-            # For pairwise, item_embedding is a combination, so we mask both components
-            item_embedding_1_masked = item_embedding_1 * (~component_masks['item_mask'])
-            item_embedding_2_masked = item_embedding_2 * (~component_masks['item_mask'])
-            item_embedding = item_embedding_1_masked + item_embedding_2_masked @ self.pairwise_relation
         
         # Combine embeddings based on use_concat_embedding flag
         if self.use_concat_embedding:
@@ -673,88 +160,3 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
                 parameter[2] = self.LOGIT_HIGH  # Second item gets higher logit
         return torch.cat((total_embedding, parameter), dim=-1)
     
-    def forward(
-        self,
-        variables: List[RankingData],
-        mask_random: bool = False,
-        fresh_random_batch_size: int = 1,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """Override forward to handle batched random embedding generation."""
-        if fresh_random_batch_size == 1:
-            # Use parent's implementation for single batch
-            return super().forward(variables, mask_random, fresh_random_batch_size)
-        
-        # Batched implementation: generate B different random embeddings
-        V = len(variables)
-        D = self.embedding_dim
-        B = fresh_random_batch_size
-        
-        # Pre-allocate output
-        batch_embeddings = []
-        
-        for b in range(B):
-            # Generate fresh random embeddings for this batch item
-            annot_dim = self.internal_dimension - self.internal_dimension // 2
-            annot_random_b = torch.randn(self.num_annotators, annot_dim, device=self.device)
-            annot_random_b = F.normalize(annot_random_b, p=2, dim=-1)
-            
-            item_random_b = torch.randn(self.num_items, self.internal_dimension, device=self.device)
-            item_random_b = F.normalize(item_random_b, p=2, dim=-1)
-            
-            # Temporarily set these as the active random embeddings
-            # Store original values and update buffers in-place
-            old_annot_random = self.annotator_embedding_random.clone()
-            old_item_embedding = self.item_embedding.clone()
-            self.annotator_embedding_random.data.copy_(annot_random_b)
-            self.item_embedding.data.copy_(item_random_b)
-            
-            # Generate embeddings for all variables with this batch's random embeddings
-            embedding_list = []
-            for i, var in enumerate(variables):
-                is_missing = var.is_missing or var.is_masked
-                
-                if var.is_listwise:
-                    feat = self.get_ranking_embedding(
-                        var.attribute_id, var.annotator_id, 
-                        var.item_ids[: self.max_rank_size], 
-                        var.ranking_order, is_missing, mask_random=mask_random
-                    )
-                else:
-                    item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
-                    feat = self.get_rating_embedding(
-                        var.attribute_id, var.annotator_id, item_id, 
-                        var.rating_value, is_missing, mask_random=mask_random
-                    )
-                
-                embedding_list.append(feat)
-            
-            # Restore original random embeddings
-            self.annotator_embedding_random.data.copy_(old_annot_random)
-            self.item_embedding.data.copy_(old_item_embedding)
-            
-            # Stack embeddings for this batch item
-            batch_embeddings.append(torch.stack(embedding_list, dim=0))
-        
-        # Stack all batches: [B, V, D + parameter_dimension]
-        feature_embeddings = torch.stack(batch_embeddings, dim=0)
-        
-        # Return feature embeddings and param stream
-        return feature_embeddings[:, :, :D], feature_embeddings[:, :, D:]
-
-    def on_forward_start(self, variables: List[RankingData]):
-        """Generate new random embeddings for all components at the start of each forward pass."""
-        if self.randomness:
-            self.partial_reset_embedding()
-
-        return
-
-    def partial_reset_embedding(self):
-        # Regenerate annotator random part as uniform unit sphere (L2 normalized random direction)
-        # Update buffer in-place to preserve device placement
-        annot_dim = self.internal_dimension - self.internal_dimension // 2
-        annot_random = torch.randn(self.num_annotators, annot_dim, device=self.device)
-        self.annotator_embedding_random.data.copy_(F.normalize(annot_random, p=2, dim=-1))
-        # Regenerate item embeddings as uniform unit sphere (L2 normalized random direction)
-        # Update buffer in-place to preserve device placement
-        item_random = torch.randn(self.num_items, self.internal_dimension, device=self.device)
-        self.item_embedding.data.copy_(F.normalize(item_random, p=2, dim=-1))

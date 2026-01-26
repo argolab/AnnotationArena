@@ -234,15 +234,15 @@ def main():
         encoder_layers_num=model_config.get("encoder_layers_num", 6),
         attention_heads=model_config.get("attention_heads", 8),
         dropout=model_config.get("dropout", 0.1),
-        embedding_type=model_config.get("embedding_type", "atom"),
         device=args.device,
-        randomness=True,
         use_gelu_after_attention=model_config.get("use_gelu_after_attention", False),
         use_final_norm=model_config.get("use_final_norm", True),
         normalize_parameter=model_config.get("normalize_parameter", True),
         num_ffn_layers=model_config.get("num_ffn_layers", 4),
         temperature=model_config.get("temperature", 1.0),
         use_concat_embedding=model_config.get("use_concat_embedding", False),
+        batch_size=1,
+        enable_pointer_mechanism=True,
     )
     
     # Load model state with strict=False to handle architecture mismatches

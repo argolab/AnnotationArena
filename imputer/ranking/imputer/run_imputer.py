@@ -10,118 +10,15 @@ import time
 
 from imputer.data import DataConverter, RankingData
 from imputer.ranking_imputer import MultiVariableImputer
-from imputer.trainer import ImputerTrainer, EvaluationCallback, EarlyStopping
+from imputer.callbacks import EvaluationCallback
 from imputer.eval import EvaluationEngine
 import sys
 sys.path.insert(0, "..")
 from stan.pipeline.bundle import GroundTruthBundle
 from stan.pipeline.io import new_run_dir, save_test_metrics, save_predictives
 
-# Try to import Lightning (optional)
-try:
-    from imputer.lightning_trainer import ImputerLightningModule, create_lightning_trainer
-    LIGHTNING_AVAILABLE = True
-except ImportError:
-    LIGHTNING_AVAILABLE = False
-    ImputerLightningModule = None
-    create_lightning_trainer = None
-
-
-def _convert_to_json_serializable(obj: Any) -> Any:
-    """Convert PyTorch tensors and other non-serializable objects to native Python types."""
-    if isinstance(obj, torch.Tensor):
-        # Convert tensor to Python scalar or list
-        if obj.numel() == 1:
-            return obj.item()
-        else:
-            return obj.tolist()
-    elif isinstance(obj, (np.integer, np.floating)):
-        return obj.item()
-    elif isinstance(obj, np.ndarray):
-        return obj.tolist()
-    elif isinstance(obj, dict):
-        return {key: _convert_to_json_serializable(value) for key, value in obj.items()}
-    elif isinstance(obj, (list, tuple)):
-        return [_convert_to_json_serializable(item) for item in obj]
-    elif obj is None:
-        return None
-    else:
-        # Try to convert to native type if possible
-        try:
-            if isinstance(obj, (int, float, str, bool)):
-                return obj
-            # Try to get item() if it has it (like numpy scalars)
-            if hasattr(obj, 'item'):
-                return obj.item()
-        except:
-            pass
-        return obj
-
-
-def _sizes_from_configs(configs: Dict[str, Any]) -> Dict[str, int]:
-    """Extract sizes from configs.json (datagen section)."""
-    if "datagen" not in configs:
-        raise ValueError("configs.json missing 'datagen' section")
-    dg = configs["datagen"]
-    required = ["K_train", "K_test", "I", "J", "C"]
-    missing = [k for k in required if k not in dg]
-    if missing:
-        raise ValueError(f"configs.datagen missing keys: {missing}")
-    return {
-        "num_items": int(dg["K_train"]) + int(dg["K_test"]),
-        "num_attributes": int(dg["I"]),
-        "num_annotators": int(dg["J"]),
-        "num_likert_classes": int(dg["C"]),
-    }
-
-
-def _build_predictives(model: MultiVariableImputer, variables: List[RankingData]) -> Dict[str, Any]:
-    """Create a serializable predictions dict for the given variables with probability distributions."""
-    model.eval()
-    with torch.no_grad():
-        out = model(variables)
-        rating_logits = out["rating"]
-        ranking_logits = out["ranking"]
-
-        # Compute probability distributions
-        rating_probs = torch.softmax(rating_logits[0], dim=-1).cpu().numpy()  # [N, num_classes]
-
-        preds: List[Dict[str, Any]] = []
-        for i, var in enumerate(variables):
-            entry: Dict[str, Any] = {
-                "attribute": var.attribute_id,
-                "annotator": var.annotator_id,
-                "items": var.item_ids,
-                "is_listwise": var.is_listwise,
-                "status": var.status,
-                "instance": var.instance,
-            }
-            if not var.is_listwise:
-                # Add argmax prediction
-                entry["predicted_rating_class"] = int(torch.argmax(rating_logits[0, i]).item())
-                # Add full probability distribution
-                entry["rating_probabilities"] = rating_probs[i].tolist()
-                if var.rating_value is not None:
-                    entry["true_rating_class"] = int(var.rating_value)
-            else:
-                scores = ranking_logits[0, i].cpu().numpy()
-                # Add raw logits for ranking
-                entry["ranking_logits"] = scores.tolist()
-                if (var.ranking_order or []) and len(var.ranking_order) == 2:
-                    import numpy as np
-                    probs = np.exp(scores[:2]) / np.exp(scores[:2]).sum()
-                    pred_first_wins = probs[0] > probs[1]
-                    pred_ranking = [1, 2] if pred_first_wins else [2, 1]
-                    # Add pairwise probabilities
-                    entry["ranking_probabilities"] = probs.tolist()
-                else:
-                    pred_ranking = var.ranking_order
-                entry["predicted_ranking"] = pred_ranking
-                if var.ranking_order is not None:
-                    entry["true_ranking"] = var.ranking_order
-            preds.append(entry)
-    model.train()
-    return {"predictions": preds}
+from imputer.lightning_trainer import ImputerLightningModule, create_lightning_trainer
+from imputer.utils import convert_to_json_serializable, sizes_from_configs, build_predictives
 
 
 def main():
@@ -133,10 +30,9 @@ def main():
     parser.add_argument("--masking-rate", type=float, default=0.15)
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--weight-decay", type=float, default=0.01, help="AdamW weight decay (L2 regularization, default: 0.01)")
-    parser.add_argument("--device", default="cuda")
+    parser.add_argument("--device", default="cuda", help="Device: 'cuda' (uses all available GPUs automatically) or 'cpu'")
     parser.add_argument("--max-rank-size", type=int, default=2)
     parser.add_argument("--transductive_learning", action="store_true")
-    parser.add_argument("--full_random", action="store_true")
     parser.add_argument("--save-checkpoints", action="store_true", help="Save model checkpoints during training")
     parser.add_argument("--checkpoint-every", type=int, default=5, help="Save checkpoint every N epochs (default: 5)")
     parser.add_argument("--save-model-every", type=int, default=None, help="Save model.pt every N epochs (default: None, only at end)")
@@ -171,13 +67,6 @@ def main():
         default=False,
         help="Use concatenation-based AtomCompositional embedding instead of projection mixing",
     )
-    parser.add_argument(
-        "--use-random-as-key",
-        action="store_true",
-        default=False,
-        help="Use random dimensions as keys: include in Q/K (pointer behavior) but zero in V (no content)",
-    )
-
     # Temperature scaling for calibration
     parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for scaling logits (T > 1 softens predictions, default: 1.0)")
 
@@ -188,9 +77,6 @@ def main():
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4, help="Minimum change to qualify as improvement (default: 1e-4)")
     parser.add_argument("--overwrite-existing-data", action="store_true", help="Overwrite existing output directory if it exists")
     
-    # Training framework selection
-    parser.add_argument("--use-lightning", action="store_true", help="Use PyTorch Lightning for training (simplified, with built-in TensorBoard)")
-    
     # Gradient clipping
     parser.add_argument("--gradient-clip-val", type=float, default=0.0, help="Gradient clipping value (0 = no clipping, default: 0)")
     
@@ -198,9 +84,9 @@ def main():
     parser.add_argument("--use-cosine-schedule", action="store_true", help="Use warmup + cosine annealing scheduler")
     parser.add_argument("--warmup-steps", type=int, default=100, help="Number of warmup steps for scheduler (default: 100)")
     
-    # Fresh random batching
-    parser.add_argument("--fresh-random-batch-size", type=int, default=1, 
-                        help="Batch size for fresh random embeddings (1=no batching, >1=batch different randomness, default: 1)")
+    # General batching
+    parser.add_argument("--batch-size", type=int, default=1, 
+                        help="Batch size for training (1=no batching, >1=batch different masking patterns, default: 1)")
 
     args = parser.parse_args()
 
@@ -224,7 +110,7 @@ def main():
         configs = json.load(f)
 
     # Sizes from configs and build converter
-    sizes = _sizes_from_configs(configs)
+    sizes = sizes_from_configs(configs)
     converter = DataConverter(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -292,10 +178,6 @@ def main():
 
     test_all: List[RankingData] = test_observed + test_missing
 
-    if args.full_random:
-        random = True
-    else:
-        random = False
     # Build model
     model = MultiVariableImputer(
         num_attributes=sizes["num_attributes"],
@@ -308,15 +190,14 @@ def main():
         attention_heads=args.attention_heads,
         embedding_dim=args.embedding_dim,
         dropout=args.dropout,
-        randomness=random,
         use_gelu_after_attention=args.use_gelu_after_attention,
         use_final_norm=args.use_final_norm,
         normalize_parameter=args.normalize_parameter,
         num_ffn_layers=args.num_ffn_layers,
         temperature=args.temperature,
         use_concat_embedding=bool(args.use_concat_embedding),
-        use_random_as_key=args.use_random_as_key,
-        fresh_random_batch_size=args.fresh_random_batch_size,
+        batch_size=args.batch_size,
+        enable_pointer_mechanism=True,
     )
 
     # Print temperature scaling status
@@ -337,29 +218,17 @@ def main():
     else:
         print("Learning rate scheduler disabled (constant learning rate)")
     
-    # Print fresh random batching status
-    if args.fresh_random_batch_size > 1:
-        print(f"Fresh random batching enabled: batch_size = {args.fresh_random_batch_size}")
+    # Print batching status
+    if args.batch_size > 1:
+        print(f"Batching enabled: batch_size = {args.batch_size}")
     else:
-        print("Fresh random batching disabled (batch_size = 1)")
+        print("Batching disabled (batch_size = 1)")
 
-    # Check if using Lightning
-    use_lightning = args.use_lightning
-    if use_lightning and not LIGHTNING_AVAILABLE:
-        print("Warning: --use-lightning specified but PyTorch Lightning is not available.")
-        print("Install with: pip install pytorch-lightning")
-        print("Falling back to original trainer.")
-        use_lightning = False
-    
-    if use_lightning:
-        print("=" * 60)
-        print("Using PyTorch Lightning for training (with built-in TensorBoard)")
-        print("=" * 60)
-    else:
-        print("Using original trainer (no TensorBoard - use --use-lightning for TensorBoard)")
+    print("=" * 60)
+    print("Using PyTorch Lightning for training (with built-in TensorBoard)")
+    print("=" * 60)
     
     # Trainer setup - will be configured after run_dir is created
-    trainer = None
     lightning_module = None
     lightning_trainer = None
 
@@ -370,10 +239,7 @@ def main():
     else:
         train_vars = train_vars_for_training
         if args.transductive_learning:
-            print("Using transductive learning: training on train + test instances")
-            train_vars += test_observed
-        else:
-            print("Standard learning: training only on train instances")
+            raise ValueError("Transductive learning is not supported yet")
     
     # Create the main run directory first (before training)
     output_root = Path(args.output_root)
@@ -430,7 +296,6 @@ def main():
             "decay_observed_epochs": args.decay_observed_epochs if args.decay_observed_weight else None,
             "mask_augmentations": args.mask_augmentations,
             "transductive_learning": bool(args.transductive_learning),
-            "full_random": bool(args.full_random),
             "save_checkpoints": bool(args.save_checkpoints),
             "checkpoint_every": args.checkpoint_every,
             "early_stopping": bool(args.early_stopping),
@@ -440,8 +305,8 @@ def main():
             "gradient_clip_val": args.gradient_clip_val,
             "use_cosine_schedule": bool(args.use_cosine_schedule),
             "warmup_steps": args.warmup_steps if args.use_cosine_schedule else None,
-            "use_lightning": bool(use_lightning),
-            "fresh_random_batch_size": args.fresh_random_batch_size,
+            "use_lightning": True,
+            "batch_size": args.batch_size,
         },
         "run": {
             "run_dir": str(run_dir)
@@ -454,188 +319,85 @@ def main():
     # Initialize evaluation engine
     eval_engine = EvaluationEngine()
     
-    # Set up trainer based on mode
-    if use_lightning:
-        # PyTorch Lightning setup
-        lightning_module = ImputerLightningModule(
-            model=model,
-            train_observed_vars=train_vars,
-            train_missing_vars=train_missing_for_trainer,
-            test_variables=test_all,
-            learning_rate=args.lr,
-            weight_decay=args.weight_decay,
-            masking_rate=args.masking_rate,
-            masked_loss_weight=args.masked_loss_weight,
-            observed_loss_weight=args.observed_loss_weight,
-            mask_augmentations=args.mask_augmentations,
-            decay_observed_weight=args.decay_observed_weight,
-            decay_observed_epochs=args.decay_observed_epochs,
+    # Set up Lightning trainer
+    test_instance_callback = EvaluationCallback(
+        eval_engine=eval_engine,
+        test_variables=test_all,
+        converter=converter,
+        device=args.device,
+        name="test_instance",
+        instance_name="test_instance",
+    )
+    train_instance_callback = None
+    if train_all is not None:
+        train_instance_callback = EvaluationCallback(
             eval_engine=eval_engine,
+            test_variables=train_all,
             converter=converter,
-            build_predictives_fn=_build_predictives,
-            run_dir=str(run_dir),
-            early_stopping_metric=args.early_stopping_metric,
-            early_stopping_patience=args.early_stopping_patience if args.early_stopping else 10,
-            early_stopping_min_delta=args.early_stopping_min_delta if args.early_stopping else 1e-4,
-            use_cosine_schedule=args.use_cosine_schedule,
-            warmup_steps=args.warmup_steps,
-            max_epochs=args.epochs,
-        )
-        
-        # Create Lightning trainer
-        lightning_trainer = create_lightning_trainer(
-            run_dir=str(run_dir),
-            max_epochs=args.epochs,
-            early_stopping=args.early_stopping,
-            early_stopping_metric=args.early_stopping_metric,
-            early_stopping_patience=args.early_stopping_patience,
-            early_stopping_min_delta=args.early_stopping_min_delta,
-            checkpoint_every=args.checkpoint_every if args.save_checkpoints else None,
-            save_top_k=1 if args.save_best_model else 0,
-            devices=1 if args.device == 'cuda' else None,
-            accelerator='gpu' if args.device == 'cuda' else 'cpu',
-            gradient_clip_val=args.gradient_clip_val if args.gradient_clip_val > 0 else None,
-        )
-    else:
-        # Original trainer setup
-        trainer = ImputerTrainer(
-            model=model,
-            learning_rate=args.lr,
-            weight_decay=args.weight_decay,
             device=args.device,
-            masked_loss_weight=args.masked_loss_weight,
-            observed_loss_weight=args.observed_loss_weight,
-            checkpoint_dir=None,  # Will be set later if checkpoints are enabled
-            save_checkpoints=False,  # Will be set later if checkpoints are enabled
-            run_dir=str(run_dir),
-            eval_engine=eval_engine,
-            test_variables=test_all,
-            converter=converter,
-            build_predictives_fn=_build_predictives,
-            gradient_clip_val=args.gradient_clip_val,
-            use_cosine_schedule=args.use_cosine_schedule,
-            warmup_steps=args.warmup_steps,
-            max_epochs=args.epochs,
+            name="train_instance",
+            instance_name="train_instance",
         )
-        
-        # Register evaluation callbacks
-        trainer.register_callback(
-            EvaluationCallback(
-                eval_engine=eval_engine,
-                test_variables=test_all,
-                converter=converter,
-                device=args.device,
-                name="test_all_evaluation",
-            )
-        )
+    lightning_module = ImputerLightningModule(
+        model=model,
+        train_observed_vars=train_vars,
+        train_missing_vars=train_missing_for_trainer,
+        test_variables=test_all,
+        learning_rate=args.lr,
+        weight_decay=args.weight_decay,
+        masking_rate=args.masking_rate,
+        masked_loss_weight=args.masked_loss_weight,
+        observed_loss_weight=args.observed_loss_weight,
+        mask_augmentations=args.mask_augmentations,
+        decay_observed_weight=args.decay_observed_weight,
+        decay_observed_epochs=args.decay_observed_epochs,
+        eval_engine=eval_engine,
+        converter=converter,
+        build_predictives_fn=build_predictives,
+        run_dir=str(run_dir),
+        use_cosine_schedule=args.use_cosine_schedule,
+        warmup_steps=args.warmup_steps,
+        max_epochs=args.epochs,
+        train_instance_callback=train_instance_callback,
+        test_instance_callback=test_instance_callback,
+    )
+    # Lightning automatically detects and uses all available GPUs when accelerator="gpu".
+    # For CPU, we pin to a single device.
+    trainer_kwargs: Dict[str, Any] = {}
+    if args.device == "cuda":
+        accelerator = "gpu"
+        # Let Lightning decide devices/strategy automatically
+    else:
+        accelerator = "cpu"
+        trainer_kwargs["devices"] = 1
 
-        # Only register train_all evaluation if:
-        # 1. Not in test-only mode
-        # 2. Using transductive learning (to monitor train set performance during transductive training)
-        if not args.test_only_training and args.transductive_learning:
-            trainer.register_callback(
-                EvaluationCallback(
-                    eval_engine=eval_engine,
-                    test_variables=train_all,
-                    converter=converter,
-                    device=args.device,
-                    name="train_all_evaluation",
-                )
-            )
-    
-    # Set up checkpoint directory and early stopping for original trainer
-    if not use_lightning:
-        # Set up checkpoint directory if saving is enabled (using separate folder with _checkpoints suffix)
-        if args.save_checkpoints:
-            checkpoint_run_dir = Path(str(run_dir) + "_checkpoints")
-            checkpoint_run_dir.mkdir(parents=True, exist_ok=True)
-            checkpoint_dir = str(checkpoint_run_dir)
-            trainer.checkpoint_dir = checkpoint_dir
-            trainer.save_checkpoints = True
-            print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
-        
-        # Set up model saving directory if periodic model saving or best model saving is enabled
-        if args.save_model_every is not None or args.save_best_model:
-            trainer.model_save_dir = str(run_dir)
-            if args.save_model_every is not None:
-                print(f"Model saving enabled. Models will be saved every {args.save_model_every} epochs to: {run_dir}")
-            if args.save_best_model:
-                print(f"Best model saving enabled. Best model will be saved when early stopping finds improvements.")
-
-        # Set up early stopping if enabled
-        early_stopping = None
-        if args.early_stopping:
-            mode = "min" if args.early_stopping_metric == "loss" else "max"
-            early_stopping = EarlyStopping(
-                patience=args.early_stopping_patience,
-                min_delta=args.early_stopping_min_delta,
-                mode=mode
-            )
-            print(f"Early stopping enabled:")
-            print(f"  Metric: test_missing_{args.early_stopping_metric}")
-            print(f"  Mode: {mode} (patience={args.early_stopping_patience}, min_delta={args.early_stopping_min_delta})")
+    lightning_trainer = create_lightning_trainer(
+        run_dir=str(run_dir),
+        max_epochs=args.epochs,
+        checkpoint_every=args.checkpoint_every if args.save_checkpoints else None,
+        accelerator=accelerator,
+        gradient_clip_val=args.gradient_clip_val if args.gradient_clip_val > 0 else None,
+        **trainer_kwargs
+    )
 
     start_time = time.time()
 
     ###################################################################################################
     # Train
-    if use_lightning:
-        # PyTorch Lightning training
-        lightning_trainer.fit(lightning_module)
-        training_results = {
-            'training_history': lightning_module.training_history,
-            'callback_history': lightning_module.callback_history
-        }
-        # Get the trained model from the Lightning module
-        model = lightning_module.model
-    else:
-        # Original trainer
-        training_results = trainer.train(
-            train_observed_vars=train_vars,
-            train_missing_vars=train_missing_for_trainer,
-            masking_rate=args.masking_rate,
-            epochs=args.epochs,
-            call_callbacks_every=1,
-            save_checkpoints_every=args.checkpoint_every,
-            save_model_every=args.save_model_every,
-            save_best_model=args.save_best_model,
-            verbose=True,
-            mask_augmentations=args.mask_augmentations,
-            early_stopping=early_stopping,
-            early_stopping_metric=args.early_stopping_metric,
-            decay_observed_weight=args.decay_observed_weight,
-            decay_observed_epochs=args.decay_observed_epochs,
-        )
+    lightning_trainer.fit(lightning_module)
+    training_results = {
+        'training_history': lightning_module.training_history,
+        'callback_history': lightning_module.callback_history
+    }
+    # Get the trained model from the Lightning module
+    model = lightning_module.model
     ###################################################################################################
 
     running_time = time.time() - start_time
     print(running_time)
 
-    # Save training history - separate test and train metrics
-    callback_history = training_results.get('callback_history', [])
-    test_history = [entry for entry in callback_history if entry.get('name') == 'test_all_evaluation']
-
-    # Convert to JSON-serializable format
-    serializable_test_history = _convert_to_json_serializable(test_history)
-    with open(run_dir / "test_training_history.json", "w") as f:
-        json.dump(serializable_test_history, f, indent=2)
-
-    # Only save train_training_history if train_all_evaluation callback was registered
-    # (i.e., when using transductive learning and not in test-only mode)
-    if not args.test_only_training and args.transductive_learning:
-        train_history = [entry for entry in callback_history if entry.get('name') == 'train_all_evaluation']
-        serializable_train_history = _convert_to_json_serializable(train_history)
-        with open(run_dir / "train_training_history.json", "w") as f:
-            json.dump(serializable_train_history, f, indent=2)
-    
-    # Save actual training loss history (per-epoch training losses)
-    training_loss_history = training_results.get('training_history', [])
-    if training_loss_history:
-        serializable_training_loss_history = _convert_to_json_serializable(training_loss_history)
-        with open(run_dir / "training_loss_history.json", "w") as f:
-            json.dump(serializable_training_loss_history, f, indent=2)
-
-    print(f"Saved training history to {run_dir}")
+    # Training history is saved via Lightning's _save_epoch_artifacts
+    print(f"Training history saved to {run_dir}")
 
     # Evaluate
     results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device)
@@ -677,7 +439,7 @@ def main():
     save_test_metrics(run_dir, metrics_obj)
 
     # Save predictives on test
-    predictives = _build_predictives(model, test_all)
+    predictives = build_predictives(model, test_all)
     save_predictives(run_dir, predictives)
 
     print(f"Saved model to {model_path}")

@@ -26,22 +26,20 @@ import copy
 import random
 import json
 
-try:
-    import pytorch_lightning as pl
-    from pytorch_lightning.callbacks import EarlyStopping as LSEarlyStopping
-    from pytorch_lightning.callbacks import ModelCheckpoint
-    from pytorch_lightning.loggers import TensorBoardLogger
-    LIGHTNING_AVAILABLE = True
-except ImportError:
-    LIGHTNING_AVAILABLE = False
-    pl = None
-    LSEarlyStopping = None
-    ModelCheckpoint = None
-    TensorBoardLogger = None
+import pytorch_lightning as pl
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.loggers import TensorBoardLogger
 
 from imputer.losses import DefaultLossStrategy, adapt_batched_logits_to_predictions
 from imputer.data import RankingData
 from imputer.eval import EvaluationEngine
+from imputer.metrics import (
+    log_instance_metrics_to_tb,
+    compute_metrics_for_subset,
+    partition_variables_by_status,
+    compute_rating_entropy_metrics,
+)
+from imputer.utils import convert_to_json_serializable
 
 
 class ImputerLightningModule(pl.LightningModule):
@@ -83,16 +81,20 @@ class ImputerLightningModule(pl.LightningModule):
         use_cosine_schedule: bool = False,
         warmup_steps: int = 100,
         max_epochs: int = 50,
+        train_instance_callback=None,
+        test_instance_callback=None,
     ):
         super().__init__()
-        self.save_hyperparameters(ignore=['model', 'train_observed_vars', 'train_missing_vars', 
-                                          'test_variables', 'eval_engine', 'converter', 
-                                          'build_predictives_fn'])
+        self.save_hyperparameters(ignore=['model', 'train_observed_vars', 'train_missing_vars',
+                                          'test_variables', 'eval_engine', 'converter',
+                                          'build_predictives_fn', 'train_instance_callback', 'test_instance_callback'])
         
         self.model = model
         self.train_observed_vars = train_observed_vars
         self.train_missing_vars = train_missing_vars
         self.test_variables = test_variables
+        self.train_instance_callback = train_instance_callback
+        self.test_instance_callback = test_instance_callback
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.masking_rate = masking_rate
@@ -129,6 +131,10 @@ class ImputerLightningModule(pl.LightningModule):
         # Track training history
         self.training_history = []
         self.callback_history = []
+
+    #########################################################
+    # Helper functions for logging and tracking
+    #########################################################
 
     @staticmethod
     def _group_key(param_name: str) -> str:
@@ -206,6 +212,7 @@ class ImputerLightningModule(pl.LightningModule):
         return {k: torch.sqrt(v) for k, v in sum_sq.items()}
 
     def on_train_batch_start(self, batch, batch_idx, dataloader_idx: int = 0) -> None:
+        """ logging optimizer and attention stats """
         self._log_optimizer_this_step = self.log_optimizer_stats and self._is_log_step(self.log_every_n_steps)
         self._log_attention_this_step = self.log_attention_stats and self._is_log_step(self.log_every_n_steps)
         self._log_update_this_step = self.log_optimizer_stats and self._is_log_step(self.log_update_every_n_steps)
@@ -223,6 +230,7 @@ class ImputerLightningModule(pl.LightningModule):
             self._param_snapshot = None
 
     def on_after_backward(self) -> None:
+        """ logging optimizer stats """
         if not self._log_optimizer_this_step:
             return
 
@@ -298,6 +306,10 @@ class ImputerLightningModule(pl.LightningModule):
             },
         }
     
+    #########################################################
+    # Helper functions for training
+    #########################################################
+
     def _apply_training_mask(self, observed_vars: List[RankingData], masking_rate: float) -> List[RankingData]:
         """Return a new list where a random subset of observed vars are marked masked (status=1)."""
         if not observed_vars:
@@ -324,72 +336,85 @@ class ImputerLightningModule(pl.LightningModule):
     def _compute_supervised_prediction_metrics(
         self, model_output: Dict[str, torch.Tensor], supervised_refs: List[RankingData]
     ) -> Dict[str, torch.Tensor]:
-        """Compute lightweight training metrics over supervised refs (masked+observed)."""
+        """
+        Compute lightweight **per-step** training metrics over supervised refs (masked+observed).
+        
+        Uses shared metric computation logic from imputer.metrics (no extra forward pass).
+        For comprehensive epoch-end evaluation with loss, see EvaluationCallback.on_epoch_end().
+        """
         with torch.no_grad():
             rating_logits = model_output["rating"][0]
             ranking_logits = model_output["ranking"][0]
             n = len(supervised_refs)
             rating_logits = rating_logits[:n]
             ranking_logits = ranking_logits[:n]
+            device = rating_logits.device
 
             metrics: Dict[str, torch.Tensor] = {}
 
-            # Rating metrics
-            rating_all = [i for i, v in enumerate(supervised_refs) if (not v.is_listwise) and (v.rating_value is not None)]
-            rating_masked = [i for i, v in enumerate(supervised_refs) if (not v.is_listwise) and v.is_masked and (v.rating_value is not None)]
-            rating_observed = [i for i, v in enumerate(supervised_refs) if (not v.is_listwise) and v.is_observed and (v.rating_value is not None)]
+            # Partition by status using shared logic
+            rating_observed, _, rating_masked = partition_variables_by_status(supervised_refs, is_rating=True)
+            ranking_observed, _, ranking_masked = partition_variables_by_status(supervised_refs, is_rating=False)
+            
+            rating_all = rating_observed + rating_masked
+            ranking_all = ranking_observed + ranking_masked
 
-            def _rating_metrics(idx: List[int], prefix: str) -> None:
-                if not idx:
+            # Compute metrics for each subset using shared logic
+            def _compute_and_log_metrics(indices: List[int], prefix: str) -> None:
+                if not indices:
                     return
-                logits = rating_logits[idx]
-                targets = torch.tensor([supervised_refs[i].rating_value for i in idx], device=logits.device, dtype=torch.long)
-                preds = torch.argmax(logits, dim=-1)
-                metrics[f"{prefix}/accuracy"] = (preds == targets).float().mean()
-                metrics[f"{prefix}/rmse"] = torch.sqrt(((preds.float() - targets.float()) ** 2).mean())
-                probs = torch.softmax(logits, dim=-1)
-                metrics[f"{prefix}/pred_entropy"] = -(probs * torch.log(probs.clamp_min(1e-12))).sum(dim=-1).mean()
-                metrics[f"{prefix}/pred_max_prob"] = probs.max(dim=-1).values.mean()
-
-            _rating_metrics(rating_all, "train/rating")
-            _rating_metrics(rating_masked, "train/rating_masked")
-            _rating_metrics(rating_observed, "train/rating_observed")
-
-            # Pairwise ranking metrics (only when we have a 2-way ranking)
-            ranking_all = [
-                i for i, v in enumerate(supervised_refs)
-                if v.is_listwise and (v.ranking_order is not None) and (len(v.ranking_order) == 2)
-            ]
-            ranking_masked = [
-                i for i, v in enumerate(supervised_refs)
-                if v.is_listwise and v.is_masked and (v.ranking_order is not None) and (len(v.ranking_order) == 2)
-            ]
-            ranking_observed = [
-                i for i, v in enumerate(supervised_refs)
-                if v.is_listwise and v.is_observed and (v.ranking_order is not None) and (len(v.ranking_order) == 2)
-            ]
-
-            def _ranking_acc(idx: List[int], prefix: str) -> None:
-                if not idx:
-                    return
-                logits = ranking_logits[idx, :2]
-                pred_first_wins = logits[:, 0] > logits[:, 1]
-                true_first_wins = torch.tensor(
-                    [bool(supervised_refs[i].ranking_order[0] < supervised_refs[i].ranking_order[1]) for i in idx],
-                    device=logits.device,
-                    dtype=torch.bool,
+                subset_metrics = compute_metrics_for_subset(
+                    rating_logits, ranking_logits, indices, supervised_refs, device, include_entropy=False
                 )
-                metrics[f"{prefix}/accuracy"] = (pred_first_wins == true_first_wins).float().mean()
+                if subset_metrics.get("rating_accuracy") is not None:
+                    metrics[f"{prefix}/accuracy"] = torch.tensor(subset_metrics["rating_accuracy"], device=device)
+                if subset_metrics.get("rating_rmse") is not None:
+                    metrics[f"{prefix}/rmse"] = torch.tensor(subset_metrics["rating_rmse"], device=device)
+                if subset_metrics.get("ranking_accuracy") is not None:
+                    metrics[f"{prefix}/accuracy"] = torch.tensor(subset_metrics["ranking_accuracy"], device=device)
 
-            _ranking_acc(ranking_all, "train/ranking")
-            _ranking_acc(ranking_masked, "train/ranking_masked")
-            _ranking_acc(ranking_observed, "train/ranking_observed")
+            # Overall metrics (with entropy for ratings) - step-level
+            if rating_all:
+                overall_metrics = compute_metrics_for_subset(
+                    rating_logits, ranking_logits, rating_all, supervised_refs, device, include_entropy=True
+                )
+                if overall_metrics.get("rating_accuracy") is not None:
+                    metrics["train_step/rating/accuracy"] = torch.tensor(overall_metrics["rating_accuracy"], device=device)
+                if overall_metrics.get("rating_rmse") is not None:
+                    metrics["train_step/rating/rmse"] = torch.tensor(overall_metrics["rating_rmse"], device=device)
+                if overall_metrics.get("pred_entropy") is not None:
+                    metrics["train_step/rating/pred_entropy"] = overall_metrics["pred_entropy"]
+                if overall_metrics.get("pred_max_prob") is not None:
+                    metrics["train_step/rating/pred_max_prob"] = overall_metrics["pred_max_prob"]
+            
+            if ranking_all:
+                overall_metrics = compute_metrics_for_subset(
+                    rating_logits, ranking_logits, ranking_all, supervised_refs, device, include_entropy=False
+                )
+                if overall_metrics.get("ranking_accuracy") is not None:
+                    metrics["train_step/ranking/accuracy"] = torch.tensor(overall_metrics["ranking_accuracy"], device=device)
 
-            metrics["train/count_supervised"] = torch.tensor(float(n), device=rating_logits.device)
-            metrics["train/count_supervised_rating"] = torch.tensor(float(len(rating_all)), device=rating_logits.device)
-            metrics["train/count_supervised_ranking_pairwise"] = torch.tensor(float(len(ranking_all)), device=rating_logits.device)
+            # Breakdown by status - step-level
+            _compute_and_log_metrics(rating_masked, "train_step/rating_masked")
+            _compute_and_log_metrics(rating_observed, "train_step/rating_observed")
+            _compute_and_log_metrics(ranking_masked, "train_step/ranking_masked")
+            _compute_and_log_metrics(ranking_observed, "train_step/ranking_observed")
+
+            # Counts - step-level
+            metrics["train_step/count_supervised"] = torch.tensor(float(n), device=device)
+            metrics["train_step/count_supervised_rating"] = torch.tensor(float(len(rating_all)), device=device)
+            metrics["train_step/count_supervised_ranking_pairwise"] = torch.tensor(float(len(ranking_all)), device=device)
 
             return metrics
+
+    def _compute_regularizer_loss(self) -> torch.Tensor:
+        """L2 regularizer (for logging only) based on current parameters."""
+        reg = torch.zeros((), device=next(self.model.parameters()).device)
+        for p in self.model.parameters():
+            if not p.requires_grad:
+                continue
+            reg = reg + p.float().pow(2).sum()
+        return reg * float(self.weight_decay)
     
     def training_step(self, batch, batch_idx):
         """Single training step."""
@@ -461,10 +486,15 @@ class ImputerLightningModule(pl.LightningModule):
         if embed is not None and hasattr(embed, "set_full_dropout"):
             embed.set_full_dropout(False)
         
-        # Log metrics
-        self.log('train/total_loss', losses.get('total_loss', 0.0), on_step=True, on_epoch=True, prog_bar=True)
-        self.log('train/rating_loss', losses.get('rating_loss', 0.0), on_step=True, on_epoch=True)
-        self.log('train/ranking_loss', losses.get('ranking_loss', 0.0), on_step=True, on_epoch=True)
+        # Log objective losses (what we optimize)
+        self.log('obj/total_loss', losses.get('total_loss', 0.0), on_step=True, on_epoch=True, prog_bar=True)
+        self.log('obj/rating_loss', losses.get('rating_loss', 0.0), on_step=True, on_epoch=True, prog_bar=True)
+        self.log('obj/ranking_loss', losses.get('ranking_loss', 0.0), on_step=True, on_epoch=True, prog_bar=True)
+        if self._is_log_step(self.log_every_n_steps):
+            reg_loss = self._compute_regularizer_loss()
+            base_total = torch.as_tensor(losses.get('total_loss', 0.0), device=reg_loss.device)
+            self.log('obj/regularizer_loss', reg_loss, on_step=True, on_epoch=True)
+            self.log('obj/total_loss_with_reg', base_total + reg_loss, on_step=True, on_epoch=True)
         for k in [
             "masked_total_loss",
             "observed_total_loss",
@@ -474,7 +504,7 @@ class ImputerLightningModule(pl.LightningModule):
             "observed_ranking_loss",
         ]:
             if k in losses:
-                self.log(f"train/{k}", losses[k], on_step=True, on_epoch=True)
+                self.log(f"obj/{k}", losses[k], on_step=True, on_epoch=True)
         
         # Update loss weights if decay is enabled
         if self.decay_observed_weight:
@@ -529,249 +559,77 @@ class ImputerLightningModule(pl.LightningModule):
         losses['_total_loss_tensor'] = total_loss_tensor
         return losses
     
-    def on_train_epoch_end(self):
+    def on_train_epoch_end(self) -> None:
         """Called at the end of each training epoch."""
-        # Store training history
         epoch_metrics = {
-            'epoch': self.current_epoch,
-            'total_loss': self.trainer.callback_metrics.get('train/total_loss_epoch', 0.0),
-            'rating_loss': self.trainer.callback_metrics.get('train/rating_loss_epoch', 0.0),
-            'ranking_loss': self.trainer.callback_metrics.get('train/ranking_loss_epoch', 0.0),
+            "epoch": self.current_epoch,
+            "total_loss": self.trainer.callback_metrics.get("obj/total_loss", 0.0),
+            "rating_loss": self.trainer.callback_metrics.get("obj/rating_loss", 0.0),
+            "ranking_loss": self.trainer.callback_metrics.get("obj/ranking_loss", 0.0),
         }
         self.training_history.append(epoch_metrics)
-        
-        # Run evaluation if test variables are provided
-        if self.test_variables is not None and self.eval_engine is not None and self.converter is not None:
-            self._run_evaluation()
-    
-    def _run_evaluation(self):
-        """Run evaluation on test variables."""
-        try:
-            # Get device from Lightning
-            device = next(self.model.parameters()).device
-            results = self.eval_engine.evaluate_model(
-                model=self.model,
-                variables=self.test_variables,
-                converter=self.converter,
-                device=device
-            )
-            
-            # Log metrics
-            self.log('test/total_loss', results.total_loss, on_epoch=True)
-            self.log('test/rating_loss', results.rating_loss, on_epoch=True)
-            self.log('test/ranking_loss', results.ranking_loss, on_epoch=True)
-            
-            if results.rating_accuracy is not None:
-                self.log('test/rating_accuracy', results.rating_accuracy, on_epoch=True, prog_bar=True)
-            if results.ranking_accuracy is not None:
-                self.log('test/ranking_accuracy', results.ranking_accuracy, on_epoch=True)
-            if results.rating_rmse is not None:
-                self.log('test/rating_rmse', results.rating_rmse, on_epoch=True)
-            
-            # Log breakdown metrics
-            if results.observed_metrics:
-                self._log_breakdown_metrics('test/observed', results.observed_metrics)
-            if results.missing_metrics:
-                self._log_breakdown_metrics('test/missing', results.missing_metrics)
-            if results.masked_metrics:
-                self._log_breakdown_metrics('test/masked', results.masked_metrics)
-            
-            # Store callback history
-            callback_result = {
-                'epoch': self.current_epoch,
-                'name': 'test_all_evaluation',
-                'total_loss': results.total_loss,
-                'rating_loss': results.rating_loss,
-                'ranking_loss': results.ranking_loss,
-                'rating_accuracy': results.rating_accuracy,
-                'rating_rmse': results.rating_rmse,
-                'ranking_accuracy': results.ranking_accuracy,
-                'num_rating_evaluations': results.num_rating_evaluations,
-                'num_ranking_evaluations': results.num_ranking_evaluations,
-                'masked_metrics': results.masked_metrics,
-                'observed_metrics': results.observed_metrics,
-                'missing_metrics': results.missing_metrics,
-            }
-            self.callback_history.append(callback_result)
-            
-            # Save metrics to file
-            if self.run_dir is not None:
-                self._save_metrics(callback_result)
-                
-        except Exception as e:
-            print(f"Warning: Evaluation failed at epoch {self.current_epoch}: {e}")
-    
-    def _log_breakdown_metrics(self, prefix: str, metrics: Dict[str, Any]):
-        """Log breakdown metrics for a specific status."""
-        if 'rating_loss' in metrics:
-            self.log(f'{prefix}/rating_loss', metrics['rating_loss'], on_epoch=True)
-        if 'rating_accuracy' in metrics and metrics['rating_accuracy'] is not None:
-            self.log(f'{prefix}/rating_accuracy', metrics['rating_accuracy'], on_epoch=True)
-        if 'ranking_accuracy' in metrics and metrics['ranking_accuracy'] is not None:
-            self.log(f'{prefix}/ranking_accuracy', metrics['ranking_accuracy'], on_epoch=True)
-    
-    def _convert_to_json_serializable(self, obj: Any) -> Any:
-        """Convert PyTorch tensors and other non-serializable objects to native Python types."""
-        if isinstance(obj, torch.Tensor):
-            # Convert tensor to Python scalar or list
-            if obj.numel() == 1:
-                return obj.item()
-            else:
-                return obj.tolist()
-        elif isinstance(obj, (np.integer, np.floating)):
-            return obj.item()
-        elif isinstance(obj, np.ndarray):
-            return obj.tolist()
-        elif isinstance(obj, dict):
-            return {key: self._convert_to_json_serializable(value) for key, value in obj.items()}
-        elif isinstance(obj, (list, tuple)):
-            return [self._convert_to_json_serializable(item) for item in obj]
-        elif obj is None:
-            return None
-        else:
-            # Try to convert to native type if possible
-            try:
-                if isinstance(obj, (int, float, str, bool)):
-                    return obj
-                # Try to get item() if it has it (like numpy scalars)
-                if hasattr(obj, 'item'):
-                    return obj.item()
-            except:
-                pass
-            return obj
-    
-    def _save_metrics(self, metrics_obj: Dict[str, Any]):
-        """Save metrics to JSON file."""
-        try:
-            run_path = Path(self.run_dir)
-            epoch = metrics_obj['epoch']
-            
-            # Convert all tensors to native Python types before saving
-            serializable_metrics = self._convert_to_json_serializable(metrics_obj)
-            
-            # Save epoch-specific metrics
-            with open(run_path / f"test_metrics_epoch_{epoch:04d}.json", "w") as f:
-                json.dump(serializable_metrics, f, indent=2)
-            
-            # Update latest test_metrics.json
-            with open(run_path / "test_metrics.json", "w") as f:
-                json.dump(serializable_metrics, f, indent=2)
-            
-            # Save training history (also convert to serializable)
-            test_history = [self._convert_to_json_serializable(entry) 
-                          for entry in self.callback_history 
-                          if entry.get('name') == 'test_all_evaluation']
-            with open(run_path / "test_training_history.json", "w") as f:
-                json.dump(test_history, f, indent=2)
-            
-            # Save training loss history (also convert to serializable)
-            if self.training_history:
-                serializable_training_history = self._convert_to_json_serializable(self.training_history)
-                with open(run_path / "training_loss_history.json", "w") as f:
-                    json.dump(serializable_training_history, f, indent=2)
-                    
-        except Exception as e:
-            print(f"Warning: Failed to save metrics at epoch {self.current_epoch}: {e}")
-    
-    def on_train_end(self):
-        """Called when training ends."""
-        # Save final training history
+
+        for cb in [self.train_instance_callback, self.test_instance_callback]:
+            if cb is None:
+                continue
+            result = cb.on_epoch_end(self.model, self.current_epoch)
+            instance_name = result.get("instance", cb.instance_name)
+            log_instance_metrics_to_tb(self, result, instance_name)
+            self.callback_history.append(result)
+
         if self.run_dir is not None:
-            try:
-                run_path = Path(self.run_dir)
-                if self.training_history:
-                    serializable_training_history = self._convert_to_json_serializable(self.training_history)
-                    with open(run_path / "training_loss_history.json", "w") as f:
-                        json.dump(serializable_training_history, f, indent=2)
-                if self.callback_history:
-                    test_history = [self._convert_to_json_serializable(entry) 
-                                  for entry in self.callback_history 
-                                  if entry.get('name') == 'test_all_evaluation']
-                    with open(run_path / "test_training_history.json", "w") as f:
-                        json.dump(test_history, f, indent=2)
-            except Exception as e:
-                print(f"Warning: Failed to save final training history: {e}")
+            self._save_epoch_artifacts()
+
+    
+    def _save_epoch_artifacts(self) -> None:
+        """Save obj training_loss_history and per-instance training histories."""
+        run_path = Path(self.run_dir)
+        if self.training_history:
+            buf = convert_to_json_serializable(self.training_history)
+            with open(run_path / "training_loss_history.json", "w") as f:
+                json.dump(buf, f, indent=2)
+        for instance_name in ("train_instance", "test_instance"):
+            hist = [convert_to_json_serializable(e) for e in self.callback_history if e.get("instance") == instance_name]
+            if not hist:
+                continue
+            with open(run_path / f"{instance_name}_training_history.json", "w") as f:
+                json.dump(hist, f, indent=2)
+
+    def on_train_end(self) -> None:
+        """Save final training history and instance histories."""
+        if self.run_dir is not None:
+            self._save_epoch_artifacts()
 
 
 def create_lightning_trainer(
     run_dir: Optional[str] = None,
     max_epochs: int = 50,
-    early_stopping: bool = False,
-    early_stopping_metric: str = "loss",
-    early_stopping_patience: int = 10,
-    early_stopping_min_delta: float = 1e-4,
     checkpoint_every: Optional[int] = 5,
-    save_top_k: int = 1,
-    monitor_metric: Optional[str] = None,
     gradient_clip_val: Optional[float] = None,
     **trainer_kwargs
 ) -> pl.Trainer:
     """
-    Create a PyTorch Lightning trainer with appropriate callbacks.
+    Create a PyTorch Lightning trainer with ModelCheckpoint (no early stopping).
     
     Args:
         run_dir: Directory for saving checkpoints and logs
         max_epochs: Maximum number of epochs
-        early_stopping: Whether to enable early stopping
-        early_stopping_metric: Metric to monitor ("loss" or "accuracy")
-        early_stopping_patience: Patience for early stopping
-        early_stopping_min_delta: Minimum delta for early stopping
-        checkpoint_every: Save checkpoint every N epochs
-        save_top_k: Number of best models to keep
-        monitor_metric: Metric to monitor for checkpointing (e.g., "test/missing_rating_loss")
+        checkpoint_every: Save checkpoint every N epochs (None = disabled)
         gradient_clip_val: Gradient clipping value (None = no clipping)
         **trainer_kwargs: Additional arguments for pl.Trainer
     """
-    if not LIGHTNING_AVAILABLE:
-        raise ImportError("PyTorch Lightning is not installed. Install with: pip install pytorch-lightning")
-    
     callbacks = []
     
-    # Early stopping callback
-    if early_stopping:
-        if early_stopping_metric == "loss":
-            monitor = "test/missing_rating_loss" if monitor_metric is None else monitor_metric
-            mode = "min"
-        elif early_stopping_metric == "accuracy":
-            monitor = "test/missing_rating_accuracy" if monitor_metric is None else monitor_metric
-            mode = "max"
-        else:
-            raise ValueError(f"Unknown early_stopping_metric: {early_stopping_metric}")
-        
-        callbacks.append(
-            LSEarlyStopping(
-                monitor=monitor,
-                patience=early_stopping_patience,
-                min_delta=early_stopping_min_delta,
-                mode=mode,
-                verbose=True
-            )
-        )
-    
-    # Model checkpoint callback
     if run_dir is not None and checkpoint_every is not None and int(checkpoint_every) > 0:
         checkpoint_dir = Path(run_dir) / "lightning_checkpoints"
         checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Determine monitor metric for checkpointing
-        if monitor_metric is None:
-            if early_stopping:
-                monitor = "test/missing_rating_loss" if early_stopping_metric == "loss" else "test/missing_rating_accuracy"
-                mode = "min" if early_stopping_metric == "loss" else "max"
-            else:
-                monitor = "test/total_loss"
-                mode = "min"
-        else:
-            monitor = monitor_metric
-            mode = "min" if "loss" in monitor.lower() else "max"
-        
         callbacks.append(
             ModelCheckpoint(
                 dirpath=str(checkpoint_dir),
-                filename='checkpoint-{epoch:04d}-{test/total_loss:.4f}',
-                monitor=monitor,
-                mode=mode,
-                save_top_k=save_top_k,
+                filename="checkpoint-{epoch:04d}",
+                monitor="test_instance/total/xent_loss/total",
+                mode="min",
+                save_top_k=0,
                 every_n_epochs=int(checkpoint_every),
                 save_last=True,
             )

@@ -13,39 +13,37 @@ from tqdm import tqdm
 class EvaluationCallback:
     """Callback for evaluation during training (no masking during eval)."""
 
-    def __init__(self, eval_engine, test_variables, converter, device='cuda', name='EvaluationCallback'):
+    def __init__(self, eval_engine, test_variables, converter, device='cuda', name='EvaluationCallback', instance_name=None):
         self.eval_engine = eval_engine
         self.test_variables = test_variables
         self.converter = converter
         self.device = device
         self.name = name
+        self.instance_name = instance_name if instance_name is not None else name
 
     def on_epoch_end(self, model, epoch):
-        try:
-            results = self.eval_engine.evaluate_model(
-                model=model,
-                variables=self.test_variables,
-                converter=self.converter,
-                device=self.device
-            )
-            return {
-                'epoch': epoch,
-                'name': self.name,
-                'total_loss': results.total_loss,
-                'rating_loss': results.rating_loss,
-                'ranking_loss': results.ranking_loss,
-                'rating_accuracy': results.rating_accuracy,
-                'rating_rmse': results.rating_rmse,
-                'ranking_accuracy': results.ranking_accuracy,
-                'num_rating_evaluations': results.num_rating_evaluations,
-                'num_ranking_evaluations': results.num_ranking_evaluations,
-                'masked_metrics': results.masked_metrics,
-                'observed_metrics': results.observed_metrics,
-                'missing_metrics': results.missing_metrics,
-            }
-        except Exception as e:
-            print(f"Warning: Evaluation callback failed at epoch {epoch}: {e}")
-            return {'epoch': epoch, 'error': str(e)}
+        results = self.eval_engine.evaluate_model(
+            model=model,
+            variables=self.test_variables,
+            converter=self.converter,
+            device=self.device
+        )
+        return {
+            'epoch': epoch,
+            'name': self.name,
+            'instance': self.instance_name,
+            'total_loss': results.total_loss,
+            'rating_loss': results.rating_loss,
+            'ranking_loss': results.ranking_loss,
+            'rating_accuracy': results.rating_accuracy,
+            'rating_rmse': results.rating_rmse,
+            'ranking_accuracy': results.ranking_accuracy,
+            'num_rating_evaluations': results.num_rating_evaluations,
+            'num_ranking_evaluations': results.num_ranking_evaluations,
+            'masked_metrics': results.masked_metrics,
+            'observed_metrics': results.observed_metrics,
+            'missing_metrics': results.missing_metrics,
+        }
 
 
 class EarlyStopping:
@@ -96,19 +94,6 @@ class EarlyStopping:
         """Restore the best model state."""
         if self.best_model_state:
             model.load_state_dict(self.best_model_state)
-
-
-def calculate_rmse(predictions: List[int], targets: List[int]) -> float:
-    """Calculate RMSE for rating predictions (on 1-5 scale)."""
-    if len(predictions) == 0:
-        return 0.0
-
-    # Convert from 0-4 internal representation to 1-5 rating scale
-    pred_ratings = [p + 1 for p in predictions]
-    true_ratings = [t + 1 for t in targets]
-
-    mse = np.mean([(p - t)**2 for p, t in zip(pred_ratings, true_ratings)])
-    return np.sqrt(mse)
 
 
 class ImputerTrainer:

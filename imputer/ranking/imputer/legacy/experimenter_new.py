@@ -3,10 +3,11 @@ import copy
 from typing import List, Iterator, Tuple, Any, Dict
 import torch
 import sys
-from .trainer import ImputerTrainer, EvaluationCallback
-from .eval import EvaluationEngine
-from .data import DataConverter, RankingData
-from ranking_imputer import MultiVariableImputer
+from imputer.legacy.trainer import ImputerTrainer
+from imputer.callbacks import EvaluationCallback
+from imputer.eval import EvaluationEngine
+from imputer.data import DataConverter, RankingData
+from imputer.ranking_imputer import MultiVariableImputer
 
 def apply_masking(variables: List[RankingData], masking_rate: float) -> List[RankingData]:
         """Apply masking: M% of variables are masked, 100 - M% are observed."""

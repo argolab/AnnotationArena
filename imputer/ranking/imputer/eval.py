@@ -9,6 +9,7 @@ import copy
 
 from imputer.data import RankingData
 from imputer.losses import DefaultLossStrategy, adapt_batched_logits_to_predictions
+from imputer.metrics import compute_rating_accuracy_rmse, compute_ranking_accuracy
 
 
 @dataclass
@@ -88,30 +89,12 @@ class EvaluationEngine:
                 #   (ground-truth lives on them; no need to reconstruct)
                 preds = []
                 refs: List[RankingData] = []
-                rating_preds_local: List[int] = []
-                rating_targets_local: List[int] = []
-                ranking_preds_local: List[List[int]] = []
-                ranking_targets_local: List[List[int]] = []
 
                 for i in indices:
                     var = ref_variables[i]
                     preds.append(predictions_full[i])
                     # Use the original ref as-is
                     refs.append(var)
-                    if not var.is_listwise:
-                        rating_preds_local.append(torch.argmax(rating_logits[0, i]).item())
-                        rating_targets_local.append(var.rating_value)
-                    else:
-                        # For ranking, we compute a simple pairwise prediction if size==2
-                        scores = ranking_logits[0, i].cpu().numpy()
-                        if len(var.ranking_order or []) == 2:
-                            probs = softmax(scores[:2])
-                            pred_first_wins = probs[0] > probs[1]
-                            pred_ranking = [1, 2] if pred_first_wins else [2, 1]
-                        else:
-                            pred_ranking = var.ranking_order
-                        ranking_preds_local.append(pred_ranking)
-                        ranking_targets_local.append(var.ranking_order)
 
                 # Compute losses on this subset using the loss strategy
                 losses = self.loss_strategy.compute(preds, refs)
@@ -119,29 +102,21 @@ class EvaluationEngine:
                 rating_loss_local = losses['rating_loss']
                 ranking_loss_local = losses['ranking_loss']
 
-                rating_accuracy_local = None
-                rating_rmse_local = None
-                if len(rating_preds_local) > 0:
-                    correct = sum(p == t for p, t in zip(rating_preds_local, rating_targets_local))
-                    rating_accuracy_local = correct / len(rating_preds_local)
-                    pred_ratings = [p + 1 for p in rating_preds_local]
-                    true_ratings = [t + 1 for t in rating_targets_local]
-                    mse = np.mean([(p - t) ** 2 for p, t in zip(pred_ratings, true_ratings)])
-                    rating_rmse_local = float(np.sqrt(mse))
-
-                ranking_accuracy_local = None
-                if len(ranking_preds_local) > 0:
-                    correct = 0
-                    for pred_r, true_r in zip(ranking_preds_local, ranking_targets_local):
-                        if len(pred_r) == 2 and len(true_r) == 2:
-                            pred_first = pred_r[0] < pred_r[1]
-                            true_first = true_r[0] < true_r[1]
-                            if pred_first == true_first:
-                                correct += 1
-                        else:
-                            if pred_r == true_r:
-                                correct += 1
-                    ranking_accuracy_local = correct / len(ranking_preds_local)
+                # Use shared metric computation functions (filter indices by type)
+                rating_indices = [i for i in indices if not ref_variables[i].is_listwise and ref_variables[i].rating_value is not None]
+                ranking_indices = [
+                    i for i in indices
+                    if ref_variables[i].is_listwise
+                    and ref_variables[i].ranking_order is not None
+                    and len(ref_variables[i].ranking_order) == 2
+                ]
+                
+                rating_accuracy_local, rating_rmse_local = compute_rating_accuracy_rmse(
+                    rating_logits[0], rating_indices, ref_variables, rating_logits.device
+                )
+                ranking_accuracy_local = compute_ranking_accuracy(
+                    ranking_logits[0], ranking_indices, ref_variables, ranking_logits.device
+                )
 
                 # Return a consistent metrics dict for this subset
                 return {
@@ -151,8 +126,8 @@ class EvaluationEngine:
                     'rating_accuracy': rating_accuracy_local,
                     'rating_rmse': rating_rmse_local,
                     'ranking_accuracy': ranking_accuracy_local,
-                    'num_rating_evaluations': len(rating_preds_local),
-                    'num_ranking_evaluations': len(ranking_preds_local),
+                    'num_rating_evaluations': len(rating_indices),
+                    'num_ranking_evaluations': len(ranking_indices),
                 }
 
             observed_metrics = compute_subset(observed_idx)

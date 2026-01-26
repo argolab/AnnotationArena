@@ -96,9 +96,7 @@ def test_create_batch():
 
 def test_forward_pass():
     from imputer.data import DataConverter, RankingData
-    from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
-    from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
-    from imputer.trainer import ImputerTrainer
+    from imputer.legacy.trainer import ImputerTrainer
     from imputer.ranking_imputer import MultiVariableImputer
 
     converter = DataConverter(
@@ -141,9 +139,7 @@ def test_forward_pass():
 
 def test_trainer_work():
     from imputer.data import DataConverter, RankingData
-    from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
-    from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
-    from imputer.trainer import ImputerTrainer
+    from imputer.legacy.trainer import ImputerTrainer
     from imputer.ranking_imputer import MultiVariableImputer
 
     converter = DataConverter(
@@ -190,9 +186,7 @@ def test_trainer_work():
 
 def test_trainer_loss():
     from imputer.data import DataConverter, RankingData
-    from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
-    from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
-    from imputer.trainer import ImputerTrainer
+    from imputer.legacy.trainer import ImputerTrainer
     from imputer.ranking_imputer import MultiVariableImputer
 
     converter = DataConverter(
@@ -227,11 +221,9 @@ def test_trainer_loss():
 
 def test_multiInstance_trainer():
     from imputer.data import DataConverter, RankingData
-    from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
-    from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
-    from imputer.trainer import ImputerTrainer
+    from imputer.legacy.trainer import ImputerTrainer
     from imputer.ranking_imputer import MultiVariableImputer
-    from imputer.multi_instance_trainer import SequentialMIT, MixedMIT
+    from imputer.legacy.multi_instance_trainer import SequentialMIT, MixedMIT
     from imputer.eval import EvaluationEngine
     from config import ExperimentConfig
 

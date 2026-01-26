@@ -51,7 +51,6 @@ def load_model_and_data(model_path: str, data_path: str, device: str = 'cpu') ->
         attention_heads=config['attention_heads'],
         embedding_dim=config['embedding_dim'],
         dropout=config['dropout'],
-        embedding_type=config['embedding_type'],
         device=device
     )
     

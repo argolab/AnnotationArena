@@ -48,16 +48,15 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
     def forward(
         self,
         variables: List[RankingData],
-        mask_random: bool = False,
-        fresh_random_batch_size: int = 1,
+        batch_size: int = 1,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         # Call on_forward_start hook for subclasses to perform initialization (only for B=1)
-        if fresh_random_batch_size == 1:
+        if batch_size == 1:
             self.on_forward_start(variables)
         
         V = len(variables)  # this will be the input token length for transformer
         D = self.embedding_dim
-        B = fresh_random_batch_size
+        B = batch_size
         device = self._ensure_device()
 
         if B == 1:
@@ -72,10 +71,10 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
                 assert var.is_missing is not None and var.is_masked is not None, "Variable must have missing or masked status"
 
                 if var.is_listwise:
-                    feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_missing, mask_random=mask_random)
+                    feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_missing)
                 else:
                     item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
-                    feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing, mask_random=mask_random)
+                    feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing)
                 
                 embedding_list.append(feat)
 
@@ -83,7 +82,7 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
             # Shape: [V, D + parameter_dimension] -> [1, V, D + parameter_dimension]
             feature_embeddings = torch.stack(embedding_list, dim=0).unsqueeze(0)
         else:
-            # Batched behavior: generate B embeddings with different randomness
+            # Batched behavior: generate B embeddings (for different masking patterns)
             # Shape: [B, V, D + parameter_dimension]
             batch_embeddings = []
             for b in range(B):
@@ -93,13 +92,11 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
                     assert not (var.is_missing and var.is_masked), "Variable cannot be both missing and masked"
                     assert var.is_missing is not None and var.is_masked is not None, "Variable must have missing or masked status"
 
-                    # Generate fresh random embedding for each batch item
-                    # The randomness is refreshed by calling on_forward_start or by generating new random embeddings
                     if var.is_listwise:
-                        feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_missing, mask_random=mask_random)
+                        feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_missing)
                     else:
                         item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
-                        feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing, mask_random=mask_random)
+                        feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing)
                     
                     embedding_list.append(feat)
                 

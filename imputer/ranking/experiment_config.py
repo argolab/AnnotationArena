@@ -46,7 +46,7 @@ class ModelConfig:
     attention_heads: int = 8
     embedding_dim: int = 64
     dropout: float = 0.1
-    embedding_type: str = "pairwise"  # "pairwise", "combined_random", "fully_random"
+    embedding_type: str = "atom"
     max_rank_size: int = 2
 
     # Loss weighting configuration

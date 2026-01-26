@@ -20,24 +20,20 @@ def load_run_data(run_dir: Path) -> Dict[str, Any]:
     """Load all JSON data from a run directory."""
     data = {}
 
-    # Load training histories
-    test_history_path = run_dir / "test_training_history.json"
-    train_history_path = run_dir / "train_training_history.json"
+    # Current Lightning naming convention
     training_loss_history_path = run_dir / "training_loss_history.json"
+    train_instance_path = run_dir / "train_instance_training_history.json"
+    test_instance_path = run_dir / "test_instance_training_history.json"
 
-    if test_history_path.exists():
-        with open(test_history_path, 'r') as f:
-            data['test_history'] = json.load(f)
-
-    if train_history_path.exists():
-        with open(train_history_path, 'r') as f:
-            data['train_history'] = json.load(f)
-    
-    # Load actual training loss history (per-epoch training losses)
-    # This takes precedence over train_history for plotting training loss curves
     if training_loss_history_path.exists():
-        with open(training_loss_history_path, 'r') as f:
-            data['training_loss_history'] = json.load(f)
+        with open(training_loss_history_path, "r") as f:
+            data["training_loss_history"] = json.load(f)
+    if train_instance_path.exists():
+        with open(train_instance_path, "r") as f:
+            data["train_instance_history"] = json.load(f)
+    if test_instance_path.exists():
+        with open(test_instance_path, "r") as f:
+            data["test_instance_history"] = json.load(f)
 
     # Load predictions
     predictives_path = run_dir / "predictives.json"
@@ -69,50 +65,33 @@ def load_stan_metrics(stan_path: Optional[Path]) -> Optional[Dict[str, float]]:
         return json.load(f)
 
 
-def plot_learning_curves_train(train_history: List[Dict], stan_metrics: Optional[Dict], output_dir: Path):
-    """Plot learning curves for training set (observed, missing, overall)."""
-    if not train_history:
-        print("Warning: No training history data to plot")
-        return
+def plot_learning_curves_train(train_history: List[Dict], stan_metrics: Optional[Dict], output_dir: Path) -> None:
+    """Plot learning curves for train instance (observed, missing, overall). Strict naming: never use total_loss for Missing/Observed."""
+    assert train_history, "train_history must not be empty"
+    assert "observed_metrics" in train_history[0], "train_history must contain observed_metrics (from EvaluationCallback)"
+    assert "missing_metrics" in train_history[0], "train_history must contain missing_metrics (from EvaluationCallback)"
     
-    epochs = [entry['epoch'] for entry in train_history]
-
-    # Check if this is the simple training_loss_history format (from trainer) or the detailed format (from callbacks)
-    has_observed_metrics = 'observed_metrics' in train_history[0] if train_history else False
+    epochs = [entry["epoch"] for entry in train_history]
     
-    if has_observed_metrics:
-        # Detailed format from callbacks (evaluation metrics)
-        overall_loss = [entry['rating_loss'] for entry in train_history]
-        overall_acc = [entry['rating_accuracy'] for entry in train_history]
-        overall_rmse = [entry['rating_rmse'] for entry in train_history]
+    # Overall metrics - rating_loss should always be present (from EvaluationCallback)
+    overall_loss = [entry["rating_loss"] for entry in train_history]
+    overall_acc = [entry["rating_accuracy"] for entry in train_history]
+    overall_rmse = [entry["rating_rmse"] for entry in train_history]
 
-        observed_loss = [entry['observed_metrics']['rating_loss'] for entry in train_history]
-        observed_acc = [entry['observed_metrics']['rating_accuracy'] for entry in train_history]
-        observed_rmse = [entry['observed_metrics']['rating_rmse'] for entry in train_history]
+    # Observed and missing metrics are always present (from EvaluationCallback)
+    observed_loss = [entry["observed_metrics"]["rating_loss"] for entry in train_history]
+    observed_acc = [entry["observed_metrics"]["rating_accuracy"] for entry in train_history]
+    observed_rmse = [entry["observed_metrics"]["rating_rmse"] for entry in train_history]
 
-        missing_loss = [entry['missing_metrics']['rating_loss'] for entry in train_history]
-        missing_acc = [entry['missing_metrics']['rating_accuracy'] for entry in train_history]
-        missing_rmse = [entry['missing_metrics']['rating_rmse'] for entry in train_history]
-    else:
-        # Simple format from trainer (actual training losses)
-        overall_loss = [entry.get('rating_loss', 0.0) for entry in train_history]
-        overall_acc = [entry.get('rating_accuracy', 0.0) for entry in train_history]
-        overall_rmse = [entry.get('rating_rmse', 0.0) for entry in train_history]
-        
-        # For simple format, we only have overall metrics, so use them for all
-        observed_loss = overall_loss
-        observed_acc = overall_acc
-        observed_rmse = overall_rmse
-        
-        missing_loss = overall_loss
-        missing_acc = overall_acc
-        missing_rmse = overall_rmse
+    missing_loss = [entry["missing_metrics"]["rating_loss"] for entry in train_history]
+    missing_acc = [entry["missing_metrics"]["rating_accuracy"] for entry in train_history]
+    missing_rmse = [entry["missing_metrics"]["rating_rmse"] for entry in train_history]
 
     # Plot 1: Rating Loss (Train)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(epochs, overall_loss, label='Overall', linewidth=2, color='black')
-    ax.plot(epochs, observed_loss, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax.plot(epochs, missing_loss, label='Missing', linewidth=1.5, color='red', linestyle='--')
+    ax.plot(epochs, overall_loss, label="Overall", linewidth=2, color="black")
+    ax.plot(epochs, observed_loss, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax.plot(epochs, missing_loss, label="Missing", linewidth=1.5, color="red", linestyle="--")
 
     if stan_metrics and 'rating_missing_log_likelihood' in stan_metrics:
         # Stan reports negative log likelihood, convert to loss
@@ -130,9 +109,9 @@ def plot_learning_curves_train(train_history: List[Dict], stan_metrics: Optional
 
     # Plot 2: Rating Accuracy (Train)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(epochs, overall_acc, label='Overall', linewidth=2, color='black')
-    ax.plot(epochs, observed_acc, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax.plot(epochs, missing_acc, label='Missing', linewidth=1.5, color='red', linestyle='--')
+    ax.plot(epochs, overall_acc, label="Overall", linewidth=2, color="black")
+    ax.plot(epochs, observed_acc, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax.plot(epochs, missing_acc, label="Missing", linewidth=1.5, color="red", linestyle="--")
 
     if stan_metrics and 'rating_missing_accuracy' in stan_metrics:
         stan_acc = stan_metrics['rating_missing_accuracy']
@@ -150,9 +129,9 @@ def plot_learning_curves_train(train_history: List[Dict], stan_metrics: Optional
 
     # Plot 3: Rating RMSE (Train)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(epochs, overall_rmse, label='Overall', linewidth=2, color='black')
-    ax.plot(epochs, observed_rmse, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax.plot(epochs, missing_rmse, label='Missing', linewidth=1.5, color='red', linestyle='--')
+    ax.plot(epochs, overall_rmse, label="Overall", linewidth=2, color="black")
+    ax.plot(epochs, observed_rmse, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax.plot(epochs, missing_rmse, label="Missing", linewidth=1.5, color="red", linestyle="--")
 
     if stan_metrics and 'rating_missing_mae' in stan_metrics:
         stan_mae = stan_metrics['rating_missing_mae']
@@ -170,22 +149,20 @@ def plot_learning_curves_train(train_history: List[Dict], stan_metrics: Optional
     # Plot 4: Combined Loss + Accuracy (Train)
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10), sharex=True)
 
-    # Loss subplot
-    ax1.plot(epochs, overall_loss, label='Overall', linewidth=2, color='black')
-    ax1.plot(epochs, observed_loss, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax1.plot(epochs, missing_loss, label='Missing', linewidth=1.5, color='red', linestyle='--')
-    if stan_metrics and 'rating_missing_log_likelihood' in stan_metrics:
-        stan_loss = -stan_metrics['rating_missing_log_likelihood']
-        ax1.axhline(y=stan_loss, color='blue', linestyle=':', linewidth=2, label=f'Stan (Missing)')
-    ax1.set_ylabel('Rating Loss', fontsize=12)
-    ax1.set_title('Training Set: Loss and Accuracy', fontsize=14, fontweight='bold')
+    ax1.plot(epochs, overall_loss, label="Overall", linewidth=2, color="black")
+    ax1.plot(epochs, observed_loss, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax1.plot(epochs, missing_loss, label="Missing", linewidth=1.5, color="red", linestyle="--")
+    if stan_metrics and "rating_missing_log_likelihood" in stan_metrics:
+        stan_loss = -stan_metrics["rating_missing_log_likelihood"]
+        ax1.axhline(y=stan_loss, color="blue", linestyle=":", linewidth=2, label="Stan (Missing)")
+    ax1.set_ylabel("Rating Loss", fontsize=12)
+    ax1.set_title("Training Set: Loss and Accuracy", fontsize=14, fontweight="bold")
     ax1.legend(fontsize=9)
     ax1.grid(True, alpha=0.3)
 
-    # Accuracy subplot
-    ax2.plot(epochs, overall_acc, label='Overall', linewidth=2, color='black')
-    ax2.plot(epochs, observed_acc, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax2.plot(epochs, missing_acc, label='Missing', linewidth=1.5, color='red', linestyle='--')
+    ax2.plot(epochs, overall_acc, label="Overall", linewidth=2, color="black")
+    ax2.plot(epochs, observed_acc, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax2.plot(epochs, missing_acc, label="Missing", linewidth=1.5, color="red", linestyle="--")
     if stan_metrics and 'rating_missing_accuracy' in stan_metrics:
         stan_acc = stan_metrics['rating_missing_accuracy']
         ax2.axhline(y=stan_acc, color='blue', linestyle=':', linewidth=2, label=f'Stan (Missing)')
@@ -200,28 +177,31 @@ def plot_learning_curves_train(train_history: List[Dict], stan_metrics: Optional
     plt.close()
 
 
-def plot_learning_curves_test(test_history: List[Dict], stan_metrics: Optional[Dict], output_dir: Path):
-    """Plot learning curves for test set (observed, missing, overall)."""
-    epochs = [entry['epoch'] for entry in test_history]
+def plot_learning_curves_test(test_history: List[Dict], stan_metrics: Optional[Dict], output_dir: Path) -> None:
+    """Plot learning curves for test instance (observed, missing, overall). Strict naming: never use total_loss for Missing/Observed."""
+    assert test_history, "test_history must not be empty"
+    assert "observed_metrics" in test_history[0], "test_history must contain observed_metrics (from EvaluationCallback)"
+    assert "missing_metrics" in test_history[0], "test_history must contain missing_metrics (from EvaluationCallback)"
+    
+    epochs = [entry["epoch"] for entry in test_history]
 
-    # Extract metrics
-    overall_loss = [entry['rating_loss'] for entry in test_history]
-    overall_acc = [entry['rating_accuracy'] for entry in test_history]
-    overall_rmse = [entry['rating_rmse'] for entry in test_history]
-
-    observed_loss = [entry['observed_metrics']['rating_loss'] for entry in test_history]
-    observed_acc = [entry['observed_metrics']['rating_accuracy'] for entry in test_history]
-    observed_rmse = [entry['observed_metrics']['rating_rmse'] for entry in test_history]
-
-    missing_loss = [entry['missing_metrics']['rating_loss'] for entry in test_history]
-    missing_acc = [entry['missing_metrics']['rating_accuracy'] for entry in test_history]
-    missing_rmse = [entry['missing_metrics']['rating_rmse'] for entry in test_history]
+    overall_loss = [entry["rating_loss"] for entry in test_history]
+    overall_acc = [entry["rating_accuracy"] for entry in test_history]
+    overall_rmse = [entry["rating_rmse"] for entry in test_history]
+    
+    # Observed and missing metrics are always present (from EvaluationCallback)
+    observed_loss = [entry["observed_metrics"]["rating_loss"] for entry in test_history]
+    observed_acc = [entry["observed_metrics"]["rating_accuracy"] for entry in test_history]
+    observed_rmse = [entry["observed_metrics"]["rating_rmse"] for entry in test_history]
+    missing_loss = [entry["missing_metrics"]["rating_loss"] for entry in test_history]
+    missing_acc = [entry["missing_metrics"]["rating_accuracy"] for entry in test_history]
+    missing_rmse = [entry["missing_metrics"]["rating_rmse"] for entry in test_history]
 
     # Plot 1: Rating Loss (Test)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(epochs, overall_loss, label='Overall', linewidth=2, color='black')
-    ax.plot(epochs, observed_loss, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax.plot(epochs, missing_loss, label='Missing', linewidth=1.5, color='red', linestyle='--')
+    ax.plot(epochs, overall_loss, label="Overall", linewidth=2, color="black")
+    ax.plot(epochs, observed_loss, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax.plot(epochs, missing_loss, label="Missing", linewidth=1.5, color="red", linestyle="--")
 
     if stan_metrics and 'rating_missing_log_likelihood' in stan_metrics:
         stan_loss = -stan_metrics['rating_missing_log_likelihood']
@@ -238,11 +218,13 @@ def plot_learning_curves_test(test_history: List[Dict], stan_metrics: Optional[D
 
     # Plot 2: Rating Accuracy (Test)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(epochs, overall_acc, label='Overall', linewidth=2, color='black')
-    ax.plot(epochs, observed_acc, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax.plot(epochs, missing_acc, label='Missing', linewidth=1.5, color='red', linestyle='--')
+    ax.plot(epochs, overall_acc, label="Overall", linewidth=2, color="black")
+    if observed_acc is not None:
+        ax.plot(epochs, observed_acc, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    if missing_acc is not None:
+        ax.plot(epochs, missing_acc, label="Missing", linewidth=1.5, color="red", linestyle="--")
 
-    if stan_metrics and 'rating_missing_accuracy' in stan_metrics:
+    if stan_metrics and "rating_missing_accuracy" in stan_metrics:
         stan_acc = stan_metrics['rating_missing_accuracy']
         ax.axhline(y=stan_acc, color='blue', linestyle=':', linewidth=2, label=f'Stan Baseline (Missing): {stan_acc:.3f}')
 
@@ -258,11 +240,11 @@ def plot_learning_curves_test(test_history: List[Dict], stan_metrics: Optional[D
 
     # Plot 3: Rating RMSE (Test)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(epochs, overall_rmse, label='Overall', linewidth=2, color='black')
-    ax.plot(epochs, observed_rmse, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax.plot(epochs, missing_rmse, label='Missing', linewidth=1.5, color='red', linestyle='--')
+    ax.plot(epochs, overall_rmse, label="Overall", linewidth=2, color="black")
+    ax.plot(epochs, observed_rmse, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax.plot(epochs, missing_rmse, label="Missing", linewidth=1.5, color="red", linestyle="--")
 
-    if stan_metrics and 'rating_missing_mae' in stan_metrics:
+    if stan_metrics and "rating_missing_mae" in stan_metrics:
         stan_mae = stan_metrics['rating_missing_mae']
         ax.axhline(y=stan_mae, color='blue', linestyle=':', linewidth=2, label=f'Stan MAE (Missing): {stan_mae:.3f}')
 
@@ -278,23 +260,21 @@ def plot_learning_curves_test(test_history: List[Dict], stan_metrics: Optional[D
     # Plot 4: Combined Loss + Accuracy (Test)
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10), sharex=True)
 
-    # Loss subplot
-    ax1.plot(epochs, overall_loss, label='Overall', linewidth=2, color='black')
-    ax1.plot(epochs, observed_loss, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax1.plot(epochs, missing_loss, label='Missing', linewidth=1.5, color='red', linestyle='--')
-    if stan_metrics and 'rating_missing_log_likelihood' in stan_metrics:
-        stan_loss = -stan_metrics['rating_missing_log_likelihood']
-        ax1.axhline(y=stan_loss, color='blue', linestyle=':', linewidth=2, label=f'Stan (Missing)')
-    ax1.set_ylabel('Rating Loss', fontsize=12)
-    ax1.set_title('Test Set: Loss and Accuracy', fontsize=14, fontweight='bold')
+    ax1.plot(epochs, overall_loss, label="Overall", linewidth=2, color="black")
+    ax1.plot(epochs, observed_loss, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax1.plot(epochs, missing_loss, label="Missing", linewidth=1.5, color="red", linestyle="--")
+    if stan_metrics and "rating_missing_log_likelihood" in stan_metrics:
+        stan_loss = -stan_metrics["rating_missing_log_likelihood"]
+        ax1.axhline(y=stan_loss, color="blue", linestyle=":", linewidth=2, label="Stan (Missing)")
+    ax1.set_ylabel("Rating Loss", fontsize=12)
+    ax1.set_title("Test Set: Loss and Accuracy", fontsize=14, fontweight="bold")
     ax1.legend(fontsize=9)
     ax1.grid(True, alpha=0.3)
 
-    # Accuracy subplot
-    ax2.plot(epochs, overall_acc, label='Overall', linewidth=2, color='black')
-    ax2.plot(epochs, observed_acc, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax2.plot(epochs, missing_acc, label='Missing', linewidth=1.5, color='red', linestyle='--')
-    if stan_metrics and 'rating_missing_accuracy' in stan_metrics:
+    ax2.plot(epochs, overall_acc, label="Overall", linewidth=2, color="black")
+    ax2.plot(epochs, observed_acc, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax2.plot(epochs, missing_acc, label="Missing", linewidth=1.5, color="red", linestyle="--")
+    if stan_metrics and "rating_missing_accuracy" in stan_metrics:
         stan_acc = stan_metrics['rating_missing_accuracy']
         ax2.axhline(y=stan_acc, color='blue', linestyle=':', linewidth=2, label=f'Stan (Missing)')
     ax2.set_xlabel('Epoch', fontsize=12)
@@ -526,25 +506,35 @@ def main():
 
     # Generate plots
     print("\nGenerating learning curves...")
-    # Use training_loss_history if available (actual training losses), otherwise use train_history (evaluation metrics)
-    if 'training_loss_history' in data:
-        plot_learning_curves_train(data['training_loss_history'], stan_metrics, plots_dir)
-        print("  - Train learning curves saved (from training_loss_history)")
-    elif 'train_history' in data:
-        plot_learning_curves_train(data['train_history'], stan_metrics, plots_dir)
-        print("  - Train learning curves saved (from train_history)")
+    if data.get("train_instance_history"):
+        train_src, train_name = data["train_instance_history"], "train_instance_history"
+    elif data.get("train_history"):
+        train_src, train_name = data["train_history"], "train_history"
+    elif data.get("training_loss_history"):
+        train_src, train_name = data["training_loss_history"], "training_loss_history"
+    else:
+        train_src = train_name = None
+    if train_src:
+        plot_learning_curves_train(train_src, stan_metrics, plots_dir)
+        print(f"  - Train learning curves saved (from {train_name})")
 
-    if 'test_history' in data:
-        plot_learning_curves_test(data['test_history'], stan_metrics, plots_dir)
-        print("  - Test learning curves saved")
+    if data.get("test_instance_history"):
+        test_src, test_name = data["test_instance_history"], "test_instance_history"
+    else:
+        test_src = test_name = None
+    if test_src:
+        plot_learning_curves_test(test_src, stan_metrics, plots_dir)
+        print(f"  - Test learning curves saved (from {test_name})")
 
     print("\nGenerating calibration plots...")
-    if 'predictives' in data and 'predictions' in data['predictives']:
+    if 'predictives' in data:
+        assert 'predictions' in data['predictives'], "predictives must contain 'predictions' key (from build_predictives)"
         plot_calibration(data['predictives']['predictions'], plots_dir)
         print("  - Calibration plots saved")
 
     print("\nGenerating confidence analysis plots...")
-    if 'predictives' in data and 'predictions' in data['predictives']:
+    if 'predictives' in data:
+        assert 'predictions' in data['predictives'], "predictives must contain 'predictions' key (from build_predictives)"
         plot_confidence_analysis(data['predictives']['predictions'], plots_dir)
         print("  - Confidence analysis plots saved")
 

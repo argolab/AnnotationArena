@@ -28,11 +28,11 @@ from typing import Dict, List, Any
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from experiment_config import create_test_config
-from new_experiment_runner import ExperimentRunner
+from legacy.new_experiment_runner import ExperimentRunner
 from iclr_data_generator import ICLRDataGenerator, ICLRDatasetConfig
 from imputer.data import DataConverter
 from imputer.eval import EvaluationEngine
-from imputer.multi_instance_trainer import GeneralMIT
+from imputer.legacy.multi_instance_trainer import GeneralMIT
 from imputer.ranking_imputer import MultiVariableImputer
 
 
@@ -115,7 +115,6 @@ def test_general_mit_test_evaluation():
         attention_heads=config.model_config.attention_heads,
         embedding_dim=config.model_config.embedding_dim,
         dropout=config.model_config.dropout,
-        embedding_type=config.model_config.embedding_type,
         device=config.finetuning_config.device
     )
 
@@ -345,7 +344,6 @@ def test_backward_compatibility():
         attention_heads=config.model_config.attention_heads,
         embedding_dim=config.model_config.embedding_dim,
         dropout=config.model_config.dropout,
-        embedding_type=config.model_config.embedding_type,
         device=config.finetuning_config.device
     )
 
