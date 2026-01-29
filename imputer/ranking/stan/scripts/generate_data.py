@@ -86,6 +86,23 @@ def main():
                        help="Missing rate for MCAR protocol (default: 0.5 = 50%% missing)")
     parser.add_argument("--pairwise-observation-rate", type=float, default=1.0,
                        help="For tie_breaking: fraction of missing pairwise rankings to observe (default: 1.0 = all missing remain missing, 0.3 = 30%% of missing become observed)")
+
+    # Axis-invariance controls for easy-data sanity experiments
+    parser.add_argument(
+        "--hold-I-constant",
+        action="store_true",
+        help="Force ratings to be invariant to criteria/attributes I (no I-dependence)",
+    )
+    parser.add_argument(
+        "--hold-J-constant",
+        action="store_true",
+        help="Force ratings to be invariant to annotators J (no J-dependence)",
+    )
+    parser.add_argument(
+        "--hold-K-constant",
+        action="store_true",
+        help="Force ratings to be invariant to items K (no K-dependence)",
+    )
     
     # Output
     parser.add_argument("--output-dir", type=str, default="OUTPUT/generated_data",
@@ -119,7 +136,10 @@ def main():
         observation_protocol=args.observation_protocol,
         mcar_missing_rate=args.mcar_missing_rate,
         pairwise_observation_rate=args.pairwise_observation_rate,
-        seed=args.seed
+        seed=args.seed,
+        hold_I_constant=args.hold_I_constant,
+        hold_J_constant=args.hold_J_constant,
+        hold_K_constant=args.hold_K_constant,
     )
     
     # Create output directory

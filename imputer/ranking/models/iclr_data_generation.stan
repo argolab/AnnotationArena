@@ -16,6 +16,15 @@ data {
     real<lower=0> sigma_measurement;
     real<lower=0> alpha_dirichlet;
     real<lower=0> temperature;
+
+    // Axis invariance controls (0 = full dependence, 1 = hold axis constant)
+    // When a flag is 1, ratings should NOT depend on that axis:
+    // - hold_I_constant = 1  -> no dependence on criteria/attributes i
+    // - hold_J_constant = 1  -> no dependence on annotator j
+    // - hold_K_constant = 1  -> no dependence on item k
+    int<lower=0, upper=1> hold_I_constant;
+    int<lower=0, upper=1> hold_J_constant;
+    int<lower=0, upper=1> hold_K_constant;
 }
 
 generated quantities {
@@ -73,29 +82,145 @@ generated quantities {
     
     // ===== GENERATE SHARED COMPONENTS =====
     
-    // Generate mean preferences: v_i ~ N(0,I) - SHARED across train/test
-    for (i in 1:I) {
-        for (d in 1:D) {
-            mean_preferences[i, d] = normal_rng(0, 1);
-        }
-    }
-    
-    // Generate annotator preferences: v_ij ~ N(v_i, σ²I) - SHARED across train/test
-    for (i in 1:I) {
-        for (j in 1:J) {
-            int idx = (i-1)*J + j;
+    // Generate mean preferences and annotator preferences with optional tying
+    // along I and J axes according to hold_I_constant / hold_J_constant flags.
+    {
+        // Base mean preference used when I is held constant
+        row_vector[D] global_mean_pref;
+
+        if (hold_I_constant == 1) {
+            // Single global mean preference shared across all i
             for (d in 1:D) {
-                annotator_preferences[idx, d] = normal_rng(mean_preferences[i, d], sigma_annotator);
+                global_mean_pref[d] = normal_rng(0, 1);
+            }
+            for (i in 1:I) {
+                mean_preferences[i] = global_mean_pref;
+            }
+        } else {
+            // Standard case: mean_preferences vary with i
+            for (i in 1:I) {
+                for (d in 1:D) {
+                    mean_preferences[i, d] = normal_rng(0, 1);
+                }
+            }
+        }
+
+        // Annotator preferences v_ij with optional tying in I/J
+        if (hold_I_constant == 1 && hold_J_constant == 1) {
+            // No I or J dependence: single annotator preference shared across all (i,j)
+            {
+                row_vector[D] shared_pref;
+                for (d in 1:D) {
+                    shared_pref[d] = normal_rng(global_mean_pref[d], sigma_annotator);
+                }
+                for (i in 1:I) {
+                    for (j in 1:J) {
+                        int idx = (i-1)*J + j;
+                        annotator_preferences[idx] = shared_pref;
+                    }
+                }
+            }
+        } else if (hold_I_constant == 1 && hold_J_constant == 0) {
+            // JK dependence only: annotator preferences depend on j but not on i
+            // First sample one preference per annotator j, then copy across i.
+            {
+                array[J] row_vector[D] pref_by_j;
+                for (j in 1:J) {
+                    for (d in 1:D) {
+                        pref_by_j[j, d] = normal_rng(global_mean_pref[d], sigma_annotator);
+                    }
+                }
+                for (i in 1:I) {
+                    for (j in 1:J) {
+                        int idx = (i-1)*J + j;
+                        annotator_preferences[idx] = pref_by_j[j];
+                    }
+                }
+            }
+        } else if (hold_I_constant == 0 && hold_J_constant == 1) {
+            // IK dependence only: annotator preferences depend on i but not on j
+            // For each i, sample one preference and share across all j.
+            {
+                array[I] row_vector[D] pref_by_i;
+                for (i in 1:I) {
+                    for (d in 1:D) {
+                        pref_by_i[i, d] = normal_rng(mean_preferences[i, d], sigma_annotator);
+                    }
+                }
+                for (i in 1:I) {
+                    for (j in 1:J) {
+                        int idx = (i-1)*J + j;
+                        annotator_preferences[idx] = pref_by_i[i];
+                    }
+                }
+            }
+        } else {
+            // Full I,J dependence (default behavior)
+            for (i in 1:I) {
+                for (j in 1:J) {
+                    int idx = (i-1)*J + j;
+                    for (d in 1:D) {
+                        annotator_preferences[idx, d] = normal_rng(mean_preferences[i, d], sigma_annotator);
+                    }
+                }
             }
         }
     }
     
-    // Generate rating thresholds: p_ij ~ Dir(α/C, ..., α/C) - SHARED across train/test
-    for (i in 1:I) {
+    // Generate rating thresholds p_ij with optional tying along I/J
+    if (hold_I_constant == 1 && hold_J_constant == 1) {
+        // Single global rating distribution shared across all (i,j)
+        // Use (i=1,j=1) as the template and copy to all (i,j)
+        int base_idx = 1;
+        rating_probs[base_idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
+        rating_cumprobs[base_idx] = cumulative_sum(rating_probs[base_idx]);
+        for (i in 1:I) {
+            for (j in 1:J) {
+                int idx = (i-1)*J + j;
+                rating_probs[idx] = rating_probs[base_idx];
+                rating_cumprobs[idx] = rating_cumprobs[base_idx];
+            }
+        }
+    } else if (hold_I_constant == 1 && hold_J_constant == 0) {
+        // Depend only on annotator j
+        // For each j, sample once at i=1 and copy across all i
         for (j in 1:J) {
-            int idx = (i-1)*J + j;
-            rating_probs[idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
-            rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
+            int base_idx = j;  // i=1, j=j
+            rating_probs[base_idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
+            rating_cumprobs[base_idx] = cumulative_sum(rating_probs[base_idx]);
+        }
+        for (i in 1:I) {
+            for (j in 1:J) {
+                int idx = (i-1)*J + j;
+                int base_idx = j;  // use i=1 row
+                rating_probs[idx] = rating_probs[base_idx];
+                rating_cumprobs[idx] = rating_cumprobs[base_idx];
+            }
+        }
+    } else if (hold_I_constant == 0 && hold_J_constant == 1) {
+        // Depend only on attribute i
+        // For each i, sample once at j=1 and copy across all j
+        for (i in 1:I) {
+            int base_idx = (i-1)*J + 1;  // j=1
+            rating_probs[base_idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
+            rating_cumprobs[base_idx] = cumulative_sum(rating_probs[base_idx]);
+        }
+        for (i in 1:I) {
+            for (j in 1:J) {
+                int idx = (i-1)*J + j;
+                int base_idx = (i-1)*J + 1;  // j=1 for this i
+                rating_probs[idx] = rating_probs[base_idx];
+                rating_cumprobs[idx] = rating_cumprobs[base_idx];
+            }
+        }
+    } else {
+        // Full I,J dependence (default behavior)
+        for (i in 1:I) {
+            for (j in 1:J) {
+                int idx = (i-1)*J + j;
+                rating_probs[idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
+                rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
+            }
         }
     }
     
@@ -111,9 +236,22 @@ generated quantities {
     // ===== GENERATE TRAINING INSTANCE =====
     
     // Generate training item embeddings: e_k_train ~ N(0,I)
-    for (k in 1:K_train) {
-        for (d in 1:D) {
-            train_embeddings[k, d] = normal_rng(0, 1);
+    if (hold_K_constant == 1) {
+        // Single shared item embedding across all training items (no K-dependence)
+        {
+            row_vector[D] shared_train_embedding;
+            for (d in 1:D) {
+                shared_train_embedding[d] = normal_rng(0, 1);
+            }
+            for (k in 1:K_train) {
+                train_embeddings[k] = shared_train_embedding;
+            }
+        }
+    } else {
+        for (k in 1:K_train) {
+            for (d in 1:D) {
+                train_embeddings[k, d] = normal_rng(0, 1);
+            }
         }
     }
     
@@ -130,9 +268,22 @@ generated quantities {
     // ===== GENERATE TEST INSTANCE =====
     
     // Generate test item embeddings: e_k_test ~ N(0,I) - DIFFERENT from training
-    for (k in 1:K_test) {
-        for (d in 1:D) {
-            test_embeddings[k, d] = normal_rng(0, 1);
+    if (hold_K_constant == 1) {
+        // Single shared item embedding across all test items (no K-dependence)
+        {
+            row_vector[D] shared_test_embedding;
+            for (d in 1:D) {
+                shared_test_embedding[d] = normal_rng(0, 1);
+            }
+            for (k in 1:K_test) {
+                test_embeddings[k] = shared_test_embedding;
+            }
+        }
+    } else {
+        for (k in 1:K_test) {
+            for (d in 1:D) {
+                test_embeddings[k, d] = normal_rng(0, 1);
+            }
         }
     }
     

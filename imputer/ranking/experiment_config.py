@@ -32,6 +32,15 @@ class DataConfig:
     sigma_embedding_prior: float = 1.0
     sigma_preference_prior: float = 1.0
 
+    # Axis invariance controls for easy-data sanity experiments.
+    # When a flag is True, ratings should NOT depend on that axis:
+    # - hold_I_constant=True  -> no dependence on criteria/attributes i
+    # - hold_J_constant=True  -> no dependence on annotator j
+    # - hold_K_constant=True  -> no dependence on item k
+    hold_I_constant: bool = False
+    hold_J_constant: bool = False
+    hold_K_constant: bool = False
+
     # Pairwise ranking limits
     max_pairs_per_tied_group: int = 10
     min_group_size: int = 2

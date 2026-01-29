@@ -56,6 +56,9 @@ def generate_data(config: DataGenConfig, stan_file: Optional[str] = None) -> Gro
         "sigma_measurement": config.sigma_measurement,
         "alpha_dirichlet": config.alpha_dirichlet,
         "temperature": config.temperature,
+        "hold_I_constant": 1 if config.hold_I_constant else 0,
+        "hold_J_constant": 1 if config.hold_J_constant else 0,
+        "hold_K_constant": 1 if config.hold_K_constant else 0,
     }
 
     # Sample with fixed parameters (data generation)

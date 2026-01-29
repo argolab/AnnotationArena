@@ -20,6 +20,18 @@ class DataGenConfig:
     alpha_dirichlet: float = 2.0
     temperature: float = 0.5
 
+    # Axis invariance controls for easy-data sanity experiments
+    # When a flag is True, ratings should NOT depend on that axis:
+    # - hold_I_constant=True  -> no dependence on criteria/attributes i
+    # - hold_J_constant=True  -> no dependence on annotator j
+    # - hold_K_constant=True  -> no dependence on item k
+    #
+    # The Stan generator implements this by tying embeddings / rating
+    # probabilities / item embeddings across the corresponding indices.
+    hold_I_constant: bool = False
+    hold_J_constant: bool = False
+    hold_K_constant: bool = False
+
     # Observation protocol
     observation_protocol: str = "tie_breaking"  # "tie_breaking", "mcar", "extended_rankings"
     mcar_missing_rate: float = 0.5  # Missing rate for MCAR protocol (was mar_missing_rate)

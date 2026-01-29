@@ -16,6 +16,12 @@ data {
     real<lower=0> sigma_measurement;
     real<lower=0> alpha_dirichlet;
     real<lower=0> temperature;
+
+    // Axis invariance controls (currently unused in extended rankings generator,
+    // but included for compatibility with DataGenConfig / generate_data.py).
+    int<lower=0, upper=1> hold_I_constant;
+    int<lower=0, upper=1> hold_J_constant;
+    int<lower=0, upper=1> hold_K_constant;
 }
 
 generated quantities {
