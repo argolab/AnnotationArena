@@ -51,6 +51,7 @@ class MultiVariableImputer(nn.Module):
                  use_final_norm=True,
                  normalize_parameter=False,
                  num_ffn_layers=4,
+                 d_ff=512,
                  temperature=1.0,
                  use_concat_embedding: bool = False,
                  batch_size: int = 1,
@@ -68,6 +69,7 @@ class MultiVariableImputer(nn.Module):
         self.use_gelu_after_attention = use_gelu_after_attention
         self.use_final_norm = use_final_norm
         self.num_ffn_layers = num_ffn_layers
+        self.d_ff = d_ff
         self.temperature = temperature
         self.use_concat_embedding = use_concat_embedding
         self.batch_size = batch_size
@@ -91,9 +93,9 @@ class MultiVariableImputer(nn.Module):
         param_dim = self.embedding_provider.parameter_dimension
         
         self.blocks = nn.ModuleList([
-            TransformerBlock(embedding_dim, param_dim, attention_heads, dropout, use_gelu_after_attention, 
+            TransformerBlock(embedding_dim, param_dim, attention_heads, dropout, use_gelu_after_attention,
                            normalize_parameter=normalize_parameter, num_ffn_layers=num_ffn_layers,
-                           enable_pointer_mechanism=enable_pointer_mechanism)
+                           enable_pointer_mechanism=enable_pointer_mechanism, d_ff=d_ff)
             for _ in range(encoder_layers_num)
         ])
 

@@ -83,11 +83,13 @@ class ImputerLightningModule(pl.LightningModule):
         max_epochs: int = 50,
         train_instance_callback=None,
         test_instance_callback=None,
+        extra_eval_callbacks=None,
     ):
         super().__init__()
         self.save_hyperparameters(ignore=['model', 'train_observed_vars', 'train_missing_vars',
                                           'test_variables', 'eval_engine', 'converter',
-                                          'build_predictives_fn', 'train_instance_callback', 'test_instance_callback'])
+                                          'build_predictives_fn', 'train_instance_callback', 'test_instance_callback',
+                                          'extra_eval_callbacks'])
         
         self.model = model
         self.train_observed_vars = train_observed_vars
@@ -95,6 +97,7 @@ class ImputerLightningModule(pl.LightningModule):
         self.test_variables = test_variables
         self.train_instance_callback = train_instance_callback
         self.test_instance_callback = test_instance_callback
+        self.extra_eval_callbacks = extra_eval_callbacks or []
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.masking_rate = masking_rate
@@ -569,7 +572,8 @@ class ImputerLightningModule(pl.LightningModule):
         }
         self.training_history.append(epoch_metrics)
 
-        for cb in [self.train_instance_callback, self.test_instance_callback]:
+        all_callbacks = [self.train_instance_callback, self.test_instance_callback] + self.extra_eval_callbacks
+        for cb in all_callbacks:
             if cb is None:
                 continue
             result = cb.on_epoch_end(self.model, self.current_epoch)
@@ -588,7 +592,14 @@ class ImputerLightningModule(pl.LightningModule):
             buf = convert_to_json_serializable(self.training_history)
             with open(run_path / "training_loss_history.json", "w") as f:
                 json.dump(buf, f, indent=2)
-        for instance_name in ("train_instance", "test_instance"):
+        # Collect all distinct instance names from callback history
+        instance_names = set()
+        instance_names.add("train_instance")
+        instance_names.add("test_instance")
+        for cb in self.extra_eval_callbacks:
+            if cb is not None:
+                instance_names.add(cb.instance_name)
+        for instance_name in sorted(instance_names):
             hist = [convert_to_json_serializable(e) for e in self.callback_history if e.get("instance") == instance_name]
             if not hist:
                 continue

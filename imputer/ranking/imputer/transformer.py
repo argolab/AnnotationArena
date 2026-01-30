@@ -63,8 +63,8 @@ class TransformerBlock(nn.Module):
       Padded tokens neither attend to others nor contribute to outputs.
     """
 
-    def __init__(self, feature_dim: int, param_dim: int, attention_heads: int, dropout: float = 0.3, use_gelu_after_attention: bool = False, 
-                 normalize_parameter: bool = False, num_ffn_layers: int = 4, enable_pointer_mechanism: bool = True):
+    def __init__(self, feature_dim: int, param_dim: int, attention_heads: int, dropout: float = 0.3, use_gelu_after_attention: bool = False,
+                 normalize_parameter: bool = False, num_ffn_layers: int = 4, enable_pointer_mechanism: bool = True, d_ff: int = 512):
         super().__init__()
         self.feature_dim = feature_dim
         self.param_dim = param_dim
@@ -108,7 +108,7 @@ class TransformerBlock(nn.Module):
         self.dropout_2 = nn.Dropout(dropout)
 
         # Full FFN on unified stream in model_dim space
-        self.ff = FeedForward(self.model_dim, dropout=dropout, num_layers=self.num_ffn_layers)
+        self.ff = FeedForward(self.model_dim, d_ff=d_ff, dropout=dropout, num_layers=self.num_ffn_layers)
 
         # Optional: collect attention distribution statistics for logging/debugging.
         # When enabled, the latest forward pass stats are stored in `last_attention_stats`.

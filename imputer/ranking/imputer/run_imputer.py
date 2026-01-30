@@ -50,6 +50,7 @@ def main():
     parser.add_argument("--embedding-dim", type=int, default=128, help="Embedding dimension (default: 128)")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate (default: 0.1)")
     parser.add_argument("--num_ffn_layers", type=int, default=4, help="FFN Layers")
+    parser.add_argument("--d-ff", type=int, default=512, help="FFN hidden dimension (default: 512)")
 
     # Loss weighting arguments
     parser.add_argument("--masked-loss-weight", type=float, default=8.0, help="Weight for masked entry loss (default: 8.0)")
@@ -201,6 +202,7 @@ def main():
         use_final_norm=args.use_final_norm,
         normalize_parameter=args.normalize_parameter,
         num_ffn_layers=args.num_ffn_layers,
+        d_ff=args.d_ff,
         temperature=args.temperature,
         use_concat_embedding=bool(args.use_concat_embedding),
         batch_size=args.batch_size,
@@ -359,7 +361,7 @@ def main():
     
     # Initialize evaluation engine
     eval_engine = EvaluationEngine()
-    
+
     # Set up Lightning trainer
     test_instance_callback = EvaluationCallback(
         eval_engine=eval_engine,
@@ -379,6 +381,45 @@ def main():
             name="train_instance",
             instance_name="train_instance",
         )
+
+    # Annotator-split evaluation callbacks for test instance
+    # Partition annotators: train-only (0..J/3-1), overlap (J/3..2J/3-1), test-only (2J/3..J-1)
+    # These use 0-indexed annotator IDs (RankingData uses 0-indexed)
+    extra_eval_callbacks = []
+    J = sizes["num_annotators"]
+    train_only_end = J // 3          # exclusive: train-only annotators are 0..train_only_end-1
+    test_only_start = (2 * J) // 3   # inclusive: test-only annotators are test_only_start..J-1
+    # Note: overlap annotators are train_only_end..test_only_start-1
+
+    # Filter test_all by annotator group
+    test_overlap_vars = [v for v in test_all if train_only_end <= v.annotator_id < test_only_start]
+    test_testonly_vars = [v for v in test_all if v.annotator_id >= test_only_start]
+
+    if is_rank0:
+        print(f"Annotator split (J={J}): train-only=0..{train_only_end-1}, "
+              f"overlap={train_only_end}..{test_only_start-1}, test-only={test_only_start}..{J-1}")
+        print(f"  test_overlap_vars: {len(test_overlap_vars)} variables")
+        print(f"  test_testonly_vars: {len(test_testonly_vars)} variables")
+
+    if test_overlap_vars:
+        extra_eval_callbacks.append(EvaluationCallback(
+            eval_engine=eval_engine,
+            test_variables=test_overlap_vars,
+            converter=converter,
+            device=args.device,
+            name="test_overlap",
+            instance_name="test_overlap",
+        ))
+    if test_testonly_vars:
+        extra_eval_callbacks.append(EvaluationCallback(
+            eval_engine=eval_engine,
+            test_variables=test_testonly_vars,
+            converter=converter,
+            device=args.device,
+            name="test_testonly",
+            instance_name="test_testonly",
+        ))
+
     lightning_module = ImputerLightningModule(
         model=model,
         train_observed_vars=train_vars,
@@ -401,6 +442,7 @@ def main():
         max_epochs=args.epochs,
         train_instance_callback=train_instance_callback,
         test_instance_callback=test_instance_callback,
+        extra_eval_callbacks=extra_eval_callbacks,
     )
     # Device / strategy configuration
     trainer_kwargs: Dict[str, Any] = {}
