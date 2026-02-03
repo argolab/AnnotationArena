@@ -521,15 +521,27 @@ def main():
         )
         
         # Register evaluation callbacks
-        trainer.register_callback(
-            EvaluationCallback(
-                eval_engine=eval_engine,
-                test_variables=test_all,
-                converter=converter,
-                device=args.device,
-                name="test_all_evaluation",
+        if args.include_train_observed:
+            trainer.register_callback(
+                EvaluationCallback(
+                    eval_engine=eval_engine,
+                    test_variables=train_observed+test_all,
+                    converter=converter,
+                    device=args.device,
+                    name="test_all_evaluation",
+                    train_indices=[i for i in range(len(train_observed))]
+                )
             )
-        )
+        else:
+            trainer.register_callback(
+                EvaluationCallback(
+                    eval_engine=eval_engine,
+                    test_variables=test_all,
+                    converter=converter,
+                    device=args.device,
+                    name="test_all_evaluation",
+                )
+            )
 
         # Only register train_all evaluation if:
         # 1. Not in test-only mode
@@ -641,7 +653,7 @@ def main():
 
     # Evaluate
     if args.include_train_observed:
-        results = eval_engine.evaluate_model(model=model, variables=train_vars+test_all, converter=converter, device=args.device, train_indices=[i for i in range(len(train_vars))])
+        results = eval_engine.evaluate_model(model=model, variables=train_observed+test_all, converter=converter, device=args.device, train_indices=[i for i in range(len(train_observed))])
     else:
         results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device)
     # Output (using the same run_dir created earlier)
