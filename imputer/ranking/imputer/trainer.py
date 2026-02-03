@@ -12,12 +12,13 @@ from tqdm import tqdm
 class EvaluationCallback:
     """Callback for evaluation during training (no masking during eval)."""
 
-    def __init__(self, eval_engine, test_variables, converter, device='cuda', name='EvaluationCallback'):
+    def __init__(self, eval_engine, test_variables, converter, device='cuda', name='EvaluationCallback', train_indices=None):
         self.eval_engine = eval_engine
         self.test_variables = test_variables
         self.converter = converter
         self.device = device
         self.name = name
+        self.train_indices = train_indices
 
     def on_epoch_end(self, model, epoch):
         try:
@@ -25,7 +26,8 @@ class EvaluationCallback:
                 model=model,
                 variables=self.test_variables,
                 converter=self.converter,
-                device=self.device
+                device=self.device,
+                train_indices=self.train_indices
             )
             return {
                 'epoch': epoch,

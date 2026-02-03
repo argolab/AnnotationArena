@@ -200,6 +200,8 @@ def create_init_from_ground_truth(
         "annotator_preferences": bundle.annotator_preferences,
         "rating_probs": bundle.rating_probs,
     }
+
+    print('Initial values: ', init_values)
     
     return init_values
 
@@ -236,7 +238,7 @@ def run_mcmc_inference(
     logger.info(f"Preparing initialization with strategy: {inference_config.init_strategy}")
     if inference_config.init_strategy == "ground_truth":
         init_values = create_init_from_ground_truth(bundle, config, use_train_only, use_test_only)
-        init = [init_values] * inference_config.chains
+        init = init_values
         logger.info(f"Using ground truth initialization for {inference_config.chains} chains")
     elif inference_config.init_strategy == "file" and inference_config.init_file:
         init = inference_config.init_file
@@ -262,7 +264,7 @@ def run_mcmc_inference(
         max_treedepth=inference_config.max_treedepth,
         inits=init,
         show_progress=inference_config.show_progress,
-        show_console=True
+        show_console=False
     )
     
     logger.info("MCMC sampling completed successfully")

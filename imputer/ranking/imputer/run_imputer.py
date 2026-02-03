@@ -138,6 +138,8 @@ def main():
     parser.add_argument("--early-stopping-min-delta", type=float, default=1e-4, help="Minimum change to qualify as improvement (default: 1e-4)")
     parser.add_argument("--overwrite-existing-data", action="store_true", help="Overwrite existing output directory if it exists")
 
+    parser.add_argument("--include-train-observed", type=bool, default=False, help="Whether to include train observed in the marformer when evaluating")
+
     args = parser.parse_args()
 
     # Check for mutually exclusive flags
@@ -272,15 +274,28 @@ def main():
 
     # Register evaluation callback on test set (runs each epoch)
     eval_engine = EvaluationEngine()
-    trainer.register_callback(
-        EvaluationCallback(
-            eval_engine=eval_engine,
-            test_variables=test_all,
-            converter=converter,
-            device=args.device,
-            name="test_all_evaluation",
+    if args.include_train_observed:
+        trainer.register_callback(
+            EvaluationCallback(
+                eval_engine=eval_engine,
+                test_variables=train_observed+test_all,
+                converter=converter,
+                device=args.device,
+                name="test_all_evaluation",
+                train_indices=[i for i in range(len(train_observed))]
+            )
         )
-    )
+    else:
+        trainer.register_callback(
+            EvaluationCallback(
+                eval_engine=eval_engine,
+                test_variables=test_all,
+                converter=converter,
+                device=args.device,
+                name="test_all_evaluation",
+                train_indices=None
+            )
+        )
 
     # Only register train_all evaluation if not in test-only mode
     if not args.test_only_training:
@@ -430,8 +445,10 @@ def main():
     print(f"Saved training history to {run_dir}")
 
     # Evaluate
-    results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device)
-
+    if args.include_train_observed:
+        results = eval_engine.evaluate_model(model=model, variables=train_vars+test_all, converter=converter, device=args.device, train_indices=[i for i in range(len(train_vars))])
+    else:
+        results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device)
     # Output (using the same run_dir created earlier)
 
     # Save model - extract config directly from the trained model

@@ -48,7 +48,7 @@ STAN_4C_ITER_SAMPLING=300
 STAN_4C_WARMUP=100
 
 # Run name (auto-generated if empty)
-RUN_NAME="no_random_marformer_without_train"  # Leave empty for auto-generated name, or specify custom name
+RUN_NAME="no_random_marformer"  # Leave empty for auto-generated name, or specify custom name
 
 # ============================================
 # EXPERIMENT PIPELINE
@@ -120,7 +120,7 @@ if [ "$MARFORMER_FULL_RANDOM" == "1" ]; then
 
     # Step 1: Generate data
     echo "[Step 1/6] Generating data..."
-    python stan/scripts/generate_data.py \
+    PYTHONPATH=. python stan/scripts/generate_data.py \
         --K-train $BASE_K_TRAIN \
         --K-test $BASE_K_TEST \
         --I $BASE_I \
@@ -140,62 +140,39 @@ if [ "$MARFORMER_FULL_RANDOM" == "1" ]; then
     exit 1
     fi
 
-    # Step 2: Run Marformer
-    echo "[Step 2/6] Running Marformer..."
-MARFORMER_ARGS="--data-dir OUTPUT/generated_data/${RUN_NAME} \
-    --run-name ${RUN_NAME}_marformer \
-        --overwrite-existing-data \
-    --embedding-dim $((BASE_D * 3)) \
-        --epochs $MARFORMER_EPOCHS \
-        --lr $MARFORMER_LR \
-        --masking-rate $MARFORMER_MASKING_RATE \
-        --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \
-        --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \
-        --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \
-        --transductive_learning \
-        --no-final-norm \
-        --normalize-parameter \
-        --device $MARFORMER_DEVICE \
-    $EARLY_STOPPING_FLAGS \
-    $FULL_RANDOM_FLAG \
-    $CONCAT_FLAG"
-
-python imputer/run_imputer.py $MARFORMER_ARGS </dev/null
-
-    if [ $? -ne 0 ]; then
-    echo "ERROR: Marformer training failed"
-    exit 1
-    fi
 
     # Step 3: Run Stan inference (4 chains)
     echo "[Step 3/6] Running Stan inference (4 chains)..."
     python stan/scripts/run_inference.py \
     --data-bundle OUTPUT/generated_data/${RUN_NAME}/data_bundle.json \
         --chains $STAN_4C_CHAINS \
-        --iter-sampling $STAN_4C_ITER_SAMPLING \
-        --iter-warmup $STAN_4C_WARMUP \
-    --run-name ${RUN_NAME}_stan4c \
-        --overwrite-existing-data </dev/null
+        --iter-sampling 100 \
+        --iter-warmup 300 \
+        --run-name ${RUN_NAME}_stan4c_gt \
+        --overwrite-existing-data \
+        --init-strategy ground_truth \
+        #--overwrite-existing-data \
 
     if [ $? -ne 0 ]; then
     echo "ERROR: Stan inference (4 chains) failed"
     exit 1
     fi
 
-    # Step 4: Run Stan inference (1 chain, long)
-    echo "[Step 4/6] Running Stan inference (1 chain, long)..."
+    echo "[Step 3/6] Running Stan inference (4 chains)..."
     python stan/scripts/run_inference.py \
     --data-bundle OUTPUT/generated_data/${RUN_NAME}/data_bundle.json \
-        --chains $STAN_1C_CHAINS \
-        --iter-sampling $STAN_1C_ITER_SAMPLING \
-        --iter-warmup $STAN_1C_WARMUP \
-    --run-name ${RUN_NAME}_stan1c \
-        --overwrite-existing-data </dev/null
+        --chains $STAN_4C_CHAINS \
+        --iter-sampling 100 \
+        --iter-warmup 300 \
+        --run-name ${RUN_NAME}_stan4c \
+        --overwrite-existing-data \
+        #--overwrite-existing-data \
 
     if [ $? -ne 0 ]; then
-    echo "ERROR: Stan inference (1 chain) failed"
+    echo "ERROR: Stan inference (4 chains) failed"
     exit 1
     fi
+
 
     # Step 5: Evaluate Stan predictions (4-chain version)
     echo "[Step 5/6] Evaluating Stan predictions (4 chains)..."
@@ -205,29 +182,19 @@ python imputer/run_imputer.py $MARFORMER_ARGS </dev/null
     --run-name ${RUN_NAME}_stan4c_eval \
         --overwrite-existing-data </dev/null
 
+    echo "[Step 5/6] Evaluating Stan predictions with GT (4 chains)..."
+    python stan/scripts/evaluate_predictions.py \
+    --data-bundle OUTPUT/generated_data/${RUN_NAME}/data_bundle.json \
+    --mcmc-dir OUTPUT/domain_model/runs/${RUN_NAME}_stan4c_gt \
+    --run-name ${RUN_NAME}_stan4c_gt_eval \
+        --overwrite-existing-data </dev/null
+
     if [ $? -ne 0 ]; then
     echo "ERROR: Stan evaluation (4 chains) failed"
     exit 1
     fi
 
-    # Step 5b: Evaluate Stan predictions (1-chain version)
-    echo "[Step 5b/6] Evaluating Stan predictions (1 chain)..."
-    python stan/scripts/evaluate_predictions.py \
-    --data-bundle OUTPUT/generated_data/${RUN_NAME}/data_bundle.json \
-    --mcmc-dir OUTPUT/domain_model/runs/${RUN_NAME}_stan1c \
-    --run-name ${RUN_NAME}_stan1c_eval \
-        --overwrite-existing-data </dev/null
 
-    if [ $? -ne 0 ]; then
-    echo "ERROR: Stan evaluation (1 chain) failed"
-    exit 1
-    fi
-
-    # Step 6: Generate visualization plots
-    echo "[Step 6/6] Generating visualization plots..."
-    python utils/visualize.py \
-    --run-dir OUTPUT/IMPUTER/${RUN_NAME}_marformer \
-    --stan-metrics OUTPUT/domain_model/eval/${RUN_NAME}_stan4c_eval/predictive_metrics.json </dev/null
 
 if [ $? -ne 0 ]; then
     echo "WARNING: Visualization failed (continuing anyway)"
@@ -244,9 +211,6 @@ echo ""
 echo "Results saved in:"
 echo "  - Data: OUTPUT/generated_data/${RUN_NAME}"
 echo "  - Marformer: OUTPUT/IMPUTER/${RUN_NAME}_marformer"
-echo "  - Stan (4c): OUTPUT/domain_model/runs/${RUN_NAME}_stan4c"
-echo "  - Stan (4c) Eval: OUTPUT/domain_model/eval/${RUN_NAME}_stan4c_eval"
-echo "  - Stan (1c): OUTPUT/domain_model/runs/${RUN_NAME}_stan1c"
-echo "  - Stan (1c) Eval: OUTPUT/domain_model/eval/${RUN_NAME}_stan1c_eval"
-echo "  - Plots: OUTPUT/IMPUTER/${RUN_NAME}_marformer/plots/"
+echo "  - Stan (4c): OUTPUT/domain_model/runs/${RUN_NAME}_stan4c_gt"
+echo "  - Stan (4c) Eval: OUTPUT/domain_model/eval/${RUN_NAME}_stan4c_gt_eval"
 echo "=============================================="

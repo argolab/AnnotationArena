@@ -65,7 +65,7 @@ def generate_data(config: DataGenConfig, stan_file: Optional[str] = None) -> Gro
         chains=1,
         iter_sampling=1,
         seed=config.seed,
-        show_console=True
+        show_console=False
     )
 
     # Extract generated quantities
