@@ -276,18 +276,24 @@ class TopLayerPredictionResult:
 
 
 def adapt_batched_logits_to_predictions(logits: Dict[str, torch.Tensor]) -> List[TopLayerPredictionResult]:
-    """Convert batched model logits dict {'rating': [B,N,C], 'ranking': [B,N,R]} to per-variable predictions for B==1.
+    """Convert batched model logits dict {'rating': [B,N,C], 'ranking': [B,N,R]} to per-variable predictions.
+    
+    For B > 1, averages logits over the batch dimension before creating predictions.
 
     This adapter pairs naturally with a List[RankingData] of length N used as references.
     """
     rating = logits['rating']  # [B,N,C]
     ranking = logits['ranking']  # [B,N,R]
-    assert rating.shape[0] == 1 and ranking.shape[0] == 1, "Adapter expects batch size 1"
-    N = rating.shape[1]
+    B, N = rating.shape[0], rating.shape[1]
+    
+    # Average over batch dimension
+    rating_avg = rating.mean(dim=0)  # [N, C]
+    ranking_avg = ranking.mean(dim=0)  # [N, R]
+    
     out: List[TopLayerPredictionResult] = []
     for i in range(N):
         pr = TopLayerPredictionResult()
-        pr.rating_logits = rating[0, i]
-        pr.ranking_logits = ranking[0, i]
+        pr.rating_logits = rating_avg[i]
+        pr.ranking_logits = ranking_avg[i]
         out.append(pr)
     return out

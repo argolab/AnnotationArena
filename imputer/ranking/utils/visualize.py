@@ -23,6 +23,7 @@ def load_run_data(run_dir: Path) -> Dict[str, Any]:
     # Load training histories
     test_history_path = run_dir / "test_training_history.json"
     train_history_path = run_dir / "train_training_history.json"
+    training_loss_history_path = run_dir / "training_loss_history.json"
 
     if test_history_path.exists():
         with open(test_history_path, 'r') as f:
@@ -31,6 +32,12 @@ def load_run_data(run_dir: Path) -> Dict[str, Any]:
     if train_history_path.exists():
         with open(train_history_path, 'r') as f:
             data['train_history'] = json.load(f)
+    
+    # Load actual training loss history (per-epoch training losses)
+    # This takes precedence over train_history for plotting training loss curves
+    if training_loss_history_path.exists():
+        with open(training_loss_history_path, 'r') as f:
+            data['training_loss_history'] = json.load(f)
 
     # Load predictions
     predictives_path = run_dir / "predictives.json"
@@ -64,20 +71,42 @@ def load_stan_metrics(stan_path: Optional[Path]) -> Optional[Dict[str, float]]:
 
 def plot_learning_curves_train(train_history: List[Dict], stan_metrics: Optional[Dict], output_dir: Path):
     """Plot learning curves for training set (observed, missing, overall)."""
+    if not train_history:
+        print("Warning: No training history data to plot")
+        return
+    
     epochs = [entry['epoch'] for entry in train_history]
 
-    # Extract metrics
-    overall_loss = [entry['rating_loss'] for entry in train_history]
-    overall_acc = [entry['rating_accuracy'] for entry in train_history]
-    overall_rmse = [entry['rating_rmse'] for entry in train_history]
+    # Check if this is the simple training_loss_history format (from trainer) or the detailed format (from callbacks)
+    has_observed_metrics = 'observed_metrics' in train_history[0] if train_history else False
+    
+    if has_observed_metrics:
+        # Detailed format from callbacks (evaluation metrics)
+        overall_loss = [entry['rating_loss'] for entry in train_history]
+        overall_acc = [entry['rating_accuracy'] for entry in train_history]
+        overall_rmse = [entry['rating_rmse'] for entry in train_history]
 
-    observed_loss = [entry['observed_metrics']['rating_loss'] for entry in train_history]
-    observed_acc = [entry['observed_metrics']['rating_accuracy'] for entry in train_history]
-    observed_rmse = [entry['observed_metrics']['rating_rmse'] for entry in train_history]
+        observed_loss = [entry['observed_metrics']['rating_loss'] for entry in train_history]
+        observed_acc = [entry['observed_metrics']['rating_accuracy'] for entry in train_history]
+        observed_rmse = [entry['observed_metrics']['rating_rmse'] for entry in train_history]
 
-    missing_loss = [entry['missing_metrics']['rating_loss'] for entry in train_history]
-    missing_acc = [entry['missing_metrics']['rating_accuracy'] for entry in train_history]
-    missing_rmse = [entry['missing_metrics']['rating_rmse'] for entry in train_history]
+        missing_loss = [entry['missing_metrics']['rating_loss'] for entry in train_history]
+        missing_acc = [entry['missing_metrics']['rating_accuracy'] for entry in train_history]
+        missing_rmse = [entry['missing_metrics']['rating_rmse'] for entry in train_history]
+    else:
+        # Simple format from trainer (actual training losses)
+        overall_loss = [entry.get('rating_loss', 0.0) for entry in train_history]
+        overall_acc = [entry.get('rating_accuracy', 0.0) for entry in train_history]
+        overall_rmse = [entry.get('rating_rmse', 0.0) for entry in train_history]
+        
+        # For simple format, we only have overall metrics, so use them for all
+        observed_loss = overall_loss
+        observed_acc = overall_acc
+        observed_rmse = overall_rmse
+        
+        missing_loss = overall_loss
+        missing_acc = overall_acc
+        missing_rmse = overall_rmse
 
     # Plot 1: Rating Loss (Train)
     fig, ax = plt.subplots(figsize=(10, 6))
@@ -497,9 +526,13 @@ def main():
 
     # Generate plots
     print("\nGenerating learning curves...")
-    if 'train_history' in data:
+    # Use training_loss_history if available (actual training losses), otherwise use train_history (evaluation metrics)
+    if 'training_loss_history' in data:
+        plot_learning_curves_train(data['training_loss_history'], stan_metrics, plots_dir)
+        print("  - Train learning curves saved (from training_loss_history)")
+    elif 'train_history' in data:
         plot_learning_curves_train(data['train_history'], stan_metrics, plots_dir)
-        print("  - Train learning curves saved")
+        print("  - Train learning curves saved (from train_history)")
 
     if 'test_history' in data:
         plot_learning_curves_test(data['test_history'], stan_metrics, plots_dir)

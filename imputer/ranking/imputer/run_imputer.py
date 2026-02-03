@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Dict, Any, List
 
 import torch
+import numpy as np
 import time
 
 from imputer.data import DataConverter, RankingData
@@ -15,6 +16,46 @@ import sys
 sys.path.insert(0, "..")
 from stan.pipeline.bundle import GroundTruthBundle
 from stan.pipeline.io import new_run_dir, save_test_metrics, save_predictives
+
+# Try to import Lightning (optional)
+try:
+    from imputer.lightning_trainer import ImputerLightningModule, create_lightning_trainer
+    LIGHTNING_AVAILABLE = True
+except ImportError:
+    LIGHTNING_AVAILABLE = False
+    ImputerLightningModule = None
+    create_lightning_trainer = None
+
+
+def _convert_to_json_serializable(obj: Any) -> Any:
+    """Convert PyTorch tensors and other non-serializable objects to native Python types."""
+    if isinstance(obj, torch.Tensor):
+        # Convert tensor to Python scalar or list
+        if obj.numel() == 1:
+            return obj.item()
+        else:
+            return obj.tolist()
+    elif isinstance(obj, (np.integer, np.floating)):
+        return obj.item()
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, dict):
+        return {key: _convert_to_json_serializable(value) for key, value in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [_convert_to_json_serializable(item) for item in obj]
+    elif obj is None:
+        return None
+    else:
+        # Try to convert to native type if possible
+        try:
+            if isinstance(obj, (int, float, str, bool)):
+                return obj
+            # Try to get item() if it has it (like numpy scalars)
+            if hasattr(obj, 'item'):
+                return obj.item()
+        except:
+            pass
+        return obj
 
 
 def _sizes_from_configs(configs: Dict[str, Any]) -> Dict[str, int]:
@@ -91,12 +132,15 @@ def main():
     parser.add_argument("--epochs", type=int, default=50)
     parser.add_argument("--masking-rate", type=float, default=0.15)
     parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--weight-decay", type=float, default=0.01, help="AdamW weight decay (L2 regularization, default: 0.01)")
     parser.add_argument("--device", default="cuda")
     parser.add_argument("--max-rank-size", type=int, default=2)
     parser.add_argument("--transductive_learning", action="store_true")
     parser.add_argument("--full_random", action="store_true")
     parser.add_argument("--save-checkpoints", action="store_true", help="Save model checkpoints during training")
-    parser.add_argument("--checkpoint-every", type=int, default=10, help="Save checkpoint every N epochs")
+    parser.add_argument("--checkpoint-every", type=int, default=5, help="Save checkpoint every N epochs (default: 5)")
+    parser.add_argument("--save-model-every", type=int, default=None, help="Save model.pt every N epochs (default: None, only at end)")
+    parser.add_argument("--save-best-model", action="store_true", help="Save best model when early stopping is enabled")
     parser.add_argument("--train-all-observed", action="store_true",
                         help="Convert all training missing to observed for artificial masking (more training data)")
     parser.add_argument("--test-only-training", action="store_true",
@@ -127,6 +171,12 @@ def main():
         default=False,
         help="Use concatenation-based AtomCompositional embedding instead of projection mixing",
     )
+    parser.add_argument(
+        "--use-random-as-key",
+        action="store_true",
+        default=False,
+        help="Use random dimensions as keys: include in Q/K (pointer behavior) but zero in V (no content)",
+    )
 
     # Temperature scaling for calibration
     parser.add_argument("--temperature", type=float, default=1.0, help="Temperature for scaling logits (T > 1 softens predictions, default: 1.0)")
@@ -139,6 +189,20 @@ def main():
     parser.add_argument("--overwrite-existing-data", action="store_true", help="Overwrite existing output directory if it exists")
 
     parser.add_argument("--include-train-observed", type=bool, default=False, help="Whether to include train observed in the marformer when evaluating")
+    
+    # Training framework selection
+    parser.add_argument("--use-lightning", action="store_true", help="Use PyTorch Lightning for training (simplified, with built-in TensorBoard)")
+    
+    # Gradient clipping
+    parser.add_argument("--gradient-clip-val", type=float, default=0.0, help="Gradient clipping value (0 = no clipping, default: 0)")
+    
+    # Learning rate scheduler
+    parser.add_argument("--use-cosine-schedule", action="store_true", help="Use warmup + cosine annealing scheduler")
+    parser.add_argument("--warmup-steps", type=int, default=100, help="Number of warmup steps for scheduler (default: 100)")
+    
+    # Fresh random batching
+    parser.add_argument("--fresh-random-batch-size", type=int, default=1, 
+                        help="Batch size for fresh random embeddings (1=no batching, >1=batch different randomness, default: 1)")
 
     args = parser.parse_args()
 
@@ -253,6 +317,8 @@ def main():
         num_ffn_layers=args.num_ffn_layers,
         temperature=args.temperature,
         use_concat_embedding=bool(args.use_concat_embedding),
+        use_random_as_key=args.use_random_as_key,
+        fresh_random_batch_size=args.fresh_random_batch_size,
     )
 
     # Print temperature scaling status
@@ -260,54 +326,44 @@ def main():
         print(f"Temperature scaling enabled: T = {args.temperature:.2f} (T > 1 softens predictions, T < 1 sharpens)")
     else:
         print("Temperature scaling disabled (T = 1.0)")
-
-    # Trainer
-    trainer = ImputerTrainer(
-        model=model,
-        learning_rate=args.lr,
-        device=args.device,
-        masked_loss_weight=args.masked_loss_weight,
-        observed_loss_weight=args.observed_loss_weight,
-        checkpoint_dir=None,  # Will be set later if checkpoints are enabled
-        save_checkpoints=False,  # Will be set later if checkpoints are enabled
-    )
-
-    # Register evaluation callback on test set (runs each epoch)
-    eval_engine = EvaluationEngine()
-    if args.include_train_observed:
-        trainer.register_callback(
-            EvaluationCallback(
-                eval_engine=eval_engine,
-                test_variables=train_observed+test_all,
-                converter=converter,
-                device=args.device,
-                name="test_all_evaluation",
-                train_indices=[i for i in range(len(train_observed))]
-            )
-        )
+    
+    # Print gradient clipping status
+    if args.gradient_clip_val > 0:
+        print(f"Gradient clipping enabled: clip_val = {args.gradient_clip_val}")
     else:
-        trainer.register_callback(
-            EvaluationCallback(
-                eval_engine=eval_engine,
-                test_variables=test_all,
-                converter=converter,
-                device=args.device,
-                name="test_all_evaluation",
-                train_indices=None
-            )
-        )
+        print("Gradient clipping disabled")
+    
+    # Print scheduler status
+    if args.use_cosine_schedule:
+        print(f"Warmup + Cosine scheduler enabled: warmup_steps = {args.warmup_steps}")
+    else:
+        print("Learning rate scheduler disabled (constant learning rate)")
+    
+    # Print fresh random batching status
+    if args.fresh_random_batch_size > 1:
+        print(f"Fresh random batching enabled: batch_size = {args.fresh_random_batch_size}")
+    else:
+        print("Fresh random batching disabled (batch_size = 1)")
 
-    # Only register train_all evaluation if not in test-only mode
-    if not args.test_only_training:
-        trainer.register_callback(
-            EvaluationCallback(
-                eval_engine=eval_engine,
-                test_variables=train_all,
-                converter=converter,
-                device=args.device,
-                name="train_all_evaluation",
-            )
-        )
+    # Check if using Lightning
+    use_lightning = args.use_lightning
+    if use_lightning and not LIGHTNING_AVAILABLE:
+        print("Warning: --use-lightning specified but PyTorch Lightning is not available.")
+        print("Install with: pip install pytorch-lightning")
+        print("Falling back to original trainer.")
+        use_lightning = False
+    
+    if use_lightning:
+        print("=" * 60)
+        print("Using PyTorch Lightning for training (with built-in TensorBoard)")
+        print("=" * 60)
+    else:
+        print("Using original trainer (no TensorBoard - use --use-lightning for TensorBoard)")
+    
+    # Trainer setup - will be configured after run_dir is created
+    trainer = None
+    lightning_module = None
+    lightning_trainer = None
 
     # Set up training variables
     if args.test_only_training:
@@ -316,8 +372,10 @@ def main():
     else:
         train_vars = train_vars_for_training
         if args.transductive_learning:
-            print("Using transductive learning")
+            print("Using transductive learning: training on train + test instances")
             train_vars += test_observed
+        else:
+            print("Standard learning: training only on train instances")
     
     # Create the main run directory first (before training)
     output_root = Path(args.output_root)
@@ -332,7 +390,8 @@ def main():
     
     run_dir = new_run_dir(output_root, run_name=args.run_name)
 
-    # Save train configuration snapshot next to outputs
+    # Save train configuration snapshot immediately after creating run_dir
+    # This ensures config is saved even if training fails early
     train_config = {
         "data": {
             "data_dir": str(data_dir),
@@ -355,11 +414,15 @@ def main():
             "include_sign_bit_in_params": True,
             "use_gelu_after_attention": args.use_gelu_after_attention,
             "use_final_norm": args.use_final_norm,
+            "normalize_parameter": args.normalize_parameter,
+            "num_ffn_layers": args.num_ffn_layers,
+            "use_concat_embedding": bool(args.use_concat_embedding),
             "temperature": args.temperature
         },
         "training": {
             "epochs": args.epochs,
             "lr": args.lr,
+            "weight_decay": args.weight_decay,
             "masking_rate": args.masking_rate,
             "train_all_observed": bool(args.train_all_observed),
             "test_only_training": bool(args.test_only_training),
@@ -376,6 +439,11 @@ def main():
             "early_stopping_metric": args.early_stopping_metric if args.early_stopping else None,
             "early_stopping_patience": args.early_stopping_patience if args.early_stopping else None,
             "early_stopping_min_delta": args.early_stopping_min_delta if args.early_stopping else None,
+            "gradient_clip_val": args.gradient_clip_val,
+            "use_cosine_schedule": bool(args.use_cosine_schedule),
+            "warmup_steps": args.warmup_steps if args.use_cosine_schedule else None,
+            "use_lightning": bool(use_lightning),
+            "fresh_random_batch_size": args.fresh_random_batch_size,
         },
         "run": {
             "run_dir": str(run_dir)
@@ -383,47 +451,163 @@ def main():
     }
     with open(run_dir / "train_config.json", "w") as f:
         json.dump(train_config, f, indent=2)
+    print(f"Saved train_config.json to {run_dir / 'train_config.json'}")
     
-    # Set up checkpoint directory if saving is enabled (using separate folder with _checkpoints suffix)
-    if args.save_checkpoints:
-        checkpoint_run_dir = Path(str(run_dir) + "_checkpoints")
-        checkpoint_run_dir.mkdir(parents=True, exist_ok=True)
-        checkpoint_dir = str(checkpoint_run_dir)
-        trainer.checkpoint_dir = checkpoint_dir
-        trainer.save_checkpoints = True
-        print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
-
-    # Set up early stopping if enabled
-    early_stopping = None
-    if args.early_stopping:
-        mode = "min" if args.early_stopping_metric == "loss" else "max"
-        early_stopping = EarlyStopping(
-            patience=args.early_stopping_patience,
-            min_delta=args.early_stopping_min_delta,
-            mode=mode
+    # Initialize evaluation engine
+    eval_engine = EvaluationEngine()
+    
+    # Set up trainer based on mode
+    if use_lightning:
+        # PyTorch Lightning setup
+        lightning_module = ImputerLightningModule(
+            model=model,
+            train_observed_vars=train_vars,
+            train_missing_vars=train_missing_for_trainer,
+            test_variables=test_all,
+            learning_rate=args.lr,
+            weight_decay=args.weight_decay,
+            masking_rate=args.masking_rate,
+            masked_loss_weight=args.masked_loss_weight,
+            observed_loss_weight=args.observed_loss_weight,
+            mask_augmentations=args.mask_augmentations,
+            decay_observed_weight=args.decay_observed_weight,
+            decay_observed_epochs=args.decay_observed_epochs,
+            eval_engine=eval_engine,
+            converter=converter,
+            build_predictives_fn=_build_predictives,
+            run_dir=str(run_dir),
+            early_stopping_metric=args.early_stopping_metric,
+            early_stopping_patience=args.early_stopping_patience if args.early_stopping else 10,
+            early_stopping_min_delta=args.early_stopping_min_delta if args.early_stopping else 1e-4,
+            use_cosine_schedule=args.use_cosine_schedule,
+            warmup_steps=args.warmup_steps,
+            max_epochs=args.epochs,
         )
-        print(f"Early stopping enabled:")
-        print(f"  Metric: test_missing_{args.early_stopping_metric}")
-        print(f"  Mode: {mode} (patience={args.early_stopping_patience}, min_delta={args.early_stopping_min_delta})")
+        
+        # Create Lightning trainer
+        lightning_trainer = create_lightning_trainer(
+            run_dir=str(run_dir),
+            max_epochs=args.epochs,
+            early_stopping=args.early_stopping,
+            early_stopping_metric=args.early_stopping_metric,
+            early_stopping_patience=args.early_stopping_patience,
+            early_stopping_min_delta=args.early_stopping_min_delta,
+            checkpoint_every=args.checkpoint_every if args.save_checkpoints else None,
+            save_top_k=1 if args.save_best_model else 0,
+            devices=1 if args.device == 'cuda' else None,
+            accelerator='gpu' if args.device == 'cuda' else 'cpu',
+            gradient_clip_val=args.gradient_clip_val if args.gradient_clip_val > 0 else None,
+        )
+    else:
+        # Original trainer setup
+        trainer = ImputerTrainer(
+            model=model,
+            learning_rate=args.lr,
+            weight_decay=args.weight_decay,
+            device=args.device,
+            masked_loss_weight=args.masked_loss_weight,
+            observed_loss_weight=args.observed_loss_weight,
+            checkpoint_dir=None,  # Will be set later if checkpoints are enabled
+            save_checkpoints=False,  # Will be set later if checkpoints are enabled
+            run_dir=str(run_dir),
+            eval_engine=eval_engine,
+            test_variables=test_all,
+            converter=converter,
+            build_predictives_fn=_build_predictives,
+            gradient_clip_val=args.gradient_clip_val,
+            use_cosine_schedule=args.use_cosine_schedule,
+            warmup_steps=args.warmup_steps,
+            max_epochs=args.epochs,
+        )
+        
+        # Register evaluation callbacks
+        trainer.register_callback(
+            EvaluationCallback(
+                eval_engine=eval_engine,
+                test_variables=test_all,
+                converter=converter,
+                device=args.device,
+                name="test_all_evaluation",
+            )
+        )
+
+        # Only register train_all evaluation if:
+        # 1. Not in test-only mode
+        # 2. Using transductive learning (to monitor train set performance during transductive training)
+        if not args.test_only_training and args.transductive_learning:
+            trainer.register_callback(
+                EvaluationCallback(
+                    eval_engine=eval_engine,
+                    test_variables=train_all,
+                    converter=converter,
+                    device=args.device,
+                    name="train_all_evaluation",
+                )
+            )
+    
+    # Set up checkpoint directory and early stopping for original trainer
+    if not use_lightning:
+        # Set up checkpoint directory if saving is enabled (using separate folder with _checkpoints suffix)
+        if args.save_checkpoints:
+            checkpoint_run_dir = Path(str(run_dir) + "_checkpoints")
+            checkpoint_run_dir.mkdir(parents=True, exist_ok=True)
+            checkpoint_dir = str(checkpoint_run_dir)
+            trainer.checkpoint_dir = checkpoint_dir
+            trainer.save_checkpoints = True
+            print(f"Checkpoint saving enabled. Checkpoints will be saved to: {checkpoint_dir}")
+        
+        # Set up model saving directory if periodic model saving or best model saving is enabled
+        if args.save_model_every is not None or args.save_best_model:
+            trainer.model_save_dir = str(run_dir)
+            if args.save_model_every is not None:
+                print(f"Model saving enabled. Models will be saved every {args.save_model_every} epochs to: {run_dir}")
+            if args.save_best_model:
+                print(f"Best model saving enabled. Best model will be saved when early stopping finds improvements.")
+
+        # Set up early stopping if enabled
+        early_stopping = None
+        if args.early_stopping:
+            mode = "min" if args.early_stopping_metric == "loss" else "max"
+            early_stopping = EarlyStopping(
+                patience=args.early_stopping_patience,
+                min_delta=args.early_stopping_min_delta,
+                mode=mode
+            )
+            print(f"Early stopping enabled:")
+            print(f"  Metric: test_missing_{args.early_stopping_metric}")
+            print(f"  Mode: {mode} (patience={args.early_stopping_patience}, min_delta={args.early_stopping_min_delta})")
 
     start_time = time.time()
 
     ###################################################################################################
     # Train
-    training_results = trainer.train(
-        train_observed_vars=train_vars,
-        train_missing_vars=train_missing_for_trainer,
-        masking_rate=args.masking_rate,
-        epochs=args.epochs,
-        call_callbacks_every=1,
-        save_checkpoints_every=args.checkpoint_every,
-        verbose=True,
-        mask_augmentations=args.mask_augmentations,
-        early_stopping=early_stopping,
-        early_stopping_metric=args.early_stopping_metric,
-        decay_observed_weight=args.decay_observed_weight,
-        decay_observed_epochs=args.decay_observed_epochs,
-    )
+    if use_lightning:
+        # PyTorch Lightning training
+        lightning_trainer.fit(lightning_module)
+        training_results = {
+            'training_history': lightning_module.training_history,
+            'callback_history': lightning_module.callback_history
+        }
+        # Get the trained model from the Lightning module
+        model = lightning_module.model
+    else:
+        # Original trainer
+        training_results = trainer.train(
+            train_observed_vars=train_vars,
+            train_missing_vars=train_missing_for_trainer,
+            masking_rate=args.masking_rate,
+            epochs=args.epochs,
+            call_callbacks_every=1,
+            save_checkpoints_every=args.checkpoint_every,
+            save_model_every=args.save_model_every,
+            save_best_model=args.save_best_model,
+            verbose=True,
+            mask_augmentations=args.mask_augmentations,
+            early_stopping=early_stopping,
+            early_stopping_metric=args.early_stopping_metric,
+            decay_observed_weight=args.decay_observed_weight,
+            decay_observed_epochs=args.decay_observed_epochs,
+        )
     ###################################################################################################
 
     running_time = time.time() - start_time
@@ -433,14 +617,25 @@ def main():
     callback_history = training_results.get('callback_history', [])
     test_history = [entry for entry in callback_history if entry.get('name') == 'test_all_evaluation']
 
+    # Convert to JSON-serializable format
+    serializable_test_history = _convert_to_json_serializable(test_history)
     with open(run_dir / "test_training_history.json", "w") as f:
-        json.dump(test_history, f, indent=2)
+        json.dump(serializable_test_history, f, indent=2)
 
-    # Only save train_training_history if not in test-only mode
-    if not args.test_only_training:
+    # Only save train_training_history if train_all_evaluation callback was registered
+    # (i.e., when using transductive learning and not in test-only mode)
+    if not args.test_only_training and args.transductive_learning:
         train_history = [entry for entry in callback_history if entry.get('name') == 'train_all_evaluation']
+        serializable_train_history = _convert_to_json_serializable(train_history)
         with open(run_dir / "train_training_history.json", "w") as f:
-            json.dump(train_history, f, indent=2)
+            json.dump(serializable_train_history, f, indent=2)
+    
+    # Save actual training loss history (per-epoch training losses)
+    training_loss_history = training_results.get('training_history', [])
+    if training_loss_history:
+        serializable_training_loss_history = _convert_to_json_serializable(training_loss_history)
+        with open(run_dir / "training_loss_history.json", "w") as f:
+            json.dump(serializable_training_loss_history, f, indent=2)
 
     print(f"Saved training history to {run_dir}")
 

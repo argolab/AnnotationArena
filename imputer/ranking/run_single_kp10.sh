@@ -10,14 +10,14 @@
 BASE_I=3
 BASE_J=12
 BASE_C=5
-BASE_K_TRAIN=10
-BASE_K_TEST=10
+BASE_K_TRAIN=20
+BASE_K_TEST=20
 
 # Data generation hyperparameters
 BASE_D=4
 BASE_SIGMA_ANNOTATOR=0.5
 BASE_SIGMA_MEASUREMENT=0.1
-BASE_KAPPA=1
+BASE_KAPPA=10
 BASE_PROTOCOL="tie_breaking"  # Options: "tie_breaking", "mcar", "extended_rankings"
 BASE_PROTOCOL_CODE="smar"     # For naming: "smar", "mcar05", "smarext"
 BASE_USE_CONCAT=0             # 0 = disabled, 1 = enabled for AtomCompositional embeddings
@@ -37,8 +37,14 @@ MARFORMER_EARLY_STOPPING_PATIENCE=10
 MARFORMER_DEVICE="cuda"
 MARFORMER_EARLY_STOPPING=false  # true = enable, false = disable (disabled for experiment: fix early stopping metric)
 MARFORMER_EARLY_STOPPING_METRIC="loss"  # "loss" or "accuracy"
-MARFORMER_FULL_RANDOM=1         # 0 = disable randomness, 1 = enable randomness
-MARFORMER_DROPOUT=0.1
+MARFORMER_FULL_RANDOM=0         # 0 = disable randomness, 1 = enable randomness
+
+MARFORMER_EMBEDDING_DIM=64
+MARFORMER_ENCODER_LAYERS=2
+MARFORMER_ATTENTION_HEADS=4
+MARFORMER_NUM_FFN_LAYERS=1
+MARFORMER_WEIGHT_DECAY=0.01
+MARFORMER_DROPOUT=0.1  # TODO: change to total dropout not just encoder dropout.
 
 # Stan hyperparameters
 STAN_4C_CHAINS=4
@@ -49,7 +55,7 @@ STAN_4C_ITER_SAMPLING=300
 STAN_4C_WARMUP=100
 
 # Run name (auto-generated if empty)
-RUN_NAME="marformer_kappa01_full_random"  # Leave empty for auto-generated name, or specify custom name
+RUN_NAME="marformer_highlr_norm"  # Leave empty for auto-generated name, or specify custom name
 
 # ============================================
 # EXPERIMENT PIPELINE
@@ -146,19 +152,22 @@ if [ "$MARFORMER_FULL_RANDOM" == "1" ]; then
 MARFORMER_ARGS="--data-dir OUTPUT/generated_data/${RUN_NAME} \
     --run-name ${RUN_NAME}_marformer \
         --overwrite-existing-data \
-    --embedding-dim $((BASE_D * 3)) \
+        --embedding-dim $MARFORMER_EMBEDDING_DIM \
+        --encoder-layers $MARFORMER_ENCODER_LAYERS \
+        --attention-heads $MARFORMER_ATTENTION_HEADS \
+        --num_ffn_layers $MARFORMER_NUM_FFN_LAYERS \
+        --weight-decay $MARFORMER_WEIGHT_DECAY \
+        --dropout $MARFORMER_DROPOUT \
         --epochs $MARFORMER_EPOCHS \
         --lr $MARFORMER_LR \
         --masking-rate $MARFORMER_MASKING_RATE \
         --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \
         --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \
         --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \
-        --transductive_learning \
         --no-final-norm \
         --normalize-parameter \
         --device $MARFORMER_DEVICE \
         --save-model-every 5 \
-        --dropout $MARFORMER_DROPOUT \
     $EARLY_STOPPING_FLAGS \
     $FULL_RANDOM_FLAG \
     $CONCAT_FLAG"
@@ -279,19 +288,22 @@ echo "python imputer/run_imputer.py \\"
 echo "    --data-dir OUTPUT/generated_data/${RUN_NAME} \\"
 echo "    --run-name ${RUN_NAME}_marformer \\"
 echo "    --overwrite-existing-data \\"
-echo "    --embedding-dim $((BASE_D * 3)) \\"
+echo "    --embedding-dim $MARFORMER_EMBEDDING_DIM \\"
+echo "    --encoder-layers $MARFORMER_ENCODER_LAYERS \\"
+echo "    --attention-heads $MARFORMER_ATTENTION_HEADS \\"
+echo "    --num_ffn_layers $MARFORMER_NUM_FFN_LAYERS \\"
+echo "    --weight-decay $MARFORMER_WEIGHT_DECAY \\"
+echo "    --dropout $MARFORMER_DROPOUT \\"
 echo "    --epochs $MARFORMER_EPOCHS \\"
 echo "    --lr $MARFORMER_LR \\"
 echo "    --masking-rate $MARFORMER_MASKING_RATE \\"
 echo "    --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \\"
 echo "    --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \\"
 echo "    --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \\"
-echo "    --transductive_learning \\"
 echo "    --no-final-norm \\"
 echo "    --normalize-parameter \\"
 echo "    --device $MARFORMER_DEVICE \\"
 echo "    --save-model-every 5 \\"
-echo "    --dropout $MARFORMER_DROPOUT \\"
 echo "    $EARLY_STOPPING_FLAGS \\"
 echo "    $FULL_RANDOM_FLAG \\"
 echo "    $CONCAT_FLAG"

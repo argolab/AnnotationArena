@@ -48,28 +48,65 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
     def forward(
         self,
         variables: List[RankingData],
-    ) -> torch.Tensor:
-        # Call on_forward_start hook for subclasses to perform initialization
-        self.on_forward_start(variables)
+        mask_random: bool = False,
+        fresh_random_batch_size: int = 1,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        # Call on_forward_start hook for subclasses to perform initialization (only for B=1)
+        if fresh_random_batch_size == 1:
+            self.on_forward_start(variables)
         
         V = len(variables)  # this will be the input token length for transformer
         D = self.embedding_dim
+        B = fresh_random_batch_size
         device = self._ensure_device()
 
-        feature_embeddings = torch.zeros(1, V, D + self.parameter_dimension, device=device)
+        if B == 1:
+            # Original behavior: single batch
+            # Collect embeddings in a list to preserve gradient flow
+            # Using in-place assignment into a zero tensor breaks autograd graph
+            embedding_list = []
 
-        for i, var in enumerate(variables):
-            is_missing = var.is_missing or var.is_masked
-            assert not (var.is_missing and var.is_masked), "Variable cannot be both missing and masked"
-            assert var.is_missing is not None and var.is_masked is not None, "Variable must have missing or masked status"
+            for i, var in enumerate(variables):
+                is_missing = var.is_missing or var.is_masked
+                assert not (var.is_missing and var.is_masked), "Variable cannot be both missing and masked"
+                assert var.is_missing is not None and var.is_masked is not None, "Variable must have missing or masked status"
 
-            if var.is_listwise:
-                feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_missing)
-                feature_embeddings[0, i] = feat
-            else:
-                item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
-                feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing)
-                feature_embeddings[0, i] = feat
+                if var.is_listwise:
+                    feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_missing, mask_random=mask_random)
+                else:
+                    item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
+                    feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing, mask_random=mask_random)
+                
+                embedding_list.append(feat)
+
+            # Stack embeddings to preserve gradient flow from embedding parameters
+            # Shape: [V, D + parameter_dimension] -> [1, V, D + parameter_dimension]
+            feature_embeddings = torch.stack(embedding_list, dim=0).unsqueeze(0)
+        else:
+            # Batched behavior: generate B embeddings with different randomness
+            # Shape: [B, V, D + parameter_dimension]
+            batch_embeddings = []
+            for b in range(B):
+                embedding_list = []
+                for i, var in enumerate(variables):
+                    is_missing = var.is_missing or var.is_masked
+                    assert not (var.is_missing and var.is_masked), "Variable cannot be both missing and masked"
+                    assert var.is_missing is not None and var.is_masked is not None, "Variable must have missing or masked status"
+
+                    # Generate fresh random embedding for each batch item
+                    # The randomness is refreshed by calling on_forward_start or by generating new random embeddings
+                    if var.is_listwise:
+                        feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_missing, mask_random=mask_random)
+                    else:
+                        item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
+                        feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing, mask_random=mask_random)
+                    
+                    embedding_list.append(feat)
+                
+                batch_embeddings.append(torch.stack(embedding_list, dim=0))
+            
+            # Stack batches: [B, V, D + parameter_dimension]
+            feature_embeddings = torch.stack(batch_embeddings, dim=0)
 
         # Return feature embeddings and full param stream including the missing-status bit
         return feature_embeddings[:, :, :D], feature_embeddings[:, :, D:]
