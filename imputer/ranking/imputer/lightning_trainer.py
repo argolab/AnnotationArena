@@ -83,6 +83,7 @@ class ImputerLightningModule(pl.LightningModule):
         max_epochs: int = 50,
         train_instance_callback=None,
         test_instance_callback=None,
+        selective_masking=False
     ):
         super().__init__()
         self.save_hyperparameters(ignore=['model', 'train_observed_vars', 'train_missing_vars',
@@ -131,6 +132,8 @@ class ImputerLightningModule(pl.LightningModule):
         # Track training history
         self.training_history = []
         self.callback_history = []
+
+        self.selective_masking = selective_masking
 
     #########################################################
     # Helper functions for logging and tracking
@@ -333,6 +336,75 @@ class ImputerLightningModule(pl.LightningModule):
             ))
         return out
 
+
+    
+    def _apply_selective_training_mask(self, observed_vars: List[RankingData], masking_rate: float) -> List[RankingData]:
+        """Return a new list where variables are masked by (annotator, item) pairs.
+        
+        Instead of randomly selecting individual variables, this selects random
+        (annotator_id, item_id) pairs and masks ALL variables for each selected pair
+        until the target masking count is reached.
+        """
+        if not observed_vars:
+            return []
+        
+        num_to_mask = int(len(observed_vars) * masking_rate)
+        num_to_mask = max(0, min(len(observed_vars), num_to_mask))
+        
+        if num_to_mask == 0:
+            # No masking needed, return all as observed
+            return [
+                RankingData(
+                    annotator_id=var.annotator_id,
+                    attribute_id=var.attribute_id,
+                    is_listwise=var.is_listwise,
+                    item_ids=var.item_ids,
+                    status=2,
+                    instance=var.instance,
+                    rating_value=var.rating_value,
+                    ranking_order=var.ranking_order,
+                )
+                for var in observed_vars
+            ]
+        
+        # Build mapping from (annotator_id, item_id) pairs to variable indices
+        pair_to_indices: Dict[Tuple[int, int], List[int]] = {}
+        for idx, var in enumerate(observed_vars):
+            # For ratings, item_ids has one item; for rankings, iterate all items
+            for item_id in var.item_ids:
+                pair = (var.annotator_id, item_id)
+                if pair not in pair_to_indices:
+                    pair_to_indices[pair] = []
+                pair_to_indices[pair].append(idx)
+        
+        # Randomly select pairs until we reach the target mask count
+        all_pairs = list(pair_to_indices.keys())
+        random.shuffle(all_pairs)
+        
+        masked_indices: Set[int] = set()
+        for pair in all_pairs:
+            if len(masked_indices) >= num_to_mask:
+                break
+            # Add all indices for this pair
+            for idx in pair_to_indices[pair]:
+                masked_indices.add(idx)
+        
+        # Build output list
+        out: List[RankingData] = []
+        for idx, var in enumerate(observed_vars):
+            status = 1 if idx in masked_indices else 2  # 1=masked, 2=observed
+            out.append(RankingData(
+                annotator_id=var.annotator_id,
+                attribute_id=var.attribute_id,
+                is_listwise=var.is_listwise,
+                item_ids=var.item_ids,
+                status=status,
+                instance=var.instance,
+                rating_value=var.rating_value,
+                ranking_order=var.ranking_order,
+            ))
+        return out
+
     def _compute_supervised_prediction_metrics(
         self, model_output: Dict[str, torch.Tensor], supervised_refs: List[RankingData]
     ) -> Dict[str, torch.Tensor]:
@@ -426,7 +498,10 @@ class ImputerLightningModule(pl.LightningModule):
             embed.set_full_dropout(True)
         
         # Apply masking to observed
-        masked_or_observed = self._apply_training_mask(self.train_observed_vars, self.masking_rate)
+        if self.selective_masking:
+            masked_or_observed = self._apply_selective_training_mask(self.train_observed_vars, self.masking_rate)
+        else:
+            masked_or_observed = self._apply_training_mask(self.train_observed_vars, self.masking_rate)
         
         # Append missing as-is (status=0)
         batch_list: List[RankingData] = []

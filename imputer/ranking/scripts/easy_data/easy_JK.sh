@@ -51,6 +51,13 @@ MARFORMER_GRADIENT_CLIP_VAL=0.0
 MARFORMER_USE_COSINE_SCHEDULE=true
 MARFORMER_WARMUP_STEPS=100
 
+SELECTIVE_MASK=0
+
+masking_args=""
+if [ $SELECTIVE_MASK == 1 ]; then
+    masking_args="--selective-masking"
+fi
+
 # Devices flag (only pass if MARFORMER_DEVICES is set and non-empty)
 DEVICES_FLAG=""
 if [ -n "$MARFORMER_DEVICES" ]; then
@@ -78,7 +85,7 @@ hJ_str=$HOLD_J
 hK_str=$HOLD_K
 
 # Construct run name
-run_name="${EASY_PREFIX}_${MODE_NAME}_D${d_str}_sa${sa_str}_sm${sm_str}_kp${kp_str}_uc${uc_str}_hI${hI_str}_hJ${hJ_str}_hK${hK_str}_${BASE_PROTOCOL_CODE}"
+run_name="${EASY_PREFIX}_${MODE_NAME}_D${d_str}_sa${sa_str}_sm${sm_str}_kp${kp_str}_uc${uc_str}_hI${hI_str}_hJ${hJ_str}_hK${hK_str}_${BASE_PROTOCOL_CODE}_selective_masking_${SELECTIVE_MASK}"
 
 echo ""
 echo "=========================================="
@@ -108,94 +115,95 @@ if [ "$MARFORMER_USE_COSINE_SCHEDULE" == "true" ]; then
     cosine_schedule_flags="--use-cosine-schedule --warmup-steps $MARFORMER_WARMUP_STEPS"
 fi
 
-# Step 1: Generate data (Stan)
-echo "[Step 1/6] Generating data..."
-hold_flags=""
-[ "$HOLD_I" == "1" ] && hold_flags="$hold_flags --hold-I-constant"
-[ "$HOLD_J" == "1" ] && hold_flags="$hold_flags --hold-J-constant"
-[ "$HOLD_K" == "1" ] && hold_flags="$hold_flags --hold-K-constant"
-python stan/scripts/generate_data.py \
-    --K-train $BASE_K_TRAIN \
-    --K-test $BASE_K_TEST \
-    --I $BASE_I \
-    --J $BASE_J \
-    --D $BASE_D \
-    --C $BASE_C \
-    --observation-protocol $BASE_PROTOCOL \
-    --sigma-annotator $BASE_SIGMA_ANNOTATOR \
-    --sigma-measurement $BASE_SIGMA_MEASUREMENT \
-    --kappa $BASE_KAPPA \
-    --run-name $run_name \
-    --overwrite-existing-data \
-    $hold_flags \
-    $protocol_args </dev/null
+# # Step 1: Generate data (Stan)
+# echo "[Step 1/6] Generating data..."
+# hold_flags=""
+# [ "$HOLD_I" == "1" ] && hold_flags="$hold_flags --hold-I-constant"
+# [ "$HOLD_J" == "1" ] && hold_flags="$hold_flags --hold-J-constant"
+# [ "$HOLD_K" == "1" ] && hold_flags="$hold_flags --hold-K-constant"
+# python stan/scripts/generate_data.py \
+#     --K-train $BASE_K_TRAIN \
+#     --K-test $BASE_K_TEST \
+#     --I $BASE_I \
+#     --J $BASE_J \
+#     --D $BASE_D \
+#     --C $BASE_C \
+#     --observation-protocol $BASE_PROTOCOL \
+#     --sigma-annotator $BASE_SIGMA_ANNOTATOR \
+#     --sigma-measurement $BASE_SIGMA_MEASUREMENT \
+#     --kappa $BASE_KAPPA \
+#     --run-name $run_name \
+#     --overwrite-existing-data \
+#     $hold_flags \
+#     $protocol_args </dev/null
 
-if [ $? -ne 0 ]; then
-    echo "ERROR: Data generation failed for $run_name"
-    exit 1
-fi
+# if [ $? -ne 0 ]; then
+#     echo "ERROR: Data generation failed for $run_name"
+#     exit 1
+# fi
 
-# Step 2: Run Marformer with Lightning
-echo "[Step 2/6] Running Marformer with PyTorch Lightning..."
-if [ -n "$DEBUG" ]; then
-    echo "Running in DEBUG mode (interactive - breakpoints will work)"
-    python imputer/run_imputer.py \
-        --data-dir OUTPUT/generated_data/${run_name} \
-        --run-name ${run_name} \
-        --overwrite-existing-data \
-        --embedding-dim $MARFORMER_EMBEDDING_DIM \
-        --encoder-layers $MARFORMER_ENCODER_LAYERS \
-        --attention-heads $MARFORMER_ATTENTION_HEADS \
-        --num_ffn_layers $MARFORMER_NUM_FFN_LAYERS \
-        --weight-decay $MARFORMER_WEIGHT_DECAY \
-        --dropout $MARFORMER_DROPOUT \
-        --epochs $MARFORMER_EPOCHS \
-        --lr $MARFORMER_LR \
-        --masking-rate $MARFORMER_MASKING_RATE \
-        --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \
-        --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \
-        --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \
-        --no-final-norm \
-        --normalize-parameter \
-        --device $MARFORMER_DEVICE \
-        $DEVICES_FLAG \
-        --save-model-every 5 \
-        --batch-size $MARFORMER_BATCH_SIZE \
-        --gradient-clip-val $MARFORMER_GRADIENT_CLIP_VAL \
-        $concat_flag \
-        $cosine_schedule_flags
-else
-    python imputer/run_imputer.py \
-        --data-dir OUTPUT/generated_data/${run_name} \
-        --run-name ${run_name} \
-        --overwrite-existing-data \
-        --embedding-dim $MARFORMER_EMBEDDING_DIM \
-        --encoder-layers $MARFORMER_ENCODER_LAYERS \
-        --attention-heads $MARFORMER_ATTENTION_HEADS \
-        --num_ffn_layers $MARFORMER_NUM_FFN_LAYERS \
-        --weight-decay $MARFORMER_WEIGHT_DECAY \
-        --dropout $MARFORMER_DROPOUT \
-        --epochs $MARFORMER_EPOCHS \
-        --lr $MARFORMER_LR \
-        --masking-rate $MARFORMER_MASKING_RATE \
-        --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \
-        --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \
-        --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \
-        --no-final-norm \
-        --normalize-parameter \
-        --device $MARFORMER_DEVICE \
-        $DEVICES_FLAG \
-        --save-model-every 5 \
-        --batch-size $MARFORMER_BATCH_SIZE \
-        --gradient-clip-val $MARFORMER_GRADIENT_CLIP_VAL \
-        $concat_flag \
-        $cosine_schedule_flags </dev/null
-fi
+# # Step 2: Run Marformer with Lightning
+# echo "[Step 2/6] Running Marformer with PyTorch Lightning..."
+# if [ -n "$DEBUG" ]; then
+#     echo "Running in DEBUG mode (interactive - breakpoints will work)"
+#     python imputer/run_imputer.py \
+#         --data-dir OUTPUT/generated_data/${run_name} \
+#         --run-name ${run_name} \
+#         --overwrite-existing-data \
+#         --embedding-dim $MARFORMER_EMBEDDING_DIM \
+#         --encoder-layers $MARFORMER_ENCODER_LAYERS \
+#         --attention-heads $MARFORMER_ATTENTION_HEADS \
+#         --num_ffn_layers $MARFORMER_NUM_FFN_LAYERS \
+#         --weight-decay $MARFORMER_WEIGHT_DECAY \
+#         --dropout $MARFORMER_DROPOUT \
+#         --epochs $MARFORMER_EPOCHS \
+#         --lr $MARFORMER_LR \
+#         --masking-rate $MARFORMER_MASKING_RATE \
+#         --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \
+#         --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \
+#         --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \
+#         --no-final-norm \
+#         --normalize-parameter \
+#         --device $MARFORMER_DEVICE \
+#         $DEVICES_FLAG \
+#         --save-model-every 5 \
+#         --batch-size $MARFORMER_BATCH_SIZE \
+#         --gradient-clip-val $MARFORMER_GRADIENT_CLIP_VAL \
+#         $concat_flag \
+#         $cosine_schedule_flags
+# else
+#     python imputer/run_imputer.py \
+#         --data-dir OUTPUT/generated_data/${run_name} \
+#         --run-name ${run_name} \
+#         --overwrite-existing-data \
+#         --embedding-dim $MARFORMER_EMBEDDING_DIM \
+#         --encoder-layers $MARFORMER_ENCODER_LAYERS \
+#         --attention-heads $MARFORMER_ATTENTION_HEADS \
+#         --num_ffn_layers $MARFORMER_NUM_FFN_LAYERS \
+#         --weight-decay $MARFORMER_WEIGHT_DECAY \
+#         --dropout $MARFORMER_DROPOUT \
+#         --epochs $MARFORMER_EPOCHS \
+#         --lr $MARFORMER_LR \
+#         --masking-rate $MARFORMER_MASKING_RATE \
+#         --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \
+#         --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \
+#         --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \
+#         --no-final-norm \
+#         --normalize-parameter \
+#         --device $MARFORMER_DEVICE \
+#         $DEVICES_FLAG \
+#         --save-model-every 5 \
+#         --batch-size $MARFORMER_BATCH_SIZE \
+#         --gradient-clip-val $MARFORMER_GRADIENT_CLIP_VAL \
+#         $concat_flag \
+#         $cosine_schedule_flags \
+#         $masking_args
+# fi
 
-if [ $? -ne 0 ]; then
-    echo "ERROR: Marformer training failed for $run_name"
-    exit 1
-fi
+# if [ $? -ne 0 ]; then
+#     echo "ERROR: Marformer training failed for $run_name"
+#     exit 1
+# fi
 
 # Step 3: Run Stan inference (4 chains)
 echo "[Step 3/6] Running Stan inference (4 chains)..."

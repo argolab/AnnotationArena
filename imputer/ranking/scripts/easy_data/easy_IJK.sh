@@ -51,6 +51,13 @@ MARFORMER_GRADIENT_CLIP_VAL=0.0
 MARFORMER_USE_COSINE_SCHEDULE=true
 MARFORMER_WARMUP_STEPS=100
 
+SELECTIVE_MASK=0
+
+masking_args=""
+if [ $SELECTIVE_MASK == 1 ]; then
+    masking_args="--selective-masking"
+fi
+
 # Devices flag (only pass if MARFORMER_DEVICES is set and non-empty)
 DEVICES_FLAG=""
 if [ -n "$MARFORMER_DEVICES" ]; then
@@ -78,7 +85,7 @@ hJ_str=$HOLD_J
 hK_str=$HOLD_K
 
 # Construct run name
-run_name="${EASY_PREFIX}_${MODE_NAME}_D${d_str}_sa${sa_str}_sm${sm_str}_kp${kp_str}_uc${uc_str}_hI${hI_str}_hJ${hJ_str}_hK${hK_str}_${BASE_PROTOCOL_CODE}"
+run_name="${EASY_PREFIX}_${MODE_NAME}_D${d_str}_sa${sa_str}_sm${sm_str}_kp${kp_str}_uc${uc_str}_hI${hI_str}_hJ${hJ_str}_hK${hK_str}_${BASE_PROTOCOL_CODE}_selective_masking_${SELECTIVE_MASK}"
 
 echo ""
 echo "=========================================="
@@ -189,7 +196,8 @@ else
         --batch-size $MARFORMER_BATCH_SIZE \
         --gradient-clip-val $MARFORMER_GRADIENT_CLIP_VAL \
         $concat_flag \
-        $cosine_schedule_flags </dev/null
+        $cosine_schedule_flags \
+        $masking_args
 fi
 
 if [ $? -ne 0 ]; then

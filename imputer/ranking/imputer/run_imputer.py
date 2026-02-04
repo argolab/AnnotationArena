@@ -89,7 +89,8 @@ def main():
     # General batching
     parser.add_argument("--batch-size", type=int, default=1, 
                         help="Batch size for training (1=no batching, >1=batch different masking patterns, default: 1)")
-
+    parser.add_argument("--selective-masking", action="store_true",
+                        help="Whether to mask all vars with (j, k) pairs in the synthetic masking examples")
     args = parser.parse_args()
 
     # PyTorch Lightning DDP re-runs this script in each worker process.
@@ -97,6 +98,8 @@ def main():
     local_rank = int(os.environ.get("LOCAL_RANK", "0"))
     is_rank0 = (local_rank == 0)
 
+    if args.selective_masking:
+        print("Use selective mask for mask examples, with JK pairs")
     # Check for mutually exclusive flags
     if args.test_only_training and args.transductive_learning:
         raise ValueError("--test-only-training and --transductive-learning are mutually exclusive")
@@ -401,6 +404,7 @@ def main():
         max_epochs=args.epochs,
         train_instance_callback=train_instance_callback,
         test_instance_callback=test_instance_callback,
+        selective_masking=args.selective_masking
     )
     # Device / strategy configuration
     trainer_kwargs: Dict[str, Any] = {}
