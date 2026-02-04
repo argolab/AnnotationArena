@@ -101,8 +101,9 @@ def save_bundle(run_dir: Path, bundle_dict: dict) -> None:
     save_json(bundle_dict, run_dir / "data_bundle.json")
 
 
-def save_predictives(run_dir: Path, predictives: dict) -> None:
-    save_json(predictives, run_dir / "predictives.json")
+def save_predictives(run_dir: Path, predictives: dict, filename: str = "predictives.json") -> None:
+    """Save predictives dict to run_dir/filename. Default filename for backward compatibility."""
+    save_json(predictives, run_dir / filename)
 
 
 def save_test_metrics(run_dir: Path, metrics: dict) -> None:

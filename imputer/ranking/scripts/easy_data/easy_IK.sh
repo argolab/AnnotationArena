@@ -5,8 +5,9 @@
 set -e
 
 # Fixed base parameters (mirrors OFAT center setup where possible)
+# When hold_J=1 we use J=1 and MCAR (no 4-annotator constraint).
 BASE_I=5
-BASE_J=12
+BASE_J=1
 BASE_C=5
 BASE_K_TRAIN=30
 BASE_K_TEST=30
@@ -16,12 +17,12 @@ BASE_D=8
 BASE_SIGMA_ANNOTATOR=0.5
 BASE_SIGMA_MEASUREMENT=0.1
 BASE_KAPPA=10
-BASE_PROTOCOL="tie_breaking"  # SMAR
-BASE_PROTOCOL_CODE="smar"
+BASE_PROTOCOL="mcar"  # MCAR when J=1 (hold J fix)
+BASE_PROTOCOL_CODE="mcar"
 BASE_USE_CONCAT=0  # Center value
 
 # Unique prefix for TensorBoard / output filtering
-EASY_PREFIX="easy_axis"
+EASY_PREFIX="easy_axis_single_030_fixJ"
 MODE_NAME="IK"
 HOLD_I=0
 HOLD_J=1

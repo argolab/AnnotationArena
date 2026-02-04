@@ -35,11 +35,13 @@ def load_run_data(run_dir: Path) -> Dict[str, Any]:
         with open(test_instance_path, "r") as f:
             data["test_instance_history"] = json.load(f)
 
-    # Load predictions
-    predictives_path = run_dir / "predictives.json"
-    if predictives_path.exists():
-        with open(predictives_path, 'r') as f:
-            data['predictives'] = json.load(f)
+    # Load predictions: prefer test_predictives.json, fall back to predictives.json for compatibility
+    for name in ("test_predictives.json", "predictives.json"):
+        predictives_path = run_dir / name
+        if predictives_path.exists():
+            with open(predictives_path, 'r') as f:
+                data['predictives'] = json.load(f)
+            break
 
     # Load final metrics
     test_metrics_path = run_dir / "test_metrics.json"
