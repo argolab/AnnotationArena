@@ -88,6 +88,14 @@ run_axis_mode() {
     local hold_J=$3
     local hold_K=$4
 
+    # Invariance rule: hold axis constant → set that dimension to 1 (no replication). Use MCAR when I=1 or J=1.
+    local I_val=$BASE_I
+    local J_val=$BASE_J
+    local protocol=$BASE_PROTOCOL
+    local protocol_code=$BASE_PROTOCOL_CODE
+    [ "$hold_I" == "1" ] && { I_val=1; protocol=mcar; protocol_code=mcar; }   # I invariant → I=1
+    [ "$hold_J" == "1" ] && { J_val=1; protocol=mcar; protocol_code=mcar; }   # J invariant → J=1
+
     # Format values for folder naming
     local d_str=$BASE_D
     local sa_str=$(echo $BASE_SIGMA_ANNOTATOR | sed 's/\.//g')
@@ -101,7 +109,7 @@ run_axis_mode() {
     local hK_str=$hold_K
 
     # Construct run name
-    local run_name="${EASY_PREFIX}_${mode_name}_D${d_str}_sa${sa_str}_sm${sm_str}_kp${kp_str}_uc${uc_str}_hI${hI_str}_hJ${hJ_str}_hK${hK_str}_${BASE_PROTOCOL_CODE}"
+    local run_name="${EASY_PREFIX}_${mode_name}_D${d_str}_sa${sa_str}_sm${sm_str}_kp${kp_str}_uc${uc_str}_hI${hI_str}_hJ${hJ_str}_hK${hK_str}_${protocol_code}"
 
     echo ""
     echo "=========================================="
@@ -111,11 +119,11 @@ run_axis_mode() {
     echo "=========================================="
     echo ""
 
-    # Determine protocol-specific arguments
+    # Determine protocol-specific arguments (use $protocol for hold_I/hold_J → mcar)
     local protocol_args=""
-    if [ "$BASE_PROTOCOL" == "extended_rankings" ]; then
+    if [ "$protocol" == "extended_rankings" ]; then
         protocol_args="--extended-pairwise-rate 0.2"
-    elif [ "$BASE_PROTOCOL" == "mcar" ]; then
+    elif [ "$protocol" == "mcar" ]; then
         protocol_args="--mcar-missing-rate 0.5"
     fi
 
@@ -140,11 +148,11 @@ run_axis_mode() {
     python stan/scripts/generate_data.py \
         --K-train $BASE_K_TRAIN \
         --K-test $BASE_K_TEST \
-        --I $BASE_I \
-        --J $BASE_J \
+        --I $I_val \
+        --J $J_val \
         --D $BASE_D \
         --C $BASE_C \
-        --observation-protocol $BASE_PROTOCOL \
+        --observation-protocol $protocol \
         --sigma-annotator $BASE_SIGMA_ANNOTATOR \
         --sigma-measurement $BASE_SIGMA_MEASUREMENT \
         --kappa $BASE_KAPPA \

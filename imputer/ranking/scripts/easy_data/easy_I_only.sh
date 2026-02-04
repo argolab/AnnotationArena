@@ -1,12 +1,13 @@
 #!/bin/bash
 # Easy-data axis invariance: I-only mode (hold_I=0, hold_J=1, hold_K=1)
 # Ratings depend only on criteria/attributes I, not on annotators or items.
+# Invariance rule: hold axis constant → set that dimension to 1. So hold_J=1 → J=1.
 
 set -e
 
-# Fixed base parameters (mirrors OFAT center setup where possible)
+# I=5 (I varies), J=1 (J invariant).
 BASE_I=5
-BASE_J=12
+BASE_J=1
 BASE_C=5
 BASE_K_TRAIN=30
 BASE_K_TEST=30
@@ -16,8 +17,8 @@ BASE_D=8
 BASE_SIGMA_ANNOTATOR=0.5
 BASE_SIGMA_MEASUREMENT=0.1
 BASE_KAPPA=10
-BASE_PROTOCOL="tie_breaking"  # SMAR
-BASE_PROTOCOL_CODE="smar"
+BASE_PROTOCOL="mcar"  # MCAR when J=1 (hold J fix)
+BASE_PROTOCOL_CODE="mcar"
 BASE_USE_CONCAT=0  # Center value
 
 # Unique prefix for TensorBoard / output filtering

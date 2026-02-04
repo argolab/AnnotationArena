@@ -481,12 +481,15 @@ def main():
     }
     save_test_metrics(run_dir, metrics_obj)
 
-    # Save predictives on test
-    predictives = build_predictives(model, test_all)
-    save_predictives(run_dir, predictives)
+    # Save predictives: train_predictives.json (train_missing) and test_predictives.json (test_all)
+    if not args.test_only_training and train_missing:
+        train_predictives = build_predictives(model, train_missing)
+        save_predictives(run_dir, train_predictives, "train_predictives.json")
+    test_predictives = build_predictives(model, test_all)
+    save_predictives(run_dir, test_predictives, "test_predictives.json")
 
     print(f"Saved model to {model_path}")
-    print(f"Saved metrics and predictives to {run_dir}")
+    print(f"Saved metrics and predictives (train_predictives.json, test_predictives.json) to {run_dir}")
 
 
 if __name__ == "__main__":

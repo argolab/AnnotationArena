@@ -449,84 +449,85 @@ generated quantities {
     int test_annotator_end = J;
     
     // ===== TRAINING INSTANCE OBSERVATION PROTOCOL =====
-    for (k in 1:K_train) {  // for each training item
-        // Sample 4 different annotators from training set
-        if ((train_annotator_end - train_annotator_start + 1) < 4) {
-            reject("Number of available training annotators is less than 4");
-        }
-        array[4] int selected_annotators;
-        int num_selected = 0;
-        
-        while (num_selected < 4) {
-            real u = uniform_rng(0, 1);
-            int candidate = train_annotator_start + to_int(floor(u * (train_annotator_end - train_annotator_start + 1)));
-            if (candidate > train_annotator_end) candidate = train_annotator_end;
+    // When J < 4 we cannot sample 4 annotators per item; leave all observed=0 so Python can apply MCAR.
+    if ((train_annotator_end - train_annotator_start + 1) >= 4) {
+        for (k in 1:K_train) {  // for each training item
+            // Sample 4 different annotators from training set
+            array[4] int selected_annotators;
+            int num_selected = 0;
             
-            // Check if this annotator is already selected
-            int already_selected = 0;
-            for (s in 1:num_selected) {
-                if (selected_annotators[s] == candidate) {
-                    already_selected = 1;
-                    break;
+            while (num_selected < 4) {
+                real u = uniform_rng(0, 1);
+                int candidate = train_annotator_start + to_int(floor(u * (train_annotator_end - train_annotator_start + 1)));
+                if (candidate > train_annotator_end) candidate = train_annotator_end;
+                
+                // Check if this annotator is already selected
+                int already_selected = 0;
+                for (s in 1:num_selected) {
+                    if (selected_annotators[s] == candidate) {
+                        already_selected = 1;
+                        break;
+                    }
+                }
+                
+                // Add if not already selected
+                if (already_selected == 0) {
+                    num_selected += 1;
+                    selected_annotators[num_selected] = candidate;
                 }
             }
             
-            // Add if not already selected
-            if (already_selected == 0) {
-                num_selected += 1;
-                selected_annotators[num_selected] = candidate;
-            }
-        }
-        
-        // Assign all 4 annotators to rate this item on all criteria
-        for (i in 1:I) {
-            for (s in 1:4) {
-                int j = selected_annotators[s];
-                int idx = (i-1)*J + j;
-                train_rating_observed[idx, k] = 1;
+            // Assign all 4 annotators to rate this item on all criteria
+            for (i in 1:I) {
+                for (s in 1:4) {
+                    int j = selected_annotators[s];
+                    int idx = (i-1)*J + j;
+                    train_rating_observed[idx, k] = 1;
+                }
             }
         }
     }
+    // else: all train_rating_observed remain 0 -> MCAR applied in Python
     
     // ===== TEST INSTANCE OBSERVATION PROTOCOL =====
-    for (k in 1:K_test) {
-        // Sample 4 different annotators from test set
-        if ((test_annotator_end - test_annotator_start + 1) < 4) {
-            reject("Number of available test annotators is less than 4");
-        }
-        array[4] int selected_annotators;
-        int num_selected = 0;
-        
-        while (num_selected < 4) {
-            real u = uniform_rng(0, 1);
-            int candidate = test_annotator_start + to_int(floor(u * (test_annotator_end - test_annotator_start + 1)));
-            if (candidate > test_annotator_end) candidate = test_annotator_end;
+    if ((test_annotator_end - test_annotator_start + 1) >= 4) {
+        for (k in 1:K_test) {
+            // Sample 4 different annotators from test set
+            array[4] int selected_annotators;
+            int num_selected = 0;
             
-            // Check if this annotator is already selected
-            int already_selected = 0;
-            for (s in 1:num_selected) {
-                if (selected_annotators[s] == candidate) {
-                    already_selected = 1;
-                    break;
+            while (num_selected < 4) {
+                real u = uniform_rng(0, 1);
+                int candidate = test_annotator_start + to_int(floor(u * (test_annotator_end - test_annotator_start + 1)));
+                if (candidate > test_annotator_end) candidate = test_annotator_end;
+                
+                // Check if this annotator is already selected
+                int already_selected = 0;
+                for (s in 1:num_selected) {
+                    if (selected_annotators[s] == candidate) {
+                        already_selected = 1;
+                        break;
+                    }
+                }
+                
+                // Add if not already selected
+                if (already_selected == 0) {
+                    num_selected += 1;
+                    selected_annotators[num_selected] = candidate;
                 }
             }
             
-            // Add if not already selected
-            if (already_selected == 0) {
-                num_selected += 1;
-                selected_annotators[num_selected] = candidate;
-            }
-        }
-        
-        // Assign all 4 annotators to rate this item on all criteria
-        for (i in 1:I) {
-            for (s in 1:4) {
-                int j = selected_annotators[s];
-                int idx = (i-1)*J + j;
-                test_rating_observed[idx, k] = 1;
+            // Assign all 4 annotators to rate this item on all criteria
+            for (i in 1:I) {
+                for (s in 1:4) {
+                    int j = selected_annotators[s];
+                    int idx = (i-1)*J + j;
+                    test_rating_observed[idx, k] = 1;
+                }
             }
         }
     }
+    // else: all test_rating_observed remain 0 -> MCAR applied in Python
     
     // ===== GENERATE PAIRWISE RANKINGS FROM TIED RATINGS =====
     num_train_pairwise_rankings = 0;

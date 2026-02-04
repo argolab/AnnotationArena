@@ -5,15 +5,16 @@
 set -e
 
 # Fixed base parameters (mirrors OFAT center setup where possible)
+# K invariant (hold_K=1) → use a single item: K_train=K_test=1.
 BASE_I=5
 BASE_J=12
 BASE_C=5
-BASE_K_TRAIN=30
-BASE_K_TEST=30
+BASE_K_TRAIN=1
+BASE_K_TEST=1
 
 # Baseline hyperparameter values
 BASE_D=8
-BASE_SIGMA_ANNOTATOR=0.5
+BASE_SIGMA_ANNOTATOR=0.005
 BASE_SIGMA_MEASUREMENT=0.1
 BASE_KAPPA=10
 BASE_PROTOCOL="tie_breaking"  # SMAR
@@ -21,14 +22,14 @@ BASE_PROTOCOL_CODE="smar"
 BASE_USE_CONCAT=0  # Center value
 
 # Unique prefix for TensorBoard / output filtering
-EASY_PREFIX="easy_axis"
+EASY_PREFIX="easy_axis_K_eq_1_sa_eq_0005"
 MODE_NAME="IJ"
 HOLD_I=0
 HOLD_J=0
 HOLD_K=1
 
 # Marformer hyperparameters (kept modest for sanity checks)
-MARFORMER_EPOCHS=300
+MARFORMER_EPOCHS=100
 MARFORMER_LR=2e-4
 MARFORMER_MASKING_RATE=0.15
 MARFORMER_MASKED_LOSS_WEIGHT=15

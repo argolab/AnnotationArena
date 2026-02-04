@@ -313,11 +313,14 @@ def main():
     save_test_metrics(output_dir, metrics_obj)
     print(f"Saved test metrics to {output_dir / 'test_metrics.json'}")
     
-    # Save predictives
+    # Save predictives (train_missing and test set)
     print("Generating predictives...")
-    predictives = _build_predictives(model, test_all)
-    save_predictives(output_dir, predictives)
-    print(f"Saved predictives to {output_dir / 'predictives.json'}")
+    train_predictives = _build_predictives(model, train_missing)
+    save_predictives(output_dir, train_predictives, "train_predictives.json")
+    print(f"Saved predictives to {output_dir / 'train_predictives.json'}")
+    test_predictives = _build_predictives(model, test_all)
+    save_predictives(output_dir, test_predictives, "test_predictives.json")
+    print(f"Saved predictives to {output_dir / 'test_predictives.json'}")
     
     # Print summary
     print("\n=== EVALUATION RESULTS ===")
