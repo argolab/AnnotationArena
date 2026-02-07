@@ -8,20 +8,22 @@ from imputer.data import DataConverter, RankingData
 class EvaluationCallback:
     """Callback for evaluation during training (no masking during eval)."""
 
-    def __init__(self, eval_engine, test_variables, converter, device='cuda', name='EvaluationCallback', instance_name=None):
+    def __init__(self, eval_engine, test_variables, converter, device='cuda', name='EvaluationCallback', instance_name=None, max_item=30):
         self.eval_engine = eval_engine
         self.test_variables = test_variables
         self.converter = converter
         self.device = device
         self.name = name
         self.instance_name = instance_name if instance_name is not None else name
+        self.max_item = max_item
 
     def on_epoch_end(self, model, epoch):
         results = self.eval_engine.evaluate_model(
             model=model,
             variables=self.test_variables,
             converter=self.converter,
-            device=self.device
+            device=self.device,
+            max_item=self.max_item
         )
         return {
             'epoch': epoch,

@@ -3,7 +3,7 @@ import json
 import os
 import shutil
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Set
 
 import torch
 import numpy as np
@@ -91,6 +91,8 @@ def main():
                         help="Batch size for training (1=no batching, >1=batch different masking patterns, default: 1)")
     parser.add_argument("--selective-masking", action="store_true",
                         help="Whether to mask all vars with (j, k) pairs in the synthetic masking examples")
+    parser.add_argument("--max-item", default=1,
+                        help="Max number of items in a single imputer forward pass")
     args = parser.parse_args()
 
     # PyTorch Lightning DDP re-runs this script in each worker process.
@@ -371,6 +373,7 @@ def main():
         device=args.device,
         name="test_instance",
         instance_name="test_instance",
+        max_item=args.max_item
     )
     train_instance_callback = None
     if train_all is not None:
@@ -381,6 +384,7 @@ def main():
             device=args.device,
             name="train_instance",
             instance_name="train_instance",
+            max_item=args.max_item
         )
     lightning_module = ImputerLightningModule(
         model=model,
@@ -404,7 +408,8 @@ def main():
         max_epochs=args.epochs,
         train_instance_callback=train_instance_callback,
         test_instance_callback=test_instance_callback,
-        selective_masking=args.selective_masking
+        selective_masking=args.selective_masking,
+        max_item=args.max_item
     )
     # Device / strategy configuration
     trainer_kwargs: Dict[str, Any] = {}

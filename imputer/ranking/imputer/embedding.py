@@ -99,7 +99,7 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         # Build annot_vec and item_vec (all learnable now)
         annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), annot_core), dim=-1)
         item_vec = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_id]), dim=-1)
-        
+        #item_vec = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[0]), dim=-1)
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
         
         # Combine embeddings based on use_concat_embedding flag

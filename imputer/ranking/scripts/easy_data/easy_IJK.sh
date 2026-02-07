@@ -6,19 +6,20 @@ set -e
 
 # Fixed base parameters (mirrors OFAT center setup where possible)
 BASE_I=5
-BASE_J=12
+BASE_J=100
 BASE_C=5
-BASE_K_TRAIN=30
-BASE_K_TEST=30
+BASE_K_TRAIN=1
+BASE_K_TEST=10
 
 # Baseline hyperparameter values
 BASE_D=8
 BASE_SIGMA_ANNOTATOR=0.5
 BASE_SIGMA_MEASUREMENT=0.1
 BASE_KAPPA=10
-BASE_PROTOCOL="tie_breaking"  # SMAR
-BASE_PROTOCOL_CODE="smar"
+BASE_PROTOCOL="mcar"  # SMAR
+BASE_PROTOCOL_CODE="mcar"
 BASE_USE_CONCAT=0  # Center value
+MAX_ITEM=5
 
 # Unique prefix for TensorBoard / output filtering
 EASY_PREFIX="easy_axis"
@@ -64,6 +65,14 @@ if [ -n "$MARFORMER_DEVICES" ]; then
     DEVICES_FLAG="--devices $MARFORMER_DEVICES"
 fi
 
+DISABLE_RANKING=1
+
+ranking_args=""
+
+if [ $DISABLE_RANKING == 1 ]; then
+    ranking_args="--disable-pairwise-rankings"
+fi
+
 # Stan hyperparameters
 STAN_4C_CHAINS=4
 STAN_1C_CHAINS=1
@@ -85,7 +94,7 @@ hJ_str=$HOLD_J
 hK_str=$HOLD_K
 
 # Construct run name
-run_name="${EASY_PREFIX}_${MODE_NAME}_D${d_str}_sa${sa_str}_sm${sm_str}_kp${kp_str}_uc${uc_str}_hI${hI_str}_hJ${hJ_str}_hK${hK_str}_${BASE_PROTOCOL_CODE}_selective_masking_${SELECTIVE_MASK}"
+run_name="K${BASE_K_TRAIN}_${EASY_PREFIX}_${MODE_NAME}_D${d_str}_sa${sa_str}_sm${sm_str}_kp${kp_str}_uc${uc_str}_hI${hI_str}_hJ${hJ_str}_hK${hK_str}_${BASE_PROTOCOL_CODE}_selective_masking_${SELECTIVE_MASK}_maxitem${MAX_ITEM}"
 
 echo ""
 echo "=========================================="
@@ -135,6 +144,7 @@ python stan/scripts/generate_data.py \
     --run-name $run_name \
     --overwrite-existing-data \
     $hold_flags \
+    $ranking_args \
     $protocol_args </dev/null
 
 if [ $? -ne 0 ]; then
@@ -165,6 +175,7 @@ if [ -n "$DEBUG" ]; then
         --no-final-norm \
         --normalize-parameter \
         --device $MARFORMER_DEVICE \
+        --max-item $MAX_ITEM \
         $DEVICES_FLAG \
         --save-model-every 5 \
         --batch-size $MARFORMER_BATCH_SIZE \
@@ -199,12 +210,6 @@ else
         $cosine_schedule_flags \
         $masking_args
 fi
-
-if [ $? -ne 0 ]; then
-    echo "ERROR: Marformer training failed for $run_name"
-    exit 1
-fi
-
 # Step 3: Run Stan inference (4 chains)
 echo "[Step 3/6] Running Stan inference (4 chains)..."
 python stan/scripts/run_inference.py \

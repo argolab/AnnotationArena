@@ -37,8 +37,6 @@ def main():
                        help="[deprecated] Enable third annotator for disagreement > 1")
     parser.add_argument("--disable-third-annotator", action="store_true",
                        help="[deprecated] Disable third annotator (ablation)")
-    parser.add_argument("--enable-pairwise-rankings", action="store_true", default=True,
-                       help="Enable pairwise rankings (ablation)")
     parser.add_argument("--disable-pairwise-rankings", action="store_true",
                        help="Disable pairwise rankings (ablation)")
     
@@ -117,7 +115,7 @@ def main():
     args = parser.parse_args()
     
     # Handle ablation flags
-    enable_pairwise_rankings = args.enable_pairwise_rankings and not args.disable_pairwise_rankings
+    enable_pairwise_rankings = not args.disable_pairwise_rankings
 
     # Create configuration
     config = DataGenConfig(

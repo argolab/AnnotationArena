@@ -17,7 +17,7 @@ Usage:
     trainer.fit(model)
 """
 
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 import torch
 import torch.nn as nn
 import numpy as np
@@ -83,7 +83,8 @@ class ImputerLightningModule(pl.LightningModule):
         max_epochs: int = 50,
         train_instance_callback=None,
         test_instance_callback=None,
-        selective_masking=False
+        selective_masking=False,
+        max_item=30
     ):
         super().__init__()
         self.save_hyperparameters(ignore=['model', 'train_observed_vars', 'train_missing_vars',
@@ -134,6 +135,7 @@ class ImputerLightningModule(pl.LightningModule):
         self.callback_history = []
 
         self.selective_masking = selective_masking
+        self.max_item = max_item
 
     #########################################################
     # Helper functions for logging and tracking
@@ -313,16 +315,35 @@ class ImputerLightningModule(pl.LightningModule):
     # Helper functions for training
     #########################################################
 
-    def _apply_training_mask(self, observed_vars: List[RankingData], masking_rate: float) -> List[RankingData]:
-        """Return a new list where a random subset of observed vars are marked masked (status=1)."""
+    def _apply_training_mask(self, observed_vars: List[RankingData], masking_rate: float, available_items: Set[int]) -> List[RankingData]:
+        """Return a new list where a random subset of observed vars are marked masked (status=1).
+        
+        Only includes variables whose items are entirely within the provided available_items set.
+        
+        Args:
+            observed_vars: List of observed variables to process
+            masking_rate: Fraction of variables to mask
+            available_items: Set of item IDs to include in this batch
+        """
         if not observed_vars:
             return []
-        num_to_mask = int(len(observed_vars) * masking_rate)
-        num_to_mask = max(0, min(len(observed_vars), num_to_mask))
-        masked_indices = set(random.sample(list(range(len(observed_vars))), num_to_mask)) if num_to_mask > 0 else set()
+        
+        # Filter to only include variables whose items are all in the available set
+        filtered_vars: List[RankingData] = []
+        for var in observed_vars:
+            if all(item_id in available_items for item_id in var.item_ids):
+                filtered_vars.append(var)
+        
+        if not filtered_vars:
+            return []
+        
+        # Apply masking
+        num_to_mask = int(len(filtered_vars) * masking_rate)
+        num_to_mask = max(0, min(len(filtered_vars), num_to_mask))
+        masked_indices = set(random.sample(list(range(len(filtered_vars))), num_to_mask)) if num_to_mask > 0 else set()
 
         out: List[RankingData] = []
-        for idx, var in enumerate(observed_vars):
+        for idx, var in enumerate(filtered_vars):
             status = 1 if idx in masked_indices else 2  # 1=masked, 2=observed
             out.append(RankingData(
                 annotator_id=var.annotator_id,
@@ -335,7 +356,6 @@ class ImputerLightningModule(pl.LightningModule):
                 ranking_order=var.ranking_order,
             ))
         return out
-
 
     
     def _apply_selective_training_mask(self, observed_vars: List[RankingData], masking_rate: float) -> List[RankingData]:
@@ -489,7 +509,7 @@ class ImputerLightningModule(pl.LightningModule):
         return reg * float(self.weight_decay)
     
     def training_step(self, batch, batch_idx):
-        """Single training step."""
+        """Single training step with item batching."""
         self.model.train()
         
         # Enable full_dropout for training (if embedding provider supports it)
@@ -497,23 +517,121 @@ class ImputerLightningModule(pl.LightningModule):
         if embed is not None and hasattr(embed, "set_full_dropout"):
             embed.set_full_dropout(True)
         
-        # Apply masking to observed
-        if self.selective_masking:
-            masked_or_observed = self._apply_selective_training_mask(self.train_observed_vars, self.masking_rate)
-        else:
-            masked_or_observed = self._apply_training_mask(self.train_observed_vars, self.masking_rate)
-        
-        # Append missing as-is (status=0)
-        batch_list: List[RankingData] = []
-        batch_list.extend(masked_or_observed)
+        # Collect all unique items across all observed and missing variables
+        all_items: Set[int] = set()
+        for var in self.train_observed_vars:
+            all_items.update(var.item_ids)
         for var in self.train_missing_vars:
-            if not var.is_missing and not var.is_masked and not var.is_observed:
-                raise ValueError("train_missing_vars contains an entry that is not missing")
-            batch_list.append(var)
+            all_items.update(var.item_ids)
         
-        # Forward
-        out = self.model(batch_list)
-
+        # Create ordered list and split into chunks
+        all_items_list = sorted(all_items)
+        num_items = len(all_items_list)
+        
+        if self.max_item is not None and num_items > self.max_item:
+            # Split into chunks of max_item size
+            item_chunks = []
+            for i in range(0, num_items, self.max_item):
+                chunk = set(all_items_list[i:i + self.max_item])
+                item_chunks.append(chunk)
+        else:
+            # All items fit in one batch
+            item_chunks = [all_items]
+        
+        # Accumulate loss tensors (connected to computation graph) and counts
+        loss_tensors: List[torch.Tensor] = []
+        loss_weights: List[int] = []  # Number of supervised tokens per chunk
+        
+        # For logging (float values)
+        total_loss_accum = 0.0
+        total_rating_loss_accum = 0.0
+        total_ranking_loss_accum = 0.0
+        total_supervised_count = 0
+        chunk_losses: List[Dict] = []
+        
+        # For logging (aggregate across chunks)
+        all_masked_or_observed: List[RankingData] = []
+        all_masked_or_observed_per_chunk: List[List[RankingData]] = []
+        all_batch_list: List[RankingData] = []
+        all_outputs: List = []
+        
+        for chunk_idx, available_items in enumerate(item_chunks):
+            # Apply masking to observed vars for this chunk
+            if self.selective_masking:
+                masked_or_observed = self._apply_selective_training_mask(self.train_observed_vars, self.masking_rate, available_items)
+            else:
+                masked_or_observed = self._apply_training_mask(self.train_observed_vars, self.masking_rate, available_items)
+            
+            if not masked_or_observed:
+                continue
+            
+            # Build batch list for this chunk
+            batch_list: List[RankingData] = []
+            batch_list.extend(masked_or_observed)
+            
+            for var in self.train_missing_vars:
+                if not var.is_missing:
+                    raise ValueError("train_missing_vars contains an entry that is not missing")
+                if all(item_id in available_items for item_id in var.item_ids):
+                    batch_list.append(var)
+            
+            if not batch_list:
+                continue
+            
+            # Forward pass for this chunk
+            out = self.model(batch_list, verbose=False)
+            
+            # Compute loss for this chunk
+            losses = self._compute_loss_for_batch(out, masked_or_observed)
+            
+            # Get the actual loss tensor (connected to computation graph)
+            chunk_loss_tensor = losses.get('_total_loss_tensor')
+            if chunk_loss_tensor is not None:
+                loss_tensors.append(chunk_loss_tensor)
+                loss_weights.append(len(masked_or_observed))
+            
+            chunk_total = losses.get('total_loss', 0.0)
+            chunk_rating = losses.get('rating_loss', 0.0)
+            chunk_ranking = losses.get('ranking_loss', 0.0)
+            chunk_count = len(masked_or_observed)
+            
+            # Accumulate float values for logging
+            total_loss_accum += chunk_total * chunk_count
+            total_rating_loss_accum += chunk_rating * chunk_count
+            total_ranking_loss_accum += chunk_ranking * chunk_count
+            total_supervised_count += chunk_count
+            
+            # Collect for logging
+            all_masked_or_observed.extend(masked_or_observed)
+            all_masked_or_observed_per_chunk.append(masked_or_observed)
+            all_batch_list.extend(batch_list)
+            all_outputs.append(out)
+            chunk_losses.append(losses)
+        
+        # Compute weighted average of loss tensors (maintains gradient connection)
+        if loss_tensors and sum(loss_weights) > 0:
+            total_weight = sum(loss_weights)
+            # Weighted sum: sum(loss_tensor * weight) / total_weight
+            total_loss_tensor = sum(
+                loss_tensor * (weight / total_weight)
+                for loss_tensor, weight in zip(loss_tensors, loss_weights)
+            )
+        else:
+            # Fallback: no valid chunks, return zero loss with grad
+            device = next(self.model.parameters()).device
+            total_loss_tensor = torch.zeros((), device=device, requires_grad=True)
+        
+        # Compute float values for logging
+        if total_supervised_count > 0:
+            final_total_loss = total_loss_accum / total_supervised_count
+            final_rating_loss = total_rating_loss_accum / total_supervised_count
+            final_ranking_loss = total_ranking_loss_accum / total_supervised_count
+        else:
+            final_total_loss = 0.0
+            final_rating_loss = 0.0
+            final_ranking_loss = 0.0
+        
+        # Logging
         if self._log_attention_this_step:
             layer_stats: list[dict[str, torch.Tensor]] = []
             blocks = getattr(self.model, "blocks", None)
@@ -536,40 +654,52 @@ class ImputerLightningModule(pl.LightningModule):
 
         if self._is_log_step(self.log_every_n_steps):
             # Token/status accounting
-            masked_count = sum(1 for v in masked_or_observed if v.is_masked)
-            observed_count = sum(1 for v in masked_or_observed if v.is_observed)
-            missing_count = len(self.train_missing_vars)
-            total_count = len(batch_list)
+            masked_count = sum(1 for v in all_masked_or_observed if v.is_masked)
+            observed_count = sum(1 for v in all_masked_or_observed if v.is_observed)
+            missing_count = sum(1 for v in all_batch_list if v.is_missing)
+            total_count = len(all_batch_list)
             self.log("train/tokens_total", float(total_count), on_step=True, on_epoch=True)
-            self.log("train/tokens_supervised", float(len(masked_or_observed)), on_step=True, on_epoch=True)
+            self.log("train/tokens_supervised", float(len(all_masked_or_observed)), on_step=True, on_epoch=True)
             self.log("train/tokens_missing", float(missing_count), on_step=True, on_epoch=True)
             self.log("train/tokens_masked", float(masked_count), on_step=True, on_epoch=True)
             self.log("train/tokens_observed", float(observed_count), on_step=True, on_epoch=True)
-            if len(masked_or_observed) > 0:
-                self.log("train/masked_fraction", float(masked_count) / float(len(masked_or_observed)), on_step=True, on_epoch=True)
+            self.log("train/num_item_chunks", float(len(item_chunks)), on_step=True, on_epoch=True)
+            if len(all_masked_or_observed) > 0:
+                self.log("train/masked_fraction", float(masked_count) / float(len(all_masked_or_observed)), on_step=True, on_epoch=True)
 
-            # Prediction quality on supervised tokens (cheap train-time accuracy/RMSE/entropy).
-            supervised_metrics = self._compute_supervised_prediction_metrics(out, masked_or_observed)
-            for k, v in supervised_metrics.items():
-                self.log(k, v, on_step=True, on_epoch=True)
-        
-        # Compute loss: only over non-missing (observed+masked)
-        losses = self._compute_loss_for_batch(out, masked_or_observed)
-        total_loss = losses.get('_total_loss_tensor')
-        
+            # Prediction quality on supervised tokens - aggregate across chunks
+            aggregated_metrics: Dict[str, List[torch.Tensor]] = {}
+            for out, masked_or_observed in zip(all_outputs, all_masked_or_observed_per_chunk):
+                if not masked_or_observed:
+                    continue
+                supervised_metrics = self._compute_supervised_prediction_metrics(out, masked_or_observed)
+                for k, v in supervised_metrics.items():
+                    if k not in aggregated_metrics:
+                        aggregated_metrics[k] = []
+                    aggregated_metrics[k].append(v)
+            
+            # Log mean of each metric across chunks
+            for k, values in aggregated_metrics.items():
+                if values:
+                    mean_value = torch.stack(values).mean()
+                    self.log(k, mean_value, on_step=True, on_epoch=True)
+
         # Disable full_dropout after training step
         if embed is not None and hasattr(embed, "set_full_dropout"):
             embed.set_full_dropout(False)
         
-        # Log objective losses (what we optimize)
-        self.log('obj/total_loss', losses.get('total_loss', 0.0), on_step=True, on_epoch=True, prog_bar=True)
-        self.log('obj/rating_loss', losses.get('rating_loss', 0.0), on_step=True, on_epoch=True, prog_bar=True)
-        self.log('obj/ranking_loss', losses.get('ranking_loss', 0.0), on_step=True, on_epoch=True, prog_bar=True)
+        # Log objective losses
+        self.log('obj/total_loss', final_total_loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log('obj/rating_loss', final_rating_loss, on_step=True, on_epoch=True, prog_bar=True)
+        self.log('obj/ranking_loss', final_ranking_loss, on_step=True, on_epoch=True, prog_bar=True)
+        
         if self._is_log_step(self.log_every_n_steps):
             reg_loss = self._compute_regularizer_loss()
-            base_total = torch.as_tensor(losses.get('total_loss', 0.0), device=reg_loss.device)
+            base_total = torch.as_tensor(final_total_loss, device=reg_loss.device)
             self.log('obj/regularizer_loss', reg_loss, on_step=True, on_epoch=True)
             self.log('obj/total_loss_with_reg', base_total + reg_loss, on_step=True, on_epoch=True)
+        
+        # Aggregate and log per-status losses across chunks
         for k in [
             "masked_total_loss",
             "observed_total_loss",
@@ -578,8 +708,10 @@ class ImputerLightningModule(pl.LightningModule):
             "masked_ranking_loss",
             "observed_ranking_loss",
         ]:
-            if k in losses:
-                self.log(f"obj/{k}", losses[k], on_step=True, on_epoch=True)
+            values = [losses[k] for losses in chunk_losses if k in losses]
+            if values:
+                mean_value = sum(values) / len(values)
+                self.log(f"obj/{k}", mean_value, on_step=True, on_epoch=True)
         
         # Update loss weights if decay is enabled
         if self.decay_observed_weight:
@@ -595,7 +727,7 @@ class ImputerLightningModule(pl.LightningModule):
             self.log('train/observed_loss_weight', current_observed_weight, on_epoch=True)
             self.log('train/masked_loss_weight', self.initial_masked_weight, on_epoch=True)
         
-        return total_loss
+        return total_loss_tensor
 
     def on_train_batch_end(self, outputs, batch, batch_idx, dataloader_idx: int = 0) -> None:
         if not self._log_update_this_step or self._param_snapshot is None:
