@@ -3,12 +3,11 @@ Unified Entity Imputer — entities as tokens in self-attention sequence.
 
 Architecture:
   1. Entity tokens (I attrs + J annotators + K items) in same sequence as observations
-  2. Edge-label key dimensions (IS_ATTR, IS_ANNOT, IS_ITEM) for entity tokens
-  3. Pointer mechanism (SAME_ATTR, SAME_ANNOT, SAME_ITEM) between observations
-  4. Type embeddings + optional per-entity deviation with dropout
-  5. Data-dependent item embeddings from mean-pooled observed [features|params]
-  6. Layer-0 observations: attribute + annotator composition
-  7. Prediction head reads from [features | params] concatenation
+  2. Per-pair edge indicators (6 dims: ATTR, ANNOT, ITEM + reverses) modulate attention
+  3. Type embeddings + optional per-entity deviation with dropout
+  4. Data-dependent item embeddings from mean-pooled observed [features|params]
+  5. Layer-0 observations: attribute + annotator composition
+  6. Prediction head reads from [features | params] concatenation
 
 External interface is identical to MultiVariableImputer:
   forward(ranking_data_list) → {'rating': [B,N,C], 'ranking': [B,N,R]}
@@ -357,82 +356,70 @@ class UnifiedEntityImputer(nn.Module):
         return torch.zeros(B, num_entities, self.param_dim, device=device)
 
     # ════════════════════════════════════════════════════════════════
-    # BUILD KEY EDGE FEATURES
+    # BUILD PER-PAIR EDGE INDICATORS
     # ════════════════════════════════════════════════════════════════
 
-    def _build_key_edge_features(
-        self,
-        N: int,
-        B: int,
-    ) -> torch.Tensor:
-        """Build fixed edge features for key positions.
-
-        Sequence structure: [observations (N) | attributes (I) | annotators (J) | items (K)]
-
-        Per Jason's proposal, edge labels should be properties of the KEY only:
-          0: IS_ATTR — key token is an attribute entity
-          1: IS_ANNOT — key token is an annotator entity
-          2: IS_ITEM — key token is an item entity
-
-        Note: SAME_ATTR/SAME_ANNOT/SAME_ITEM between observations are handled
-        separately via the pointer mechanism (K_aug), not through key-only edges.
-
-        Returns:
-            key_edge_features: [B, L, 3] where L = N + I + J + K
-        """
-        I, J, K = self.num_attributes, self.num_annotators, self.num_items
-        L = N + I + J + K
-        device = self.attr_type_emb.device
-
-        key_edges = torch.zeros(L, 3, device=device)
-
-        # IS_ATTR (dim 0): positions N to N+I are attribute entities
-        key_edges[N:N+I, 0] = 1.0
-
-        # IS_ANNOT (dim 1): positions N+I to N+I+J are annotator entities
-        key_edges[N+I:N+I+J, 1] = 1.0
-
-        # IS_ITEM (dim 2): positions N+I+J to end are item entities
-        key_edges[N+I+J:, 2] = 1.0
-
-        # Expand for batch
-        return key_edges.unsqueeze(0).expand(B, -1, -1)  # [B, L, 3]
-
-    # ════════════════════════════════════════════════════════════════
-    # BUILD PAIRWISE OBS-TO-OBS INDICATORS (K_aug)
-    # ════════════════════════════════════════════════════════════════
-
-    def _build_K_aug(
+    def _build_edge_indicators(
         self,
         attr_ids: torch.Tensor,
         annot_ids: torch.Tensor,
         item_ids: torch.Tensor,
+        N: int,
         B: int,
     ) -> torch.Tensor:
-        """Build pairwise SAME_ATTR/SAME_ANNOT/SAME_ITEM indicators for observations.
+        """Build per-pair edge indicators for the graph structure.
 
-        Same mechanism as the old Marformer's pointer mechanism (K_aug).
+        Sequence: [observations (N) | attributes (I) | annotators (J) | items (K)]
+
+        Edge labels (per Jason's proposal — query-dependent key features):
+          0: ATTR      — obs → its attribute entity
+          1: ANNOT     — obs → its annotator entity
+          2: ITEM      — obs → its item entity
+          3: REV_ATTR  — attribute entity → its observations
+          4: REV_ANNOT — annotator entity → its observations
+          5: REV_ITEM  — item entity → its observations
 
         Args:
             attr_ids: [N] — attribute id per observation
             annot_ids: [N] — annotator id per observation
-            item_ids: [N] — item id per observation
+            item_ids: [N] — item id per observation (-1 for invalid)
+            N: number of observation tokens
             B: batch size
 
         Returns:
-            K_aug: [B, N, N, 3] where [b, i, j, :] = [same_attr, same_annot, same_item]
+            edge_indicators: [B, L, L, 6] — binary indicators
         """
-        attr_indicator = (attr_ids.unsqueeze(0) == attr_ids.unsqueeze(1)).float()  # [N, N]
-        annot_indicator = (annot_ids.unsqueeze(0) == annot_ids.unsqueeze(1)).float()  # [N, N]
-        item_indicator = (item_ids.unsqueeze(0) == item_ids.unsqueeze(1)).float()  # [N, N]
+        I, J, K = self.num_attributes, self.num_annotators, self.num_items
+        L = N + I + J + K
+        device = attr_ids.device
 
-        # Don't count invalid item_ids (-1) as matching
-        invalid = (item_ids == -1)
-        item_indicator[invalid, :] = 0
-        item_indicator[:, invalid] = 0
+        edge_indicators = torch.zeros(1, L, L, 6, device=device)
 
-        K_aug = torch.stack([attr_indicator, annot_indicator, item_indicator], dim=-1)  # [N, N, 3]
-        return K_aug.unsqueeze(0).expand(B, -1, -1, -1)  # [B, N, N, 3]
+        obs_idx = torch.arange(N, device=device)
+
+        # ATTR: obs n → attribute entity at position N + attr_ids[n]
+        attr_pos = N + attr_ids  # [N]
+        edge_indicators[0, obs_idx, attr_pos, 0] = 1.0
+        # REV_ATTR: attribute entity → its observations
+        edge_indicators[0, attr_pos, obs_idx, 3] = 1.0
+
+        # ANNOT: obs n → annotator entity at position N + I + annot_ids[n]
+        annot_pos = N + I + annot_ids  # [N]
+        edge_indicators[0, obs_idx, annot_pos, 1] = 1.0
+        # REV_ANNOT: annotator entity → its observations
+        edge_indicators[0, annot_pos, obs_idx, 4] = 1.0
+
+        # ITEM: obs n → item entity at position N + I + J + item_ids[n]
+        # Handle item_ids = -1 (padding)
+        valid_mask = item_ids >= 0
+        valid_obs = obs_idx[valid_mask]
+        valid_item_ids = item_ids[valid_mask]
+        item_pos = N + I + J + valid_item_ids  # [N_valid]
+        edge_indicators[0, valid_obs, item_pos, 2] = 1.0
+        # REV_ITEM: item entity → its observations
+        edge_indicators[0, item_pos, valid_obs, 5] = 1.0
+
+        return edge_indicators.expand(B, -1, -1, -1)  # [B, L, L, 6]
 
     # ════════════════════════════════════════════════════════════════
     # BUILD ATTENTION MASK
@@ -534,9 +521,6 @@ class UnifiedEntityImputer(nn.Module):
             item_emb, obs_features, obs_params, item_ids, status, B
         )  # [B, K, D]
 
-        # ── Build pairwise obs-to-obs indicators ──
-        K_aug = self._build_K_aug(attr_ids, annot_ids, item_ids, B)  # [B, N, N, 3]
-
         # ── Concatenate into unified sequence ──
         # Features: [obs | attr | annot | item]
         all_features = torch.cat([obs_features, attr_emb, annot_emb, item_emb], dim=1)  # [B, L, D]
@@ -546,8 +530,8 @@ class UnifiedEntityImputer(nn.Module):
         # ── Build unified tensor [features | params] ──
         x = torch.cat([all_features, all_params], dim=-1)  # [B, L, D + param_dim]
 
-        # ── Build key edge features and attention mask ──
-        key_edge_features = self._build_key_edge_features(N, B)  # [B, L, 3]
+        # ── Build per-pair edge indicators and attention mask ──
+        edge_indicators = self._build_edge_indicators(attr_ids, annot_ids, item_ids, N, B)  # [B, L, L, 6]
         attn_mask = self._build_attn_mask(status, B, N)  # [B, L]
 
         # ── Intermediate states ──
@@ -560,7 +544,7 @@ class UnifiedEntityImputer(nn.Module):
 
         # ── Run transformer blocks ──
         for block in self.blocks:
-            x = block(x, key_edge_features, attn_mask, K_aug=K_aug, num_obs=N)
+            x = block(x, edge_indicators, attn_mask)
             if return_intermediate:
                 features = x[:, :, :self.feature_dim]
                 params = x[:, :, self.feature_dim:]

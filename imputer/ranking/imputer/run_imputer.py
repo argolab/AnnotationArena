@@ -101,7 +101,7 @@ def main():
                         help="Batch size for training (1=no batching, >1=batch different masking patterns, default: 1)")
     parser.add_argument("--selective-masking", action="store_true",
                         help="Whether to mask all vars with (j, k) pairs in the synthetic masking examples")
-    parser.add_argument("--max-item", default=1,
+    parser.add_argument("--max-item", type=int, default=1,
                         help="Max number of items in a single imputer forward pass")
     args = parser.parse_args()
 
