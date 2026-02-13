@@ -30,6 +30,14 @@ def main():
     parser.add_argument("--J", type=int, default=9, help="Number of annotators")
     parser.add_argument("--D", type=int, default=64, help="Embedding dimension")
     parser.add_argument("--C", type=int, default=5, help="Number of rating categories")
+    parser.add_argument("--d-annotator", type=int, default=None,
+                       help="Annotator embedding dimension (default: D). Lower values give low-rank factorization.")
+    parser.add_argument("--use-factored-annotator", action="store_true", default=True,
+                       help="Use new factored annotator model V_ij = v_i + u_j * M_i (default: True)")
+    parser.add_argument("--use-spherical-annotator", action="store_true",
+                       help="Use old spherical annotator model V_ij ~ N(v_i, sigma^2) (disables factored)")
+    parser.add_argument("--derive-thresholds-from-annotator", action="store_true",
+                       help="Derive rating thresholds from annotator embedding u_j (consistent annotator style, fewer d.f.)")
     
     # Observation protocol controls
     # Deprecated in generator; keep flags for backward CLI compatibility (ignored)
@@ -37,6 +45,8 @@ def main():
                        help="[deprecated] Enable third annotator for disagreement > 1")
     parser.add_argument("--disable-third-annotator", action="store_true",
                        help="[deprecated] Disable third annotator (ablation)")
+    parser.add_argument("--enable-pairwise-rankings", action="store_true", default=True,
+                       help="Enable pairwise rankings (ablation)")
     parser.add_argument("--disable-pairwise-rankings", action="store_true",
                        help="Disable pairwise rankings (ablation)")
     
@@ -115,7 +125,8 @@ def main():
     args = parser.parse_args()
     
     # Handle ablation flags
-    enable_pairwise_rankings = not args.disable_pairwise_rankings
+    enable_pairwise_rankings = args.enable_pairwise_rankings and not args.disable_pairwise_rankings
+    use_factored_annotator = args.use_factored_annotator and not args.use_spherical_annotator
 
     # Create configuration
     config = DataGenConfig(
@@ -125,6 +136,9 @@ def main():
         J=args.J,
         D=args.D,
         C=args.C,
+        d_annotator=args.d_annotator,
+        use_factored_annotator=use_factored_annotator,
+        derive_thresholds_from_annotator=args.derive_thresholds_from_annotator,
         enable_pairwise_rankings=enable_pairwise_rankings,
         pairwise_cap_per_item=args.pairwise_cap_per_item,
         sigma_annotator=args.sigma_annotator,

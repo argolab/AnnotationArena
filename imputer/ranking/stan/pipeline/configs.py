@@ -11,6 +11,21 @@ class DataGenConfig:
     D: int
     C: int
 
+    # Annotator embedding dimension (for low-rank factorization)
+    # None means use D (full rank)
+    d_annotator: Optional[int] = None
+
+    # Annotator model selection
+    # True = new factored model: V_ij = v_i + u_j * M_i (allows covariance learning)
+    # False = old spherical model: V_ij ~ N(v_i, sigma^2) independently
+    use_factored_annotator: bool = True
+
+    # Rating threshold derivation from annotator embedding
+    # True = thresholds derived from u_j (consistent annotator style, fewer d.f.)
+    # False = independent Dirichlet samples for each (i,j) pair
+    # Only meaningful when use_factored_annotator=True
+    derive_thresholds_from_annotator: bool = False
+
     enable_third_annotator: bool = True
     enable_pairwise_rankings: bool = True
     pairwise_cap_per_item: int = 10

@@ -11,6 +11,7 @@ import time
 
 from imputer.data import DataConverter, RankingData
 from imputer.ranking_imputer import MultiVariableImputer
+from imputer.unified_entity_imputer import UnifiedEntityImputer
 from imputer.callbacks import EvaluationCallback
 from imputer.eval import EvaluationEngine
 import sys
@@ -50,6 +51,15 @@ def main():
     parser.add_argument("--embedding-dim", type=int, default=128, help="Embedding dimension (default: 128)")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate (default: 0.1)")
     parser.add_argument("--num_ffn_layers", type=int, default=4, help="FFN Layers")
+    parser.add_argument("--d-ff", type=int, default=512, help="FFN hidden dimension (default: 512)")
+
+    # Unified Entity architecture
+    parser.add_argument("--use-unified-entity", action="store_true", help="Use unified entity architecture")
+    parser.add_argument("--use-prediction-head", action="store_true", help="Use separate MLP prediction head")
+    parser.add_argument("--logit-high", type=float, default=20.0, help="Value for one-hot logit spike in param stream (default: 20.0)")
+    parser.add_argument("--use-annotator-deviation", action="store_true", default=True, help="Per-annotator deviation embeddings (default: True)")
+    parser.add_argument("--no-annotator-deviation", dest="use_annotator_deviation", action="store_false", help="Disable per-annotator deviation embeddings")
+    parser.add_argument("--annotator-dropout", type=float, default=0.5, help="Dropout for annotator deviation embeddings (default: 0.5)")
 
     # Loss weighting arguments
     parser.add_argument("--masked-loss-weight", type=float, default=8.0, help="Weight for masked entry loss (default: 8.0)")
@@ -191,26 +201,54 @@ def main():
     test_all: List[RankingData] = test_observed + test_missing
 
     # Build model
-    model = MultiVariableImputer(
-        num_attributes=sizes["num_attributes"],
-        num_annotators=sizes["num_annotators"],
-        num_items=sizes["num_items"],
-        num_likert_classes=sizes["num_likert_classes"],
-        max_rank_size=args.max_rank_size,
-        device=args.device,
-        encoder_layers_num=args.encoder_layers,
-        attention_heads=args.attention_heads,
-        embedding_dim=args.embedding_dim,
-        dropout=args.dropout,
-        use_gelu_after_attention=args.use_gelu_after_attention,
-        use_final_norm=args.use_final_norm,
-        normalize_parameter=args.normalize_parameter,
-        num_ffn_layers=args.num_ffn_layers,
-        temperature=args.temperature,
-        use_concat_embedding=bool(args.use_concat_embedding),
-        batch_size=args.batch_size,
-        enable_pointer_mechanism=True,
-    )
+    if args.use_unified_entity:
+        model = UnifiedEntityImputer(
+            num_attributes=sizes["num_attributes"],
+            num_annotators=sizes["num_annotators"],
+            num_items=sizes["num_items"],
+            num_likert_classes=sizes["num_likert_classes"],
+            max_rank_size=args.max_rank_size,
+            device=args.device,
+            encoder_layers_num=args.encoder_layers,
+            attention_heads=args.attention_heads,
+            embedding_dim=args.embedding_dim,
+            dropout=args.dropout,
+            use_gelu_after_attention=args.use_gelu_after_attention,
+            use_final_norm=args.use_final_norm,
+            normalize_parameter=args.normalize_parameter,
+            num_ffn_layers=args.num_ffn_layers,
+            d_ff=args.d_ff,
+            temperature=args.temperature,
+            batch_size=args.batch_size,
+            use_prediction_head=args.use_prediction_head,
+            logit_high=args.logit_high,
+            use_annotator_deviation=args.use_annotator_deviation,
+            annotator_dropout=args.annotator_dropout,
+        )
+        print(f"Using UnifiedEntityImputer (logit_high={args.logit_high}, "
+              f"prediction_head={args.use_prediction_head}, "
+              f"annotator_deviation={args.use_annotator_deviation})")
+    else:
+        model = MultiVariableImputer(
+            num_attributes=sizes["num_attributes"],
+            num_annotators=sizes["num_annotators"],
+            num_items=sizes["num_items"],
+            num_likert_classes=sizes["num_likert_classes"],
+            max_rank_size=args.max_rank_size,
+            device=args.device,
+            encoder_layers_num=args.encoder_layers,
+            attention_heads=args.attention_heads,
+            embedding_dim=args.embedding_dim,
+            dropout=args.dropout,
+            use_gelu_after_attention=args.use_gelu_after_attention,
+            use_final_norm=args.use_final_norm,
+            normalize_parameter=args.normalize_parameter,
+            num_ffn_layers=args.num_ffn_layers,
+            temperature=args.temperature,
+            use_concat_embedding=bool(args.use_concat_embedding),
+            batch_size=args.batch_size,
+            enable_pointer_mechanism=True,
+        )
 
     # Print temperature scaling status
     if args.temperature != 1.0:
@@ -318,15 +356,21 @@ def main():
             "attention_heads": model.blocks[0].attention_heads,
             "embedding_dim": model.embedding_dim,
             "dropout": args.dropout,
-            "embedding_type": "atom",
+            "embedding_type": getattr(model, 'embedding_type', 'atom'),
             "device": args.device,
             "include_sign_bit_in_params": True,
             "use_gelu_after_attention": args.use_gelu_after_attention,
             "use_final_norm": args.use_final_norm,
             "normalize_parameter": args.normalize_parameter,
             "num_ffn_layers": args.num_ffn_layers,
+            "d_ff": args.d_ff,
             "use_concat_embedding": bool(args.use_concat_embedding),
-            "temperature": args.temperature
+            "temperature": args.temperature,
+            "use_unified_entity": bool(args.use_unified_entity),
+            "use_prediction_head": bool(args.use_prediction_head),
+            "logit_high": args.logit_high,
+            "use_annotator_deviation": bool(args.use_annotator_deviation),
+            "annotator_dropout": args.annotator_dropout
         },
         "training": {
             "epochs": args.epochs,
@@ -468,8 +512,9 @@ def main():
         'attention_heads': model.blocks[0].attention_heads,
         'embedding_dim': model.embedding_dim,
         'dropout': model.blocks[0].dropout_1.p,
-        'embedding_type': model.embedding_type,
-        'device': args.device
+        'embedding_type': getattr(model, 'embedding_type', 'atom'),
+        'device': args.device,
+        'use_unified_entity': bool(args.use_unified_entity),
     }
     print(f"Saving model with config: {model_config}")
     torch.save({

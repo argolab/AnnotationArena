@@ -43,6 +43,9 @@ def generate_data(config: DataGenConfig, stan_file: Optional[str] = None) -> Gro
     model = compile_data_generation_model(stan_file)
 
     # Prepare Stan data
+    # d_annotator defaults to D if not specified
+    d_annotator = config.d_annotator if config.d_annotator is not None else config.D
+
     stan_data = {
         "K_train": config.K_train,
         "K_test": config.K_test,
@@ -50,6 +53,7 @@ def generate_data(config: DataGenConfig, stan_file: Optional[str] = None) -> Gro
         "J": config.J,
         "D": config.D,
         "C": config.C,
+        "d_annotator": d_annotator,
         "enable_pairwise_rankings": 1 if config.enable_pairwise_rankings else 0,
         "pairwise_cap_per_item": config.pairwise_cap_per_item,
         "sigma_annotator": config.sigma_annotator,
@@ -59,6 +63,8 @@ def generate_data(config: DataGenConfig, stan_file: Optional[str] = None) -> Gro
         "hold_I_constant": 1 if config.hold_I_constant else 0,
         "hold_J_constant": 1 if config.hold_J_constant else 0,
         "hold_K_constant": 1 if config.hold_K_constant else 0,
+        "use_factored_annotator": 1 if config.use_factored_annotator else 0,
+        "derive_thresholds_from_annotator": 1 if config.derive_thresholds_from_annotator else 0,
     }
 
     # Sample with fixed parameters (data generation)
@@ -192,50 +198,24 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
         test_posterior_rating_probs = test_posterior_rating_probs[0]
 
     # Extract pairwise rankings
-    # When K_train < 2 or K_test < 2 there are no possible pairwise comparisons.
-    # Stan may omit zero-length generated quantities entirely (no 'train_pairwise_items' key),
-    # so we must handle that case and treat it as \"no pairwise data\".
-    num_train_pairwise = int(sample.get("num_train_pairwise_rankings", 0))
-    num_test_pairwise = int(sample.get("num_test_pairwise_rankings", 0))
+    num_train_pairwise = int(sample["num_train_pairwise_rankings"])
+    num_test_pairwise = int(sample["num_test_pairwise_rankings"])
 
-    has_train_pairwise = "train_pairwise_items" in sample and num_train_pairwise > 0
-    has_test_pairwise = "test_pairwise_items" in sample and num_test_pairwise > 0
+    # Training pairwise rankings
+    train_pairwise_items = sample["train_pairwise_items"][0, :num_train_pairwise]  # Shape: [N_train, 2]
+    train_pairwise_orders = sample["train_pairwise_orders"][0, :num_train_pairwise]  # Shape: [N_train]
+    train_pairwise_annotators = sample["train_pairwise_annotator"][0, :num_train_pairwise]  # Shape: [N_train]
+    train_pairwise_attributes = sample["train_pairwise_attribute"][0, :num_train_pairwise]  # Shape: [N_train]
+    train_pairwise_tied_ratings = sample["train_pairwise_tied_rating"][0, :num_train_pairwise]  # Shape: [N_train]
+    train_pairwise_observed = sample["train_pairwise_observed"][0, :num_train_pairwise]  # Shape: [N_train]
 
-    if has_train_pairwise:
-        # Training pairwise rankings
-        train_pairwise_items = sample["train_pairwise_items"][0, :num_train_pairwise]  # Shape: [N_train, 2]
-        train_pairwise_orders = sample["train_pairwise_orders"][0, :num_train_pairwise]  # Shape: [N_train]
-        train_pairwise_annotators = sample["train_pairwise_annotator"][0, :num_train_pairwise]  # Shape: [N_train]
-        train_pairwise_attributes = sample["train_pairwise_attribute"][0, :num_train_pairwise]  # Shape: [N_train]
-        train_pairwise_tied_ratings = sample["train_pairwise_tied_rating"][0, :num_train_pairwise]  # Shape: [N_train]
-        train_pairwise_observed = sample["train_pairwise_observed"][0, :num_train_pairwise]  # Shape: [N_train]
-    else:
-        # No training pairwise data
-        train_pairwise_items = np.zeros((0, 2), dtype=int)
-        train_pairwise_orders = np.zeros(0, dtype=int)
-        train_pairwise_annotators = np.zeros(0, dtype=int)
-        train_pairwise_attributes = np.zeros(0, dtype=int)
-        train_pairwise_tied_ratings = np.zeros(0, dtype=int)
-        train_pairwise_observed = np.zeros(0, dtype=int)
-        num_train_pairwise = 0
-
-    if has_test_pairwise:
-        # Test pairwise rankings
-        test_pairwise_items = sample["test_pairwise_items"][0, :num_test_pairwise]  # Shape: [N_test, 2]
-        test_pairwise_orders = sample["test_pairwise_orders"][0, :num_test_pairwise]  # Shape: [N_test]
-        test_pairwise_annotators = sample["test_pairwise_annotator"][0, :num_test_pairwise]  # Shape: [N_test]
-        test_pairwise_attributes = sample["test_pairwise_attribute"][0, :num_test_pairwise]  # Shape: [N_test]
-        test_pairwise_tied_ratings = sample["test_pairwise_tied_rating"][0, :num_test_pairwise]  # Shape: [N_test]
-        test_pairwise_observed = sample["test_pairwise_observed"][0, :num_test_pairwise]  # Shape: [N_test]
-    else:
-        # No test pairwise data
-        test_pairwise_items = np.zeros((0, 2), dtype=int)
-        test_pairwise_orders = np.zeros(0, dtype=int)
-        test_pairwise_annotators = np.zeros(0, dtype=int)
-        test_pairwise_attributes = np.zeros(0, dtype=int)
-        test_pairwise_tied_ratings = np.zeros(0, dtype=int)
-        test_pairwise_observed = np.zeros(0, dtype=int)
-        num_test_pairwise = 0
+    # Test pairwise rankings
+    test_pairwise_items = sample["test_pairwise_items"][0, :num_test_pairwise]  # Shape: [N_test, 2]
+    test_pairwise_orders = sample["test_pairwise_orders"][0, :num_test_pairwise]  # Shape: [N_test]
+    test_pairwise_annotators = sample["test_pairwise_annotator"][0, :num_test_pairwise]  # Shape: [N_test]
+    test_pairwise_attributes = sample["test_pairwise_attribute"][0, :num_test_pairwise]  # Shape: [N_test]
+    test_pairwise_tied_ratings = sample["test_pairwise_tied_rating"][0, :num_test_pairwise]  # Shape: [N_test]
+    test_pairwise_observed = sample["test_pairwise_observed"][0, :num_test_pairwise]  # Shape: [N_test]
     
     # Convert training ratings to list format
     train_ratings = []
