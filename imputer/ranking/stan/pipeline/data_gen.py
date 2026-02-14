@@ -67,6 +67,10 @@ def generate_data(config: DataGenConfig, stan_file: Optional[str] = None) -> Gro
         "derive_thresholds_from_annotator": 1 if config.derive_thresholds_from_annotator else 0,
     }
 
+    # Add factor_decay for tensor CP model (only when specified)
+    if config.factor_decay is not None:
+        stan_data["factor_decay"] = config.factor_decay
+
     # Sample with fixed parameters (data generation)
     fit = model.sample(
         data=stan_data,

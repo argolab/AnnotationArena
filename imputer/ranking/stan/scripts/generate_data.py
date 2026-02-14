@@ -85,6 +85,8 @@ def main():
         help="Temperature for pairwise ranking generation",
     )
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--factor-decay", type=float, default=None,
+                       help="CP tensor decomposition: T_d = factor_decay^(d-1). Only for tensor_data_generation.stan.")
 
     # Observation protocol
     parser.add_argument("--observation-protocol", type=str, default="tie_breaking",
@@ -152,6 +154,7 @@ def main():
         hold_I_constant=args.hold_I_constant,
         hold_J_constant=args.hold_J_constant,
         hold_K_constant=args.hold_K_constant,
+        factor_decay=args.factor_decay,
     )
     
     # Create output directory

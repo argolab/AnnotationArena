@@ -78,47 +78,59 @@ def prepare_stan_data_for_inference(
         raise ValueError("Cannot use both train_only and test_only")
     
     # Filter ratings and pairwise data based on instance
+    # When using train_only or test_only, item indices must be re-mapped
+    # to 1..K since the bundle uses global indices (test items offset by K_train).
+    item_offset = 0  # subtracted from item indices to re-map
     if use_train_only:
         observed_ratings = [r for r in bundle.observed_ratings if r["instance"] == "train"]
         observed_pairwise = [p for p in bundle.observed_pairwise if p["instance"] == "train"]
         K = config.K_train
+        item_offset = 0  # train items are already 1..K_train
     elif use_test_only:
         observed_ratings = [r for r in bundle.observed_ratings if r["instance"] == "test"]
         observed_pairwise = [p for p in bundle.observed_pairwise if p["instance"] == "test"]
         K = config.K_test
+        item_offset = config.K_train  # test items are K_train+1..K_train+K_test -> 1..K_test
     else:
         # Use both train and test (transductive learning)
         observed_ratings = bundle.observed_ratings
         observed_pairwise = bundle.observed_pairwise
         K = config.K_train + config.K_test
 
-    # Convert ratings to Stan format
+    # Convert ratings to Stan format (re-map item indices)
     N_ratings = len(observed_ratings)
     rating_attributes = [r["attribute"] for r in observed_ratings]
     rating_annotators = [r["annotator"] for r in observed_ratings]
-    rating_items = [r["item"] for r in observed_ratings]
+    rating_items = [r["item"] - item_offset for r in observed_ratings]
     rating_values = [r["value"] for r in observed_ratings]
 
     # Convert pairwise rankings to Stan format
     N_pairwise_rankings = len(observed_pairwise)
     pairwise_ranking_attributes = [p["attribute"] for p in observed_pairwise]
     pairwise_ranking_annotators = [p["annotator"] for p in observed_pairwise]
-    pairwise_ranking_items = [p["items"] for p in observed_pairwise]
+    pairwise_ranking_items = [[item - item_offset for item in p["items"]] for p in observed_pairwise]
     pairwise_ranking_orders = [p["order"][0] for p in observed_pairwise]  # 1 if item1 > item2, 2 if item2 > item1
 
-    # Prepare missing variables (all missing ratings and pairwise)
-    missing_ratings = bundle.missing_ratings
-    missing_pairwise = bundle.missing_pairwise
+    # Prepare missing variables (filter by instance, re-map item indices)
+    if use_train_only:
+        missing_ratings = [r for r in bundle.missing_ratings if r["instance"] == "train"]
+        missing_pairwise = [p for p in bundle.missing_pairwise if p["instance"] == "train"]
+    elif use_test_only:
+        missing_ratings = [r for r in bundle.missing_ratings if r["instance"] == "test"]
+        missing_pairwise = [p for p in bundle.missing_pairwise if p["instance"] == "test"]
+    else:
+        missing_ratings = bundle.missing_ratings
+        missing_pairwise = bundle.missing_pairwise
 
     N_missing_ratings = len(missing_ratings)
     missing_rating_attributes = [r["attribute"] for r in missing_ratings]
     missing_rating_annotators = [r["annotator"] for r in missing_ratings]
-    missing_rating_items = [r["item"] for r in missing_ratings]
+    missing_rating_items = [r["item"] - item_offset for r in missing_ratings]
 
     N_missing_pairwise_rankings = len(missing_pairwise)
     missing_pairwise_ranking_attributes = [p["attribute"] for p in missing_pairwise]
     missing_pairwise_ranking_annotators = [p["annotator"] for p in missing_pairwise]
-    missing_pairwise_ranking_items = [p["items"] for p in missing_pairwise]
+    missing_pairwise_ranking_items = [[item - item_offset for item in p["items"]] for p in missing_pairwise]
     
     stan_data = {
         # Dimensions

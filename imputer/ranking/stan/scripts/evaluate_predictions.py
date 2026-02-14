@@ -37,6 +37,10 @@ def main():
     parser.add_argument("--csv-pattern", default="domain_model-*.csv", help="Pattern for MCMC CSV files")
     parser.add_argument("--verbose", action="store_true", help="Print detailed results")
     parser.add_argument("--overwrite-existing-data", action="store_true", help="Overwrite existing output directory if it exists")
+    parser.add_argument("--use-test-only", action="store_true",
+                       help="Stan was run with --use-test-only; predictions correspond to test missing ratings only")
+    parser.add_argument("--use-train-only", action="store_true",
+                       help="Stan was run with --use-train-only; predictions correspond to train missing ratings only")
     
     args = parser.parse_args()
     
@@ -110,7 +114,9 @@ def main():
     # Evaluate predictions
     print(f"\nEvaluating predictions...")
     try:
-        results = evaluate_predictives(fit, bundle, config)
+        results = evaluate_predictives(fit, bundle, config,
+                                      use_test_only=args.use_test_only,
+                                      use_train_only=args.use_train_only)
         
         print("Evaluation completed successfully!")
         

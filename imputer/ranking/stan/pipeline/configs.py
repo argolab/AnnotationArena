@@ -47,6 +47,11 @@ class DataGenConfig:
     hold_J_constant: bool = False
     hold_K_constant: bool = False
 
+    # CP tensor decomposition parameter
+    # T_d = factor_decay^(d-1), controls how fast components decay
+    # Only used with tensor_data_generation.stan
+    factor_decay: Optional[float] = None
+
     # Observation protocol
     observation_protocol: str = "tie_breaking"  # "tie_breaking", "mcar", "extended_rankings"
     mcar_missing_rate: float = 0.5  # Missing rate for MCAR protocol (was mar_missing_rate)

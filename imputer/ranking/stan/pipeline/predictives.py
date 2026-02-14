@@ -221,29 +221,57 @@ def evaluate_pairwise_predictions(
 def evaluate_predictives(
     fit: cmdstanpy.CmdStanMCMC,
     bundle: GroundTruthBundle,
-    config: Dict[str, Any]
+    config: Dict[str, Any],
+    use_test_only: bool = False,
+    use_train_only: bool = False
 ) -> PredictiveResults:
     """
     Extract and evaluate posterior predictives against ground truth.
-    
+
     Args:
         fit: CmdStanMCMC fit object
         bundle: Ground truth data bundle
         config: Configuration dict
-    
+        use_test_only: If True, Stan was run with --use-test-only so predictions
+                       correspond only to test missing ratings
+        use_train_only: If True, Stan was run with --use-train-only so predictions
+                        correspond only to train missing ratings
+
     Returns:
         PredictiveResults object with predictions and metrics
     """
     # Extract predictives
     predictives = extract_predictives_from_fit(fit)
-    missing_indices = bundle.missing_ratings_indexes_in_test_instance
-    # Evaluate rating predictions
-    rating_metrics = evaluate_rating_predictions(
-        predictives["missing_rating_predictions"][:, missing_indices],
-        predictives["missing_rating_probs"][:, missing_indices],
-        [bundle.missing_ratings[i] for i in range(len(bundle.missing_ratings)) if i in missing_indices],
-        config
-    )
+
+    if use_test_only:
+        # Stan predicted only test-instance missing ratings, indices are 0..N_test_missing-1
+        eval_missing = [r for r in bundle.missing_ratings if r["instance"] == "test"]
+        all_indices = list(range(len(eval_missing)))
+        rating_metrics = evaluate_rating_predictions(
+            predictives["missing_rating_predictions"][:, all_indices],
+            predictives["missing_rating_probs"][:, all_indices],
+            eval_missing,
+            config
+        )
+    elif use_train_only:
+        # Stan predicted only train-instance missing ratings
+        eval_missing = [r for r in bundle.missing_ratings if r["instance"] == "train"]
+        all_indices = list(range(len(eval_missing)))
+        rating_metrics = evaluate_rating_predictions(
+            predictives["missing_rating_predictions"][:, all_indices],
+            predictives["missing_rating_probs"][:, all_indices],
+            eval_missing,
+            config
+        )
+    else:
+        missing_indices = bundle.missing_ratings_indexes_in_test_instance
+        # Evaluate rating predictions
+        rating_metrics = evaluate_rating_predictions(
+            predictives["missing_rating_predictions"][:, missing_indices],
+            predictives["missing_rating_probs"][:, missing_indices],
+            [bundle.missing_ratings[i] for i in range(len(bundle.missing_ratings)) if i in missing_indices],
+            config
+        )
     
     # Evaluate pairwise predictions (if any exist)
     if len(bundle.missing_pairwise) > 0 and predictives["missing_pairwise_ranking_predictions"].shape[1] > 0:
