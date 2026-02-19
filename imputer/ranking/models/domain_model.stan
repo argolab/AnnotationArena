@@ -93,6 +93,7 @@ transformed parameters {
         // Convert cumulative probabilities to thresholds
         for (c in 2:C) {
             real cum_prob = sum(rating_probs[ij][1:(c-1)]);
+            cum_prob = fmin(fmax(cum_prob, 1e-6), 1.0 - 1e-6);
             rating_thresholds[ij][c] = inv_Phi(cum_prob);
         }
         

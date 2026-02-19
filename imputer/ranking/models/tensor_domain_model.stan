@@ -2,6 +2,7 @@
  * Domain model for CP tensor decomposition inference using MCMC
  * Learns CP factors (v_i, u_j, e_k) and component weights T_d from ratings and comparisons
  * Score: Z_ijk = sum_d v_id * u_jd * e_kd * T_d where T_d = factor_decay^(d-1)
+ * Loadings are real-valued (normal prior) so the model can fit dot-product and other signed data.
  */
 
 data {
@@ -46,6 +47,8 @@ data {
     
     // Pipeline compatibility (d_annotator should equal D for CP)
     int<lower=1> d_annotator;
+    // Debug init: set to 1 via --stan-arg DEBUG_INIT=1 to reject() with which variable is non-finite
+    int<lower=0,upper=1> DEBUG_INIT;
 }
 
 transformed data {
@@ -59,12 +62,12 @@ transformed data {
         T_weights[d] = pow(factor_decay, d - 1);
     }
     
-    // Score centering: E[Z] = sum_d E[v*u*e]*T_d = sum_d T_d (since E[Exp(1)]=1)
-    real score_center = sum(T_weights);
+    // Score centering: with normal(0,1) loadings E[v*u*e]=0 so E[Z]=0
+    real score_center = 0;
 }
 
 parameters {
-    // CP factor loadings (all positive, use log-normal or exponential priors)
+    // CP factor loadings (real-valued so model can fit dot-product and other signed data)
     // v_id: attribute loadings
     matrix[I, D] v_loadings;
     
@@ -122,9 +125,10 @@ transformed parameters {
             int idx = (i-1)*J + j;
             rating_thresholds[idx][1] = negative_infinity();  // -∞ for category 1
             
-            // Convert cumulative probabilities to thresholds
+            // Convert cumulative probabilities to thresholds (clamp to avoid inf gradient at 0/1)
             for (c in 2:C) {
                 real cum_prob = sum(rating_probs[j][1:(c-1)]);
+                cum_prob = fmin(fmax(cum_prob, 1e-6), 1.0 - 1e-6);
                 rating_thresholds[idx][c] = inv_Phi(cum_prob);
             }
             
@@ -132,13 +136,13 @@ transformed parameters {
         }
     }
     
-    // Compute total_std per ij for rating binning
+    // Compute total_std per ij for rating binning (bounded below to avoid 0/0 or NaN in Phi)
     // Binning is based on distribution of Z + epsilon with std = sqrt(||annotator_preferences[ij]||^2 + sigma_measurement^2)
     for (i in 1:I) {
         for (j in 1:J) {
             int ij_idx = (i-1)*J + j;
             real pref_norm_sq = dot_self(annotator_preferences[ij_idx]);
-            total_std[ij_idx] = sqrt(pref_norm_sq + sigma_measurement * sigma_measurement);
+            total_std[ij_idx] = fmax(sqrt(pref_norm_sq + sigma_measurement * sigma_measurement), 1e-10);
         }
     }
 
@@ -156,28 +160,67 @@ transformed parameters {
 }
 
 model {
+    // ===== DEBUG INIT: locate non-finite gradient (set DEBUG_INIT=1 via --stan-arg) =====
+    if (DEBUG_INIT == 1) {
+        if (temperature <= 0 || is_nan(temperature) || is_inf(temperature))
+            reject("DEBUG_INIT: temperature is non-positive or non-finite, value=", temperature);
+        if (sigma_measurement <= 0 || is_nan(sigma_measurement) || is_inf(sigma_measurement))
+            reject("DEBUG_INIT: sigma_measurement is non-positive or non-finite, value=", sigma_measurement);
+        for (i in 1:I)
+            for (d in 1:D)
+                if (is_nan(v_loadings[i,d]) || is_inf(v_loadings[i,d]))
+                    reject("DEBUG_INIT: v_loadings[", i, ",", d, "] non-finite, value=", v_loadings[i,d]);
+        for (j in 1:J)
+            for (d in 1:D)
+                if (is_nan(u_loadings[j,d]) || is_inf(u_loadings[j,d]))
+                    reject("DEBUG_INIT: u_loadings[", j, ",", d, "] non-finite, value=", u_loadings[j,d]);
+        for (k in 1:K)
+            for (d in 1:D)
+                if (is_nan(e_loadings[k,d]) || is_inf(e_loadings[k,d]))
+                    reject("DEBUG_INIT: e_loadings[", k, ",", d, "] non-finite, value=", e_loadings[k,d]);
+        for (idx in 1:(I*J)) {
+            if (is_nan(total_std[idx]) || is_inf(total_std[idx]) || total_std[idx] <= 0)
+                reject("DEBUG_INIT: total_std[", idx, "] is bad, value=", total_std[idx]);
+        }
+        for (idx in 1:(I*J)) {
+            for (c in 1:(C+1)) {
+                real th = rating_thresholds[idx][c];
+                if (c > 1 && c <= C && (is_nan(th) || is_inf(th)))
+                    reject("DEBUG_INIT: rating_thresholds[", idx, ",", c, "] is non-finite, value=", th);
+            }
+        }
+        for (idx in 1:(I*J)) {
+            for (k in 1:K) {
+                real bs = base_scores[idx, k];
+                if (is_nan(bs) || is_inf(bs))
+                    reject("DEBUG_INIT: base_scores[", idx, ",", k, "] is non-finite, value=", bs);
+            }
+        }
+        for (j in 1:J) {
+            for (c in 1:C) {
+                real p = rating_probs[j][c];
+                if (is_nan(p) || is_inf(p))
+                    reject("DEBUG_INIT: rating_probs[", j, ",", c, "] is non-finite, value=", p);
+            }
+        }
+    }
     // ===== PRIORS =====
     
-    // CP factor loadings: use log-normal priors to ensure positivity
-    // v_id ~ LogNormal(0, 1) so E[v] ≈ 1.65, Var(v) ≈ 4.67
-    // This approximates Exp(1) behavior (E=1, Var=1) but allows negative gradients
+    // CP factor loadings: normal(0, 1) so scores can be negative (fits dot-product and misspecified data)
+    // Softer than lognormal: finite gradient at init, and all data have positive probability
     for (i in 1:I) {
         for (d in 1:D) {
-            v_loadings[i, d] ~ lognormal(0, 1);
+            v_loadings[i, d] ~ normal(0, 1);
         }
     }
-    
-    // u_jd ~ LogNormal(0, 1)
     for (j in 1:J) {
         for (d in 1:D) {
-            u_loadings[j, d] ~ lognormal(0, 1);
+            u_loadings[j, d] ~ normal(0, 1);
         }
     }
-    
-    // e_kd ~ LogNormal(0, 1)
     for (k in 1:K) {
         for (d in 1:D) {
-            e_loadings[k, d] ~ lognormal(0, 1);
+            e_loadings[k, d] ~ normal(0, 1);
         }
     }
     
@@ -207,20 +250,25 @@ model {
         // Conditional: Z + epsilon | v, u, e ~ N(Z, sigma_measurement^2)
         // Standardized: mean = base_score / total_std, std = sigma_measurement / total_std
         real mean_std = base_score / total_std[ij_idx];
-        real cond_std = sigma_measurement / total_std[ij_idx];
+        real cond_std = fmax(sigma_measurement / total_std[ij_idx], 1e-10);  // avoid 0 -> inf gradient
         
         real upper_prob, lower_prob;
+        // Clamp Phi argument to finite range to avoid NaN/Inf from bad proposals (Phi(-20)~0, Phi(20)~1)
+        real raw_upper = (upper_threshold - mean_std) / cond_std;
+        real raw_lower = (lower_threshold - mean_std) / cond_std;
+        real phi_arg_upper = (upper_threshold == positive_infinity()) ? 20.0 : (is_nan(raw_upper) ? 0.0 : fmax(fmin(raw_upper, 20.0), -20.0));
+        real phi_arg_lower = (lower_threshold == negative_infinity()) ? -20.0 : (is_nan(raw_lower) ? 0.0 : fmax(fmin(raw_lower, 20.0), -20.0));
         
         if (upper_threshold == positive_infinity()) {
             upper_prob = 1.0;
         } else {
-            upper_prob = Phi((upper_threshold - mean_std) / cond_std);
+            upper_prob = Phi(phi_arg_upper);
         }
         
         if (lower_threshold == negative_infinity()) {
             lower_prob = 0.0;
         } else {
-            lower_prob = Phi((lower_threshold - mean_std) / cond_std);
+            lower_prob = Phi(phi_arg_lower);
         }
         
         real bin_prob = upper_prob - lower_prob;
@@ -244,9 +292,10 @@ model {
         int item2 = pairwise_ranking_items[n, 2];
         int order = pairwise_ranking_orders[n];  // 1 if item1 > item2, 2 if item2 > item1
         
-        // Base scores scaled by temperature: z_ijk/T
-        real score1 = base_scores[ij_idx, item1] / temperature;
-        real score2 = base_scores[ij_idx, item2] / temperature;
+        // Base scores scaled by temperature: z_ijk/T (bound temperature to avoid inf gradient)
+        real safe_temp = fmax(temperature, 1e-10);
+        real score1 = base_scores[ij_idx, item1] / safe_temp;
+        real score2 = base_scores[ij_idx, item2] / safe_temp;
         
         // Bradley-Terry likelihood: P(item1 > item2) = exp(score1) / (exp(score1) + exp(score2))
         // This is equivalent to log_inv_logit(score1 - score2)

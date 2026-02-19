@@ -17,7 +17,7 @@ from imputer.eval import EvaluationEngine
 import sys
 sys.path.insert(0, "..")
 from stan.pipeline.bundle import GroundTruthBundle
-from stan.pipeline.io import new_run_dir, save_test_metrics, save_predictives
+from stan.pipeline.io import new_run_dir, save_test_metrics, save_predictives, save_json
 
 from imputer.lightning_trainer import ImputerLightningModule, create_lightning_trainer
 from imputer.utils import convert_to_json_serializable, sizes_from_configs, build_predictives
@@ -495,7 +495,7 @@ def main():
     # Training history is saved via Lightning's _save_epoch_artifacts
     print(f"Training history saved to {run_dir}")
 
-    # Evaluate
+    # Evaluate: test_all (for test_metrics.json, as before)
     results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device)
 
     # Output (using the same run_dir created earlier)
@@ -522,7 +522,7 @@ def main():
         "model_config": model_config
     }, model_path)
 
-    # Save metrics
+    # Save metrics: test_all (legacy behavior)
     metrics_obj = {
         "total_loss": results.total_loss,
         "rating_loss": results.rating_loss,
@@ -534,6 +534,22 @@ def main():
         "masked_metrics": results.masked_metrics,
     }
     save_test_metrics(run_dir, metrics_obj)
+
+    # Also evaluate on train_missing only, to get train-instance missing metrics for comparisons
+    if train_missing:
+        print("Evaluating imputer on train_missing for train_metrics.json ...")
+        results_train = eval_engine.evaluate_model(model=model, variables=train_missing, converter=converter, device=args.device)
+        train_metrics_obj = {
+            "total_loss": results_train.total_loss,
+            "rating_loss": results_train.rating_loss,
+            "ranking_loss": results_train.ranking_loss,
+            "num_rating_evaluations": results_train.num_rating_evaluations,
+            "num_ranking_evaluations": results_train.num_ranking_evaluations,
+            "observed_metrics": results_train.observed_metrics,
+            "missing_metrics": results_train.missing_metrics,
+            "masked_metrics": results_train.masked_metrics,
+        }
+        save_json(train_metrics_obj, run_dir / "train_metrics.json")
 
     # Save predictives: train_predictives.json (train_missing) and test_predictives.json (test_all)
     if not args.test_only_training and train_missing:
