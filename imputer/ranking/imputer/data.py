@@ -132,16 +132,25 @@ class DataConverter:
         """Validate bundle data integrity and return list of errors."""
         errors = []
         
-        # Check dimensions
-        K, D = bundle.embeddings.shape
-        I, D_pref = bundle.mean_preferences.shape
-        IJ, D_ann = bundle.annotator_preferences.shape
+        # Check dimensions only if embedding-world fields are present
+        if bundle.embeddings is not None and bundle.mean_preferences is not None and bundle.annotator_preferences is not None:
+            K, D = bundle.embeddings.shape
+            I, D_pref = bundle.mean_preferences.shape
+            IJ, D_ann = bundle.annotator_preferences.shape
+            
+            if D != D_pref or D != D_ann:
+                errors.append("Embedding dimensions inconsistent across embeddings, mean_preferences, annotator_preferences")
+            
+            if IJ != I * (IJ // I):
+                errors.append("Annotator preferences dimension mismatch with I*J")
         
-        if D != D_pref or D != D_ann:
-            errors.append("Embedding dimensions inconsistent across embeddings, mean_preferences, annotator_preferences")
-        
-        if IJ != I * (IJ // I):
-            errors.append("Annotator preferences dimension mismatch with I*J")
+        # Infer dimensions from data if embedding fields are not available
+        if bundle.all_ratings:
+            K = max(r["item"] for r in bundle.all_ratings)
+            I = max(r["attribute"] for r in bundle.all_ratings)
+        else:
+            K = bundle.stats.get("total_items", 0)
+            I = bundle.stats.get("I", 0)  # May not be in stats
         
         # Check rating data integrity
         for rating in bundle.all_ratings:
