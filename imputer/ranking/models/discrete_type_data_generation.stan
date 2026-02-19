@@ -177,7 +177,7 @@ generated quantities {
                 rating_thresholds_z[idx][1] = negative_infinity();
 
                 for (c in 2:C) {
-                    real target = rating_cumprobs[idx][c-1];  // desired CDF mass
+                    real cdf_target = rating_cumprobs[idx][c-1];  // desired CDF mass
                     real lo = -10;
                     real hi =  10;
 
@@ -194,7 +194,7 @@ generated quantities {
                         }
                         F /= M;
 
-                        if (F < target) {
+                        if (F < cdf_target) {
                             lo = mid;
                         } else {
                             hi = mid;

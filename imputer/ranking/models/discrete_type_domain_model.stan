@@ -83,11 +83,11 @@ parameters {
 
     // Soft prototype assignments for items: each item has a simplex over M
     // (continuous relaxation of discrete z_k)
-    simplex[M] proto_weights[K];
+    array[K] simplex[M] proto_weights;
 
     // Soft style assignments for annotators: each annotator has a simplex over S
     // (continuous relaxation of discrete s_j)
-    simplex[S] style_weights[J];
+    array[J] simplex[S] style_weights;
 
     // Rating probabilities: p_ij ~ Dir(α/C, ..., α/C)
     array[I*J] simplex[C] rating_probs;
@@ -344,10 +344,8 @@ generated quantities {
         if (DEBUG_PRINT == 1 && n <= 10) {
             print("[DEBUG RATING] n=", n,
                   " i=", i, " j=", j, " k=", k, " ij_idx=", ij_idx,
-                  " base_score=", base_score,
-                  " lower_th=", lower_threshold, " upper_th=", upper_threshold,
-                  " lower_prob=", lower_prob, " upper_prob=", upper_prob,
-                  " bin_prob=", bin_prob,
+                  " base_score=", base_scores[ij_idx, k],
+                  " lower_th=", lower_th, " upper_th=", upper_th,
                   " value=", c);
         }
     }
