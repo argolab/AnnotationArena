@@ -15,17 +15,8 @@ data {
     // Hyperparameters
     real<lower=0> sigma_annotator;
     real<lower=0> sigma_measurement;
-    real<lower=0> alpha_dirichlet;
+    real<lower=0> kappa;
     real<lower=0> temperature;
-
-    // Axis invariance controls (0 = full dependence, 1 = hold axis constant)
-    // When a flag is 1, ratings should NOT depend on that axis:
-    // - hold_I_constant = 1  -> no dependence on criteria/attributes i
-    // - hold_J_constant = 1  -> no dependence on annotator j
-    // - hold_K_constant = 1  -> no dependence on item k
-    int<lower=0, upper=1> hold_I_constant;
-    int<lower=0, upper=1> hold_J_constant;
-    int<lower=0, upper=1> hold_K_constant;
 
     // Annotator model selection
     // 0 = old spherical model: V_ij ~ N(v_i, sigma^2) independently
@@ -112,25 +103,10 @@ generated quantities {
 
     {
         // Step 1: Generate attribute embeddings v_i
-        row_vector[D] global_mean_pref = rep_row_vector(0, D);  // Initialize to zeros
-
-        if (hold_I_constant == 1) {
-            // Single global mean preference shared across all i
+        for (i in 1:I) {
             for (d in 1:D) {
-                global_mean_pref[d] = normal_rng(0, 1);
+                mean_preferences[i, d] = normal_rng(0, 1);
             }
-            for (i in 1:I) {
-                mean_preferences[i] = global_mean_pref;
-            }
-        } else {
-            // Standard case: mean_preferences vary with i
-            for (i in 1:I) {
-                for (d in 1:D) {
-                    mean_preferences[i, d] = normal_rng(0, 1);
-                }
-            }
-            // Also set global_mean_pref from first attribute for potential use
-            global_mean_pref = mean_preferences[1];
         }
 
         if (use_factored_annotator == 1) {
@@ -138,41 +114,17 @@ generated quantities {
             // V_ij = v_i + u_j * M_i
 
             // Step 2: Generate annotator embeddings u_j
-            if (hold_J_constant == 1) {
-                // No annotator dependence: all u_j = 0
-                for (j in 1:J) {
-                    for (d in 1:d_annotator) {
-                        annotator_embeddings[j, d] = 0;
-                    }
-                }
-            } else {
-                // Standard case: u_j ~ N(0, I)
-                for (j in 1:J) {
-                    for (d in 1:d_annotator) {
-                        annotator_embeddings[j, d] = normal_rng(0, 1);
-                    }
+            for (j in 1:J) {
+                for (d in 1:d_annotator) {
+                    annotator_embeddings[j, d] = normal_rng(0, 1);
                 }
             }
 
             // Step 3: Generate attribute-specific transforms M_i
-            if (hold_I_constant == 1) {
-                // Single M shared across all attributes
-                matrix[d_annotator, D] shared_M;
+            for (i in 1:I) {
                 for (r in 1:d_annotator) {
                     for (c in 1:D) {
-                        shared_M[r, c] = normal_rng(0, sigma_M);
-                    }
-                }
-                for (i in 1:I) {
-                    attr_transforms[i] = shared_M;
-                }
-            } else {
-                // Standard case: M_i varies with i
-                for (i in 1:I) {
-                    for (r in 1:d_annotator) {
-                        for (c in 1:D) {
-                            attr_transforms[i, r, c] = normal_rng(0, sigma_M);
-                        }
+                        attr_transforms[i, r, c] = normal_rng(0, sigma_M);
                     }
                 }
             }
@@ -205,55 +157,11 @@ generated quantities {
                 }
             }
 
-            // Generate V_ij with axis invariance handling
-            if (hold_I_constant == 1 && hold_J_constant == 1) {
-                // No I or J dependence: single preference shared across all (i,j)
-                row_vector[D] shared_pref;
-                for (d in 1:D) {
-                    shared_pref[d] = normal_rng(global_mean_pref[d], sigma_annotator);
-                }
-                for (i in 1:I) {
-                    for (j in 1:J) {
-                        int idx = (i-1)*J + j;
-                        annotator_preferences[idx] = shared_pref;
-                    }
-                }
-            } else if (hold_I_constant == 1 && hold_J_constant == 0) {
-                // JK dependence only: preferences depend on j but not on i
-                array[J] row_vector[D] pref_by_j;
+            for (i in 1:I) {
                 for (j in 1:J) {
+                    int idx = (i-1)*J + j;
                     for (d in 1:D) {
-                        pref_by_j[j, d] = normal_rng(global_mean_pref[d], sigma_annotator);
-                    }
-                }
-                for (i in 1:I) {
-                    for (j in 1:J) {
-                        int idx = (i-1)*J + j;
-                        annotator_preferences[idx] = pref_by_j[j];
-                    }
-                }
-            } else if (hold_I_constant == 0 && hold_J_constant == 1) {
-                // IK dependence only: preferences depend on i but not on j
-                array[I] row_vector[D] pref_by_i;
-                for (i in 1:I) {
-                    for (d in 1:D) {
-                        pref_by_i[i, d] = normal_rng(mean_preferences[i, d], sigma_annotator);
-                    }
-                }
-                for (i in 1:I) {
-                    for (j in 1:J) {
-                        int idx = (i-1)*J + j;
-                        annotator_preferences[idx] = pref_by_i[i];
-                    }
-                }
-            } else {
-                // Full I,J dependence (default behavior)
-                for (i in 1:I) {
-                    for (j in 1:J) {
-                        int idx = (i-1)*J + j;
-                        for (d in 1:D) {
-                            annotator_preferences[idx, d] = normal_rng(mean_preferences[i, d], sigma_annotator);
-                        }
+                        annotator_preferences[idx, d] = normal_rng(mean_preferences[i, d], sigma_annotator);
                     }
                 }
             }
@@ -299,18 +207,7 @@ generated quantities {
                 // Compute threshold logits from annotator embedding
                 vector[C-1] threshold_logits = threshold_transform_W * to_vector(annotator_embeddings[j]);
 
-                // Add attribute-specific bias (unless hold_I_constant)
-                if (hold_I_constant == 0) {
-                    threshold_logits = threshold_logits + to_vector(threshold_attr_bias[i]);
-                }
-
-                // If hold_J_constant, use j=1 annotator for all
-                if (hold_J_constant == 1) {
-                    threshold_logits = threshold_transform_W * to_vector(annotator_embeddings[1]);
-                    if (hold_I_constant == 0) {
-                        threshold_logits = threshold_logits + to_vector(threshold_attr_bias[i]);
-                    }
-                }
+                threshold_logits = threshold_logits + to_vector(threshold_attr_bias[i]);
 
                 // Convert logits to probability simplex via softmax
                 // Prepend 0 for the first category (reference)
@@ -339,59 +236,11 @@ generated quantities {
     } else {
         // ===== ORIGINAL: Independent Dirichlet samples =====
 
-        if (hold_I_constant == 1 && hold_J_constant == 1) {
-            // Single global rating distribution shared across all (i,j)
-            // Use (i=1,j=1) as the template and copy to all (i,j)
-            int base_idx = 1;
-            rating_probs[base_idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
-            rating_cumprobs[base_idx] = cumulative_sum(rating_probs[base_idx]);
-            for (i in 1:I) {
-                for (j in 1:J) {
-                    int idx = (i-1)*J + j;
-                    rating_probs[idx] = rating_probs[base_idx];
-                    rating_cumprobs[idx] = rating_cumprobs[base_idx];
-                }
-            }
-        } else if (hold_I_constant == 1 && hold_J_constant == 0) {
-            // Depend only on annotator j
-            // For each j, sample once at i=1 and copy across all i
+        for (i in 1:I) {
             for (j in 1:J) {
-                int base_idx = j;  // i=1, j=j
-                rating_probs[base_idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
-                rating_cumprobs[base_idx] = cumulative_sum(rating_probs[base_idx]);
-            }
-            for (i in 1:I) {
-                for (j in 1:J) {
-                    int idx = (i-1)*J + j;
-                    int base_idx = j;  // use i=1 row
-                    rating_probs[idx] = rating_probs[base_idx];
-                    rating_cumprobs[idx] = rating_cumprobs[base_idx];
-                }
-            }
-        } else if (hold_I_constant == 0 && hold_J_constant == 1) {
-            // Depend only on attribute i
-            // For each i, sample once at j=1 and copy across all j
-            for (i in 1:I) {
-                int base_idx = (i-1)*J + 1;  // j=1
-                rating_probs[base_idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
-                rating_cumprobs[base_idx] = cumulative_sum(rating_probs[base_idx]);
-            }
-            for (i in 1:I) {
-                for (j in 1:J) {
-                    int idx = (i-1)*J + j;
-                    int base_idx = (i-1)*J + 1;  // j=1 for this i
-                    rating_probs[idx] = rating_probs[base_idx];
-                    rating_cumprobs[idx] = rating_cumprobs[base_idx];
-                }
-            }
-        } else {
-            // Full I,J dependence (default behavior)
-            for (i in 1:I) {
-                for (j in 1:J) {
-                    int idx = (i-1)*J + j;
-                    rating_probs[idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
-                    rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
-                }
+                int idx = (i-1)*J + j;
+                rating_probs[idx] = dirichlet_rng(rep_vector(kappa/C, C));
+                rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
             }
         }
     }
@@ -407,23 +256,9 @@ generated quantities {
     
     // ===== GENERATE TRAINING INSTANCE =====
     
-    // Generate training item embeddings: e_k_train ~ N(0,I)
-    if (hold_K_constant == 1) {
-        // Single shared item embedding across all training items (no K-dependence)
-        {
-            row_vector[D] shared_train_embedding;
-            for (d in 1:D) {
-                shared_train_embedding[d] = normal_rng(0, 1);
-            }
-            for (k in 1:K_train) {
-                train_embeddings[k] = shared_train_embedding;
-            }
-        }
-    } else {
-        for (k in 1:K_train) {
-            for (d in 1:D) {
-                train_embeddings[k, d] = normal_rng(0, 1);
-            }
+    for (k in 1:K_train) {
+        for (d in 1:D) {
+            train_embeddings[k, d] = normal_rng(0, 1);
         }
     }
     
@@ -439,23 +274,9 @@ generated quantities {
     
     // ===== GENERATE TEST INSTANCE =====
     
-    // Generate test item embeddings: e_k_test ~ N(0,I) - DIFFERENT from training
-    if (hold_K_constant == 1) {
-        // Single shared item embedding across all test items (no K-dependence)
-        {
-            row_vector[D] shared_test_embedding;
-            for (d in 1:D) {
-                shared_test_embedding[d] = normal_rng(0, 1);
-            }
-            for (k in 1:K_test) {
-                test_embeddings[k] = shared_test_embedding;
-            }
-        }
-    } else {
-        for (k in 1:K_test) {
-            for (d in 1:D) {
-                test_embeddings[k, d] = normal_rng(0, 1);
-            }
+    for (k in 1:K_test) {
+        for (d in 1:D) {
+            test_embeddings[k, d] = normal_rng(0, 1);
         }
     }
     
@@ -853,7 +674,7 @@ generated quantities {
     // ===== DEBUG: print a few posterior rating probabilities =====
 
     if (DEBUG_PRINT == 1) {
-        print("alpha_dirichlet=", alpha_dirichlet);
+        print("kappa=", kappa);
         print("rating_probs[1]=", rating_probs[1]);
         print("rating_cumprobs[1]=", rating_cumprobs[1]);
         print("rating_thresholds_z[1]=", rating_thresholds_z[1]);
