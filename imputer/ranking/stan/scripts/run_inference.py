@@ -34,35 +34,39 @@ logger = logging.getLogger(__name__)
 
 def main():
     parser = argparse.ArgumentParser(description="Run MCMC inference with domain model")
-    
-    # Required arguments
+
+    # ---------- Input & output (most important) ----------
     parser.add_argument("--data-bundle", required=True, help="Path to data bundle JSON file")
     parser.add_argument("--output-dir", default="OUTPUT/domain_model/runs", help="Output directory for results")
-    parser.add_argument("--run-name", type=str, default=None, help="Custom run name (default: auto-generated timestamp)")
-    
-    # Data configuration
+    parser.add_argument("--run-name", type=str, default=None, help="Custom run name (default: auto-generated)")
+    parser.add_argument("--overwrite-existing-data", action="store_true",
+                        help="Overwrite existing output directory if it exists")
+
+    # ---------- Stan model (subtype / file) ----------
+    parser.add_argument("--stan-type", type=str, default=None,
+                        choices=["normal-noise-dot-product", "factored-dot-product", "discrete", "tensor"],
+                        help="Stan model (must match data generation). Default: from configs.json.")
+    parser.add_argument("--stan-file", help="Path to domain_model.stan (overrides --stan-type when set)")
+
+    # ---------- Data configuration ----------
     parser.add_argument("--use-train-only", action="store_true", help="Use only training instance data")
     parser.add_argument("--use-test-only", action="store_true", help="Use only test instance data")
-    
-    # MCMC configuration
+
+    # ---------- MCMC configuration ----------
     parser.add_argument("--chains", type=int, default=8, help="Number of MCMC chains")
     parser.add_argument("--iter-warmup", type=int, default=500, help="Number of warmup iterations")
     parser.add_argument("--iter-sampling", type=int, default=2000, help="Number of sampling iterations")
     parser.add_argument("--seed", type=int, help="Random seed for MCMC")
     parser.add_argument("--adapt-delta", type=float, default=0.8, help="Adapt delta for NUTS")
     parser.add_argument("--max-treedepth", type=int, default=10, help="Maximum tree depth for NUTS")
-    
-    # Initialization strategy
-    parser.add_argument("--init-strategy", choices=["random", "ground_truth", "file"], 
-                       default="random", help="Initialization strategy")
+
+    # ---------- Initialization ----------
+    parser.add_argument("--init-strategy", choices=["random", "ground_truth", "file"],
+                        default="random", help="Initialization strategy")
     parser.add_argument("--init-file", help="Path to initialization file (if init-strategy=file)")
-    
-    # Model configuration
-    parser.add_argument("--stan-file", help="Path to domain_model.stan (defaults to models/domain_model.stan)")
-    
-    # Other options
+
+    # ---------- Other ----------
     parser.add_argument("--no-progress", action="store_true", help="Disable progress bar")
-    parser.add_argument("--overwrite-existing-data", action="store_true", help="Overwrite existing output directory if it exists")
     
     args = parser.parse_args()
     
@@ -112,6 +116,35 @@ def main():
         show_progress=not args.no_progress
     )
     
+    # Load data generation config (stan_type and hyperparameters come from config)
+    from stan.pipeline.configs import DataGenConfig
+    from dataclasses import fields
+    data_bundle_dir = Path(args.data_bundle).parent
+    configs_path = data_bundle_dir / "configs.json"
+    if not configs_path.exists():
+        raise ValueError(f"Configs file not found at {configs_path}")
+    with open(configs_path, 'r') as f:
+        configs_data = json.load(f)
+        datagen_config = configs_data["datagen"]
+    valid_keys = {f.name for f in fields(DataGenConfig)}
+    datagen_filtered = {k: v for k, v in datagen_config.items() if k in valid_keys}
+    if "kappa" not in datagen_filtered and "alpha_dirichlet" in datagen_config:
+        print(f"kappa not in datagen_filtered and alpha_dirichlet in datagen_config: {datagen_config}! Replace it with kappa!")
+        datagen_filtered["kappa"] = datagen_config["alpha_dirichlet"]
+    data_config = DataGenConfig(**datagen_filtered)
+    # Stan type: CLI override or from config
+    stan_type = args.stan_type if args.stan_type is not None else data_config.stan_type
+    print(f"Domain model Stan type: {stan_type}, original data has type: {data_config.stan_type}")
+    # Resolve domain model .stan file (from --stan-file or from config.stan_type)
+    stan_file = args.stan_file
+    if stan_file is None:
+        if stan_type == "discrete":
+            stan_file = str(Path(__file__).parent.parent.parent / "models" / "discrete_type_domain_model.stan")
+        elif stan_type == "tensor":
+            stan_file = str(Path(__file__).parent.parent.parent / "models" / "tensor_domain_model.stan")
+        else:
+            stan_file = str(Path(__file__).parent.parent.parent / "models" / "domain_model.stan")
+    
     # Save inference configuration
     config_dict = {
         "data_bundle": str(args.data_bundle),
@@ -125,13 +158,15 @@ def main():
         "max_treedepth": args.max_treedepth,
         "init_strategy": args.init_strategy,
         "init_file": args.init_file,
-        "stan_file": args.stan_file,
+        "stan_file": stan_file,
+        "stan_type": stan_type,
     }
     save_configs(output_dir, inference=config_dict)
     
     # Print configuration
     print("\nInference Configuration:")
     print(f"  Data bundle: {args.data_bundle}")
+    print(f"  Stan type: {stan_type}")
     print(f"  Use train only: {args.use_train_only}")
     print(f"  Use test only: {args.use_test_only}")
     print(f"  Chains: {args.chains}")
@@ -141,34 +176,6 @@ def main():
     print(f"  Init strategy: {args.init_strategy}")
     print(f"  Adapt delta: {args.adapt_delta}")
     print(f"  Max tree depth: {args.max_treedepth}")
-    
-    # Extract data generation config from bundle stats and configs
-    from stan.pipeline.configs import DataGenConfig
-    stats = bundle.stats
-    
-    # Try to load from configs.json first
-    data_bundle_dir = Path(args.data_bundle).parent
-    configs_path = data_bundle_dir / "configs.json"
-    
-    if configs_path.exists():
-        with open(configs_path, 'r') as f:
-            configs_data = json.load(f)
-        datagen_config = configs_data["datagen"]
-        data_config = DataGenConfig(
-            K_train=datagen_config["K_train"],
-            K_test=datagen_config["K_test"],
-            I=datagen_config["I"],
-            J=datagen_config["J"],
-            D=datagen_config["D"],
-            C=datagen_config["C"],
-            sigma_annotator=datagen_config["sigma_annotator"],
-            sigma_measurement=datagen_config["sigma_measurement"],
-            alpha_dirichlet=datagen_config["alpha_dirichlet"],
-            temperature=datagen_config["temperature"]
-        )
-    else:
-        raise ValueError(f"Configs file not found at {configs_path}")
-        
     
     print(f"\nData Configuration:")
     print(f"  K_train: {data_config.K_train}")
@@ -187,9 +194,9 @@ def main():
             bundle=bundle,
             config=data_config,
             inference_config=inference_config,
-            stan_file=args.stan_file,
+            stan_file=stan_file,
             use_train_only=args.use_train_only,
-            use_test_only=args.use_test_only
+            use_test_only=args.use_test_only,
         )
         #########################################################
         

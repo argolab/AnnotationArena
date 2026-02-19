@@ -57,17 +57,19 @@ def compile_domain_model(stan_file: Optional[str] = None) -> cmdstanpy.CmdStanMo
 
 
 def prepare_stan_data_for_inference(
-    bundle: GroundTruthBundle, 
+    bundle: GroundTruthBundle,
     config: DataGenConfig,
     use_train_only: bool = False,
-    use_test_only: bool = False
+    use_test_only: bool = False,
 ) -> Dict[str, Any]:
     """
     Prepare Stan data for domain model inference.
+    Hyperparameters and type-specific fields come from config.to_stan_data() (uses config.stan_type).
+    We prepare lists of observed and missing variables that STAN conditioned on.
     
     Args:
         bundle: Generated data bundle
-        config: Data generation configuration
+        config: Data generation configuration (must have stan_type and type-specific fields set)
         use_train_only: If True, only use training instance data
         use_test_only: If True, only use test instance data
     
@@ -132,15 +134,8 @@ def prepare_stan_data_for_inference(
     missing_pairwise_ranking_annotators = [p["annotator"] for p in missing_pairwise]
     missing_pairwise_ranking_items = [[item - item_offset for item in p["items"]] for p in missing_pairwise]
     
-    stan_data = {
-        # Dimensions
+    observed_part = {
         "K": K,
-        "I": config.I,
-        "J": config.J,
-        "D": config.D,
-        "C": config.C,
-        
-        # Observed ratings
         "N_ratings": N_ratings,
         "rating_attributes": rating_attributes,
         "rating_annotators": rating_annotators,
@@ -164,14 +159,9 @@ def prepare_stan_data_for_inference(
         "missing_pairwise_ranking_attributes": missing_pairwise_ranking_attributes,
         "missing_pairwise_ranking_annotators": missing_pairwise_ranking_annotators,
         "missing_pairwise_ranking_items": missing_pairwise_ranking_items,
-        
-        # Hyperparameters
-        "sigma_annotator": config.sigma_annotator,
-        "sigma_measurement": config.sigma_measurement,
-        "alpha_dirichlet": config.alpha_dirichlet,
-        "temperature": config.temperature,
     }
-    
+    # Hyperparameters and type-specific fields from config (single source of truth)
+    stan_data = {**config.to_stan_data(), **observed_part}
     return stan_data
 
 
@@ -222,16 +212,17 @@ def run_mcmc_inference(
     inference_config: InferenceConfig,
     stan_file: Optional[str] = None,
     use_train_only: bool = False,
-    use_test_only: bool = False
+    use_test_only: bool = False,
 ) -> cmdstanpy.CmdStanMCMC:
     """
     Run MCMC inference using the domain model.
+    Stan type and hyperparameters come from config (config.stan_type, config.to_stan_data()).
     
     Args:
         bundle: Generated data bundle
-        config: Data generation configuration
+        config: Data generation configuration (stan_type and type-specific fields set)
         inference_config: MCMC configuration
-        stan_file: Path to domain_model.stan (defaults to models/domain_model.stan)
+        stan_file: Path to domain_model.stan (defaults from config.stan_type when None)
         use_train_only: If True, only use training instance data
         use_test_only: If True, only use test instance data
     
@@ -241,8 +232,12 @@ def run_mcmc_inference(
     # Compile model
     model = compile_domain_model(stan_file)
     
-    # Prepare Stan data (model hyperparameters and observed data)
-    stan_data = prepare_stan_data_for_inference(bundle, config, use_train_only, use_test_only)
+    # Prepare Stan data (hyperparameters from config.to_stan_data(), observed data from bundle)
+    stan_data = prepare_stan_data_for_inference(
+        bundle, config,
+        use_train_only=use_train_only,
+        use_test_only=use_test_only,
+    )
     
     # Prepare initialization
     logger.info(f"Preparing initialization with strategy: {inference_config.init_strategy}")
