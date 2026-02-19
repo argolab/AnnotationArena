@@ -108,8 +108,8 @@ generate_data() {
         --J $BASE_J \
         --D $BASE_D \
         --C $BASE_C \
-        --d-annotator $BASE_D_ANNOTATOR \
-        --factor-decay $BASE_FACTOR_DECAY \
+        --stan-arg d_annotator=$BASE_D_ANNOTATOR \
+        --stan-arg factor_decay=$BASE_FACTOR_DECAY \
         --observation-protocol mcar \
         --mcar-missing-rate 0.5 \
         --sigma-annotator $BASE_SIGMA_ANNOTATOR \
@@ -231,9 +231,9 @@ run_mode() {
 
     # Build hold flags for data generation
     local hold_flags=""
-    [ "$hold_I" == "1" ] && hold_flags="$hold_flags --hold-I-constant"
-    [ "$hold_J" == "1" ] && hold_flags="$hold_flags --hold-J-constant"
-    [ "$hold_K" == "1" ] && hold_flags="$hold_flags --hold-K-constant"
+    [ "$hold_I" == "1" ] && hold_flags="$hold_flags --stan-arg hold_I_constant=1"
+    [ "$hold_J" == "1" ] && hold_flags="$hold_flags --stan-arg hold_J_constant=1"
+    [ "$hold_K" == "1" ] && hold_flags="$hold_flags --stan-arg hold_K_constant=1"
 
     local base="${EXP_PREFIX}_${mode_name}"
 

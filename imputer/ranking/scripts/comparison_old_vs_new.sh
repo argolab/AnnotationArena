@@ -96,9 +96,9 @@ generate_data() {
 
     local data_model_flag=""
     if [ "$data_type" == "old" ]; then
-        data_model_flag="--use-spherical-annotator"
+        data_model_flag="--stan-arg use_factored_annotator=0"
     else
-        data_model_flag="--d-annotator $BASE_D_ANNOTATOR"
+        data_model_flag="--stan-arg d_annotator=$BASE_D_ANNOTATOR"
     fi
 
     echo "[data] Generating ${data_type} data -> ${run_name}"
@@ -235,9 +235,9 @@ run_mode() {
 
     # Build hold flags for data generation
     local hold_flags=""
-    [ "$hold_I" == "1" ] && hold_flags="$hold_flags --hold-I-constant"
-    [ "$hold_J" == "1" ] && hold_flags="$hold_flags --hold-J-constant"
-    [ "$hold_K" == "1" ] && hold_flags="$hold_flags --hold-K-constant"
+    [ "$hold_I" == "1" ] && hold_flags="$hold_flags --stan-arg hold_I_constant=1"
+    [ "$hold_J" == "1" ] && hold_flags="$hold_flags --stan-arg hold_J_constant=1"
+    [ "$hold_K" == "1" ] && hold_flags="$hold_flags --stan-arg hold_K_constant=1"
 
     local base="${EXP_PREFIX}_${mode_name}"
 
