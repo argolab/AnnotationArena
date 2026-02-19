@@ -94,7 +94,7 @@ hJ_str=$HOLD_J
 hK_str=$HOLD_K
 
 # Construct run name
-run_name="K${BASE_K_TRAIN}_${EASY_PREFIX}_${MODE_NAME}_D${d_str}_sa${sa_str}_sm${sm_str}_kp${kp_str}_uc${uc_str}_hI${hI_str}_hJ${hJ_str}_hK${hK_str}_${BASE_PROTOCOL_CODE}_selective_masking_${SELECTIVE_MASK}_maxitem${MAX_ITEM}"
+run_name="real_data_maxitem${MAX_ITEM}"
 
 echo ""
 echo "=========================================="
@@ -124,40 +124,40 @@ if [ "$MARFORMER_USE_COSINE_SCHEDULE" == "true" ]; then
     cosine_schedule_flags="--use-cosine-schedule --warmup-steps $MARFORMER_WARMUP_STEPS"
 fi
 
-# Step 1: Generate data (Stan)
-echo "[Step 1/6] Generating data..."
-hold_flags=""
-[ "$HOLD_I" == "1" ] && hold_flags="$hold_flags --hold-I-constant"
-[ "$HOLD_J" == "1" ] && hold_flags="$hold_flags --hold-J-constant"
-[ "$HOLD_K" == "1" ] && hold_flags="$hold_flags --hold-K-constant"
-python stan/scripts/generate_data.py \
-    --K-train $BASE_K_TRAIN \
-    --K-test $BASE_K_TEST \
-    --I $BASE_I \
-    --J $BASE_J \
-    --D $BASE_D \
-    --C $BASE_C \
-    --observation-protocol $BASE_PROTOCOL \
-    --sigma-annotator $BASE_SIGMA_ANNOTATOR \
-    --sigma-measurement $BASE_SIGMA_MEASUREMENT \
-    --kappa $BASE_KAPPA \
-    --run-name $run_name \
-    --overwrite-existing-data \
-    $hold_flags \
-    $ranking_args \
-    $protocol_args </dev/null
+# # Step 1: Generate data (Stan)
+# echo "[Step 1/6] Generating data..."
+# hold_flags=""
+# [ "$HOLD_I" == "1" ] && hold_flags="$hold_flags --hold-I-constant"
+# [ "$HOLD_J" == "1" ] && hold_flags="$hold_flags --hold-J-constant"
+# [ "$HOLD_K" == "1" ] && hold_flags="$hold_flags --hold-K-constant"
+# python stan/scripts/generate_data.py \
+#     --K-train $BASE_K_TRAIN \
+#     --K-test $BASE_K_TEST \
+#     --I $BASE_I \
+#     --J $BASE_J \
+#     --D $BASE_D \
+#     --C $BASE_C \
+#     --observation-protocol $BASE_PROTOCOL \
+#     --sigma-annotator $BASE_SIGMA_ANNOTATOR \
+#     --sigma-measurement $BASE_SIGMA_MEASUREMENT \
+#     --kappa $BASE_KAPPA \
+#     --run-name $run_name \
+#     --overwrite-existing-data \
+#     $hold_flags \
+#     $ranking_args \
+#     $protocol_args </dev/null
 
-if [ $? -ne 0 ]; then
-    echo "ERROR: Data generation failed for $run_name"
-    exit 1
-fi
+# if [ $? -ne 0 ]; then
+#     echo "ERROR: Data generation failed for $run_name"
+#     exit 1
+# fi
 
 # Step 2: Run Marformer with Lightning
 echo "[Step 2/6] Running Marformer with PyTorch Lightning..."
 if [ -n "$DEBUG" ]; then
     echo "Running in DEBUG mode (interactive - breakpoints will work)"
     python imputer/run_imputer.py \
-        --data-dir OUTPUT/generated_data/${run_name} \
+        --data-dir OUTPUT/generated_data/real_data_llm_rubric \
         --run-name ${run_name} \
         --overwrite-existing-data \
         --embedding-dim $MARFORMER_EMBEDDING_DIM \
@@ -213,7 +213,7 @@ fi
 # Step 3: Run Stan inference (4 chains)
 echo "[Step 3/6] Running Stan inference (4 chains)..."
 python stan/scripts/run_inference.py \
-    --data-bundle OUTPUT/generated_data/${run_name}/data_bundle.json \
+    --data-bundle OUTPUT/generated_data/real_data_llm_rubric/data_bundle.json \
     --chains $STAN_4C_CHAINS \
     --iter-sampling $STAN_4C_ITER_SAMPLING \
     --iter-warmup $STAN_4C_WARMUP \
@@ -228,7 +228,7 @@ fi
 # Step 4: Run Stan inference (1 chain, long)
 echo "[Step 4/6] Running Stan inference (1 chain, long)..."
 python stan/scripts/run_inference.py \
-    --data-bundle OUTPUT/generated_data/${run_name}/data_bundle.json \
+    --data-bundle OUTPUT/generated_data/real_data_llm_rubric/data_bundle.json \
     --chains $STAN_1C_CHAINS \
     --iter-sampling $STAN_1C_ITER_SAMPLING \
     --iter-warmup $STAN_1C_WARMUP \
@@ -243,7 +243,7 @@ fi
 # Step 5: Evaluate Stan predictions (4-chain version)
 echo "[Step 5/6] Evaluating Stan predictions (4 chains)..."
 python stan/scripts/evaluate_predictions.py \
-    --data-bundle OUTPUT/generated_data/${run_name}/data_bundle.json \
+    --data-bundle OUTPUT/generated_data/real_data_llm_rubric/data_bundle.json \
     --mcmc-dir OUTPUT/domain_model/runs/${run_name}_stan4c \
     --run-name ${run_name}_stan4c_eval \
     --overwrite-existing-data </dev/null
@@ -256,7 +256,7 @@ fi
 # Step 5b: Evaluate Stan predictions (1-chain version)
 echo "[Step 5b/6] Evaluating Stan predictions (1 chain)..."
 python stan/scripts/evaluate_predictions.py \
-    --data-bundle OUTPUT/generated_data/${run_name}/data_bundle.json \
+    --data-bundle OUTPUT/generated_data/real_data_llm_rubric/data_bundle.json \
     --mcmc-dir OUTPUT/domain_model/runs/${run_name}_stan1c \
     --run-name ${run_name}_stan1c_eval \
     --overwrite-existing-data </dev/null
