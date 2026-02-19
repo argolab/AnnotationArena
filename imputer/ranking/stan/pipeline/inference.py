@@ -61,17 +61,21 @@ def prepare_stan_data_for_inference(
     config: DataGenConfig,
     use_train_only: bool = False,
     use_test_only: bool = False,
+    stan_arg: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Prepare Stan data for domain model inference.
-    Hyperparameters and type-specific fields come from config.to_stan_data() (uses config.stan_type).
-    We prepare lists of observed and missing variables that STAN conditioned on.
+    Hyperparameters come from config.to_stan_data(). Any extra keys (e.g. M, S for
+    the discrete model when fitting on non-discrete data) are passed in via stan_arg
+    and merged last so the caller controls model-specific data.
     
     Args:
         bundle: Generated data bundle
-        config: Data generation configuration (must have stan_type and type-specific fields set)
+        config: Data generation configuration (from the run that produced the bundle)
         use_train_only: If True, only use training instance data
         use_test_only: If True, only use test instance data
+        stan_arg: Optional dict of Stan data keys to merge (e.g. {"M": 6, "S": 3}
+            when fitting the discrete domain model). Passed in via --stan-arg from CLI.
     
     Returns:
         Dictionary of Stan data for domain model
@@ -160,8 +164,10 @@ def prepare_stan_data_for_inference(
         "missing_pairwise_ranking_annotators": missing_pairwise_ranking_annotators,
         "missing_pairwise_ranking_items": missing_pairwise_ranking_items,
     }
-    # Hyperparameters and type-specific fields from config (single source of truth)
+    # Hyperparameters from config; then any --stan-arg overrides/adds (e.g. M, S for discrete model)
     stan_data = {**config.to_stan_data(), **observed_part}
+    if stan_arg:
+        stan_data.update(stan_arg)
     return stan_data
 
 
@@ -211,18 +217,21 @@ def run_mcmc_inference(
     config: DataGenConfig,
     inference_config: InferenceConfig,
     stan_file: Optional[str] = None,
+    stan_arg: Optional[Dict[str, Any]] = None,
     use_train_only: bool = False,
     use_test_only: bool = False,
 ) -> cmdstanpy.CmdStanMCMC:
     """
     Run MCMC inference using the domain model.
-    Stan type and hyperparameters come from config (config.stan_type, config.to_stan_data()).
+    Hyperparameters come from config.to_stan_data(); stan_arg (e.g. from --stan-arg)
+    is merged so the caller can supply model-specific data (e.g. M, S for discrete).
     
     Args:
         bundle: Generated data bundle
-        config: Data generation configuration (stan_type and type-specific fields set)
+        config: Data generation configuration (from the run that produced the bundle)
         inference_config: MCMC configuration
-        stan_file: Path to domain_model.stan (defaults from config.stan_type when None)
+        stan_file: Path to domain_model.stan
+        stan_arg: Optional Stan data to merge (e.g. {"M": 6, "S": 3} for discrete model)
         use_train_only: If True, only use training instance data
         use_test_only: If True, only use test instance data
     
@@ -232,11 +241,12 @@ def run_mcmc_inference(
     # Compile model
     model = compile_domain_model(stan_file)
     
-    # Prepare Stan data (hyperparameters from config.to_stan_data(), observed data from bundle)
+    # Prepare Stan data (config + observed; stan_arg overrides/adds)
     stan_data = prepare_stan_data_for_inference(
         bundle, config,
         use_train_only=use_train_only,
         use_test_only=use_test_only,
+        stan_arg=stan_arg,
     )
     
     # Prepare initialization
@@ -245,13 +255,13 @@ def run_mcmc_inference(
         init_values = create_init_from_ground_truth(bundle, config, use_train_only, use_test_only)
         init = [init_values] * inference_config.chains
         logger.info(f"Using ground truth initialization for {inference_config.chains} chains")
-    elif inference_config.init_strategy == "file" and inference_config.init_file:
+    elif inference_config.init_strategy == "file" and inference_config.init_file and inference_config.init_file != "random":
         init = inference_config.init_file
         logger.info(f"Using initialization file: {inference_config.init_file}")
-    else:  # "random"
-        # Use range [-2, 2] for random initialization
+    else:
+        # "random" or no valid file: use numeric init so CmdStanPy does not treat a path
         init = 1.0
-        logger.info(f"Using random initialization with range [-2, 2] for {inference_config.chains} chains")
+        logger.info(f"Using default initialization (1.0) for {inference_config.chains} chains")
     
     # Run MCMC sampling
     logger.info(f"Starting MCMC sampling with {inference_config.chains} chains")

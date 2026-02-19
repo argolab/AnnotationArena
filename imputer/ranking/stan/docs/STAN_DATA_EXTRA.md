@@ -84,8 +84,10 @@ For a given `stan_type`, **exactly** the set of fields listed for that type in Â
    - Save `configs.json` (full datagen config, including type-specific fields) and `stan_data.json` for inference.
 
 2. **Inference (`stan/scripts/run_inference.py` + `stan/pipeline/inference.py`)**
-   - Load bundle and `configs.json`; reconstruct `DataGenConfig` (all attributes, including type-specific, are in the saved config).
-   - `prepare_stan_data_for_inference(bundle, config, ...)` builds observed-data dict and merges with **`config.to_stan_data()`** so hyperparameters and type-specific fields come from the config only.
+   - Load bundle and `configs.json`; reconstruct `DataGenConfig`.
+   - Choose domain model via `--stan-type` (or from config). Model-specific Stan data is passed via **`--stan-arg KEY=VALUE`** and merged after `config.to_stan_data()`.
+   - **Cross-type inference:** The *data* config is from the bundle (data-generation type), so it does not contain the *inference* modelâ€™s type-specific parameters. The **caller** (e.g. `scripts/cross_stan_type_experiment.py`) is the single source of truth: it must pass all parameters required by the chosen domain model via `--stan-arg`. `run_inference.py` does not inject any defaults.
+   - `prepare_stan_data_for_inference(bundle, config, ..., stan_arg=...)` builds observed-data dict, merges **`config.to_stan_data()`**, then overlays `stan_arg`.
 
 ---
 

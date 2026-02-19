@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from stan.pipeline.inference import InferenceConfig, run_mcmc_inference
 from stan.pipeline.bundle import GroundTruthBundle
 from stan.pipeline.io import new_run_dir, save_bundle, save_configs
+from stan.scripts.generate_data import _parse_stan_arg
 
 # Set up logging
 logging.basicConfig(
@@ -45,8 +46,10 @@ def main():
     # ---------- Stan model (subtype / file) ----------
     parser.add_argument("--stan-type", type=str, default=None,
                         choices=["normal-noise-dot-product", "factored-dot-product", "discrete", "tensor"],
-                        help="Stan model (must match data generation). Default: from configs.json.")
+                        help="Stan model type for inference. Default: from configs.json.")
     parser.add_argument("--stan-file", help="Path to domain_model.stan (overrides --stan-type when set)")
+    parser.add_argument("--stan-arg", action="append", metavar="KEY=VALUE",
+                        help="Model-specific Stan data (repeatable). E.g. discrete: M=6, S=3; tensor: factor_decay=0.9. Tensor: DEBUG_INIT=1 to locate non-finite gradient at init.")
 
     # ---------- Data configuration ----------
     parser.add_argument("--use-train-only", action="store_true", help="Use only training instance data")
@@ -134,6 +137,16 @@ def main():
     data_config = DataGenConfig(**datagen_filtered)
     # Stan type: CLI override or from config
     stan_type = args.stan_type if args.stan_type is not None else data_config.stan_type
+    # Parse --stan-arg KEY=VALUE into a dict. For cross-type inference the caller
+    # (e.g. scripts/cross_stan_type_experiment.py) must pass all parameters required
+    # by the chosen domain model; no defaults are injected here.
+    stan_arg = {}
+    for s in (args.stan_arg or []):
+        k, v = _parse_stan_arg(s)
+        stan_arg[k] = v
+    # Tensor model supports DEBUG_INIT=1 to locate non-finite gradient at init
+    if stan_type == "tensor":
+        stan_arg.setdefault("DEBUG_INIT", 0)
     print(f"Domain model Stan type: {stan_type}, original data has type: {data_config.stan_type}")
     # Resolve domain model .stan file (from --stan-file or from config.stan_type)
     stan_file = args.stan_file
@@ -160,6 +173,7 @@ def main():
         "init_file": args.init_file,
         "stan_file": stan_file,
         "stan_type": stan_type,
+        "stan_arg": stan_arg,
     }
     save_configs(output_dir, inference=config_dict)
     
@@ -167,6 +181,8 @@ def main():
     print("\nInference Configuration:")
     print(f"  Data bundle: {args.data_bundle}")
     print(f"  Stan type: {stan_type}")
+    if stan_arg:
+        print(f"  Stan args: {stan_arg}")
     print(f"  Use train only: {args.use_train_only}")
     print(f"  Use test only: {args.use_test_only}")
     print(f"  Chains: {args.chains}")
@@ -195,6 +211,7 @@ def main():
             config=data_config,
             inference_config=inference_config,
             stan_file=stan_file,
+            stan_arg=stan_arg if stan_arg else None,
             use_train_only=args.use_train_only,
             use_test_only=args.use_test_only,
         )
