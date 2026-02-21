@@ -336,22 +336,10 @@ class ImputerLightningModule(pl.LightningModule):
         
         if not filtered_vars:
             return []
-<<<<<<< Updated upstream
-        
-        # Apply masking
-        num_to_mask = int(len(filtered_vars) * masking_rate)
-        num_to_mask = max(0, min(len(filtered_vars), num_to_mask))
-        masked_indices = set(random.sample(list(range(len(filtered_vars))), num_to_mask)) if num_to_mask > 0 else set()
-
-        out: List[RankingData] = []
-        for idx, var in enumerate(filtered_vars):
-            status = 1 if idx in masked_indices else 2  # 1=masked, 2=observed
-=======
 
         out: List[RankingData] = []
         for idx, var in enumerate(filtered_vars):
             status = 2 if var.annotator_id==25 else 1  # 1=masked, 2=observed
->>>>>>> Stashed changes
             out.append(RankingData(
                 annotator_id=var.annotator_id,
                 attribute_id=var.attribute_id,
