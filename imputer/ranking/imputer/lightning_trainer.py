@@ -339,8 +339,7 @@ class ImputerLightningModule(pl.LightningModule):
 
         out: List[RankingData] = []
         for idx, var in enumerate(filtered_vars):
-            status = 2 if var.annotator_id==25 else 1  # 1=masked, 2=observed
-            print(status)
+            status = 2 if var.annotator_id==24 else 1  # 1=masked, 2=observed
             out.append(RankingData(
                 annotator_id=var.annotator_id,
                 attribute_id=var.attribute_id,
@@ -351,7 +350,6 @@ class ImputerLightningModule(pl.LightningModule):
                 rating_value=var.rating_value,
                 ranking_order=var.ranking_order,
             ))
-        raise Exception
         return out
 
     
@@ -551,7 +549,6 @@ class ImputerLightningModule(pl.LightningModule):
         all_masked_or_observed_per_chunk: List[List[RankingData]] = []
         all_batch_list: List[RankingData] = []
         all_outputs: List = []
-        
         for chunk_idx, available_items in enumerate(item_chunks):
             # Apply masking to observed vars for this chunk
             if self.selective_masking:

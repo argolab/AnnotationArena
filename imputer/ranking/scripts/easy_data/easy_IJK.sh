@@ -19,7 +19,7 @@ BASE_KAPPA=10
 BASE_PROTOCOL="mcar"  # SMAR
 BASE_PROTOCOL_CODE="mcar"
 BASE_USE_CONCAT=0  # Center value
-MAX_ITEM=50
+MAX_ITEM=1
 
 # Unique prefix for TensorBoard / output filtering
 EASY_PREFIX="easy_axis"
@@ -94,7 +94,7 @@ hJ_str=$HOLD_J
 hK_str=$HOLD_K
 
 # Construct run name
-run_name="real_data_maxitem${MAX_ITEM}_D32_train_only"
+run_name="real_data_maxitem${MAX_ITEM}"
 
 echo ""
 echo "=========================================="
@@ -153,63 +153,64 @@ fi
 # fi
 
 # Step 2: Run Marformer with Lightning
-# echo "[Step 2/6] Running Marformer with PyTorch Lightning..."
-# if [ -n "$DEBUG" ]; then
-#     echo "Running in DEBUG mode (interactive - breakpoints will work)"
-#     python imputer/run_imputer.py \
-#         --data-dir OUTPUT/generated_data/real_data_llm_rubric \
-#         --run-name ${run_name} \
-#         --overwrite-existing-data \
-#         --embedding-dim $MARFORMER_EMBEDDING_DIM \
-#         --encoder-layers $MARFORMER_ENCODER_LAYERS \
-#         --attention-heads $MARFORMER_ATTENTION_HEADS \
-#         --num_ffn_layers $MARFORMER_NUM_FFN_LAYERS \
-#         --weight-decay $MARFORMER_WEIGHT_DECAY \
-#         --dropout $MARFORMER_DROPOUT \
-#         --epochs $MARFORMER_EPOCHS \
-#         --lr $MARFORMER_LR \
-#         --masking-rate $MARFORMER_MASKING_RATE \
-#         --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \
-#         --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \
-#         --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \
-#         --no-final-norm \
-#         --normalize-parameter \
-#         --device $MARFORMER_DEVICE \
-#         --max-item $MAX_ITEM \
-#         $DEVICES_FLAG \
-#         --save-model-every 5 \
-#         --batch-size $MARFORMER_BATCH_SIZE \
-#         --gradient-clip-val $MARFORMER_GRADIENT_CLIP_VAL \
-#         $concat_flag \
-#         $cosine_schedule_flags
-# else
-#     python imputer/run_imputer.py \
-#         --data-dir OUTPUT/generated_data/real_data_llm_rubric \
-#         --run-name ${run_name} \
-#         --overwrite-existing-data \
-#         --embedding-dim $MARFORMER_EMBEDDING_DIM \
-#         --encoder-layers $MARFORMER_ENCODER_LAYERS \
-#         --attention-heads $MARFORMER_ATTENTION_HEADS \
-#         --num_ffn_layers $MARFORMER_NUM_FFN_LAYERS \
-#         --weight-decay $MARFORMER_WEIGHT_DECAY \
-#         --dropout $MARFORMER_DROPOUT \
-#         --epochs $MARFORMER_EPOCHS \
-#         --lr $MARFORMER_LR \
-#         --masking-rate $MARFORMER_MASKING_RATE \
-#         --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \
-#         --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \
-#         --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \
-#         --no-final-norm \
-#         --normalize-parameter \
-#         --device $MARFORMER_DEVICE \
-#         $DEVICES_FLAG \
-#         --save-model-every 5 \
-#         --batch-size $MARFORMER_BATCH_SIZE \
-#         --gradient-clip-val $MARFORMER_GRADIENT_CLIP_VAL \
-#         $concat_flag \
-#         $cosine_schedule_flags \
-#         $masking_args
-# fi
+echo "[Step 2/6] Running Marformer with PyTorch Lightning..."
+if [ -n "$DEBUG" ]; then
+    echo "Running in DEBUG mode (interactive - breakpoints will work)"
+    python imputer/run_imputer.py \
+        --data-dir OUTPUT/generated_data/real_data_llm_rubric \
+        --run-name ${run_name} \
+        --overwrite-existing-data \
+        --embedding-dim $MARFORMER_EMBEDDING_DIM \
+        --encoder-layers $MARFORMER_ENCODER_LAYERS \
+        --attention-heads $MARFORMER_ATTENTION_HEADS \
+        --num_ffn_layers $MARFORMER_NUM_FFN_LAYERS \
+        --weight-decay $MARFORMER_WEIGHT_DECAY \
+        --dropout $MARFORMER_DROPOUT \
+        --epochs $MARFORMER_EPOCHS \
+        --lr $MARFORMER_LR \
+        --masking-rate $MARFORMER_MASKING_RATE \
+        --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \
+        --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \
+        --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \
+        --no-final-norm \
+        --normalize-parameter \
+        --device $MARFORMER_DEVICE \
+        --max-item $MAX_ITEM \
+        $DEVICES_FLAG \
+        --save-model-every 5 \
+        --batch-size $MARFORMER_BATCH_SIZE \
+        --gradient-clip-val $MARFORMER_GRADIENT_CLIP_VAL \
+        $concat_flag \
+        $cosine_schedule_flags
+else
+    python imputer/run_imputer.py \
+        --data-dir OUTPUT/generated_data/real_data_llm_rubric \
+        --run-name ${run_name} \
+        --overwrite-existing-data \
+        --embedding-dim $MARFORMER_EMBEDDING_DIM \
+        --encoder-layers $MARFORMER_ENCODER_LAYERS \
+        --attention-heads $MARFORMER_ATTENTION_HEADS \
+        --num_ffn_layers $MARFORMER_NUM_FFN_LAYERS \
+        --weight-decay $MARFORMER_WEIGHT_DECAY \
+        --dropout $MARFORMER_DROPOUT \
+        --epochs $MARFORMER_EPOCHS \
+        --lr $MARFORMER_LR \
+        --masking-rate $MARFORMER_MASKING_RATE \
+        --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \
+        --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \
+        --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \
+        --no-final-norm \
+        --normalize-parameter \
+        --device $MARFORMER_DEVICE \
+        $DEVICES_FLAG \
+        --save-model-every 5 \
+        --max-item $MAX_ITEM \
+        --batch-size $MARFORMER_BATCH_SIZE \
+        --gradient-clip-val $MARFORMER_GRADIENT_CLIP_VAL \
+        $concat_flag \
+        $cosine_schedule_flags \
+        $masking_args
+fi
 # Step 3: Run Stan inference (4 chains)
 echo "[Step 3/6] Running Stan inference (4 chains)..."
 python stan/scripts/run_inference.py \
