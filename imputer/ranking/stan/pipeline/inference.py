@@ -57,11 +57,16 @@ def compile_domain_model(stan_file: Optional[str] = None) -> cmdstanpy.CmdStanMo
 
 
 def prepare_stan_data_for_inference(
+<<<<<<< Updated upstream
     bundle: GroundTruthBundle, 
+=======
+    bundle: GroundTruthBundle,
+>>>>>>> Stashed changes
     config: DataGenConfig,
     use_train_only: bool = False,
     use_test_only: bool = False
 ) -> Dict[str, Any]:
+<<<<<<< Updated upstream
     """
     Prepare Stan data for domain model inference.
     
@@ -95,6 +100,35 @@ def prepare_stan_data_for_inference(
         # Use both train and test (transductive learning)
         observed_ratings = bundle.observed_ratings
         observed_pairwise = bundle.observed_pairwise
+=======
+    
+    if use_train_only and use_test_only:
+        raise ValueError("Cannot use both train_only and test_only")
+
+    item_offset = 0
+
+    if use_train_only:
+        observed_ratings = [r for r in bundle.observed_ratings if r["instance"] == "train"]
+        observed_pairwise = [p for p in bundle.observed_pairwise if p["instance"] == "train"]
+        # Include ALL missing so Stan generates predictives for test missing too.
+        # item_offset=0 since train items are 1..K_train and test items K_train+1..K_train+K_test,
+        # both already correctly indexed in the bundle.
+        missing_ratings = bundle.missing_ratings
+        missing_pairwise = bundle.missing_pairwise
+        K = config.K_train + config.K_test
+    elif use_test_only:
+        observed_ratings = [r for r in bundle.observed_ratings if r["instance"] == "test"]
+        observed_pairwise = [p for p in bundle.observed_pairwise if p["instance"] == "test"]
+        missing_ratings = [r for r in bundle.missing_ratings if r["instance"] == "test"]
+        missing_pairwise = [p for p in bundle.missing_pairwise if p["instance"] == "test"]
+        K = config.K_test
+        item_offset = config.K_train
+    else:
+        observed_ratings = bundle.observed_ratings
+        observed_pairwise = bundle.observed_pairwise
+        missing_ratings = bundle.missing_ratings
+        missing_pairwise = bundle.missing_pairwise
+>>>>>>> Stashed changes
         K = config.K_train + config.K_test
 
     # Convert ratings to Stan format (re-map item indices)
@@ -109,6 +143,7 @@ def prepare_stan_data_for_inference(
     pairwise_ranking_attributes = [p["attribute"] for p in observed_pairwise]
     pairwise_ranking_annotators = [p["annotator"] for p in observed_pairwise]
     pairwise_ranking_items = [[item - item_offset for item in p["items"]] for p in observed_pairwise]
+<<<<<<< Updated upstream
     pairwise_ranking_orders = [p["order"][0] for p in observed_pairwise]  # 1 if item1 > item2, 2 if item2 > item1
 
     # Prepare missing variables (filter by instance, re-map item indices)
@@ -121,6 +156,9 @@ def prepare_stan_data_for_inference(
     else:
         missing_ratings = bundle.missing_ratings
         missing_pairwise = bundle.missing_pairwise
+=======
+    pairwise_ranking_orders = [p["order"][0] for p in observed_pairwise]
+>>>>>>> Stashed changes
 
     N_missing_ratings = len(missing_ratings)
     missing_rating_attributes = [r["attribute"] for r in missing_ratings]
@@ -133,39 +171,57 @@ def prepare_stan_data_for_inference(
     missing_pairwise_ranking_items = [[item - item_offset for item in p["items"]] for p in missing_pairwise]
     
     stan_data = {
+<<<<<<< Updated upstream
         # Dimensions
+=======
+>>>>>>> Stashed changes
         "K": K,
         "I": config.I,
         "J": config.J,
         "D": config.D,
         "C": config.C,
+<<<<<<< Updated upstream
         
         # Observed ratings
+=======
+>>>>>>> Stashed changes
         "N_ratings": N_ratings,
         "rating_attributes": rating_attributes,
         "rating_annotators": rating_annotators,
         "rating_items": rating_items,
         "rating_values": rating_values,
+<<<<<<< Updated upstream
         
         # Observed pairwise rankings
+=======
+>>>>>>> Stashed changes
         "N_pairwise_rankings": N_pairwise_rankings,
         "pairwise_ranking_attributes": pairwise_ranking_attributes,
         "pairwise_ranking_annotators": pairwise_ranking_annotators,
         "pairwise_ranking_items": pairwise_ranking_items,
         "pairwise_ranking_orders": pairwise_ranking_orders,
+<<<<<<< Updated upstream
         
         # Missing variables
+=======
+>>>>>>> Stashed changes
         "N_missing_ratings": N_missing_ratings,
         "missing_rating_attributes": missing_rating_attributes,
         "missing_rating_annotators": missing_rating_annotators,
         "missing_rating_items": missing_rating_items,
+<<<<<<< Updated upstream
         
+=======
+>>>>>>> Stashed changes
         "N_missing_pairwise_rankings": N_missing_pairwise_rankings,
         "missing_pairwise_ranking_attributes": missing_pairwise_ranking_attributes,
         "missing_pairwise_ranking_annotators": missing_pairwise_ranking_annotators,
         "missing_pairwise_ranking_items": missing_pairwise_ranking_items,
+<<<<<<< Updated upstream
         
         # Hyperparameters
+=======
+>>>>>>> Stashed changes
         "sigma_annotator": config.sigma_annotator,
         "sigma_measurement": config.sigma_measurement,
         "alpha_dirichlet": config.alpha_dirichlet,
@@ -274,7 +330,11 @@ def run_mcmc_inference(
         max_treedepth=inference_config.max_treedepth,
         inits=init,
         show_progress=inference_config.show_progress,
+<<<<<<< Updated upstream
         show_console=True
+=======
+        show_console=False
+>>>>>>> Stashed changes
     )
     
     logger.info("MCMC sampling completed successfully")
