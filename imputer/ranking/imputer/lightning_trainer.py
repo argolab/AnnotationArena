@@ -340,6 +340,7 @@ class ImputerLightningModule(pl.LightningModule):
         out: List[RankingData] = []
         for idx, var in enumerate(filtered_vars):
             status = 2 if var.annotator_id==25 else 1  # 1=masked, 2=observed
+            print(status)
             out.append(RankingData(
                 annotator_id=var.annotator_id,
                 attribute_id=var.attribute_id,
@@ -350,6 +351,7 @@ class ImputerLightningModule(pl.LightningModule):
                 rating_value=var.rating_value,
                 ranking_order=var.ranking_order,
             ))
+        raise Exception
         return out
 
     

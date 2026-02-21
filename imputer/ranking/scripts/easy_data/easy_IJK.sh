@@ -19,11 +19,7 @@ BASE_KAPPA=10
 BASE_PROTOCOL="mcar"  # SMAR
 BASE_PROTOCOL_CODE="mcar"
 BASE_USE_CONCAT=0  # Center value
-<<<<<<< Updated upstream
-MAX_ITEM=5
-=======
 MAX_ITEM=50
->>>>>>> Stashed changes
 
 # Unique prefix for TensorBoard / output filtering
 EASY_PREFIX="easy_axis"
@@ -33,19 +29,6 @@ HOLD_J=0
 HOLD_K=0
 
 # Marformer hyperparameters (kept modest for sanity checks)
-<<<<<<< Updated upstream
-MARFORMER_EPOCHS=300
-MARFORMER_LR=2e-4
-MARFORMER_MASKING_RATE=0.15
-MARFORMER_MASKED_LOSS_WEIGHT=15
-MARFORMER_OBSERVED_LOSS_WEIGHT=1
-MARFORMER_MASK_AUGMENTATIONS=5
-MARFORMER_DEVICE="cuda"
-MARFORMER_DEVICES=1
-
-# Transformer architecture (medium size)
-MARFORMER_EMBEDDING_DIM=72
-=======
 MARFORMER_EPOCHS=100
 MARFORMER_LR=1e-3
 MARFORMER_MASKING_RATE=0.5
@@ -57,7 +40,6 @@ MARFORMER_DEVICES=1
 
 # Transformer architecture (medium size)
 MARFORMER_EMBEDDING_DIM=16
->>>>>>> Stashed changes
 MARFORMER_ENCODER_LAYERS=4
 MARFORMER_ATTENTION_HEADS=4
 MARFORMER_NUM_FFN_LAYERS=2
@@ -112,11 +94,7 @@ hJ_str=$HOLD_J
 hK_str=$HOLD_K
 
 # Construct run name
-<<<<<<< Updated upstream
-run_name="real_data_maxitem${MAX_ITEM}"
-=======
 run_name="real_data_maxitem${MAX_ITEM}_D32_train_only"
->>>>>>> Stashed changes
 
 echo ""
 echo "=========================================="
@@ -175,65 +153,6 @@ fi
 # fi
 
 # Step 2: Run Marformer with Lightning
-<<<<<<< Updated upstream
-echo "[Step 2/6] Running Marformer with PyTorch Lightning..."
-if [ -n "$DEBUG" ]; then
-    echo "Running in DEBUG mode (interactive - breakpoints will work)"
-    python imputer/run_imputer.py \
-        --data-dir OUTPUT/generated_data/real_data_llm_rubric \
-        --run-name ${run_name} \
-        --overwrite-existing-data \
-        --embedding-dim $MARFORMER_EMBEDDING_DIM \
-        --encoder-layers $MARFORMER_ENCODER_LAYERS \
-        --attention-heads $MARFORMER_ATTENTION_HEADS \
-        --num_ffn_layers $MARFORMER_NUM_FFN_LAYERS \
-        --weight-decay $MARFORMER_WEIGHT_DECAY \
-        --dropout $MARFORMER_DROPOUT \
-        --epochs $MARFORMER_EPOCHS \
-        --lr $MARFORMER_LR \
-        --masking-rate $MARFORMER_MASKING_RATE \
-        --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \
-        --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \
-        --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \
-        --no-final-norm \
-        --normalize-parameter \
-        --device $MARFORMER_DEVICE \
-        --max-item $MAX_ITEM \
-        $DEVICES_FLAG \
-        --save-model-every 5 \
-        --batch-size $MARFORMER_BATCH_SIZE \
-        --gradient-clip-val $MARFORMER_GRADIENT_CLIP_VAL \
-        $concat_flag \
-        $cosine_schedule_flags
-else
-    python imputer/run_imputer.py \
-        --data-dir OUTPUT/generated_data/${run_name} \
-        --run-name ${run_name} \
-        --overwrite-existing-data \
-        --embedding-dim $MARFORMER_EMBEDDING_DIM \
-        --encoder-layers $MARFORMER_ENCODER_LAYERS \
-        --attention-heads $MARFORMER_ATTENTION_HEADS \
-        --num_ffn_layers $MARFORMER_NUM_FFN_LAYERS \
-        --weight-decay $MARFORMER_WEIGHT_DECAY \
-        --dropout $MARFORMER_DROPOUT \
-        --epochs $MARFORMER_EPOCHS \
-        --lr $MARFORMER_LR \
-        --masking-rate $MARFORMER_MASKING_RATE \
-        --masked-loss-weight $MARFORMER_MASKED_LOSS_WEIGHT \
-        --observed-loss-weight $MARFORMER_OBSERVED_LOSS_WEIGHT \
-        --mask-augmentations $MARFORMER_MASK_AUGMENTATIONS \
-        --no-final-norm \
-        --normalize-parameter \
-        --device $MARFORMER_DEVICE \
-        $DEVICES_FLAG \
-        --save-model-every 5 \
-        --batch-size $MARFORMER_BATCH_SIZE \
-        --gradient-clip-val $MARFORMER_GRADIENT_CLIP_VAL \
-        $concat_flag \
-        $cosine_schedule_flags \
-        $masking_args
-fi
-=======
 # echo "[Step 2/6] Running Marformer with PyTorch Lightning..."
 # if [ -n "$DEBUG" ]; then
 #     echo "Running in DEBUG mode (interactive - breakpoints will work)"
@@ -291,7 +210,6 @@ fi
 #         $cosine_schedule_flags \
 #         $masking_args
 # fi
->>>>>>> Stashed changes
 # Step 3: Run Stan inference (4 chains)
 echo "[Step 3/6] Running Stan inference (4 chains)..."
 python stan/scripts/run_inference.py \
@@ -300,10 +218,7 @@ python stan/scripts/run_inference.py \
     --iter-sampling $STAN_4C_ITER_SAMPLING \
     --iter-warmup $STAN_4C_WARMUP \
     --run-name ${run_name}_stan4c \
-<<<<<<< Updated upstream
-=======
     --use-train-only \
->>>>>>> Stashed changes
     --overwrite-existing-data </dev/null
 
 if [ $? -ne 0 ]; then
@@ -319,10 +234,7 @@ python stan/scripts/run_inference.py \
     --iter-sampling $STAN_1C_ITER_SAMPLING \
     --iter-warmup $STAN_1C_WARMUP \
     --run-name ${run_name}_stan1c \
-<<<<<<< Updated upstream
-=======
     --use-train-only \
->>>>>>> Stashed changes
     --overwrite-existing-data </dev/null
 
 if [ $? -ne 0 ]; then
@@ -336,10 +248,7 @@ python stan/scripts/evaluate_predictions.py \
     --data-bundle OUTPUT/generated_data/real_data_llm_rubric/data_bundle.json \
     --mcmc-dir OUTPUT/domain_model/runs/${run_name}_stan4c \
     --run-name ${run_name}_stan4c_eval \
-<<<<<<< Updated upstream
-=======
     --use-train-only \
->>>>>>> Stashed changes
     --overwrite-existing-data </dev/null
 
 if [ $? -ne 0 ]; then
@@ -353,10 +262,7 @@ python stan/scripts/evaluate_predictions.py \
     --data-bundle OUTPUT/generated_data/real_data_llm_rubric/data_bundle.json \
     --mcmc-dir OUTPUT/domain_model/runs/${run_name}_stan1c \
     --run-name ${run_name}_stan1c_eval \
-<<<<<<< Updated upstream
-=======
     --use-train-only \
->>>>>>> Stashed changes
     --overwrite-existing-data </dev/null
 
 if [ $? -ne 0 ]; then

@@ -142,15 +142,9 @@ def main():
     )
 
     # Optional validation
-<<<<<<< Updated upstream
-    errors = converter.validate_bundle(bundle)
-    if errors:
-        raise ValueError(f"Bundle validation errors: {errors}")
-=======
     '''errors = converter.validate_bundle(bundle)
     if errors:
         raise ValueError(f"Bundle validation errors: {errors}")'''
->>>>>>> Stashed changes
 
     # Prepare variables
     train_observed = converter.create_variables_from_bundle(bundle, partition="train", status="observed")

@@ -254,15 +254,6 @@ def evaluate_predictives(
             config
         )
     elif use_train_only:
-<<<<<<< Updated upstream
-        # Stan predicted only train-instance missing ratings
-        eval_missing = [r for r in bundle.missing_ratings if r["instance"] == "train"]
-        all_indices = list(range(len(eval_missing)))
-        rating_metrics = evaluate_rating_predictions(
-            predictives["missing_rating_predictions"][:, all_indices],
-            predictives["missing_rating_probs"][:, all_indices],
-            eval_missing,
-=======
         # Stan was run with train observations only, but missing_ratings includes
         # both train and test missing (train first, then test) so we can evaluate
         # on test missing. Find the indices of test missing in the full missing list.
@@ -273,7 +264,6 @@ def evaluate_predictives(
             predictives["missing_rating_predictions"][:, test_indices],
             predictives["missing_rating_probs"][:, test_indices],
             test_missing_ratings,
->>>>>>> Stashed changes
             config
         )
     else:
