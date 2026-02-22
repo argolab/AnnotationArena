@@ -1,7 +1,8 @@
+import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 from imputer.abstractions import RankingEmbeddingProviderBase
 from imputer.data import RankingData
@@ -24,6 +25,8 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         embedding_dropout: float = 0.0,
         use_concat_embedding: bool = False,
         enable_full_dropout: bool = False,
+        item_text_embeddings: Optional[torch.Tensor] = None,
+        text_embedding_dim: int = 768,
     ):
 
         super().__init__(
@@ -71,6 +74,13 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         torch.nn.init.kaiming_normal_(self.annotator_embedding, mode='fan_out', nonlinearity='relu')
         torch.nn.init.kaiming_normal_(self.item_embedding, mode='fan_out', nonlinearity='relu')
 
+        # Optional frozen text embeddings + learned projection (SentenceBERT etc.)
+        if item_text_embeddings is not None:
+            self.register_buffer('item_text_embs', item_text_embeddings.float())  # [K, text_dim], frozen
+            self.W_text = nn.Linear(text_embedding_dim, self.internal_dimension, bias=False)
+        else:
+            self.item_text_embs = None
+
         # Class constant for the logit value
         self.LOGIT_HIGH = getattr(self, "LOGIT_HIGH", 20.0)
 
@@ -90,7 +100,7 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         """Enable or disable full dropout. Should be True during training, False during evaluation."""
         self.enable_full_dropout = enabled
 
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False) -> torch.Tensor:
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False, rating_dist: Optional[List[float]] = None) -> torch.Tensor:
         """Implementation for rating embeddings."""
         attr_core = self._full_dropout(self.attribute_embedding[attribute_id])
         annot_core = self._full_dropout(self.annotator_embedding[annotator_id])
@@ -98,7 +108,10 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         
         # Build annot_vec and item_vec (all learnable now)
         annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), annot_core), dim=-1)
-        item_vec = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_id]), dim=-1)
+        item_core = self.item_embedding[item_id]
+        if self.item_text_embs is not None:
+            item_core = item_core + self.W_text(self.item_text_embs[item_id])
+        item_vec = torch.cat((torch.tensor([0, 0, 1]).to(self.device), item_core), dim=-1)
         #item_vec = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[0]), dim=-1)
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
         
@@ -113,8 +126,14 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
             # Missing/masked items: encode uniform distribution (all zeros = uniform logits)
             parameter[0] = 1.0  # Mask bit
             # Leave remaining dimensions as zeros (uniform distribution)
+        elif rating_dist is not None:
+            # Soft observed: encode full distribution as log-probabilities.
+            # softmax(log(p)) = p exactly, so the residual naturally preserves the distribution.
+            parameter[0] = 0.0  # Not masked
+            for c, p in enumerate(rating_dist):
+                parameter[1 + c] = math.log(max(float(p), 1e-10))
         else:
-            # Observed items: encode the known rating value
+            # Hard observed: encode the known integer rating as a near-one-hot logit.
             assert rating_value is not None and 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
             parameter[0] = 0.0  # Not masked
             parameter[rating_value + 1] = self.LOGIT_HIGH  # One-hot-like encoding of rating logit
@@ -128,8 +147,13 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         attr_vec = torch.cat((torch.tensor([1, 0, 0]).to(self.device), attr_core), dim=-1)
         annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), annot_core), dim=-1)
 
-        item_embedding_1 = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_ids[0]]), dim=-1)
-        item_embedding_2 = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_ids[1]]), dim=-1)
+        item_core_1 = self.item_embedding[item_ids[0]]
+        item_core_2 = self.item_embedding[item_ids[1]]
+        if self.item_text_embs is not None:
+            item_core_1 = item_core_1 + self.W_text(self.item_text_embs[item_ids[0]])
+            item_core_2 = item_core_2 + self.W_text(self.item_text_embs[item_ids[1]])
+        item_embedding_1 = torch.cat((torch.tensor([0, 0, 1]).to(self.device), item_core_1), dim=-1)
+        item_embedding_2 = torch.cat((torch.tensor([0, 0, 1]).to(self.device), item_core_2), dim=-1)
         item_embedding = item_embedding_1 + item_embedding_2 @ self.pairwise_relation
         
         # Combine embeddings based on use_concat_embedding flag

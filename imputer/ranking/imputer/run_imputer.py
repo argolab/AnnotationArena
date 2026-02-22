@@ -107,6 +107,15 @@ def main():
                         help="0-indexed annotator ID of the LLM. When set, masks ALL human annotations and keeps only LLM as observed during training.")
     parser.add_argument("--human-observed-rate", type=float, default=0.0,
                         help="Fraction of human annotations to keep as observed (not masked) when --llm-annotator-id is set. Default 0.0 = mask all humans.")
+
+    # Text embedding arguments (SentenceBERT item initialization)
+    parser.add_argument("--use-text-embeddings", action="store_true",
+                        help="Initialise item embeddings with precomputed text embeddings (e.g. SentenceBERT). "
+                             "Only affects MultiVariableImputer. Disabled by default.")
+    parser.add_argument("--text-embeddings-file", type=str, default=None,
+                        help="Path to .pt file containing item text embeddings [K, text_dim]. "
+                             "Defaults to {data_dir}/item_text_embeddings.pt when --use-text-embeddings is set.")
+
     args = parser.parse_args()
 
     # PyTorch Lightning DDP re-runs this script in each worker process.
@@ -137,6 +146,20 @@ def main():
 
     # Sizes from configs and build converter
     sizes = sizes_from_configs(configs)
+
+    # Load optional text embeddings (SentenceBERT or similar)
+    item_text_embeddings = None
+    if args.use_text_embeddings:
+        text_emb_path = args.text_embeddings_file or str(data_dir / "item_text_embeddings.pt")
+        print(f"Loading item text embeddings from {text_emb_path}")
+        item_text_embeddings = torch.load(text_emb_path, map_location="cpu")
+        assert item_text_embeddings.shape[0] == sizes["num_items"], (
+            f"Text embeddings shape[0]={item_text_embeddings.shape[0]} "
+            f"!= num_items={sizes['num_items']}"
+        )
+        text_embedding_dim = item_text_embeddings.shape[1]
+        print(f"  Loaded text embeddings: {item_text_embeddings.shape}  (dim={text_embedding_dim})")
+
     converter = DataConverter(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -252,6 +275,8 @@ def main():
             use_concat_embedding=bool(args.use_concat_embedding),
             batch_size=args.batch_size,
             enable_pointer_mechanism=True,
+            item_text_embeddings=item_text_embeddings,
+            text_embedding_dim=text_embedding_dim if item_text_embeddings is not None else 768,
         )
 
     # Print temperature scaling status

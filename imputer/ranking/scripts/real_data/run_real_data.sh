@@ -18,7 +18,7 @@ BUNDLE="${BUNDLE:-hard}"
 
 if [ "$BUNDLE" == "dist" ]; then
     DATA_DIR="OUTPUT/generated_data/llm_rubric_dist"
-    RUN_NAME="llm_rubric_marformer_dist_alt_2"
+    RUN_NAME="llm_rubric_marformer_dist_sentences_alt"
 else
     DATA_DIR="OUTPUT/generated_data/llm_rubric"
     RUN_NAME="llm_rubric_marformer"
@@ -93,6 +93,7 @@ python imputer/run_imputer.py \
     --save-model-every 5 \
     --llm-annotator-id 24 \
     --human-observed-rate 0.2 \
+    --use-text-embeddings \
     $cosine_flags
 
 echo ""

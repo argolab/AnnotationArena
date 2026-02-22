@@ -54,7 +54,9 @@ class MultiVariableImputer(nn.Module):
                  temperature=1.0,
                  use_concat_embedding: bool = False,
                  batch_size: int = 1,
-                 enable_pointer_mechanism: bool = True):
+                 enable_pointer_mechanism: bool = True,
+                 item_text_embeddings=None,
+                 text_embedding_dim: int = 768):
         super().__init__()
         self.device = torch.device(device)
         # Defer moving to device until after all submodules are created
@@ -85,6 +87,8 @@ class MultiVariableImputer(nn.Module):
             self.device,
             embedding_dropout=embedding_dropout,
             use_concat_embedding=use_concat_embedding,
+            item_text_embeddings=item_text_embeddings,
+            text_embedding_dim=text_embedding_dim,
         )
 
         # Use provider-declared parameter dimension (includes missing-status bit)

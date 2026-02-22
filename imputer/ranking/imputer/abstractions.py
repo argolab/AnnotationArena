@@ -30,7 +30,7 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
         return 1 + max(self.num_likert_classes, self.max_rank_size)  # 1 for the missing-status bit
 
     # Abstract hooks for subclasses
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value: Optional[int], is_missing: bool = False) -> torch.Tensor:
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value: Optional[int], is_missing: bool = False, rating_dist: Optional[List[float]] = None) -> torch.Tensor:
         raise NotImplementedError
 
     def get_ranking_embedding(self, attribute_id: int, annotator_id: int, item_ids: List[int], ranking_order: Optional[List[int]], is_missing: bool = False) -> torch.Tensor:
@@ -74,8 +74,8 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
                     feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_missing)
                 else:
                     item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
-                    feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing)
-                
+                    feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing, rating_dist=var.rating_dist)
+
                 embedding_list.append(feat)
 
             # Stack embeddings to preserve gradient flow from embedding parameters
@@ -96,8 +96,8 @@ class RankingEmbeddingProviderBase(EmbeddingProviderBase):
                         feat = self.get_ranking_embedding(var.attribute_id, var.annotator_id, var.item_ids[: self.max_rank_size], var.ranking_order, is_missing)
                     else:
                         item_id = var.item_ids[0] if len(var.item_ids) > 0 else -1
-                        feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing)
-                    
+                        feat = self.get_rating_embedding(var.attribute_id, var.annotator_id, item_id, var.rating_value, is_missing, rating_dist=var.rating_dist)
+
                     embedding_list.append(feat)
                 
                 batch_embeddings.append(torch.stack(embedding_list, dim=0))
