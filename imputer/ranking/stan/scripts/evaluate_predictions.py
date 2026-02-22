@@ -89,21 +89,30 @@ def main():
     data_bundle_dir = Path(args.data_bundle).parent
     configs_path = data_bundle_dir / "configs.json"
     
-    if configs_path.exists():
+    # Prefer augmented_configs.json from the MCMC run dir (has D + all hyperparams).
+    # This is written by run_inference.py and captures any --override-* values.
+    augmented_path = mcmc_dir / "augmented_configs.json"
+    if augmented_path.exists():
+        with open(augmented_path, 'r') as f:
+            datagen_config = json.load(f)["datagen"]
+        print(f"Reading config from {augmented_path}")
+    elif configs_path.exists():
         with open(configs_path, 'r') as f:
             configs_data = json.load(f)
         datagen_config = configs_data["datagen"]
-        config = {
-            "K_train": datagen_config["K_train"],
-            "K_test": datagen_config["K_test"],
-            "I": datagen_config["I"],
-            "J": datagen_config["J"],
-            "D": datagen_config["D"],
-            "C": datagen_config["C"],
-            "temperature": datagen_config.get("temperature", 1.0),
-        }
+        print(f"Reading config from {configs_path}")
     else:
-        raise ValueError(f"Configs file not found at {configs_path}")
+        raise ValueError(f"Neither {augmented_path} nor {configs_path} found")
+
+    config = {
+        "K_train": datagen_config["K_train"],
+        "K_test": datagen_config["K_test"],
+        "I": datagen_config["I"],
+        "J": datagen_config["J"],
+        "D": datagen_config.get("D", 8),
+        "C": datagen_config["C"],
+        "temperature": datagen_config.get("temperature", 1.0),
+    }
     
     print(f"\nConfiguration:")
     print(f"  K_train: {config['K_train']}")

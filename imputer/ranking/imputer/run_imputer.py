@@ -103,6 +103,10 @@ def main():
                         help="Whether to mask all vars with (j, k) pairs in the synthetic masking examples")
     parser.add_argument("--max-item", type=int, default=1,
                         help="Max number of items in a single imputer forward pass")
+    parser.add_argument("--llm-annotator-id", type=int, default=None,
+                        help="0-indexed annotator ID of the LLM. When set, masks ALL human annotations and keeps only LLM as observed during training.")
+    parser.add_argument("--human-observed-rate", type=float, default=0.0,
+                        help="Fraction of human annotations to keep as observed (not masked) when --llm-annotator-id is set. Default 0.0 = mask all humans.")
     args = parser.parse_args()
 
     # PyTorch Lightning DDP re-runs this script in each worker process.
@@ -453,7 +457,9 @@ def main():
         train_instance_callback=train_instance_callback,
         test_instance_callback=test_instance_callback,
         selective_masking=args.selective_masking,
-        max_item=args.max_item
+        max_item=args.max_item,
+        llm_annotator_id=args.llm_annotator_id,
+        human_observed_rate=args.human_observed_rate,
     )
     # Device / strategy configuration
     trainer_kwargs: Dict[str, Any] = {}
@@ -495,8 +501,8 @@ def main():
     # Training history is saved via Lightning's _save_epoch_artifacts
     print(f"Training history saved to {run_dir}")
 
-    # Evaluate
-    results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device)
+    # Evaluate (use same max_item as training so item-context matches)
+    results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device, max_item=args.max_item)
 
     # Output (using the same run_dir created earlier)
 
@@ -536,10 +542,11 @@ def main():
     save_test_metrics(run_dir, metrics_obj)
 
     # Save predictives: train_predictives.json (train_missing) and test_predictives.json (test_all)
+    # Use same max_item as training so item-context matches
     if not args.test_only_training and train_missing:
-        train_predictives = build_predictives(model, train_missing)
+        train_predictives = build_predictives(model, train_missing, max_item=args.max_item)
         save_predictives(run_dir, train_predictives, "train_predictives.json")
-    test_predictives = build_predictives(model, test_all)
+    test_predictives = build_predictives(model, test_all, max_item=args.max_item)
     save_predictives(run_dir, test_predictives, "test_predictives.json")
 
     print(f"Saved model to {model_path}")

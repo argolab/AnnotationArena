@@ -87,6 +87,12 @@ def main():
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--factor-decay", type=float, default=None,
                        help="CP tensor decomposition: T_d = factor_decay^(d-1). Only for tensor_data_generation.stan.")
+    parser.add_argument("--use-log-scores", action="store_true",
+                       help="Apply log() to raw CP scores before binning (misspecifies Stan's linear likelihood)")
+    parser.add_argument("--use-logistic-link", action="store_true",
+                       help="Use inv_logit instead of Phi for binning (misspecifies Stan's probit link)")
+    parser.add_argument("--use-normal-loadings", action="store_true",
+                       help="Use N(0,1) loadings instead of Exp(1) for TCP model (allows cancellation)")
 
     # Observation protocol
     parser.add_argument("--observation-protocol", type=str, default="tie_breaking",
@@ -155,6 +161,9 @@ def main():
         hold_J_constant=args.hold_J_constant,
         hold_K_constant=args.hold_K_constant,
         factor_decay=args.factor_decay,
+        use_log_scores=args.use_log_scores,
+        use_logistic_link=args.use_logistic_link,
+        use_normal_loadings=args.use_normal_loadings,
     )
     
     # Create output directory

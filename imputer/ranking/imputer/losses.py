@@ -163,7 +163,15 @@ class DefaultLossStrategy(LossStrategyBase):
             if not ref.is_listwise:
 
                 if ref.rating_value is not None and 0 <= ref.rating_value < C:
-                    rating_targets[0, i, ref.rating_value] = 1.0  # one-hot distribution
+                    if ref.rating_dist is not None:
+                        # Soft target: full distribution over C categories (real data).
+                        # LLM: actual probability vector; human: one-hot stored explicitly.
+                        rating_targets[0, i] = torch.tensor(
+                            ref.rating_dist, dtype=torch.float32, device=device
+                        )
+                    else:
+                        # Hard target: one-hot at rating_value (synthetic data, default).
+                        rating_targets[0, i, ref.rating_value] = 1.0
                     rating_mask[0, i] = True
                 else:
                     raise ValueError(f"Rating value not found or out of range for voter {i}")
@@ -191,8 +199,10 @@ class DefaultLossStrategy(LossStrategyBase):
             idx = rating_mask.nonzero(as_tuple=False)
             v_logits = rating_logits[idx[:, 0], idx[:, 1]]
             v_targets = rating_targets[idx[:, 0], idx[:, 1]]
-            target_classes = torch.argmax(v_targets, dim=1)
-            losses = self.rating_loss_fn(v_logits, target_classes)
+            # Pass the distribution directly — PyTorch CE accepts float targets
+            # (soft or one-hot) natively since 1.10. Equivalent to hard CE when
+            # v_targets is one-hot (synthetic data), and soft CE otherwise.
+            losses = self.rating_loss_fn(v_logits, v_targets)
 
             # Separate by masked status using boolean indexing
             valid_indices = idx[:, 1]  # Get variable indices

@@ -84,7 +84,9 @@ class ImputerLightningModule(pl.LightningModule):
         train_instance_callback=None,
         test_instance_callback=None,
         selective_masking=False,
-        max_item=30
+        max_item=30,
+        llm_annotator_id: Optional[int] = None,
+        human_observed_rate: float = 0.0,
     ):
         super().__init__()
         self.save_hyperparameters(ignore=['model', 'train_observed_vars', 'train_missing_vars',
@@ -136,6 +138,8 @@ class ImputerLightningModule(pl.LightningModule):
 
         self.selective_masking = selective_masking
         self.max_item = max_item
+        self.llm_annotator_id = llm_annotator_id
+        self.human_observed_rate = human_observed_rate
 
     #########################################################
     # Helper functions for logging and tracking
@@ -336,13 +340,41 @@ class ImputerLightningModule(pl.LightningModule):
         
         if not filtered_vars:
             return []
-        
-        # Apply masking
+
+        out: List[RankingData] = []
+        if self.llm_annotator_id is not None:
+            # Structured masking: LLM always observed; humans masked except random human_observed_rate fraction
+            human_vars = [v for v in filtered_vars if v.annotator_id != self.llm_annotator_id]
+            num_human_observed = int(len(human_vars) * self.human_observed_rate)
+            human_observed_indices = set(
+                random.sample(range(len(human_vars)), num_human_observed)
+            ) if num_human_observed > 0 else set()
+
+            human_idx = 0
+            for var in filtered_vars:
+                if var.annotator_id == self.llm_annotator_id:
+                    status = 2
+                else:
+                    status = 2 if human_idx in human_observed_indices else 1
+                    human_idx += 1
+                out.append(RankingData(
+                    annotator_id=var.annotator_id,
+                    attribute_id=var.attribute_id,
+                    is_listwise=var.is_listwise,
+                    item_ids=var.item_ids,
+                    status=status,
+                    instance=var.instance,
+                    rating_value=var.rating_value,
+                    ranking_order=var.ranking_order,
+                    rating_dist=var.rating_dist,
+                ))
+            return out
+
+        # Random masking (default for synthetic data)
         num_to_mask = int(len(filtered_vars) * masking_rate)
         num_to_mask = max(0, min(len(filtered_vars), num_to_mask))
         masked_indices = set(random.sample(list(range(len(filtered_vars))), num_to_mask)) if num_to_mask > 0 else set()
 
-        out: List[RankingData] = []
         for idx, var in enumerate(filtered_vars):
             status = 1 if idx in masked_indices else 2  # 1=masked, 2=observed
             out.append(RankingData(
@@ -768,14 +800,29 @@ class ImputerLightningModule(pl.LightningModule):
     
     def on_train_epoch_end(self) -> None:
         """Called at the end of each training epoch."""
+        masked_rating_loss = self.trainer.callback_metrics.get("obj/masked_rating_loss", 0.0)
+        observed_rating_loss = self.trainer.callback_metrics.get("obj/observed_rating_loss", 0.0)
         epoch_metrics = {
             "epoch": self.current_epoch,
             "total_loss": self.trainer.callback_metrics.get("obj/total_loss", 0.0),
             "rating_loss": self.trainer.callback_metrics.get("obj/rating_loss", 0.0),
             "ranking_loss": self.trainer.callback_metrics.get("obj/ranking_loss", 0.0),
+            "masked_rating_loss": float(masked_rating_loss),
+            "observed_rating_loss": float(observed_rating_loss),
         }
+        total_tokens = self.trainer.callback_metrics.get('train/tokens_total', '?')
+        masked_tokens = self.trainer.callback_metrics.get('train/tokens_masked', '?')
+        observed_tokens = self.trainer.callback_metrics.get('train/tokens_observed', '?')
+        print(
+            f"[Epoch {self.current_epoch}] "
+            f"total={epoch_metrics['total_loss']:.4f}  "
+            f"masked_rating={epoch_metrics['masked_rating_loss']:.4f}  "
+            f"observed_rating={epoch_metrics['observed_rating_loss']:.4f}  "
+            f"| tokens: total={total_tokens} masked={masked_tokens} observed={observed_tokens}"
+        )
         self.training_history.append(epoch_metrics)
 
+        test_cb_result = None
         for cb in [self.train_instance_callback, self.test_instance_callback]:
             if cb is None:
                 continue
@@ -783,6 +830,16 @@ class ImputerLightningModule(pl.LightningModule):
             instance_name = result.get("instance", cb.instance_name)
             log_instance_metrics_to_tb(self, result, instance_name)
             self.callback_history.append(result)
+            if cb is self.test_instance_callback:
+                test_cb_result = result
+
+        if test_cb_result is not None:
+            mm = test_cb_result.get("missing_metrics") or {}
+            miss_acc  = mm.get("rating_accuracy")
+            miss_loss = mm.get("rating_loss")
+            acc_str  = f"{miss_acc:.4f}"  if miss_acc  is not None else "N/A"
+            loss_str = f"{miss_loss:.4f}" if miss_loss is not None else "N/A"
+            print(f"  [test_missing] acc={acc_str}  xent={loss_str}")
 
         if self.run_dir is not None:
             self._save_epoch_artifacts()

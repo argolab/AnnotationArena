@@ -27,6 +27,13 @@ data {
     // Annotator model flags (unused in CP model, kept for pipeline compatibility)
     int<lower=0, upper=1> use_factored_annotator;
     int<lower=0, upper=1> derive_thresholds_from_annotator;
+
+    // Misspecification flags (for testing Stan robustness)
+    int<lower=0, upper=1> use_log_scores;     // Apply log() to raw CP scores before binning
+    int<lower=0, upper=1> use_logistic_link;   // Use inv_logit instead of Phi for binning
+
+    // Loading distribution: 0 = Exp(1) (default, all positive), 1 = N(0,1) (signed, cancellation)
+    int<lower=0, upper=1> use_normal_loadings;
 }
 
 generated quantities {
@@ -143,6 +150,8 @@ generated quantities {
         print("  D (rank) = ", D);
         print("  factor_decay = ", factor_decay);
         print("  T_weights = ", T_weights);
+        print("  use_log_scores = ", use_log_scores);
+        print("  use_logistic_link = ", use_logistic_link);
     }
 
     // ===== GENERATE ATTRIBUTE LOADINGS v_i =====
@@ -151,7 +160,7 @@ generated quantities {
             // Single shared loading across all attributes
             row_vector[D] shared_v;
             for (d in 1:D) {
-                shared_v[d] = exponential_rng(1.0);
+                shared_v[d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
             }
             for (i in 1:I) {
                 v_loadings[i] = shared_v;
@@ -159,7 +168,7 @@ generated quantities {
         } else {
             for (i in 1:I) {
                 for (d in 1:D) {
-                    v_loadings[i, d] = exponential_rng(1.0);
+                    v_loadings[i, d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
                 }
             }
         }
@@ -173,7 +182,7 @@ generated quantities {
             // Single shared loading across all annotators
             row_vector[D] shared_u;
             for (d in 1:D) {
-                shared_u[d] = exponential_rng(1.0);
+                shared_u[d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
             }
             for (j in 1:J) {
                 u_loadings[j] = shared_u;
@@ -181,7 +190,7 @@ generated quantities {
         } else {
             for (j in 1:J) {
                 for (d in 1:D) {
-                    u_loadings[j, d] = exponential_rng(1.0);
+                    u_loadings[j, d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
                 }
             }
         }
@@ -216,43 +225,71 @@ generated quantities {
         print("annotator_preferences[1] = ", annotator_preferences[1]);
     }
 
-    // ===== GENERATE PER-ANNOTATOR THRESHOLDS =====
-    // Each annotator j gets one Dirichlet sample, shared across all attributes i.
-    // This gives each annotator a distinct grading style (harsh vs lenient).
+    // ===== GENERATE PER-(i,j) THRESHOLDS =====
+    // Each (attribute, annotator) pair gets an independent Dirichlet sample.
+    // This maximizes threshold variability — same annotator rates different
+    // attributes with different scales.
     {
-        array[J] vector[C] annot_probs;
-        array[J] vector[C] annot_cumprobs;
-
-        if (hold_J_constant == 1) {
-            // No annotator dependence: single threshold set
+        if (hold_I_constant == 1 && hold_J_constant == 1) {
+            // Single global threshold set
             vector[C] shared_probs = dirichlet_rng(rep_vector(alpha_dirichlet / C, C));
             vector[C] shared_cumprobs = cumulative_sum(shared_probs);
-            for (j in 1:J) {
-                annot_probs[j] = shared_probs;
-                annot_cumprobs[j] = shared_cumprobs;
+            for (i in 1:I) {
+                for (j in 1:J) {
+                    int idx = (i-1)*J + j;
+                    rating_probs[idx] = shared_probs;
+                    rating_cumprobs[idx] = shared_cumprobs;
+                }
             }
-        } else {
+        } else if (hold_I_constant == 1) {
+            // Per-j only (no I dependence)
+            array[J] vector[C] annot_probs;
             for (j in 1:J) {
                 annot_probs[j] = dirichlet_rng(rep_vector(alpha_dirichlet / C, C));
-                annot_cumprobs[j] = cumulative_sum(annot_probs[j]);
             }
-        }
-
-        // Replicate per-j thresholds across all attributes i
-        for (i in 1:I) {
-            for (j in 1:J) {
-                int idx = (i-1)*J + j;
-                rating_probs[idx] = annot_probs[j];
-                rating_cumprobs[idx] = annot_cumprobs[j];
+            for (i in 1:I) {
+                for (j in 1:J) {
+                    int idx = (i-1)*J + j;
+                    rating_probs[idx] = annot_probs[j];
+                    rating_cumprobs[idx] = cumulative_sum(annot_probs[j]);
+                }
+            }
+        } else if (hold_J_constant == 1) {
+            // Per-i only (no J dependence)
+            array[I] vector[C] attr_probs;
+            for (i in 1:I) {
+                attr_probs[i] = dirichlet_rng(rep_vector(alpha_dirichlet / C, C));
+            }
+            for (i in 1:I) {
+                for (j in 1:J) {
+                    int idx = (i-1)*J + j;
+                    rating_probs[idx] = attr_probs[i];
+                    rating_cumprobs[idx] = cumulative_sum(attr_probs[i]);
+                }
+            }
+        } else {
+            // Full (i,j) dependence — independent Dirichlet for each pair
+            for (i in 1:I) {
+                for (j in 1:J) {
+                    int idx = (i-1)*J + j;
+                    rating_probs[idx] = dirichlet_rng(rep_vector(alpha_dirichlet / C, C));
+                    rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
+                }
             }
         }
     }
 
-    // Convert cumulative probabilities to standard normal cutpoints (z-space)
+    // Convert cumulative probabilities to cutpoints
+    // Probit link: z = inv_Phi(p)   -> cdf = Phi(z)
+    // Logistic link: z = logit(p)   -> cdf = inv_logit(z)
     for (ij in 1:(I*J)) {
         rating_thresholds_z[ij][1] = negative_infinity();
         for (c in 2:C) {
-            rating_thresholds_z[ij][c] = inv_Phi(rating_cumprobs[ij][c-1]);
+            if (use_logistic_link == 1) {
+                rating_thresholds_z[ij][c] = logit(rating_cumprobs[ij][c-1]);
+            } else {
+                rating_thresholds_z[ij][c] = inv_Phi(rating_cumprobs[ij][c-1]);
+            }
         }
         rating_thresholds_z[ij][C+1] = positive_infinity();
     }
@@ -269,7 +306,7 @@ generated quantities {
     if (hold_K_constant == 1) {
         row_vector[D] shared_e;
         for (d in 1:D) {
-            shared_e[d] = exponential_rng(1.0);
+            shared_e[d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
         }
         for (k in 1:K_train) {
             train_embeddings[k] = shared_e;
@@ -277,21 +314,17 @@ generated quantities {
     } else {
         for (k in 1:K_train) {
             for (d in 1:D) {
-                train_embeddings[k, d] = exponential_rng(1.0);
+                train_embeddings[k, d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
             }
         }
     }
 
-    // Compute training base scores: Z_ijk = dot(annotator_preferences[ij], e_k) - E[Z]
-    // Center by subtracting expected mean (E[v*u*e]=1 per component, so E[Z] = sum(T))
-    {
-        real score_center = sum(T_weights);
-        for (i in 1:I) {
-            for (j in 1:J) {
-                int idx = (i-1)*J + j;
-                for (k in 1:K_train) {
-                    train_base_scores[idx, k] = dot_product(annotator_preferences[idx], train_embeddings[k]) - score_center;
-                }
+    // Compute training base scores: z_ijk = v_ij · e_k
+    for (i in 1:I) {
+        for (j in 1:J) {
+            int idx = (i-1)*J + j;
+            for (k in 1:K_train) {
+                train_base_scores[idx, k] = dot_product(annotator_preferences[idx], train_embeddings[k]);
             }
         }
     }
@@ -300,7 +333,7 @@ generated quantities {
     if (hold_K_constant == 1) {
         row_vector[D] shared_e_test;
         for (d in 1:D) {
-            shared_e_test[d] = exponential_rng(1.0);
+            shared_e_test[d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
         }
         for (k in 1:K_test) {
             test_embeddings[k] = shared_e_test;
@@ -308,20 +341,17 @@ generated quantities {
     } else {
         for (k in 1:K_test) {
             for (d in 1:D) {
-                test_embeddings[k, d] = exponential_rng(1.0);
+                test_embeddings[k, d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
             }
         }
     }
 
-    // Compute test base scores (centered)
-    {
-        real score_center = sum(T_weights);
-        for (i in 1:I) {
-            for (j in 1:J) {
-                int idx = (i-1)*J + j;
-                for (k in 1:K_test) {
-                    test_base_scores[idx, k] = dot_product(annotator_preferences[idx], test_embeddings[k]) - score_center;
-                }
+    // Compute test base scores: z_ijk = v_ij · e_k
+    for (i in 1:I) {
+        for (j in 1:J) {
+            int idx = (i-1)*J + j;
+            for (k in 1:K_test) {
+                test_base_scores[idx, k] = dot_product(annotator_preferences[idx], test_embeddings[k]);
             }
         }
     }
@@ -335,7 +365,12 @@ generated quantities {
                 real pref_norm_sq = dot_self(annotator_preferences[idx]);
                 real total_std = sqrt(pref_norm_sq + sigma_measurement * sigma_measurement);
                 real standardized_score = noisy_score / total_std;
-                real cdf_val = Phi(standardized_score);
+                real cdf_val;
+                if (use_logistic_link == 1) {
+                    cdf_val = inv_logit(standardized_score);
+                } else {
+                    cdf_val = Phi(standardized_score);
+                }
 
                 int rating = 1;
                 for (c in 1:C) {
@@ -359,7 +394,12 @@ generated quantities {
                 real pref_norm_sq = dot_self(annotator_preferences[idx]);
                 real total_std = sqrt(pref_norm_sq + sigma_measurement * sigma_measurement);
                 real standardized_score = noisy_score / total_std;
-                real cdf_val = Phi(standardized_score);
+                real cdf_val;
+                if (use_logistic_link == 1) {
+                    cdf_val = inv_logit(standardized_score);
+                } else {
+                    cdf_val = Phi(standardized_score);
+                }
 
                 int rating = 1;
                 for (c in 1:C) {
@@ -375,6 +415,12 @@ generated quantities {
     }
 
     // ===== COMPUTE POSTERIOR RATING PROBABILITIES =====
+    // For logistic link, posterior uses logistic CDF instead of Phi.
+    // The posterior P(rating=c | base_score) integrates over measurement noise.
+    // For probit: P(z < t) = Phi((t - mean)/cond_std)
+    // For logistic: no clean closed form for integral of logistic over Gaussian noise,
+    //   so we approximate with the same Gaussian integral (Phi) — this is fine since
+    //   the posterior probs are only used as ground truth for evaluation, not for training.
 
     // Training
     for (i in 1:I) {

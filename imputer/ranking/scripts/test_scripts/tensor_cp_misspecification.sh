@@ -1,28 +1,27 @@
 #!/bin/bash
-# Comparison: Old Data vs New Data x Marformer vs Unified Entity
-# Modes: IJK and JK only. No Stan inference. No selective masking. MCAR 0.5.
-# Uses item-chunking batching (max_item=5) for large K=100.
+# Tensor CP Misspecification Experiments
+# Tests Stan robustness under different data generation assumptions.
+# All use tensor_data_generation.stan with per-annotator thresholds, centered scores.
 #
-# For each mode, runs 4 experiments:
-#   1. Old Data (spherical annotator) + Marformer
-#   2. Old Data (spherical annotator) + Unified Entity
-#   3. New Data (factored annotator)  + Marformer
-#   4. New Data (factored annotator)  + Unified Entity
+# 6 experiments:
+#   1. D=8, J=32, log-space scores (breaks Stan's linear likelihood)
+#   2. D=6, J=32, log-space scores
+#   3. D=4, J=12, log-space scores
+#   4. D=4, J=9,  log-space scores
+#   5. D=6, J=32, logistic link (breaks Stan's probit assumption)
+#   6. D=6, J=32, log-space scores, factor_decay=1.0 (equal components)
 #
-# Runs 1,2 share the same generated old data.
-# Runs 3,4 share the same generated new data.
+# Each: data gen + Marformer training + Stan 1C (commented out).
+# No pairwise rankings. MCAR 0.5.
 
 set -e
 
 # ─── Data generation parameters ───
 BASE_I=5
-BASE_J=32
 BASE_C=5
 BASE_K_TRAIN=100
 BASE_K_TEST=10
 
-BASE_D=6
-BASE_D_ANNOTATOR=6  # Annotator embedding dim for factored model (None→D=full rank)
 BASE_SIGMA_ANNOTATOR=0.5
 BASE_SIGMA_MEASUREMENT=0.1
 BASE_KAPPA=10
@@ -53,11 +52,16 @@ GRADIENT_CLIP_VAL=0.0
 USE_COSINE_SCHEDULE=true
 WARMUP_STEPS=5
 
+# ─── Stan parameters ───
+STAN_1C_CHAINS=1
+STAN_1C_ITER_SAMPLING=300
+STAN_1C_WARMUP=100
+
 # ─── Experiment flags ───
 DISABLE_RANKING=1
 USE_CONCAT=0
 
-EXP_PREFIX="old_marformer_K_largeJ_${BASE_K_TRAIN}_30_artificial_masking"
+EXP_PREFIX="tcp_misspec"
 
 # ─── Derived flags ───
 DEVICES_FLAG=""
@@ -81,34 +85,32 @@ if [ "$USE_CONCAT" == "1" ]; then
 fi
 
 # ═══════════════════════════════════════════════════════════
-# Helper: generate data
+# Helper: generate tensor CP data
 #   $1 = run_name
-#   $2 = data_type ("old" or "new")
-#   $3 = I_val
-#   $4... = hold flags (e.g. --hold-I-constant)
+#   $2 = D
+#   $3 = J
+#   $4 = factor_decay
+#   $5 = extra_flags (e.g. "--use-log-scores" or "--use-logistic-link")
 # ═══════════════════════════════════════════════════════════
 generate_data() {
     local run_name=$1
-    local data_type=$2
-    local I_val=$3
-    shift 3
-    local hold_flags="$@"
+    local D_val=$2
+    local J_val=$3
+    local decay=$4
+    local extra_flags=$5
 
-    local data_model_flag=""
-    if [ "$data_type" == "old" ]; then
-        data_model_flag="--use-spherical-annotator"
-    else
-        data_model_flag="--d-annotator $BASE_D_ANNOTATOR"
-    fi
-
-    echo "[data] Generating ${data_type} data -> ${run_name}"
+    echo "[data] Generating tensor CP data -> ${run_name}"
+    echo "       D=${D_val}, J=${J_val}, factor_decay=${decay} ${extra_flags}"
     python stan/scripts/generate_data.py \
+        --stan-file models/tensor_data_generation.stan \
         --K-train $BASE_K_TRAIN \
         --K-test $BASE_K_TEST \
-        --I $I_val \
-        --J $BASE_J \
-        --D $BASE_D \
+        --I $BASE_I \
+        --J $J_val \
+        --D $D_val \
         --C $BASE_C \
+        --d-annotator $D_val \
+        --factor-decay $decay \
         --observation-protocol mcar \
         --mcar-missing-rate 0.5 \
         --sigma-annotator $BASE_SIGMA_ANNOTATOR \
@@ -116,12 +118,53 @@ generate_data() {
         --kappa $BASE_KAPPA \
         --run-name "$run_name" \
         --overwrite-existing-data \
-        $hold_flags \
         $ranking_args \
-        $data_model_flag </dev/null
+        $extra_flags </dev/null
 
     if [ $? -ne 0 ]; then
         echo "ERROR: Data generation failed for $run_name"
+        return 1
+    fi
+}
+
+# ═══════════════════════════════════════════════════════════
+# Helper: run Stan inference + evaluation
+#   $1 = data_run_name
+#   $2 = stan_run_name
+#   $3 = chains
+#   $4 = iter_sampling
+#   $5 = iter_warmup
+# ═══════════════════════════════════════════════════════════
+run_stan() {
+    local data_run_name=$1
+    local stan_run_name=$2
+    local chains=$3
+    local iter_sampling=$4
+    local iter_warmup=$5
+
+    echo "[stan] Inference (${chains}c) -> ${stan_run_name}"
+    python stan/scripts/run_inference.py \
+        --data-bundle OUTPUT/generated_data/${data_run_name}/data_bundle.json \
+        --chains $chains \
+        --iter-sampling $iter_sampling \
+        --iter-warmup $iter_warmup \
+        --run-name ${stan_run_name} \
+        --overwrite-existing-data </dev/null
+
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Stan inference failed for $stan_run_name"
+        return 1
+    fi
+
+    echo "[stan] Evaluation -> ${stan_run_name}_eval"
+    python stan/scripts/evaluate_predictions.py \
+        --data-bundle OUTPUT/generated_data/${data_run_name}/data_bundle.json \
+        --mcmc-dir OUTPUT/domain_model/runs/${stan_run_name} \
+        --run-name ${stan_run_name}_eval \
+        --overwrite-existing-data </dev/null
+
+    if [ $? -ne 0 ]; then
+        echo "ERROR: Stan evaluation failed for ${stan_run_name}_eval"
         return 1
     fi
 }
@@ -171,103 +214,41 @@ run_marformer() {
 }
 
 # ═══════════════════════════════════════════════════════════
-# Helper: run Unified Entity
-#   $1 = data_run_name (for --data-dir)
-#   $2 = model_run_name (for --run-name)
+# Run one experiment
+#   $1 = exp_name
+#   $2 = D
+#   $3 = J
+#   $4 = factor_decay
+#   $5 = extra_flags for data gen
 # ═══════════════════════════════════════════════════════════
-run_unified_entity() {
-    local data_run_name=$1
-    local model_run_name=$2
+run_experiment() {
+    local exp_name=$1
+    local D_val=$2
+    local J_val=$3
+    local decay=$4
+    local extra_flags=$5
 
-    echo "[train] Unified Entity -> ${model_run_name}"
-    python imputer/run_imputer.py \
-        --data-dir OUTPUT/generated_data/${data_run_name} \
-        --run-name ${model_run_name} \
-        --overwrite-existing-data \
-        --use-unified-entity \
-        --use-prediction-head \
-        --logit-high 20.0 \
-        --embedding-dim $EMBEDDING_DIM \
-        --encoder-layers $ENCODER_LAYERS \
-        --attention-heads $ATTENTION_HEADS \
-        --num_ffn_layers $NUM_FFN_LAYERS \
-        --d-ff $D_FF \
-        --weight-decay $WEIGHT_DECAY \
-        --dropout $DROPOUT \
-        --epochs $EPOCHS \
-        --lr $LR \
-        --masking-rate $MASKING_RATE \
-        --masked-loss-weight $MASKED_LOSS_WEIGHT \
-        --observed-loss-weight $OBSERVED_LOSS_WEIGHT \
-        --mask-augmentations $MASK_AUGMENTATIONS \
-        --no-final-norm \
-        --normalize-parameter \
-        --device $DEVICE \
-        --max-item $MAX_ITEM \
-        $DEVICES_FLAG \
-        --save-model-every 5 \
-        --batch-size $BATCH_SIZE \
-        --gradient-clip-val $GRADIENT_CLIP_VAL \
-        $cosine_flags </dev/null
-
-    if [ $? -ne 0 ]; then
-        echo "ERROR: Unified Entity training failed for $model_run_name"
-        return 1
-    fi
-}
-
-# ═══════════════════════════════════════════════════════════
-# Run one mode (generates data twice: old + new, trains 4 models)
-#   $1 = mode_name
-#   $2 = hold_I (0/1)
-#   $3 = hold_J (0/1)
-#   $4 = hold_K (0/1)
-# ═══════════════════════════════════════════════════════════
-run_mode() {
-    local mode_name=$1
-    local hold_I=$2
-    local hold_J=$3
-    local hold_K=$4
-
-    # Adjust I when held constant (same logic as easy_all_modes.sh)
-    local I_val=$BASE_I
-    [ "$hold_I" == "1" ] && I_val=1
-
-    # Build hold flags for data generation
-    local hold_flags=""
-    [ "$hold_I" == "1" ] && hold_flags="$hold_flags --hold-I-constant"
-    [ "$hold_J" == "1" ] && hold_flags="$hold_flags --hold-J-constant"
-    [ "$hold_K" == "1" ] && hold_flags="$hold_flags --hold-K-constant"
-
-    local base="${EXP_PREFIX}_${mode_name}"
+    local base="${EXP_PREFIX}_${exp_name}"
 
     echo ""
     echo "=========================================="
-    echo "MODE: ${mode_name}"
-    echo "  hold_I=${hold_I}, hold_J=${hold_J}, hold_K=${hold_K}"
-    echo "  I=${I_val}, J=${BASE_J}, K_train=${BASE_K_TRAIN}, max_item=${MAX_ITEM}"
+    echo "EXPERIMENT: ${exp_name}"
+    echo "  D=${D_val}, J=${J_val}, factor_decay=${decay}"
+    echo "  extra: ${extra_flags}"
     echo "=========================================="
 
-    # --- Old data (spherical annotator) ---
-    echo ""
-    echo "--- Old Data (spherical annotator) ---"
-    local old_data="${base}_olddata"
-    generate_data "$old_data" "old" "$I_val" $hold_flags
+    # --- Generate data ---
+    local data_name="${base}_data"
+    generate_data "$data_name" "$D_val" "$J_val" "$decay" "$extra_flags"
 
-    run_marformer "$old_data" "${base}_old_marformer"
-    # run_unified_entity "$old_data" "${base}_old_unified"
+    # --- Stan 1C (commented out) ---
+    # run_stan "$data_name" "${base}_stan1c" $STAN_1C_CHAINS $STAN_1C_ITER_SAMPLING $STAN_1C_WARMUP
 
-    # --- New data (factored annotator) ---
-    # echo ""
-    # echo "--- New Data (factored annotator) ---"
-    # local new_data="${base}_newdata"
-    # generate_data "$new_data" "new" "$I_val" $hold_flags
-
-    # run_marformer "$new_data" "${base}_new_marformer"
-    # run_unified_entity "$new_data" "${base}_new_unified"
+    # --- Marformer ---
+    run_marformer "$data_name" "${base}_marformer"
 
     echo ""
-    echo "  Mode ${mode_name} complete"
+    echo "  Experiment ${exp_name} complete"
 }
 
 # ═══════════════════════════════════════════════════════════
@@ -275,40 +256,64 @@ run_mode() {
 # ═══════════════════════════════════════════════════════════
 
 echo "=============================================="
-echo "COMPARISON: Marformer vs Unified Entity"
-echo "           Old Data vs New Data"
+echo "TENSOR CP MISSPECIFICATION EXPERIMENTS"
 echo "=============================================="
 echo ""
 echo "Parameters:"
-echo "  I=${BASE_I}, J=${BASE_J}, C=${BASE_C}"
+echo "  I=${BASE_I}, C=${BASE_C}"
 echo "  K_train=${BASE_K_TRAIN}, K_test=${BASE_K_TEST}, max_item=${MAX_ITEM}"
-echo "  D=${BASE_D}, d_annotator=${BASE_D_ANNOTATOR}, sigma_a=${BASE_SIGMA_ANNOTATOR}, sigma_m=${BASE_SIGMA_MEASUREMENT}"
+echo "  sigma_a=${BASE_SIGMA_ANNOTATOR}, sigma_m=${BASE_SIGMA_MEASUREMENT}"
 echo "  kappa=${BASE_KAPPA}, protocol=mcar (missing_rate=0.5)"
 echo "  epochs=${EPOCHS}, lr=${LR}, embedding_dim=${EMBEDDING_DIM}"
 echo "  encoder_layers=${ENCODER_LAYERS}, heads=${ATTENTION_HEADS}, d_ff=${D_FF}"
 echo ""
-echo "Modes: IJK, JK"
-echo "Models: Marformer, Unified Entity"
-echo "Data: Old (spherical), New (factored)"
-echo "Total runs: 2 modes x 2 data x 2 models = 8 training runs"
+echo "Experiments:"
+echo "  1. log_D8_J32:     D=8,  J=32, log-space, decay=0.9"
+echo "  2. log_D6_J32:     D=6,  J=32, log-space, decay=0.9"
+echo "  3. log_D4_J12:     D=4,  J=12, log-space, decay=0.9"
+echo "  4. log_D4_J9:      D=4,  J=9,  log-space, decay=0.9"
+echo "  5. logistic_D6_J32: D=6, J=32, logistic link, decay=0.9"
+echo "  6. log_D6_J32_eq:  D=6,  J=32, log-space, decay=1.0 (equal components)"
 echo ""
 
-TOTAL_MODES=0
-FAILED_MODES=0
+TOTAL_EXPS=0
+FAILED_EXPS=0
 
-# IJK: full dependence (hold_I=0, hold_J=0, hold_K=0)
-run_mode "IJK" 0 0 0 || ((FAILED_MODES++))
-((TOTAL_MODES++))
+# Exp 1: D=8, J=32, log-space
+run_experiment "log_D8_J32" 8 32 0.9 "--use-log-scores" || ((FAILED_EXPS++))
+((TOTAL_EXPS++))
+
+# Exp 2: D=6, J=32, log-space
+run_experiment "log_D6_J32" 6 32 0.9 "--use-log-scores" || ((FAILED_EXPS++))
+((TOTAL_EXPS++))
+
+# Exp 3: D=4, J=12, log-space
+run_experiment "log_D4_J12" 4 12 0.9 "--use-log-scores" || ((FAILED_EXPS++))
+((TOTAL_EXPS++))
+
+# Exp 4: D=4, J=9, log-space
+run_experiment "log_D4_J9" 4 9 0.9 "--use-log-scores" || ((FAILED_EXPS++))
+((TOTAL_EXPS++))
+
+# Exp 5: D=6, J=32, logistic link (no log-space)
+run_experiment "logistic_D6_J32" 6 32 0.9 "--use-logistic-link" || ((FAILED_EXPS++))
+((TOTAL_EXPS++))
+
+# Exp 6: D=6, J=32, log-space, factor_decay=1.0
+run_experiment "log_D6_J32_eq" 6 32 1.0 "--use-log-scores" || ((FAILED_EXPS++))
+((TOTAL_EXPS++))
 
 echo ""
 echo "=============================================="
 echo "ALL EXPERIMENTS COMPLETE"
 echo "=============================================="
-echo "Total modes: $TOTAL_MODES"
-echo "Failed modes: $FAILED_MODES"
+echo "Total experiments: $TOTAL_EXPS"
+echo "Failed experiments: $FAILED_EXPS"
 echo ""
 echo "Results:"
-echo "  Data:   OUTPUT/generated_data/${EXP_PREFIX}_*"
-echo "  Models: OUTPUT/IMPUTER/${EXP_PREFIX}_*"
+echo "  Data:     OUTPUT/generated_data/${EXP_PREFIX}_*"
+echo "  Stan:     OUTPUT/domain_model/runs/${EXP_PREFIX}_*"
+echo "  Stan eval: OUTPUT/domain_model/eval/${EXP_PREFIX}_*"
+echo "  Marformer: OUTPUT/IMPUTER/${EXP_PREFIX}_*"
 echo "=============================================="
 echo ""

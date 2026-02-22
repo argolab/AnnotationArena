@@ -52,6 +52,11 @@ class DataGenConfig:
     # Only used with tensor_data_generation.stan
     factor_decay: Optional[float] = None
 
+    # Misspecification flags (only used with tensor_data_generation.stan)
+    use_log_scores: bool = False       # Apply log() to raw CP scores before binning
+    use_logistic_link: bool = False    # Use inv_logit instead of Phi for binning
+    use_normal_loadings: bool = False  # Use N(0,1) loadings instead of Exp(1)
+
     # Observation protocol
     observation_protocol: str = "tie_breaking"  # "tie_breaking", "mcar", "extended_rankings"
     mcar_missing_rate: float = 0.5  # Missing rate for MCAR protocol (was mar_missing_rate)
