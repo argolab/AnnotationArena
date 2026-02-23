@@ -16,7 +16,7 @@ import sys
 # Add the parent directory to Python path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from stan.pipeline.inference import InferenceConfig, run_mcmc_inference
+from stan.pipeline.inference import InferenceConfig, run_mcmc_inference, compile_domain_model
 from stan.pipeline.bundle import GroundTruthBundle
 from stan.pipeline.io import new_run_dir, save_bundle, save_configs
 
@@ -231,32 +231,43 @@ def main():
     print(f"\nStarting MCMC inference...")
     try:
         if args.use_dist:
-            #########################################################
-            # Dist mode: all ratings use soft expected log-likelihood.
-            # Requires a dist bundle where each observed rating has a
-            # 'rating_dist' field (simplex over C categories).
-            # Human ratings have one-hot rating_dist; LLM ratings have
-            # actual distributions.  Both are handled uniformly.
-            #########################################################
-            from stan.pipeline.inference import compile_domain_model
-
             default_stan_dist = str(
                 Path(__file__).resolve().parents[2] / "models" / "stan_dist_model.stan"
             )
             stan_file_dist = args.stan_file or default_stan_dist
             print(f"Dist mode: Stan model = {stan_file_dist}")
-
-            K = data_config.K_train + data_config.K_test
-            observed = bundle.observed_ratings
-            missing  = bundle.missing_ratings
-
-            # Build rating_dists — convert int value to one-hot if rating_dist absent
             C = data_config.C
+            K_train = data_config.K_train
+            K_test  = data_config.K_test
+
+            if args.use_train_only:
+                # Likelihood: only train-instance observed ratings
+                # Missing:    test-instance missing (what we actually want to predict)
+                # K:          full K_train + K_test — test item indices must remain valid
+                observed = [r for r in bundle.observed_ratings if r["instance"] == "train"]
+                missing  = [r for r in bundle.missing_ratings  if r["instance"] == "test"]
+                K        = K_train + K_test
+                item_offset = 0
+            elif args.use_test_only:
+                # Likelihood: only test-instance observed ratings
+                # Missing:    test-instance missing
+                # K:          K_test only — re-map item indices from K_train+1..K to 1..K_test
+                observed    = [r for r in bundle.observed_ratings if r["instance"] == "test"]
+                missing     = [r for r in bundle.missing_ratings  if r["instance"] == "test"]
+                K           = K_test
+                item_offset = K_train
+            else:
+                # All observed ratings, all missing
+                observed    = bundle.observed_ratings
+                missing     = bundle.missing_ratings
+                K           = K_train + K_test
+                item_offset = 0
+
             def _to_dist(r):
                 if "rating_dist" in r:
                     d = r["rating_dist"]
                     s = sum(d)
-                    return [x / s for x in d]   # normalise for safety
+                    return [x / s for x in d]
                 else:
                     oh = [0.0] * C
                     oh[r["value"] - 1] = 1.0
@@ -268,21 +279,21 @@ def main():
                 "J": data_config.J,
                 "D": data_config.D,
                 "C": C,
-                "N_ratings":           len(observed),
-                "rating_attributes":   [r["attribute"] for r in observed],
-                "rating_annotators":   [r["annotator"]  for r in observed],
-                "rating_items":        [r["item"]        for r in observed],
-                "rating_dists":        [_to_dist(r)      for r in observed],
-                "N_missing_ratings":              len(missing),
-                "missing_rating_attributes":      [r["attribute"] for r in missing],
-                "missing_rating_annotators":      [r["annotator"]  for r in missing],
-                "missing_rating_items":           [r["item"]        for r in missing],
+                "N_ratings":         len(observed),
+                "rating_attributes": [r["attribute"]              for r in observed],
+                "rating_annotators": [r["annotator"]               for r in observed],
+                "rating_items":      [r["item"] - item_offset      for r in observed],
+                "rating_dists":      [_to_dist(r)                  for r in observed],
+                "N_missing_ratings":          len(missing),
+                "missing_rating_attributes":  [r["attribute"]              for r in missing],
+                "missing_rating_annotators":  [r["annotator"]               for r in missing],
+                "missing_rating_items":       [r["item"] - item_offset      for r in missing],
                 "sigma_annotator":   data_config.sigma_annotator,
                 "sigma_measurement": data_config.sigma_measurement,
                 "alpha_dirichlet":   data_config.alpha_dirichlet,
                 "temperature":       data_config.temperature,
             }
-            print(f"  N_ratings={len(observed)}  N_missing={len(missing)}  K={K}")
+            print(f"  N_ratings={len(observed)}  N_missing={len(missing)}  K={K}  item_offset={item_offset}")
 
             model = compile_domain_model(stan_file_dist)
             fit = model.sample(
@@ -295,7 +306,7 @@ def main():
                 max_treedepth=inference_config.max_treedepth,
                 inits=1.0,
                 show_progress=inference_config.show_progress,
-                show_console=True,
+                show_console=False,
             )
         else:
             #########################################################

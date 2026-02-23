@@ -14,8 +14,8 @@
 set -e
 
 # ── Dataset & bundle ──────────────────────────────────────────────────────────
-DATASET="${DATASET:-hanna}"
-BUNDLE="${BUNDLE:-hard}"
+DATASET="${DATASET:-llmrubric}"
+BUNDLE="${BUNDLE:-dist}"
 
 if [ "$DATASET" == "hanna" ]; then
     if [ "$BUNDLE" == "dist" ]; then
@@ -40,8 +40,8 @@ fi
 
 # ── MCMC hyperparameters ──────────────────────────────────────────────────────
 CHAINS=1
-ITER_WARMUP=300
-ITER_SAMPLING=100
+ITER_WARMUP=100
+ITER_SAMPLING=300
 ADAPT_DELTA=0.85
 MAX_TREEDEPTH=12
 SEED=42
@@ -81,6 +81,8 @@ python stan/scripts/run_inference.py \
     --seed         $SEED \
     --override-D   $EMBEDDING_DIM \
     --overwrite-existing-data \
+    --use-train-only \
+    --use-dist \
     $dist_flag
 
 if [ $? -ne 0 ]; then
@@ -96,6 +98,8 @@ python stan/scripts/evaluate_predictions.py \
     --mcmc-dir     OUTPUT/domain_model/runs/$RUN_BASE \
     --run-name     ${RUN_BASE}_eval \
     --overwrite-existing-data \
+    --use-train-only \
+    --csv-pattern stan_dist_model-*.csv \
     --verbose
 
 if [ $? -ne 0 ]; then
