@@ -24,6 +24,7 @@ import numpy as np
 from pathlib import Path
 import copy
 import random
+import sys
 import json
 
 import pytorch_lightning as pl
@@ -87,6 +88,7 @@ class ImputerLightningModule(pl.LightningModule):
         max_item=30,
         llm_annotator_id: Optional[int] = None,
         human_observed_rate: float = 0.0,
+        loss_fn: str = "ce",
     ):
         super().__init__()
         self.save_hyperparameters(ignore=['model', 'train_observed_vars', 'train_missing_vars',
@@ -111,7 +113,8 @@ class ImputerLightningModule(pl.LightningModule):
         
         self.loss_strategy = DefaultLossStrategy(
             masked_loss_weight=masked_loss_weight,
-            observed_loss_weight=observed_loss_weight
+            observed_loss_weight=observed_loss_weight,
+            loss_fn=loss_fn,
         )
         self.initial_observed_weight = observed_loss_weight
         self.initial_masked_weight = masked_loss_weight

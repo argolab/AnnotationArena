@@ -18,7 +18,7 @@ BUNDLE="${BUNDLE:-hard}"
 
 if [ "$BUNDLE" == "dist" ]; then
     DATA_DIR="OUTPUT/generated_data/llm_rubric_dist"
-    RUN_NAME="llm_rubric_marformer_dist_alt_2"
+    RUN_NAME="llm_rubric_marformer_dist_DFF_128_ITEM_DROP_0.5_MIXED_INIT_TRANSD"
 else
     DATA_DIR="OUTPUT/generated_data/llm_rubric"
     RUN_NAME="llm_rubric_marformer"
@@ -35,14 +35,16 @@ echo ""
 
 # ── Marformer hyperparameters (identical to all_datagen_marformer.sh) ─────────
 EMBEDDING_DIM=72
+W_INIT="identity"
 ENCODER_LAYERS=4
 ATTENTION_HEADS=4
 NUM_FFN_LAYERS=1
 D_FF=128
 DROPOUT=0.1
+EMBEDDING_DROPOUT=0.5
 WEIGHT_DECAY=0.01
 
-EPOCHS=150
+EPOCHS=180
 LR=2e-4
 MASKING_RATE=0.15
 MASKED_LOSS_WEIGHT=15
@@ -93,6 +95,10 @@ python imputer/run_imputer.py \
     --save-model-every 5 \
     --llm-annotator-id 24 \
     --human-observed-rate 0.2 \
+    --item-embedding-dropout $EMBEDDING_DROPOUT \
+    --w-init $W_INIT \
+    --loss-fn kl \
+    --transductive_learning \
     $cosine_flags
 
 echo ""

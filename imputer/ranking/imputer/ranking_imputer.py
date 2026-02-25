@@ -46,7 +46,9 @@ class MultiVariableImputer(nn.Module):
                  embedding_dim=64,
                  dropout=0.1,
                  device="cuda",
-                 embedding_dropout: float | None = None,
+                 item_embedding_dropout: float = 0.0,
+                 w_init: str = "random",
+                 llm_input_dist: bool = False,
                  use_gelu_after_attention=False,
                  use_final_norm=True,
                  normalize_parameter=False,
@@ -54,7 +56,8 @@ class MultiVariableImputer(nn.Module):
                  temperature=1.0,
                  use_concat_embedding: bool = False,
                  batch_size: int = 1,
-                 enable_pointer_mechanism: bool = True):
+                 enable_pointer_mechanism: bool = True,
+                 logit_high: float = 20.0):
         super().__init__()
         self.device = torch.device(device)
         # Defer moving to device until after all submodules are created
@@ -72,8 +75,6 @@ class MultiVariableImputer(nn.Module):
         self.use_concat_embedding = use_concat_embedding
         self.batch_size = batch_size
         self.enable_pointer_mechanism = enable_pointer_mechanism
-        if embedding_dropout is None:
-            embedding_dropout = dropout
 
         self.embedding_provider = AtomCompositonalEmbeddingProvider(
             num_attributes,
@@ -83,8 +84,11 @@ class MultiVariableImputer(nn.Module):
             num_likert_classes,
             max_rank_size,
             self.device,
-            embedding_dropout=embedding_dropout,
+            item_embedding_dropout=item_embedding_dropout,
             use_concat_embedding=use_concat_embedding,
+            logit_high=logit_high,
+            w_init=w_init,
+            llm_input_dist=llm_input_dist,
         )
 
         # Use provider-declared parameter dimension (includes missing-status bit)
