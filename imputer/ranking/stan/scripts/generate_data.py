@@ -75,6 +75,14 @@ def main():
     parser.add_argument("--pairwise-cap-per-item", type=int, default=10,
                         help="Max pairwise comparisons per item")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--factor-decay", type=float, default=None,
+                       help="CP tensor decomposition: T_d = factor_decay^(d-1). Only for tensor_data_generation.stan.")
+    parser.add_argument("--use-log-scores", action="store_true",
+                       help="Apply log() to raw CP scores before binning (misspecifies Stan's linear likelihood)")
+    parser.add_argument("--use-logistic-link", action="store_true",
+                       help="Use inv_logit instead of Phi for binning (misspecifies Stan's probit link)")
+    parser.add_argument("--use-normal-loadings", action="store_true",
+                       help="Use N(0,1) loadings instead of Exp(1) for TCP model (allows cancellation)")
 
     # ---------- Observation protocol ----------
     parser.add_argument("--observation-protocol", type=str, default="tie_breaking",
@@ -134,6 +142,10 @@ def main():
     elif stan_type == "factored-dot-product":
         defaults["use_factored_annotator"] = 1
         defaults["derive_thresholds_from_annotator"] = 1 if args.derive_thresholds_from_annotator else 0
+    elif stan_type == "tensor": # TODO: should move these arguments to be under stan_arg.
+        defaults["use_log_scores"] = 1 if args.use_log_scores else 0
+        defaults["use_logistic_link"] = 1 if args.use_logistic_link else 0
+        defaults["use_normal_loadings"] = 1 if args.use_normal_loadings else 0
     type_kwargs = {k: stan_arg.get(k, defaults.get(k)) for k in required}
     if "d_annotator" in required and type_kwargs.get("d_annotator") is None:
         type_kwargs["d_annotator"] = type_kwargs.get("D") or args.D

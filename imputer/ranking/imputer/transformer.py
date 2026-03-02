@@ -55,15 +55,20 @@ class FeedForward(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    """Unified-stream transformer block over concatenated feature+param with mask support.
+    """Dual-stream transformer block: features projected into attention space, combined with params.
 
-    - Multi-head attention operates on the concatenated stream `[features | params]`.
-    - No separate feature/param updates; a single FFN processes the unified stream.
-    - `attn_mask`: optional bool tensor `[B, N]` where True marks valid tokens.
-      Padded tokens neither attend to others nor contribute to outputs.
+    Architecture per block:
+      1. proj_in: Linear(feature_dim, feat_proj_dim)  — project features only
+      2. z = cat([proj_in(features), params])          — combined at model_dim
+      3. Attention + FFN on z (combined-over-combined)
+      4. proj_out: Linear(model_dim, feature_dim)      — explicit feature outer residual
+      5. W_param:  Linear(model_dim, param_dim)        — explicit param outer residual
+
+    feat_proj_dim = model_dim - param_dim, so combined = model_dim (divisible by heads).
+    `attn_mask`: optional bool tensor `[B, N]` where True marks valid tokens.
     """
 
-    def __init__(self, feature_dim: int, param_dim: int, attention_heads: int, dropout: float = 0.3, use_gelu_after_attention: bool = False, 
+    def __init__(self, feature_dim: int, param_dim: int, attention_heads: int, dropout: float = 0.3, use_gelu_after_attention: bool = False,
                  normalize_parameter: bool = False, num_ffn_layers: int = 4, enable_pointer_mechanism: bool = True):
         super().__init__()
         self.feature_dim = feature_dim
@@ -74,20 +79,26 @@ class TransformerBlock(nn.Module):
         self.normalize_parameter = normalize_parameter
         self.num_ffn_layers = num_ffn_layers
         self.enable_pointer_mechanism = enable_pointer_mechanism
-        # Define an internal model dim that is a multiple of heads for MHAttention
+        # model_dim must be divisible by heads; combined = cat([proj_features, params]) = model_dim
 
         if normalize_parameter:
             self.model_dim = int(math.ceil(self.total_dim / attention_heads) * attention_heads)
         else:
             self.model_dim = self.total_dim
 
-        # Projections to/from attention space when needed
-        self.proj_in = (nn.Identity() if self.model_dim == self.total_dim
-                        else nn.Linear(self.total_dim, self.model_dim))
-        self.proj_out = (nn.Identity() if self.model_dim == self.total_dim
-                         else nn.Linear(self.model_dim, self.total_dim))
+        # feat_proj_dim: feature projection target so that cat([proj_features, params]) = model_dim
+        # When normalize_parameter=False: model_dim = total_dim, feat_proj_dim = feature_dim (square proj)
+        # When normalize_parameter=True:  model_dim > total_dim, feat_proj_dim = model_dim - param_dim
+        self.feat_proj_dim = self.model_dim - self.param_dim
 
-        # Unified stream attention over concatenated [feature | param] in model_dim space
+        # proj_in: project features only into attention space
+        self.proj_in = nn.Linear(self.feature_dim, self.feat_proj_dim)
+        # proj_out: feature stream outer residual (model_dim → feature_dim)
+        self.proj_out = nn.Linear(self.model_dim, self.feature_dim)
+        # W_param: explicit param stream outer residual (model_dim → param_dim)
+        self.W_param = nn.Linear(self.model_dim, self.param_dim)
+
+        # Attention on combined [proj_features | params] at model_dim
         # Q gets +3 dimensions for pointer mechanism, K and V stay same size
         if enable_pointer_mechanism:
             self.Q = nn.Linear(self.model_dim, self.model_dim + 3)
@@ -99,9 +110,8 @@ class TransformerBlock(nn.Module):
         if normalize_parameter:
             self.norm_1 = NormLayer(self.model_dim)
         else:
-            self.norm_1 = NormLayer(self.feature_dim)
-            # Add learnable scale factor for parameter stream to balance with normalized feature stream
-            # This prevents the unnormalized parameter stream (values like 20.0 or 0.0) from dominating attention
+            # Normalize projected features only; scale param stream separately
+            self.norm_1 = NormLayer(self.feat_proj_dim)
             self.param_scale = nn.Parameter(torch.ones(1) * 0.01)  # Small initial scale
         self.norm_2 = NormLayer(self.model_dim)
         self.dropout_1 = nn.Dropout(dropout)
@@ -236,27 +246,21 @@ class TransformerBlock(nn.Module):
     def forward(self, feature_x: torch.Tensor, param_x: torch.Tensor, attn_mask: torch.Tensor | None = None, K_aug: torch.Tensor | None = None) -> torch.Tensor:
         batch_size = feature_x.shape[0]
 
-        # Concatenate streams and apply unified attention + FFN with residuals
-        combined_total = torch.cat([feature_x, param_x], dim=-1)
-        z = self.proj_in(combined_total)
+        # Project features only, then combine with params to form model_dim combined representation
+        z = torch.cat([self.proj_in(feature_x), param_x], dim=-1)  # [B, N, model_dim]
 
         if self.normalize_parameter:
             z_norm = self.norm_1(z)
         else:
-            # Scale parameter stream to balance with normalized feature stream
-            # This allows attention to work properly despite scale mismatch
-            z_norm = torch.cat((self.norm_1(z[:, :, :self.feature_dim]), 
-                               self.param_scale * z[:, :, self.feature_dim:]), dim=-1)
+            # Normalize projected feature part; scale raw param stream to balance magnitudes
+            z_norm = torch.cat((self.norm_1(z[:, :, :self.feat_proj_dim]),
+                                self.param_scale * z[:, :, self.feat_proj_dim:]), dim=-1)
         attn_out = self._multihead_attention(z_norm, batch_size, attn_mask, K_aug=K_aug)
 
-        # Optional GeLU activation after attention (before residual)
-        if self.use_gelu_after_attention:
-            attn_out = F.gelu(attn_out)
-
-        # Unscale parameter stream part of attention output before adding to z
+        # Unscale parameter portion of attention output before adding residual to z
         if not self.normalize_parameter:
-            attn_out_feat = attn_out[:, :, :self.feature_dim]
-            attn_out_param = attn_out[:, :, self.feature_dim:]
+            attn_out_feat = attn_out[:, :, :self.feat_proj_dim]
+            attn_out_param = attn_out[:, :, self.feat_proj_dim:]
             attn_out_param_unscaled = attn_out_param / (self.param_scale + 1e-8)
             attn_out = torch.cat([attn_out_feat, attn_out_param_unscaled], dim=-1)
 
@@ -266,12 +270,13 @@ class TransformerBlock(nn.Module):
         z_ff = self.ff(z_ff_in)
         z = z + z_ff
 
-        back = self.proj_out(z)
+        # Explicit outer residuals: dedicated projections for each stream
+        back_feat = self.proj_out(z)   # [B, N, feature_dim]
+        back_param = self.W_param(z)   # [B, N, param_dim]
         if attn_mask is not None:
-            back = back * attn_mask.unsqueeze(-1).to(back.dtype)
-        combined_total = combined_total + self.dropout_2(back)
-
-        # Split back to feature and param streams for compatibility
-        feature_x = combined_total[:, :, :self.feature_dim]
-        param_x = combined_total[:, :, self.feature_dim:]
+            mask = attn_mask.unsqueeze(-1).to(back_feat.dtype)
+            back_feat = back_feat * mask
+            back_param = back_param * mask
+        feature_x = feature_x + self.dropout_2(back_feat)
+        param_x = param_x + self.dropout_2(back_param)
         return feature_x, param_x

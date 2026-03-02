@@ -18,7 +18,9 @@ ratings and rankings. It includes:
 from typing import Dict, List, Optional
 from dataclasses import dataclass
 import torch
+import sys
 import torch.nn as nn
+import torch.nn.functional as F
 from imputer.data import RankingData
 
 
@@ -114,10 +116,14 @@ class LossStrategyBase:
 class DefaultLossStrategy(LossStrategyBase):
     """Default loss strategy with cross-entropy for ratings and Plackett-Luce for rankings."""
 
-    def __init__(self, masked_loss_weight: float = 1.0, observed_loss_weight: float = 1.0):
+    def __init__(self, masked_loss_weight: float = 1.0, observed_loss_weight: float = 1.0,
+                 loss_fn: str = "ce"):
         """Initialize loss functions and weights."""
         super().__init__()
-        self.rating_loss_fn = nn.CrossEntropyLoss(reduction='none')
+        if loss_fn not in ("ce", "kl"):
+            raise ValueError(f"loss_fn must be 'ce' or 'kl', got {loss_fn!r}")
+        self.loss_fn = loss_fn
+        self.rating_loss_fn = nn.CrossEntropyLoss(reduction='none') if loss_fn == "ce" else nn.KLDivLoss(reduction='none')
         self.ranking_loss_fn = PlackettLuceLoss()
         self.masked_loss_weight = masked_loss_weight
         self.observed_loss_weight = observed_loss_weight
@@ -163,7 +169,15 @@ class DefaultLossStrategy(LossStrategyBase):
             if not ref.is_listwise:
 
                 if ref.rating_value is not None and 0 <= ref.rating_value < C:
-                    rating_targets[0, i, ref.rating_value] = 1.0  # one-hot distribution
+                    if ref.rating_dist is not None:
+                        # Soft target: full distribution over C categories (real data).
+                        # LLM: actual probability vector; human: one-hot stored explicitly.
+                        rating_targets[0, i] = torch.tensor(
+                            ref.rating_dist, dtype=torch.float32, device=device
+                        )
+                    else:
+                        # Hard target: one-hot at rating_value (synthetic data, default).
+                        rating_targets[0, i, ref.rating_value] = 1.0
                     rating_mask[0, i] = True
                 else:
                     raise ValueError(f"Rating value not found or out of range for voter {i}")
@@ -191,8 +205,14 @@ class DefaultLossStrategy(LossStrategyBase):
             idx = rating_mask.nonzero(as_tuple=False)
             v_logits = rating_logits[idx[:, 0], idx[:, 1]]
             v_targets = rating_targets[idx[:, 0], idx[:, 1]]
-            target_classes = torch.argmax(v_targets, dim=1)
-            losses = self.rating_loss_fn(v_logits, target_classes)
+            if self.loss_fn == "ce":
+                # CE accepts raw logits + float targets (PyTorch >= 1.10).
+                losses = self.rating_loss_fn(v_logits, v_targets)          # [M]
+            else:
+                # KL requires log-probabilities as input; returns [M, C] → sum to [M].
+                losses = self.rating_loss_fn(
+                    F.log_softmax(v_logits, dim=-1), v_targets
+                ).sum(dim=-1)                                               # [M]
 
             # Separate by masked status using boolean indexing
             valid_indices = idx[:, 1]  # Get variable indices
@@ -209,6 +229,7 @@ class DefaultLossStrategy(LossStrategyBase):
 
         # Ranking losses via Plackett-Luce - separated by masked status
         if ranking_mask.any():
+            print('Problem')
             # Create separate masks for masked and observed rankings
             masked_ranking_mask = torch.zeros_like(ranking_mask)
             observed_ranking_mask = torch.zeros_like(ranking_mask)

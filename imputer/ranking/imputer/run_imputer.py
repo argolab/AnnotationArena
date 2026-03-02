@@ -50,6 +50,13 @@ def main():
     parser.add_argument("--attention-heads", type=int, default=8, help="Number of attention heads (default: 8)")
     parser.add_argument("--embedding-dim", type=int, default=128, help="Embedding dimension (default: 128)")
     parser.add_argument("--dropout", type=float, default=0.1, help="Dropout rate (default: 0.1)")
+    parser.add_argument("--item-embedding-dropout", type=float, default=0.0, help="Dropout rate for item embeddings specifically (default: 0.0, off)")
+    parser.add_argument("--w-init", type=str, default="random", choices=["random", "xavier", "identity"],
+                        help="Initialization for W_I/W_J/W_K projection matrices: random (default), xavier, identity")
+    parser.add_argument("--loss-fn", type=str, default="ce", choices=["ce", "kl"],
+                        help="Rating loss function: ce (cross-entropy, default) or kl (KL divergence)")
+    parser.add_argument("--llm-input-dist", action="store_true", default=False,
+                        help="Encode LLM observations as LOGIT_HIGH*p_i per class instead of LOGIT_HIGH at argmax")
     parser.add_argument("--num_ffn_layers", type=int, default=4, help="FFN Layers")
     parser.add_argument("--d-ff", type=int, default=512, help="FFN hidden dimension (default: 512)")
 
@@ -103,6 +110,10 @@ def main():
                         help="Whether to mask all vars with (j, k) pairs in the synthetic masking examples")
     parser.add_argument("--max-item", type=int, default=1,
                         help="Max number of items in a single imputer forward pass")
+    parser.add_argument("--llm-annotator-id", type=int, default=None,
+                        help="0-indexed annotator ID of the LLM. When set, masks ALL human annotations and keeps only LLM as observed during training.")
+    parser.add_argument("--human-observed-rate", type=float, default=0.0,
+                        help="Fraction of human annotations to keep as observed (not masked) when --llm-annotator-id is set. Default 0.0 = mask all humans.")
     args = parser.parse_args()
 
     # PyTorch Lightning DDP re-runs this script in each worker process.
@@ -248,6 +259,10 @@ def main():
             use_concat_embedding=bool(args.use_concat_embedding),
             batch_size=args.batch_size,
             enable_pointer_mechanism=True,
+            logit_high=args.logit_high,
+            item_embedding_dropout=args.item_embedding_dropout,
+            w_init=args.w_init,
+            llm_input_dist=args.llm_input_dist,
         )
 
     # Print temperature scaling status
@@ -289,7 +304,12 @@ def main():
     else:
         train_vars = train_vars_for_training
         if args.transductive_learning:
-            raise ValueError("Transductive learning is not supported yet")
+            # Transductive mode: add test_observed (LLM ratings for test items) to
+            # train_vars so test item embeddings receive gradient signal during training.
+            # Human test ratings stay in test_missing — invisible to the model.
+            print("\033[93mTransductive mode: including test_observed in training.\033[0m")
+            print(f"  +{len(test_observed)} test_observed tokens added to train_vars.")
+            train_vars = train_vars + test_observed
     
     # Create the main run directory first (before training)
     output_root = Path(args.output_root)
@@ -370,7 +390,11 @@ def main():
             "use_prediction_head": bool(args.use_prediction_head),
             "logit_high": args.logit_high,
             "use_annotator_deviation": bool(args.use_annotator_deviation),
-            "annotator_dropout": args.annotator_dropout
+            "annotator_dropout": args.annotator_dropout,
+            "item_embedding_dropout": args.item_embedding_dropout,
+            "w_init": args.w_init,
+            "loss_fn": args.loss_fn,
+            "llm_input_dist": bool(args.llm_input_dist),
         },
         "training": {
             "epochs": args.epochs,
@@ -396,6 +420,7 @@ def main():
             "warmup_steps": args.warmup_steps if args.use_cosine_schedule else None,
             "use_lightning": True,
             "batch_size": args.batch_size,
+            "loss_fn": args.loss_fn,
         },
         "run": {
             "run_dir": str(run_dir)
@@ -407,7 +432,7 @@ def main():
         print(f"Saved train_config.json to {run_dir / 'train_config.json'}")
     
     # Initialize evaluation engine
-    eval_engine = EvaluationEngine()
+    eval_engine = EvaluationEngine(loss_fn=args.loss_fn)
     
     # Set up Lightning trainer
     test_instance_callback = EvaluationCallback(
@@ -453,7 +478,10 @@ def main():
         train_instance_callback=train_instance_callback,
         test_instance_callback=test_instance_callback,
         selective_masking=args.selective_masking,
-        max_item=args.max_item
+        max_item=args.max_item,
+        llm_annotator_id=args.llm_annotator_id,
+        human_observed_rate=args.human_observed_rate,
+        loss_fn=args.loss_fn,
     )
     # Device / strategy configuration
     trainer_kwargs: Dict[str, Any] = {}
@@ -495,8 +523,8 @@ def main():
     # Training history is saved via Lightning's _save_epoch_artifacts
     print(f"Training history saved to {run_dir}")
 
-    # Evaluate: test_all (for test_metrics.json, as before)
-    results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device)
+    # Evaluate (use same max_item as training so item-context matches)
+    results = eval_engine.evaluate_model(model=model, variables=test_all, converter=converter, device=args.device, max_item=args.max_item)
 
     # Output (using the same run_dir created earlier)
 
@@ -515,6 +543,10 @@ def main():
         'embedding_type': getattr(model, 'embedding_type', 'atom'),
         'device': args.device,
         'use_unified_entity': bool(args.use_unified_entity),
+        'item_embedding_dropout': model.embedding_provider.embedding_dropout_p,
+        'w_init': args.w_init,
+        'loss_fn': args.loss_fn,
+        'llm_input_dist': bool(args.llm_input_dist),
     }
     print(f"Saving model with config: {model_config}")
     torch.save({
@@ -552,10 +584,11 @@ def main():
         save_json(train_metrics_obj, run_dir / "train_metrics.json")
 
     # Save predictives: train_predictives.json (train_missing) and test_predictives.json (test_all)
+    # Use same max_item as training so item-context matches
     if not args.test_only_training and train_missing:
-        train_predictives = build_predictives(model, train_missing)
+        train_predictives = build_predictives(model, train_missing, max_item=args.max_item)
         save_predictives(run_dir, train_predictives, "train_predictives.json")
-    test_predictives = build_predictives(model, test_all)
+    test_predictives = build_predictives(model, test_all, max_item=args.max_item)
     save_predictives(run_dir, test_predictives, "test_predictives.json")
 
     print(f"Saved model to {model_path}")

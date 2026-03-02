@@ -6,6 +6,7 @@ from typing import List, Tuple
 from imputer.abstractions import RankingEmbeddingProviderBase
 from imputer.data import RankingData
 import logging
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +22,12 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         num_likert_classes: int,
         max_rank_size: int,
         device: str,
-        embedding_dropout: float = 0.0,
+        item_embedding_dropout: float = 0.0,
         use_concat_embedding: bool = False,
         enable_full_dropout: bool = False,
+        logit_high: float = 20.0,
+        w_init: str = "random",
+        llm_input_dist: bool = False,
     ):
 
         super().__init__(
@@ -32,13 +36,14 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
             embedding_dim=embedding_dim
         )
         self.use_concat_embedding = use_concat_embedding
-        
+
         self.num_attributes = num_attributes
         self.num_annotators = num_annotators
         self.num_items = num_items
         self.device = device
-        self.embedding_dropout_p = float(embedding_dropout)
+        self.embedding_dropout_p = float(item_embedding_dropout)
         self.enable_full_dropout = enable_full_dropout
+        self.llm_input_dist = llm_input_dist
 
         # Dimension scaling for concat mode: each component vector should be embedding_dim // 3
         # to ensure concatenation yields embedding_dim
@@ -51,9 +56,19 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
             # Non-concat mode: use learned weight matrices, keep original dimension logic
             self.component_dim = embedding_dim
             self.internal_dimension = embedding_dim - 3
+            if w_init == "random":
+                self.W_J = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
+                self.W_K = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
+            elif w_init == "xavier":
+                self.W_J = nn.Parameter(nn.init.xavier_normal_(torch.empty(embedding_dim, embedding_dim)))
+                self.W_K = nn.Parameter(nn.init.xavier_normal_(torch.empty(embedding_dim, embedding_dim)))
+            elif w_init == "identity":
+                self.W_J = nn.Parameter(torch.eye(embedding_dim) + 1e-3 * torch.randn(embedding_dim, embedding_dim))
+                self.W_K = nn.Parameter(torch.eye(embedding_dim) + 1e-3 * torch.randn(embedding_dim, embedding_dim))
+            else:
+                raise ValueError(f"w_init must be 'random', 'xavier', or 'identity', got {w_init!r}")
+            
             self.W_I = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
-            self.W_J = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
-            self.W_K = nn.Parameter(torch.randn(embedding_dim, embedding_dim))
         
         # Pairwise relation matrix dimension matches component dimension
         # Initialize to near negative identity
@@ -72,7 +87,7 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         torch.nn.init.kaiming_normal_(self.item_embedding, mode='fan_out', nonlinearity='relu')
 
         # Class constant for the logit value
-        self.LOGIT_HIGH = getattr(self, "LOGIT_HIGH", 20.0)
+        self.LOGIT_HIGH = logit_high
 
 
     def _full_dropout(self, x: torch.Tensor) -> torch.Tensor:
@@ -90,16 +105,23 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
         """Enable or disable full dropout. Should be True during training, False during evaluation."""
         self.enable_full_dropout = enabled
 
-    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False) -> torch.Tensor:
+    def get_rating_embedding(self, attribute_id: int, annotator_id: int, item_id: int, rating_value, is_missing: bool = False, rating_dist=None) -> torch.Tensor:
         """Implementation for rating embeddings."""
-        attr_core = self._full_dropout(self.attribute_embedding[attribute_id])
-        annot_core = self._full_dropout(self.annotator_embedding[annotator_id])
+
+        # attr_core = self._full_dropout(self.attribute_embedding[attribute_id])
+        # annot_core = self._full_dropout(self.annotator_embedding[annotator_id])
+
+        # TODO: REVERT ABOVE (Testing)
+        attr_core = self.attribute_embedding[attribute_id]
+        annot_core = self.annotator_embedding[annotator_id]
+
+        # ITEM EMBEDDING DROPOUT
+        item_core = self._full_dropout(self.item_embedding[item_id])
+
         attr_vec = torch.cat((torch.tensor([1, 0, 0]).to(self.device), attr_core), dim=-1)
-        
-        # Build annot_vec and item_vec (all learnable now)
         annot_vec = torch.cat((torch.tensor([0, 1, 0]).to(self.device), annot_core), dim=-1)
-        item_vec = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[item_id]), dim=-1)
-        #item_vec = torch.cat((torch.tensor([0, 0, 1]).to(self.device), self.item_embedding[0]), dim=-1)
+        item_vec = torch.cat((torch.tensor([0, 0, 1]).to(self.device), item_core), dim=-1)
+
         assert 0 <= item_id < self.num_items, f"Item ID {item_id} is out of bounds"
         
         # Combine embeddings based on use_concat_embedding flag
@@ -117,7 +139,15 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
             # Observed items: encode the known rating value
             assert rating_value is not None and 0 <= rating_value < self.num_likert_classes, f"rating_value {rating_value} must be in range [0, {self.num_likert_classes})"
             parameter[0] = 0.0  # Not masked
-            parameter[rating_value + 1] = self.LOGIT_HIGH  # One-hot-like encoding of rating logit
+            # LLM soft distribution input (Option C): LOGIT_HIGH * p_i for each class.
+            # Detected by: flag on AND rating_dist provided AND max < 1 (not a one-hot human rating).
+            # When flag is off, or token is human (one-hot, max==1): falls through to LOGIT_HIGH at argmax.
+            if self.llm_input_dist and rating_dist is not None and max(rating_dist) < 1.0 - 1e-6:
+                for c, p in enumerate(rating_dist):
+                    parameter[c + 1] = self.LOGIT_HIGH * float(p)
+            else:
+                parameter[rating_value + 1] = self.LOGIT_HIGH  # One-hot-like encoding of rating logit
+
         return torch.cat((total_embedding, parameter), dim=-1)
 
     # Get embedding for ranking variables

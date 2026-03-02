@@ -38,10 +38,10 @@ class EvaluationResults:
 class EvaluationEngine:
     """Engine for evaluating imputation models without masking (use observed + missing)."""
 
-    def __init__(self, config=None):
+    def __init__(self, config=None, loss_fn: str = "ce"):
         self.config = config
         # Loss strategy; weights don't matter in eval since masked subset is empty
-        self.loss_strategy = DefaultLossStrategy()
+        self.loss_strategy = DefaultLossStrategy(loss_fn=loss_fn)
 
     def evaluate_model(self, model, variables: List[RankingData], converter=None, device='cuda', max_item=30) -> EvaluationResults:
         """Evaluate on provided variables as-is; compute metrics/log-loss per status (observed/missing/masked).

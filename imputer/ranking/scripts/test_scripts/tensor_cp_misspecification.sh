@@ -1,36 +1,36 @@
 #!/bin/bash
-# Stan + Marformer on Tensor CP Data
-# Data: Z_ijk = sum_d v_id * u_jd * e_kd * T_d
-#   v, u, e ~ Exp(1), T_d = factor_decay^(d-1)
-#   Per-annotator thresholds, centered scores, MCAR 0.5, no pairwise rankings.
+# Tensor CP Misspecification Experiments
+# Tests Stan robustness under different data generation assumptions.
+# All use tensor_data_generation.stan with per-annotator thresholds, centered scores.
 #
-# Runs:
-#   1. Generate CP tensor data
-#   2. Stan inference (4 chains) + evaluation
-#   3. Stan inference (1 chain) + evaluation
-#   4. Train Old Marformer on CP data
+# 6 experiments:
+#   1. D=8, J=32, log-space scores (breaks Stan's linear likelihood)
+#   2. D=6, J=32, log-space scores
+#   3. D=4, J=12, log-space scores
+#   4. D=4, J=9,  log-space scores
+#   5. D=6, J=32, logistic link (breaks Stan's probit assumption)
+#   6. D=6, J=32, log-space scores, factor_decay=1.0 (equal components)
+#
+# Each: data gen + Marformer training + Stan 1C (commented out).
+# No pairwise rankings. MCAR 0.5.
 
 set -e
 
 # ─── Data generation parameters ───
 BASE_I=5
-BASE_J=32
 BASE_C=5
 BASE_K_TRAIN=100
 BASE_K_TEST=10
 
-BASE_D=6            # CP rank
-BASE_D_ANNOTATOR=6  # Same as D for CP model
-BASE_FACTOR_DECAY=0.9
 BASE_SIGMA_ANNOTATOR=0.5
 BASE_SIGMA_MEASUREMENT=0.1
 BASE_KAPPA=10
 
 # ─── Training parameters (shared by both models) ───
 MAX_ITEM=10
-EPOCHS=300
+EPOCHS=350
 LR=2e-4
-MASKING_RATE=0.15
+MASKING_RATE=0.30
 MASKED_LOSS_WEIGHT=15
 OBSERVED_LOSS_WEIGHT=1
 MASK_AUGMENTATIONS=5
@@ -53,10 +53,7 @@ USE_COSINE_SCHEDULE=true
 WARMUP_STEPS=5
 
 # ─── Stan parameters ───
-STAN_4C_CHAINS=4
 STAN_1C_CHAINS=1
-STAN_4C_ITER_SAMPLING=300
-STAN_4C_WARMUP=100
 STAN_1C_ITER_SAMPLING=300
 STAN_1C_WARMUP=100
 
@@ -64,7 +61,7 @@ STAN_1C_WARMUP=100
 DISABLE_RANKING=1
 USE_CONCAT=0
 
-EXP_PREFIX="tensor_cp_marformer_largeJ_K${BASE_K_TRAIN}"
+EXP_PREFIX="tcp_misspec"
 
 # ─── Derived flags ───
 DEVICES_FLAG=""
@@ -90,23 +87,27 @@ fi
 # ═══════════════════════════════════════════════════════════
 # Helper: generate tensor CP data
 #   $1 = run_name
-#   $2 = I_val
-#   $3... = hold flags (e.g. --hold-I-constant)
+#   $2 = D
+#   $3 = J
+#   $4 = factor_decay
+#   $5 = extra_flags (e.g. "--use-log-scores" or "--use-logistic-link")
 # ═══════════════════════════════════════════════════════════
 generate_data() {
     local run_name=$1
-    local I_val=$2
-    shift 2
-    local hold_flags="$@"
+    local D_val=$2
+    local J_val=$3
+    local decay=$4
+    local extra_flags=$5
 
     echo "[data] Generating tensor CP data -> ${run_name}"
+    echo "       D=${D_val}, J=${J_val}, factor_decay=${decay} ${extra_flags}"
     python stan/scripts/generate_data.py \
         --stan-file models/tensor_data_generation.stan \
         --K-train $BASE_K_TRAIN \
         --K-test $BASE_K_TEST \
-        --I $I_val \
-        --J $BASE_J \
-        --D $BASE_D \
+        --I $BASE_I \
+        --J $J_val \
+        --D $D_val \
         --C $BASE_C \
         --stan-arg d_annotator=$BASE_D_ANNOTATOR \
         --stan-arg factor_decay=$BASE_FACTOR_DECAY \
@@ -117,8 +118,8 @@ generate_data() {
         --kappa $BASE_KAPPA \
         --run-name "$run_name" \
         --overwrite-existing-data \
-        $hold_flags \
-        $ranking_args </dev/null
+        $ranking_args \
+        $extra_flags </dev/null
 
     if [ $? -ne 0 ]; then
         echo "ERROR: Data generation failed for $run_name"
@@ -213,54 +214,41 @@ run_marformer() {
 }
 
 # ═══════════════════════════════════════════════════════════
-# Run one mode
-#   $1 = mode_name
-#   $2 = hold_I (0/1)
-#   $3 = hold_J (0/1)
-#   $4 = hold_K (0/1)
+# Run one experiment
+#   $1 = exp_name
+#   $2 = D
+#   $3 = J
+#   $4 = factor_decay
+#   $5 = extra_flags for data gen
 # ═══════════════════════════════════════════════════════════
-run_mode() {
-    local mode_name=$1
-    local hold_I=$2
-    local hold_J=$3
-    local hold_K=$4
+run_experiment() {
+    local exp_name=$1
+    local D_val=$2
+    local J_val=$3
+    local decay=$4
+    local extra_flags=$5
 
-    # Adjust I when held constant (same logic as easy_all_modes.sh)
-    local I_val=$BASE_I
-    [ "$hold_I" == "1" ] && I_val=1
-
-    # Build hold flags for data generation
-    local hold_flags=""
-    [ "$hold_I" == "1" ] && hold_flags="$hold_flags --stan-arg hold_I_constant=1"
-    [ "$hold_J" == "1" ] && hold_flags="$hold_flags --stan-arg hold_J_constant=1"
-    [ "$hold_K" == "1" ] && hold_flags="$hold_flags --stan-arg hold_K_constant=1"
-
-    local base="${EXP_PREFIX}_${mode_name}"
+    local base="${EXP_PREFIX}_${exp_name}"
 
     echo ""
     echo "=========================================="
-    echo "MODE: ${mode_name}"
-    echo "  hold_I=${hold_I}, hold_J=${hold_J}, hold_K=${hold_K}"
-    echo "  I=${I_val}, J=${BASE_J}, K_train=${BASE_K_TRAIN}, max_item=${MAX_ITEM}"
+    echo "EXPERIMENT: ${exp_name}"
+    echo "  D=${D_val}, J=${J_val}, factor_decay=${decay}"
+    echo "  extra: ${extra_flags}"
     echo "=========================================="
 
-    # --- Generate tensor CP data ---
-    echo ""
-    echo "--- Tensor CP Data (Exp loadings, per-annotator thresholds, centered) ---"
+    # --- Generate data ---
     local data_name="${base}_data"
-    generate_data "$data_name" "$I_val" $hold_flags
+    generate_data "$data_name" "$D_val" "$J_val" "$decay" "$extra_flags"
 
-    # --- Stan inference (4 chains) ---
-    # run_stan "$data_name" "${base}_stan4c" $STAN_4C_CHAINS $STAN_4C_ITER_SAMPLING $STAN_4C_WARMUP
-
-    # --- Stan inference (1 chain) ---
-    run_stan "$data_name" "${base}_stan1c" $STAN_1C_CHAINS $STAN_1C_ITER_SAMPLING $STAN_1C_WARMUP
+    # --- Stan 1C (commented out) ---
+    # run_stan "$data_name" "${base}_stan1c" $STAN_1C_CHAINS $STAN_1C_ITER_SAMPLING $STAN_1C_WARMUP
 
     # --- Marformer ---
     run_marformer "$data_name" "${base}_marformer"
 
     echo ""
-    echo "  Mode ${mode_name} complete"
+    echo "  Experiment ${exp_name} complete"
 }
 
 # ═══════════════════════════════════════════════════════════
@@ -268,44 +256,63 @@ run_mode() {
 # ═══════════════════════════════════════════════════════════
 
 echo "=============================================="
-echo "STAN + MARFORMER ON TENSOR CP DATA"
+echo "TENSOR CP MISSPECIFICATION EXPERIMENTS"
 echo "=============================================="
 echo ""
-echo "Data Model: Z_ijk = sum_d v_id * u_jd * e_kd * T_d"
-echo "  v, u, e ~ Exp(1), centered scores"
-echo "  T_d = ${BASE_FACTOR_DECAY}^(d-1)"
-echo "  D (rank) = ${BASE_D}"
-echo "  Per-annotator thresholds"
-echo ""
 echo "Parameters:"
-echo "  I=${BASE_I}, J=${BASE_J}, C=${BASE_C}"
+echo "  I=${BASE_I}, C=${BASE_C}"
 echo "  K_train=${BASE_K_TRAIN}, K_test=${BASE_K_TEST}, max_item=${MAX_ITEM}"
-echo "  D=${BASE_D}, d_annotator=${BASE_D_ANNOTATOR}"
 echo "  sigma_a=${BASE_SIGMA_ANNOTATOR}, sigma_m=${BASE_SIGMA_MEASUREMENT}"
-echo "  kappa=${BASE_KAPPA}, factor_decay=${BASE_FACTOR_DECAY}"
-echo "  protocol=mcar (missing_rate=0.5)"
+echo "  kappa=${BASE_KAPPA}, protocol=mcar (missing_rate=0.5)"
+echo "  epochs=${EPOCHS}, lr=${LR}, embedding_dim=${EMBEDDING_DIM}"
+echo "  encoder_layers=${ENCODER_LAYERS}, heads=${ATTENTION_HEADS}, d_ff=${D_FF}"
 echo ""
-echo "Stan: ${STAN_4C_CHAINS}c/${STAN_4C_ITER_SAMPLING}s/${STAN_4C_WARMUP}w + ${STAN_1C_CHAINS}c/${STAN_1C_ITER_SAMPLING}s/${STAN_1C_WARMUP}w"
-echo "Marformer: epochs=${EPOCHS}, lr=${LR}, dim=${EMBEDDING_DIM}, layers=${ENCODER_LAYERS}, heads=${ATTENTION_HEADS}"
+echo "Experiments:"
+echo "  1. log_D8_J32:     D=8,  J=32, log-space, decay=0.9"
+echo "  2. log_D6_J32:     D=6,  J=32, log-space, decay=0.9"
+echo "  3. log_D4_J12:     D=4,  J=12, log-space, decay=0.9"
+echo "  4. log_D4_J9:      D=4,  J=9,  log-space, decay=0.9"
+echo "  5. logistic_D6_J32: D=6, J=32, logistic link, decay=0.9"
+echo "  6. log_D6_J32_eq:  D=6,  J=32, log-space, decay=1.0 (equal components)"
 echo ""
 
-TOTAL_MODES=0
-FAILED_MODES=0
+TOTAL_EXPS=0
+FAILED_EXPS=0
 
-# IJK: full dependence (hold_I=0, hold_J=0, hold_K=0)
-run_mode "IJK" 0 0 0 || ((FAILED_MODES++))
-((TOTAL_MODES++))
+# Exp 1: D=8, J=32, log-space
+run_experiment "log_D8_J32" 8 32 0.9 "--use-log-scores" || ((FAILED_EXPS++))
+((TOTAL_EXPS++))
+
+# Exp 2: D=6, J=32, log-space
+run_experiment "log_D6_J32" 6 32 0.9 "--use-log-scores" || ((FAILED_EXPS++))
+((TOTAL_EXPS++))
+
+# Exp 3: D=4, J=12, log-space
+run_experiment "log_D4_J12" 4 12 0.9 "--use-log-scores" || ((FAILED_EXPS++))
+((TOTAL_EXPS++))
+
+# Exp 4: D=4, J=9, log-space
+run_experiment "log_D4_J9" 4 9 0.9 "--use-log-scores" || ((FAILED_EXPS++))
+((TOTAL_EXPS++))
+
+# Exp 5: D=6, J=32, logistic link (no log-space)
+run_experiment "logistic_D6_J32" 6 32 0.9 "--use-logistic-link" || ((FAILED_EXPS++))
+((TOTAL_EXPS++))
+
+# Exp 6: D=6, J=32, log-space, factor_decay=1.0
+run_experiment "log_D6_J32_eq" 6 32 1.0 "--use-log-scores" || ((FAILED_EXPS++))
+((TOTAL_EXPS++))
 
 echo ""
 echo "=============================================="
 echo "ALL EXPERIMENTS COMPLETE"
 echo "=============================================="
-echo "Total modes: $TOTAL_MODES"
-echo "Failed modes: $FAILED_MODES"
+echo "Total experiments: $TOTAL_EXPS"
+echo "Failed experiments: $FAILED_EXPS"
 echo ""
 echo "Results:"
-echo "  Data:   OUTPUT/generated_data/${EXP_PREFIX}_*"
-echo "  Stan:   OUTPUT/domain_model/runs/${EXP_PREFIX}_*"
+echo "  Data:     OUTPUT/generated_data/${EXP_PREFIX}_*"
+echo "  Stan:     OUTPUT/domain_model/runs/${EXP_PREFIX}_*"
 echo "  Stan eval: OUTPUT/domain_model/eval/${EXP_PREFIX}_*"
 echo "  Marformer: OUTPUT/IMPUTER/${EXP_PREFIX}_*"
 echo "=============================================="

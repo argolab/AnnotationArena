@@ -102,10 +102,16 @@ class DataGenConfig:
     d_annotator: Optional[int] = None
     factor_decay: Optional[float] = None
 
-    # --- Pipeline (not Stan data) ---
-    observation_protocol: str = "tie_breaking"
-    mcar_missing_rate: float = 0.5
-    pairwise_observation_rate: float = 1.0
+    # Misspecification flags (only used with tensor_data_generation.stan)
+    use_log_scores: bool = False       # Apply log() to raw CP scores before binning
+    use_logistic_link: bool = False    # Use inv_logit instead of Phi for binning
+    use_normal_loadings: bool = False  # Use N(0,1) loadings instead of Exp(1)
+
+    # Observation protocol
+    observation_protocol: str = "tie_breaking"  # "tie_breaking", "mcar", "extended_rankings"
+    mcar_missing_rate: float = 0.5  # Missing rate for MCAR protocol (was mar_missing_rate)
+    pairwise_observation_rate: float = 1.0  # For tie_breaking: fraction of missing pairwise rankings to observe (0.0-1.0)
+
     seed: Optional[int] = None
 
     stan_type: str = "factored-dot-product"
