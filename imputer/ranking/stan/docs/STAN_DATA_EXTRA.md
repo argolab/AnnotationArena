@@ -30,6 +30,7 @@ Every Stan-data field that can vary by model is an **explicit attribute** on `Da
 - `sigma_annotator`, `sigma_measurement`, `kappa`, `temperature`
 - `use_factored_annotator`, `derive_thresholds_from_annotator` (0/1)
 - `d_annotator`, `factor_decay`
+- Tensor-only misspecification / loading flags (0/1): `use_log_scores`, `use_logistic_link`, `use_normal_loadings`
 
 For a given `stan_type`, **exactly** the set of fields listed for that type in ยง3 must be set (non-`None`); **no other** type-specific field may be set. Validation is done by `check_config_for_stan_type(config)` and by `config.to_stan_data()`.
 
@@ -70,8 +71,22 @@ For a given `stan_type`, **exactly** the set of fields listed for that type in ย
 
 ### 3.4 `tensor`
 
-- **Required (exactly):** `D`, `factor_decay`, `sigma_annotator`, `sigma_measurement`, `kappa`, `temperature`
-- **Meaning:** CP tensor model; all dimensions match (rank `D`). `d_annotator` is set to `D` automatically in the pipeline (not a separate parameter). `factor_decay` is the decay for factor weights. No `use_factored_annotator` / `derive_thresholds_from_annotator` (not used by the CP model).
+- **Required (exactly):**
+  - `D`, `factor_decay`, `sigma_annotator`, `sigma_measurement`, `kappa`, `temperature`
+  - Tensor-only misspecification / loading flags (all 0/1):  
+    `use_log_scores`, `use_logistic_link`, `use_normal_loadings`
+- **Meaning:**
+  - Core CP tensor hyperparameters: all dimensions match (rank `D`). `d_annotator` is set to `D` automatically in the pipeline (not a separate parameter). `factor_decay` is the decay for factor weights.
+  - Misspecification / loading flags (used only by `tensor_data_generation.stan` for robustness experiments):
+    - `use_log_scores`: apply `log()` to raw CP scores before binning into Likert categories (misspecifies the linear Gaussian likelihood assumed by the domain model).
+    - `use_logistic_link`: use `inv_logit` instead of `Phi` for binning (misspecifies the probit link).
+    - `use_normal_loadings`: use `N(0,1)` loadings instead of `Exp(1)` for the CP factors (allows signed cancellation).
+
+Typical CLI usage for tensor data generation:
+
+- Base hyperparameters (from flags or defaults): e.g. `--D 8 --sigma-annotator 0.3 --sigma-measurement 0.1 --kappa 2.0`.
+- Tensor-specific fields via `--stan-arg` (overriding any defaults):  
+  `--stan-type tensor --stan-arg factor_decay=0.9 --stan-arg use_log_scores=1 --stan-arg use_logistic_link=1 --stan-arg use_normal_loadings=1`.
 
 ---
 

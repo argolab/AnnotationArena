@@ -164,15 +164,23 @@ def main():
     if stan_type == "tensor":
         stan_arg.setdefault("DEBUG_INIT", 0)
     print(f"Domain model Stan type: {stan_type}, original data has type: {data_config.stan_type}")
-    # Resolve domain model .stan file (from --stan-file or from config.stan_type)
-    stan_file = args.stan_file
-    if stan_file is None:
-        if stan_type == "discrete":
-            stan_file = str(Path(__file__).parent.parent.parent / "models" / "discrete_type_domain_model.stan")
-        elif stan_type == "tensor":
-            stan_file = str(Path(__file__).parent.parent.parent / "models" / "tensor_domain_model.stan")
-        else:
-            stan_file = str(Path(__file__).parent.parent.parent / "models" / "domain_model.stan")
+    # Resolve Stan model file (from --stan-file or defaults).
+    # For dist mode we use stan_dist_model.stan; otherwise use the appropriate domain model.
+    # TODO: we should have multiple distribution version of the domain model as well.
+    if args.use_dist:
+        default_stan_dist = str(
+            Path(__file__).resolve().parents[2] / "models" / "stan_dist_model.stan"
+        )
+        stan_file = args.stan_file or default_stan_dist
+    else:
+        stan_file = args.stan_file
+        if stan_file is None:
+            if stan_type == "discrete":
+                stan_file = str(Path(__file__).parent.parent.parent / "models" / "discrete_type_domain_model.stan")
+            elif stan_type == "tensor":
+                stan_file = str(Path(__file__).parent.parent.parent / "models" / "tensor_domain_model.stan")
+            else:
+                stan_file = str(Path(__file__).parent.parent.parent / "models" / "domain_model.stan")
     
     # Save inference configuration
     config_dict = {
@@ -190,6 +198,7 @@ def main():
         "stan_file": stan_file,
         "stan_type": stan_type,
         "stan_arg": stan_arg,
+        "use_dist": args.use_dist,
     }
     save_configs(output_dir, inference=config_dict)
     
@@ -256,85 +265,19 @@ def main():
     logger.info("Starting MCMC inference")
     print(f"\nStarting MCMC inference...")
     try:
-        if args.use_dist:
-            #########################################################
-            # Dist mode: all ratings use soft expected log-likelihood.
-            # Requires a dist bundle where each observed rating has a
-            # 'rating_dist' field (simplex over C categories).
-            # Human ratings have one-hot rating_dist; LLM ratings have
-            # actual distributions.  Both are handled uniformly.
-            #########################################################
-            from stan.pipeline.inference import compile_domain_model
-
-            default_stan_dist = str(
-                Path(__file__).resolve().parents[2] / "models" / "stan_dist_model.stan"
-            )
-            stan_file_dist = args.stan_file or default_stan_dist
-            print(f"Dist mode: Stan model = {stan_file_dist}")
-
-            K = data_config.K_train + data_config.K_test
-            observed = bundle.observed_ratings
-            missing  = bundle.missing_ratings
-
-            # Build rating_dists — convert int value to one-hot if rating_dist absent
-            C = data_config.C
-            def _to_dist(r):
-                if "rating_dist" in r:
-                    d = r["rating_dist"]
-                    s = sum(d)
-                    return [x / s for x in d]   # normalise for safety
-                else:
-                    oh = [0.0] * C
-                    oh[r["value"] - 1] = 1.0
-                    return oh
-
-            stan_data = {
-                "K": K,
-                "I": data_config.I,
-                "J": data_config.J,
-                "D": data_config.D,
-                "C": C,
-                "N_ratings":           len(observed),
-                "rating_attributes":   [r["attribute"] for r in observed],
-                "rating_annotators":   [r["annotator"]  for r in observed],
-                "rating_items":        [r["item"]        for r in observed],
-                "rating_dists":        [_to_dist(r)      for r in observed],
-                "N_missing_ratings":              len(missing),
-                "missing_rating_attributes":      [r["attribute"] for r in missing],
-                "missing_rating_annotators":      [r["annotator"]  for r in missing],
-                "missing_rating_items":           [r["item"]        for r in missing],
-                "sigma_annotator":   data_config.sigma_annotator,
-                "sigma_measurement": data_config.sigma_measurement,
-                "alpha_dirichlet":   data_config.alpha_dirichlet,
-                "temperature":       data_config.temperature,
-            }
-            print(f"  N_ratings={len(observed)}  N_missing={len(missing)}  K={K}")
-
-            model = compile_domain_model(stan_file_dist)
-            fit = model.sample(
-                data=stan_data,
-                chains=inference_config.chains,
-                iter_warmup=inference_config.iter_warmup,
-                iter_sampling=inference_config.iter_sampling,
-                seed=inference_config.seed,
-                adapt_delta=inference_config.adapt_delta,
-                max_treedepth=inference_config.max_treedepth,
-                inits=1.0,
-                show_progress=inference_config.show_progress,
-                show_console=True,
-            )
-        else:
-            #########################################################
-            fit = run_mcmc_inference(
-                bundle=bundle,
-                config=data_config,
-                inference_config=inference_config,
-                stan_file=args.stan_file,
-                use_train_only=args.use_train_only,
-                use_test_only=args.use_test_only
-            )
-            #########################################################
-
+        #########################################################
+        fit = run_mcmc_inference(
+            bundle=bundle,
+            config=data_config,
+            inference_config=inference_config,
+            stan_file=stan_file,
+            stan_arg=stan_arg,
+            use_train_only=args.use_train_only,
+            use_test_only=args.use_test_only,
+            use_dist=args.use_dist,
+        )
+        #########################################################
+        
         logger.info("MCMC inference completed successfully")
         print("MCMC inference completed successfully!")
 

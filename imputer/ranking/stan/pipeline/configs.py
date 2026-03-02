@@ -11,8 +11,8 @@ CORE_STAN_KEYS: frozenset = frozenset({
     "enable_pairwise_rankings", "pairwise_cap_per_item",
 })
 
-# For each stan_type, the exact set of (non-core) Stan data field names that must be set
-# on the config (non-None). No other Stan-data field may be set for that type.
+# For each stan_type, the exact set of (non-core) Stan data field names that must be
+# set on the config (non-None). No other Stan-data field may be set for that type.
 # All values are passed from config into Stan data; there is no separate "extra" dict.
 STAN_TYPE_REQUIRED: Dict[str, Set[str]] = {
     "discrete": {"M", "S", "sigma_measurement", "kappa", "temperature"},
@@ -25,7 +25,16 @@ STAN_TYPE_REQUIRED: Dict[str, Set[str]] = {
         "use_factored_annotator", "derive_thresholds_from_annotator",
     },
     "tensor": {
-        "D", "factor_decay", "sigma_annotator", "sigma_measurement", "kappa", "temperature",
+        "D",
+        "factor_decay",
+        "sigma_annotator",
+        "sigma_measurement",
+        "kappa",
+        "temperature",
+        # Misspecification flags and loading distribution for tensor-only data generation.
+        "use_log_scores",
+        "use_logistic_link",
+        "use_normal_loadings",
     },
 }
 
@@ -33,6 +42,8 @@ STAN_TYPE_REQUIRED: Dict[str, Set[str]] = {
 STAN_DATA_FIELDS: frozenset = frozenset({
     "D", "M", "S", "sigma_annotator", "sigma_measurement", "kappa", "temperature",
     "use_factored_annotator", "derive_thresholds_from_annotator", "d_annotator", "factor_decay",
+    # Tensor-only misspecification flags / loading distribution.
+    "use_log_scores", "use_logistic_link", "use_normal_loadings",
 })
 
 
@@ -102,10 +113,11 @@ class DataGenConfig:
     d_annotator: Optional[int] = None
     factor_decay: Optional[float] = None
 
-    # Misspecification flags (only used with tensor_data_generation.stan)
-    use_log_scores: bool = False       # Apply log() to raw CP scores before binning
-    use_logistic_link: bool = False    # Use inv_logit instead of Phi for binning
-    use_normal_loadings: bool = False  # Use N(0,1) loadings instead of Exp(1)
+    # Misspecification flags (tensor-only). These are part of Stan data for the tensor
+    # data-generation model and are required (0/1) for stan_type="tensor".
+    use_log_scores: Optional[int] = None       # 0/1: apply log() to raw CP scores before binning
+    use_logistic_link: Optional[int] = None    # 0/1: use inv_logit instead of Phi for binning
+    use_normal_loadings: Optional[int] = None  # 0/1: use N(0,1) instead of Exp(1) loadings
 
     # Observation protocol
     observation_protocol: str = "tie_breaking"  # "tie_breaking", "mcar", "extended_rankings"
@@ -115,6 +127,23 @@ class DataGenConfig:
     seed: Optional[int] = None
 
     stan_type: str = "factored-dot-product"
+
+    def __post_init__(self) -> None:
+        """
+        Backwards-compatible defaults for tensor-only misspecification flags.
+
+        Older `configs.json` files produced before these fields were added will not
+        contain them; when such a config is reconstructed with stan_type="tensor",
+        we treat the missing flags as 0 (off) so that validation still passes and
+        Stan data is well-defined.
+        """
+        if self.stan_type == "tensor":
+            if self.use_log_scores is None:
+                self.use_log_scores = 0
+            if self.use_logistic_link is None:
+                self.use_logistic_link = 0
+            if self.use_normal_loadings is None:
+                self.use_normal_loadings = 0
 
     def to_stan_data(self) -> Dict[str, Any]:
         """
@@ -137,7 +166,13 @@ class DataGenConfig:
         required = STAN_TYPE_REQUIRED[self.stan_type]
         for key in sorted(required):
             val = getattr(self, key)
-            if key in ("use_factored_annotator", "derive_thresholds_from_annotator"):
+            if key in (
+                "use_factored_annotator",
+                "derive_thresholds_from_annotator",
+                "use_log_scores",
+                "use_logistic_link",
+                "use_normal_loadings",
+            ):
                 base[key] = int(val) if isinstance(val, (bool, int)) else val
             else:
                 base[key] = val

@@ -73,6 +73,9 @@ VALID_TENSOR = {
     "sigma_measurement": 0.1,
     "kappa": 2.0,
     "temperature": 0.5,
+    "use_log_scores": 0,
+    "use_logistic_link": 0,
+    "use_normal_loadings": 0,
 }
 
 VALID_BY_TYPE = {
@@ -154,7 +157,13 @@ def test_extra_parameter_raises(stan_type: str):
         kwargs[extra_key] = 1
     elif extra_key == "factor_decay":
         kwargs[extra_key] = 0.8
-    elif extra_key in ("use_factored_annotator", "derive_thresholds_from_annotator"):
+    elif extra_key in (
+        "use_factored_annotator",
+        "derive_thresholds_from_annotator",
+        "use_log_scores",
+        "use_logistic_link",
+        "use_normal_loadings",
+    ):
         kwargs[extra_key] = 0
     else:
         kwargs[extra_key] = 0.5
@@ -177,7 +186,13 @@ def test_extra_parameter_to_stan_data_raises(stan_type: str):
         kwargs[extra_key] = 1
     elif extra_key == "factor_decay":
         kwargs[extra_key] = 0.8
-    elif extra_key in ("use_factored_annotator", "derive_thresholds_from_annotator"):
+    elif extra_key in (
+        "use_factored_annotator",
+        "derive_thresholds_from_annotator",
+        "use_log_scores",
+        "use_logistic_link",
+        "use_normal_loadings",
+    ):
         kwargs[extra_key] = 0
     else:
         kwargs[extra_key] = 0.5
