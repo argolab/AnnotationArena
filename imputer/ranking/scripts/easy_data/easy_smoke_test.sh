@@ -142,9 +142,9 @@ run_axis_mode() {
     # Step 1: Generate data (Stan)
     echo "[Step 1/6] Generating data..."
     local hold_flags=""
-    [ "$hold_I" == "1" ] && hold_flags="$hold_flags --hold-I-constant"
-    [ "$hold_J" == "1" ] && hold_flags="$hold_flags --hold-J-constant"
-    [ "$hold_K" == "1" ] && hold_flags="$hold_flags --hold-K-constant"
+[ "$hold_I" == "1" ] && hold_flags="$hold_flags --stan-arg hold_I_constant=1"
+[ "$hold_J" == "1" ] && hold_flags="$hold_flags --stan-arg hold_J_constant=1"
+[ "$hold_K" == "1" ] && hold_flags="$hold_flags --stan-arg hold_K_constant=1"
     python stan/scripts/generate_data.py \
         --K-train $BASE_K_TRAIN \
         --K-test $BASE_K_TEST \

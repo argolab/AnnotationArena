@@ -1,35 +1,35 @@
 #!/bin/bash
-# Easy-data axis invariance: J-only mode (hold_I=1, hold_J=0, hold_K=1)
-# Ratings depend only on annotators J, not on criteria or items.
-# Invariance rule: hold axis constant → set that dimension to 1. So hold_I=1 → I=1.
+# Easy-data axis invariance: IJ mode (hold_I=0, hold_J=0, hold_K=1)
+# Ratings depend on criteria I and annotators J, but not on items K.
 
 set -e
 
-# I=1 (I invariant), J=12 (J varies).
-BASE_I=1
+# Fixed base parameters (mirrors OFAT center setup where possible)
+# K invariant (hold_K=1) → use a single item: K_train=K_test=1.
+BASE_I=5
 BASE_J=12
 BASE_C=5
-BASE_K_TRAIN=30
-BASE_K_TEST=30
+BASE_K_TRAIN=1
+BASE_K_TEST=1
 
 # Baseline hyperparameter values
 BASE_D=8
 BASE_SIGMA_ANNOTATOR=0.5
 BASE_SIGMA_MEASUREMENT=0.1
 BASE_KAPPA=10
-BASE_PROTOCOL="mcar"  # MCAR when I=1 (hold I fix)
-BASE_PROTOCOL_CODE="mcar"
+BASE_PROTOCOL="tie_breaking"  # SMAR
+BASE_PROTOCOL_CODE="smar"
 BASE_USE_CONCAT=0  # Center value
 
 # Unique prefix for TensorBoard / output filtering
-EASY_PREFIX="easy_axis"
-MODE_NAME="J_only"
-HOLD_I=1
+EASY_PREFIX="easy_axis_K_eq_1"
+MODE_NAME="IJ"
+HOLD_I=0
 HOLD_J=0
 HOLD_K=1
 
 # Marformer hyperparameters (kept modest for sanity checks)
-MARFORMER_EPOCHS=300
+MARFORMER_EPOCHS=100
 MARFORMER_LR=2e-4
 MARFORMER_MASKING_RATE=0.15
 MARFORMER_MASKED_LOSS_WEIGHT=15

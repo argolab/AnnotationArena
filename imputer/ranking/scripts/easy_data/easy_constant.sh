@@ -113,9 +113,9 @@ fi
 # Step 1: Generate data (Stan)
 echo "[Step 1/6] Generating data..."
 hold_flags=""
-[ "$HOLD_I" == "1" ] && hold_flags="$hold_flags --hold-I-constant"
-[ "$HOLD_J" == "1" ] && hold_flags="$hold_flags --hold-J-constant"
-[ "$HOLD_K" == "1" ] && hold_flags="$hold_flags --hold-K-constant"
+[ "$HOLD_I" == "1" ] && hold_flags="$hold_flags --stan-arg hold_I_constant=1"
+[ "$HOLD_J" == "1" ] && hold_flags="$hold_flags --stan-arg hold_J_constant=1"
+[ "$HOLD_K" == "1" ] && hold_flags="$hold_flags --stan-arg hold_K_constant=1"
 python stan/scripts/generate_data.py \
     --K-train $BASE_K_TRAIN \
     --K-test $BASE_K_TEST \

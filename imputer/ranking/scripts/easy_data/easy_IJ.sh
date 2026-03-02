@@ -58,6 +58,9 @@ if [ -n "$MARFORMER_DEVICES" ]; then
     DEVICES_FLAG="--devices $MARFORMER_DEVICES"
 fi
 
+# Stan model set: embedding_dot_product (default) or discrete
+STAN_TYPE="${STAN_TYPE:-embedding_dot_product}"
+
 # Stan hyperparameters
 STAN_4C_CHAINS=4
 STAN_1C_CHAINS=1
@@ -112,9 +115,9 @@ fi
 # Step 1: Generate data (Stan)
 echo "[Step 1/6] Generating data..."
 hold_flags=""
-[ "$HOLD_I" == "1" ] && hold_flags="$hold_flags --hold-I-constant"
-[ "$HOLD_J" == "1" ] && hold_flags="$hold_flags --hold-J-constant"
-[ "$HOLD_K" == "1" ] && hold_flags="$hold_flags --hold-K-constant"
+[ "$HOLD_I" == "1" ] && hold_flags="$hold_flags --stan-arg hold_I_constant=1"
+[ "$HOLD_J" == "1" ] && hold_flags="$hold_flags --stan-arg hold_J_constant=1"
+[ "$HOLD_K" == "1" ] && hold_flags="$hold_flags --stan-arg hold_K_constant=1"
 python stan/scripts/generate_data.py \
     --K-train $BASE_K_TRAIN \
     --K-test $BASE_K_TEST \
@@ -126,6 +129,7 @@ python stan/scripts/generate_data.py \
     --sigma-annotator $BASE_SIGMA_ANNOTATOR \
     --sigma-measurement $BASE_SIGMA_MEASUREMENT \
     --kappa $BASE_KAPPA \
+    --stan-type "$STAN_TYPE" \
     --run-name $run_name \
     --overwrite-existing-data \
     $hold_flags \
@@ -202,6 +206,7 @@ fi
 echo "[Step 3/6] Running Stan inference (4 chains)..."
 python stan/scripts/run_inference.py \
     --data-bundle OUTPUT/generated_data/${run_name}/data_bundle.json \
+    --stan-type "$STAN_TYPE" \
     --chains $STAN_4C_CHAINS \
     --iter-sampling $STAN_4C_ITER_SAMPLING \
     --iter-warmup $STAN_4C_WARMUP \
@@ -217,6 +222,7 @@ fi
 echo "[Step 4/6] Running Stan inference (1 chain, long)..."
 python stan/scripts/run_inference.py \
     --data-bundle OUTPUT/generated_data/${run_name}/data_bundle.json \
+    --stan-type "$STAN_TYPE" \
     --chains $STAN_1C_CHAINS \
     --iter-sampling $STAN_1C_ITER_SAMPLING \
     --iter-warmup $STAN_1C_WARMUP \
