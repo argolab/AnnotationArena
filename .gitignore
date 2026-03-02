@@ -277,3 +277,14 @@ imputer/ranking/MY_COMPREHENSIVE_REFERENCE.md
 imputer/ranking/READMEs/DATA_CONVERTER_RENOVATION_PLAN.md
 imputer/ranking/READMEs/IMPUTER_README_OLD.md
 imputer/ranking/READMEs/TRAINER_EVAL_RENOVATION_PLAN.md
+imputer/ranking/models/discrete_type_data_generation
+imputer/ranking/models/discrete_type_domain_model
+imputer/ranking/scripts/JK_interaction/
+imputer/ranking/scripts/large_instance/
+imputer/ranking/scripts/ofat_no_random/
+imputer/ranking/scripts/cross_stan_type_experiment_override.py
+
+*.err
+imputer/ranking/test.sh
+imputer/ranking/run_single_kp10_random_as_key_fresh_lightning.sh
+imputer/ranking/models/tensor_domain_model
