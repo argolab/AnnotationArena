@@ -37,7 +37,7 @@ STAN_TYPES = [
 BASE_K_TRAIN = 10
 BASE_K_TEST = 10
 BASE_I = 5
-BASE_J = 12
+BASE_J = 24
 BASE_C = 5
 
 # ---------- 3. Shared noise/temperature (used by embedding types and discrete) ----------
@@ -49,7 +49,7 @@ BASE_TEMPERATURE = 0.5
 
 # ---------- 4. Per–stan_type parameters (for data generation only) ----------
 # discrete: M item prototypes, S annotator styles (required by discrete_type_data_generation.stan)
-DISCRETE_M = 6
+DISCRETE_M = 4
 DISCRETE_S = 3
 
 # tensor: CP factor decay (required by tensor_data_generation.stan)
