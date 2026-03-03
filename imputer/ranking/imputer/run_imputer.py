@@ -11,7 +11,7 @@ import time
 
 from imputer.data import DataConverter, RankingData
 from imputer.ranking_imputer import MultiVariableImputer
-from imputer.unified_entity_imputer import UnifiedEntityImputer
+from imputer.legacy.unified_entity_imputer import UnifiedEntityImputer
 from imputer.callbacks import EvaluationCallback
 from imputer.eval import EvaluationEngine
 import sys
