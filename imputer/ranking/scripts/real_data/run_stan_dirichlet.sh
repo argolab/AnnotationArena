@@ -26,8 +26,8 @@ RUN_BASE="${RUN_BASE:-llmrubric_stan_dirichlet_alpha${ALPHA_LLM}}"
 
 # ── MCMC hyperparameters ──────────────────────────────────────────────────────
 CHAINS="${CHAINS:-1}"
-ITER_WARMUP="${ITER_WARMUP:-300}"
-ITER_SAMPLING="${ITER_SAMPLING:-100}"
+ITER_WARMUP="${ITER_WARMUP:-100}"
+ITER_SAMPLING="${ITER_SAMPLING:-300}"
 ADAPT_DELTA="${ADAPT_DELTA:-0.85}"
 MAX_TREEDEPTH="${MAX_TREEDEPTH:-12}"
 SEED="${SEED:-42}"
@@ -60,7 +60,8 @@ python stan/scripts/run_inference_dirichlet.py \
     --seed           "$SEED" \
     --override-D     "$EMBEDDING_DIM" \
     --alpha-llm      "$ALPHA_LLM" \
-    --overwrite-existing-data
+    --overwrite-existing-data \
+    --use-train-only
 
 if [ $? -ne 0 ]; then
     echo "ERROR: Stan inference failed"
@@ -74,7 +75,7 @@ python stan/scripts/evaluate_predictions.py \
     --data-bundle  "$DATA_DIR/data_bundle.json" \
     --mcmc-dir     "OUTPUT/domain_model/runs/$RUN_BASE" \
     --run-name     "${RUN_BASE}_eval" \
-    --csv-pattern  "stan_dirichlet_model-*.csv" \
+    --csv-pattern  "stan_dirichlet_model_freeze-*.csv" \
     --overwrite-existing-data \
     --verbose
 
