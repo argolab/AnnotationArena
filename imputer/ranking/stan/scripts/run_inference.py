@@ -70,7 +70,7 @@ _DEFAULT_STAN_FILES = {
     "discrete":                  str(_MODELS_DIR / "discrete_model.stan"),
     "normal-noise-dot-product":  str(_MODELS_DIR / "normal_noise_dot_product_model.stan"),
     "factored-dot-product":      str(_MODELS_DIR / "normal_noise_dot_product_model.stan"),
-    "tensor":                    str(_MODELS_DIR / "tensor_domain_model.stan"),
+    "tensor":                    str(_MODELS_DIR / "tensor_model.stan"),
 }
 
 # Parameters frozen in Round 2 per stan type.
@@ -91,7 +91,11 @@ _ROUND2_FROZEN_PARAMS = {
     # TODO: fill in frozen params for discrete and tensor when two-round
     # support is needed for those types.
     "discrete": [],
-    "tensor":   [],
+    "tensor": [
+        ("v_loadings",   lambda I, J, D, C: (I, D)),
+        ("u_loadings",   lambda I, J, D, C: (J, D)),
+        ("rating_probs", lambda I, J, D, C: (J, C)),
+    ],
 }
 # fmt: on
 

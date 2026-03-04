@@ -36,7 +36,7 @@ sm_str=$(echo $BASE_SIGMA_MEASUREMENT | sed 's/\.//g')
 kp_str=$(echo $BASE_KAPPA | sed 's/\.//g')
 
 # Construct run name
-run_name="K_train_${BASE_K_TRAIN}_K_test_${BASE_K_TEST}_I_${BASE_I}_J_${BASE_J}_normal_noise_dot_product"
+run_name="K_train_${BASE_K_TRAIN}_K_test_${BASE_K_TEST}_I_${BASE_I}_J_${BASE_J}_factored_dot_product"
 
 #run_name="normal_noise_dot_product_llm_rubric"
 
@@ -65,7 +65,8 @@ python stan/scripts/generate_data.py \
     --kappa $BASE_KAPPA \
     --run-name $run_name \
     --overwrite-existing-data \
-    --stan-type normal-noise-dot-product \
+    --stan-type factored-dot-product \
+    --derive-thresholds-from-annotator \
     $ranking_args \
     $protocol_args </dev/null
 
@@ -88,8 +89,8 @@ RUN_BASE="${run_name}"
 
 # ── MCMC hyperparameters ──────────────────────────────────────────────────────
 CHAINS="${CHAINS:-1}"
-ITER_WARMUP="${ITER_WARMUP:-100}"
-ITER_SAMPLING="${ITER_SAMPLING:-300}"
+ITER_WARMUP="${ITER_WARMUP:-1}"
+ITER_SAMPLING="${ITER_SAMPLING:-1}"
 ADAPT_DELTA="${ADAPT_DELTA:-0.85}"
 MAX_TREEDEPTH="${MAX_TREEDEPTH:-12}"
 SEED="${SEED:-42}"
@@ -122,7 +123,7 @@ python stan/scripts/run_inference.py \
     --seed           "$SEED" \
     --override-D     "$EMBEDDING_DIM" \
     --alpha-llm      "$ALPHA_LLM" \
-    --stan-type      "normal-noise-dot-product" \
+    --stan-type      "factored-dot-product" \
     --overwrite-existing-data
 
 if [ $? -ne 0 ]; then
@@ -159,7 +160,7 @@ python stan/scripts/run_inference.py \
     --seed           "$SEED" \
     --override-D     "$EMBEDDING_DIM" \
     --alpha-llm      "$ALPHA_LLM" \
-    --stan-type      "normal-noise-dot-product" \
+    --stan-type      "factored-dot-product" \
     --overwrite-existing-data \
     --use-train-only
 

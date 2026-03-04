@@ -40,7 +40,7 @@ def generate_data(
         if stan_type == "discrete":
             stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "discrete_type_data_generation.stan")
         elif stan_type == "tensor":
-            stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "tensor_data_generation.stan")
+            stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "tensor_generation.stan")
         elif stan_type in ("normal-noise-dot-product", "factored-dot-product"):
             stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "normal_noise_dot_product_generation.stan")
         elif getattr(config, "observation_protocol", None) == "extended_rankings":
@@ -64,7 +64,7 @@ def generate_data(
         chains=1,
         iter_sampling=1,
         seed=config.seed,
-        show_console=True
+        show_console=False
     )
 
     # Extract generated quantities

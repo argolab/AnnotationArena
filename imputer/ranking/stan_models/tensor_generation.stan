@@ -153,16 +153,7 @@ generated quantities {
     {
         for (i in 1:I) {
             for (d in 1:D) {
-                shared_v[d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
-            }
-            for (i in 1:I) {
-                v_loadings[i] = shared_v;
-            }
-        } else {
-            for (i in 1:I) {
-                for (d in 1:D) {
-                    v_loadings[i, d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
-                }
+                v_loadings[i, d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
             }
         }
         mean_preferences = v_loadings;
@@ -172,16 +163,7 @@ generated quantities {
     {
         for (j in 1:J) {
             for (d in 1:D) {
-                shared_u[d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
-            }
-            for (j in 1:J) {
-                u_loadings[j] = shared_u;
-            }
-        } else {
-            for (j in 1:J) {
-                for (d in 1:D) {
-                    u_loadings[j, d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
-                }
+                u_loadings[j, d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
             }
         }
         // Store in annotator_embeddings for pipeline compatibility
@@ -224,7 +206,7 @@ generated quantities {
         for (i in 1:I) {
             for (j in 1:J) {
                 int idx = (i-1)*J + j;
-                rating_probs[idx] = dirichlet_rng(rep_vector(alpha_dirichlet / C, C));
+                rating_probs[idx] = dirichlet_rng(rep_vector(kappa / C, C));
                 rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
             }
         }
@@ -256,18 +238,10 @@ generated quantities {
     // ===== GENERATE TRAINING ITEM EMBEDDINGS =====
     for (k in 1:K_train) {
         for (d in 1:D) {
-            shared_e[d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
-        }
-        for (k in 1:K_train) {
-            train_embeddings[k] = shared_e;
-        }
-    } else {
-        for (k in 1:K_train) {
-            for (d in 1:D) {
-                train_embeddings[k, d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
-            }
+            train_embeddings[k, d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
         }
     }
+
 
     // Compute training base scores: z_ijk = v_ij · e_k
     for (i in 1:I) {
@@ -282,18 +256,10 @@ generated quantities {
     // ===== GENERATE TEST ITEM EMBEDDINGS =====
     for (k in 1:K_test) {
         for (d in 1:D) {
-            shared_e_test[d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
-        }
-        for (k in 1:K_test) {
-            test_embeddings[k] = shared_e_test;
-        }
-    } else {
-        for (k in 1:K_test) {
-            for (d in 1:D) {
-                test_embeddings[k, d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
-            }
+            test_embeddings[k, d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
         }
     }
+    
 
     // Compute test base scores: z_ijk = v_ij · e_k
     for (i in 1:I) {
