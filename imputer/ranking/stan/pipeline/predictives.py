@@ -255,7 +255,7 @@ def evaluate_predictives(
         )
     elif use_train_only:
         # Stan predicted only train-instance missing ratings
-        eval_missing = [r for r in bundle.missing_ratings if r["instance"] == "train"]
+        eval_missing = [r for r in bundle.missing_ratings if r["instance"] == "test"]
         all_indices = list(range(len(eval_missing)))
         rating_metrics = evaluate_rating_predictions(
             predictives["missing_rating_predictions"][:, all_indices],
