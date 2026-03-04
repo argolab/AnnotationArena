@@ -38,11 +38,11 @@ def generate_data(
     stan_type = config.stan_type
     if stan_file is None:
         if stan_type == "discrete":
-            stan_file = str(Path(__file__).parent.parent.parent / "models" / "discrete_type_data_generation.stan")
+            stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "discrete_type_data_generation.stan")
         elif stan_type == "tensor":
-            stan_file = str(Path(__file__).parent.parent.parent / "models" / "tensor_data_generation.stan")
+            stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "tensor_data_generation.stan")
         elif stan_type in ("normal-noise-dot-product", "factored-dot-product"):
-            stan_file = str(Path(__file__).parent.parent.parent / "models" / "iclr_data_generation.stan")
+            stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "normal_noise_dot_product_generation.stan")
         elif getattr(config, "observation_protocol", None) == "extended_rankings":
             import warnings
             warnings.warn(
@@ -170,6 +170,7 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     test_rating_values = sample["test_rating_values"][0]  # Shape: [I*J, K_test]
     test_rating_observed = sample["test_rating_observed"][0]  # Shape: [I*J, K_test]
     
+    num_classes = config.C
     # Extract optional standard embedding-world ground truth (if present)
     mean_preferences = sample.get("mean_preferences")
     if mean_preferences is not None:
@@ -231,21 +232,24 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     num_train_pairwise = int(sample["num_train_pairwise_rankings"])
     num_test_pairwise = int(sample["num_test_pairwise_rankings"])
 
+
     # Training pairwise rankings
-    train_pairwise_items = sample["train_pairwise_items"][0, :num_train_pairwise]  # Shape: [N_train, 2]
-    train_pairwise_orders = sample["train_pairwise_orders"][0, :num_train_pairwise]  # Shape: [N_train]
-    train_pairwise_annotators = sample["train_pairwise_annotator"][0, :num_train_pairwise]  # Shape: [N_train]
-    train_pairwise_attributes = sample["train_pairwise_attribute"][0, :num_train_pairwise]  # Shape: [N_train]
-    train_pairwise_tied_ratings = sample["train_pairwise_tied_rating"][0, :num_train_pairwise]  # Shape: [N_train]
-    train_pairwise_observed = sample["train_pairwise_observed"][0, :num_train_pairwise]  # Shape: [N_train]
+    if not num_train_pairwise == 0:
+        train_pairwise_items = sample["train_pairwise_items"][0, :num_train_pairwise]  # Shape: [N_train, 2]
+        train_pairwise_orders = sample["train_pairwise_orders"][0, :num_train_pairwise]  # Shape: [N_train]
+        train_pairwise_annotators = sample["train_pairwise_annotator"][0, :num_train_pairwise]  # Shape: [N_train]
+        train_pairwise_attributes = sample["train_pairwise_attribute"][0, :num_train_pairwise]  # Shape: [N_train]
+        train_pairwise_tied_ratings = sample["train_pairwise_tied_rating"][0, :num_train_pairwise]  # Shape: [N_train]
+        train_pairwise_observed = sample["train_pairwise_observed"][0, :num_train_pairwise]  # Shape: [N_train]
 
     # Test pairwise rankings
-    test_pairwise_items = sample["test_pairwise_items"][0, :num_test_pairwise]  # Shape: [N_test, 2]
-    test_pairwise_orders = sample["test_pairwise_orders"][0, :num_test_pairwise]  # Shape: [N_test]
-    test_pairwise_annotators = sample["test_pairwise_annotator"][0, :num_test_pairwise]  # Shape: [N_test]
-    test_pairwise_attributes = sample["test_pairwise_attribute"][0, :num_test_pairwise]  # Shape: [N_test]
-    test_pairwise_tied_ratings = sample["test_pairwise_tied_rating"][0, :num_test_pairwise]  # Shape: [N_test]
-    test_pairwise_observed = sample["test_pairwise_observed"][0, :num_test_pairwise]  # Shape: [N_test]
+    if not num_test_pairwise == 0:
+        test_pairwise_items = sample["test_pairwise_items"][0, :num_test_pairwise]  # Shape: [N_test, 2]
+        test_pairwise_orders = sample["test_pairwise_orders"][0, :num_test_pairwise]  # Shape: [N_test]
+        test_pairwise_annotators = sample["test_pairwise_annotator"][0, :num_test_pairwise]  # Shape: [N_test]
+        test_pairwise_attributes = sample["test_pairwise_attribute"][0, :num_test_pairwise]  # Shape: [N_test]
+        test_pairwise_tied_ratings = sample["test_pairwise_tied_rating"][0, :num_test_pairwise]  # Shape: [N_test]
+        test_pairwise_observed = sample["test_pairwise_observed"][0, :num_test_pairwise]  # Shape: [N_test]
     
     # Convert training ratings to list format
     train_ratings = []
@@ -267,8 +271,10 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
                     "annotator": annotator,
                     "item": item,
                     "value": int(train_rating_values[ij_idx, k]),
-                    "instance": "train"
+                    "instance": "train",
+                    "rating_dist": [0.0] * num_classes
                 }
+                rating_dict["rating_dist"][int(train_rating_values[ij_idx, k]) - 1] = 1.0
                 train_ratings.append(rating_dict)
                 
                 if train_rating_observed[ij_idx, k] == 1:
