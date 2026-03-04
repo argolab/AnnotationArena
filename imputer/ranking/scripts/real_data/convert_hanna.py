@@ -26,8 +26,10 @@ from pathlib import Path
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 MARFORMER_ROOT = Path(__file__).resolve().parents[2]
-HUMAN_JSON = Path("/Users/prabhavsingh/Documents/JHU/JHUResearch/Marformer/src/input/fixed/human-data-new.json")
-GPT_JSON   = Path("/Users/prabhavsingh/Documents/JHU/JHUResearch/Marformer/src/input/fixed/gpt-3.5-turbo-data-new.json")
+
+# Raw HANNA JSONs now live in the repo under real-data/hanna/
+HUMAN_JSON = MARFORMER_ROOT / "real-data/hanna/human-data-new.json"
+GPT_JSON   = MARFORMER_ROOT / "real-data/hanna/gpt-3.5-turbo-data-new.json"
 
 OUTPUT_DIR = MARFORMER_ROOT / "OUTPUT/generated_data/hanna"
 

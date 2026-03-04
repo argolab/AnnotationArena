@@ -24,7 +24,8 @@ CONFIGS_IN  = MARFORMER_ROOT / "OUTPUT/generated_data/hanna/configs.json"
 BUNDLE_OUT  = MARFORMER_ROOT / "OUTPUT/generated_data/hanna_dist/data_bundle.json"
 CONFIGS_OUT = MARFORMER_ROOT / "OUTPUT/generated_data/hanna_dist/configs.json"
 
-GPT_JSON    = Path("/Users/prabhavsingh/Documents/JHU/JHUResearch/Marformer/src/input/fixed/gpt-3.5-turbo-data-new.json")
+# GPT soft distributions now live in the repo under real-data/hanna/
+GPT_JSON    = MARFORMER_ROOT / "real-data/hanna/gpt-3.5-turbo-data-new.json"
 
 GPT_ANN_ID  = 19   # 1-indexed
 C           = 5

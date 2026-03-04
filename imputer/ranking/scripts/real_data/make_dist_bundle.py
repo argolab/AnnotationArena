@@ -28,8 +28,10 @@ BUNDLE_OUT  = MARFORMER_ROOT / "OUTPUT/generated_data/llm_rubric_dist/data_bundl
 CONFIGS_OUT = MARFORMER_ROOT / "OUTPUT/generated_data/llm_rubric_dist/configs.json"
 
 # Original raw TSVs (stay in RealData folder — not moved)
-HUMAN_TSV = Path("/Users/prabhavsingh/Documents/JHU/JHUResearch/RealData/imputer/ranking/OUTPUT/real_data/human_judges_real_convs_FIXED_ANON.tsv")
-LLM_TSV   = Path("/Users/prabhavsingh/Documents/JHU/JHUResearch/RealData/imputer/ranking/OUTPUT/real_data/gpt-3.5-turbo-16k_real_evaluations_FIXED.tsv")
+
+
+HUMAN_TSV = MARFORMER_ROOT / "real-data/human_judges_real_convs_FIXED_ANON.tsv"
+LLM_TSV   = MARFORMER_ROOT / "real-data/gpt-3.5-turbo-16k_real_evaluations_FIXED.tsv"
 
 RANDOM_SEED = 42
 N_TEST      = 25
