@@ -20,59 +20,42 @@ def compile_data_generation_model(stan_file: str) -> cmdstanpy.CmdStanModel:
     return cmdstanpy.CmdStanModel(stan_file=stan_file)
 
 
-def generate_data(config: DataGenConfig, stan_file: Optional[str] = None) -> GroundTruthBundle:
+def generate_data(
+    config: DataGenConfig,
+    stan_file: Optional[str] = None,
+) -> GroundTruthBundle:
     """
     Generate synthetic data using Stan data generation model.
 
     Args:
-        config: Data generation configuration
-        stan_file: Path to iclr_data_generation.stan (defaults to models/iclr_data_generation.stan)
+        config: Data generation configuration; config must have stan_type and exactly the
+                type-specific Stan fields set (CLI does this). Stan data is config.to_stan_data().
+        stan_file: Path to .stan file (defaults from config.stan_type)
 
     Returns:
         GroundTruthBundle with generated data and ground truth parameters
     """
-    # Determine which Stan file to use based on observation protocol
+    stan_type = config.stan_type
     if stan_file is None:
-        if config.observation_protocol == "extended_rankings":
-            stan_file = str(Path(__file__).parent.parent.parent / "models" / "extended_rankings_generation.stan")
+        if stan_type == "discrete":
+            stan_file = str(Path(__file__).parent.parent.parent / "models" / "discrete_type_data_generation.stan")
+        elif stan_type == "tensor":
+            stan_file = str(Path(__file__).parent.parent.parent / "models" / "tensor_data_generation.stan")
+        elif stan_type in ("normal-noise-dot-product", "factored-dot-product"):
+            stan_file = str(Path(__file__).parent.parent.parent / "models" / "iclr_data_generation.stan")
+        elif getattr(config, "observation_protocol", None) == "extended_rankings":
+            import warnings
+            warnings.warn(
+                "observation_protocol='extended_rankings' is deprecated; using iclr_data_generation.stan",
+                UserWarning,
+                stacklevel=2,
+            )
+            stan_file = str(Path(__file__).parent.parent.parent / "models" / "iclr_data_generation.stan")
         else:
-            # Use default for both tie_breaking and mar (mar is post-processed)
             stan_file = str(Path(__file__).parent.parent.parent / "models" / "iclr_data_generation.stan")
 
-    # Compile model
     model = compile_data_generation_model(stan_file)
-
-    # Prepare Stan data
-    # d_annotator defaults to D if not specified
-    d_annotator = config.d_annotator if config.d_annotator is not None else config.D
-
-    stan_data = {
-        "K_train": config.K_train,
-        "K_test": config.K_test,
-        "I": config.I,
-        "J": config.J,
-        "D": config.D,
-        "C": config.C,
-        "d_annotator": d_annotator,
-        "enable_pairwise_rankings": 1 if config.enable_pairwise_rankings else 0,
-        "pairwise_cap_per_item": config.pairwise_cap_per_item,
-        "sigma_annotator": config.sigma_annotator,
-        "sigma_measurement": config.sigma_measurement,
-        "alpha_dirichlet": config.alpha_dirichlet,
-        "temperature": config.temperature,
-        "hold_I_constant": 1 if config.hold_I_constant else 0,
-        "hold_J_constant": 1 if config.hold_J_constant else 0,
-        "hold_K_constant": 1 if config.hold_K_constant else 0,
-        "use_factored_annotator": 1 if config.use_factored_annotator else 0,
-        "derive_thresholds_from_annotator": 1 if config.derive_thresholds_from_annotator else 0,
-    }
-
-    # Add tensor CP model parameters (only when specified)
-    if config.factor_decay is not None:
-        stan_data["factor_decay"] = config.factor_decay
-        stan_data["use_log_scores"] = 1 if config.use_log_scores else 0
-        stan_data["use_logistic_link"] = 1 if config.use_logistic_link else 0
-        stan_data["use_normal_loadings"] = 1 if config.use_normal_loadings else 0
+    stan_data = config.to_stan_data()  # Core + type-specific fields dump to json and passed to Stan
 
     # Sample with fixed parameters (data generation)
     fit = model.sample(
@@ -172,29 +155,56 @@ def _is_cross_instance_pairwise(annotator: int, items: List[int], config: DataGe
 
 
 def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenConfig) -> GroundTruthBundle:
-    """Extract GroundTruthBundle from Stan output."""
+    """Extract GroundTruthBundle from Stan output.
+    
+    Dynamically extracts available fields based on what the generator outputs,
+    supporting different generator types (iclr, discrete_type, etc.).
+    """
     
     # Get the single sample (since we used fixed_param=True with 1 sample)
     sample = fit.stan_variables()
     
-    # Extract shared parameters (same for train and test)
-    mean_preferences = sample["mean_preferences"][0]  # Shape: [I, D] - SHARED
-    annotator_preferences = sample["annotator_preferences"][0]  # Shape: [I*J, D] - SHARED
-    rating_probs = sample["rating_probs"][0]  # Shape: [I*J, C] - SHARED
-    rating_cumprobs = sample["rating_cumprobs"][0]  # Shape: [I*J, C] - SHARED
-    rating_thresholds_z = sample["rating_thresholds_z"][0]  # Shape: [I*J, C+1] - SHARED
-    
-    # Extract training instance data
-    train_embeddings = sample["train_embeddings"][0]  # Shape: [K_train, D]
-    train_base_scores = sample["train_base_scores"][0]  # Shape: [I*J, K_train]
+    # Extract core data structures (always present)
     train_rating_values = sample["train_rating_values"][0]  # Shape: [I*J, K_train]
     train_rating_observed = sample["train_rating_observed"][0]  # Shape: [I*J, K_train]
-    
-    # Extract test instance data
-    test_embeddings = sample["test_embeddings"][0]  # Shape: [K_test, D]
-    test_base_scores = sample["test_base_scores"][0]  # Shape: [I*J, K_test]
     test_rating_values = sample["test_rating_values"][0]  # Shape: [I*J, K_test]
     test_rating_observed = sample["test_rating_observed"][0]  # Shape: [I*J, K_test]
+    
+    # Extract optional standard embedding-world ground truth (if present)
+    mean_preferences = sample.get("mean_preferences")
+    if mean_preferences is not None:
+        mean_preferences = mean_preferences[0]
+    
+    annotator_preferences = sample.get("annotator_preferences")
+    if annotator_preferences is not None:
+        annotator_preferences = annotator_preferences[0]
+    
+    rating_probs = sample.get("rating_probs")
+    if rating_probs is not None:
+        rating_probs = rating_probs[0]
+    
+    rating_cumprobs = sample.get("rating_cumprobs")
+    if rating_cumprobs is not None:
+        rating_cumprobs = rating_cumprobs[0]
+    
+    rating_thresholds_z = sample.get("rating_thresholds_z")
+    if rating_thresholds_z is not None:
+        rating_thresholds_z = rating_thresholds_z[0]
+    
+    # Extract embeddings and base scores (if present)
+    train_embeddings = sample.get("train_embeddings")
+    test_embeddings = sample.get("test_embeddings")
+    train_base_scores = sample.get("train_base_scores")
+    test_base_scores = sample.get("test_base_scores")
+    
+    if train_embeddings is not None:
+        train_embeddings = train_embeddings[0]
+    if test_embeddings is not None:
+        test_embeddings = test_embeddings[0]
+    if train_base_scores is not None:
+        train_base_scores = train_base_scores[0]
+    if test_base_scores is not None:
+        test_base_scores = test_base_scores[0]
     
     # Extract posterior rating probabilities (optional downstream use)
     train_posterior_rating_probs = sample.get("train_posterior_rating_probs")
@@ -203,6 +213,19 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     test_posterior_rating_probs = sample.get("test_posterior_rating_probs")
     if test_posterior_rating_probs is not None:
         test_posterior_rating_probs = test_posterior_rating_probs[0]
+    
+    # Extract extra ground truth (generator-specific fields)
+    extra_ground_truth = {}
+    
+    # Factored annotator model fields (iclr generator with use_factored_annotator=1)
+    for key in ["annotator_embeddings", "attr_transforms", "threshold_transform_W", "threshold_attr_bias"]:
+        if key in sample:
+            extra_ground_truth[key] = sample[key][0]
+    
+    # Discrete prototype-style fields (discrete_type generator)
+    for key in ["z_train", "z_test", "s_of_j", "a_attr", "u_proto", "v_style", "delta_ims", "mu_ims"]:
+        if key in sample:
+            extra_ground_truth[key] = sample[key][0]
 
     # Extract pairwise rankings
     num_train_pairwise = int(sample["num_train_pairwise_rankings"])
@@ -347,11 +370,15 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     observed_pairwise = train_observed_pairwise + test_observed_pairwise
     missing_pairwise = train_missing_pairwise + test_missing_pairwise
     
-    # Combine item embeddings (train + test), Notice this is not used for the imputer, just for debugging the domain model.
-    all_embeddings = np.vstack([train_embeddings, test_embeddings])  # Shape: [K_train + K_test, D]
+    # Combine item embeddings (train + test) if both are present
+    all_embeddings = None
+    if train_embeddings is not None and test_embeddings is not None:
+        all_embeddings = np.vstack([train_embeddings, test_embeddings])  # Shape: [K_train + K_test, D]
     
-    # Combine base scores (train + test)
-    all_base_scores = np.hstack([train_base_scores, test_base_scores])  # Shape: [I*J, K_train + K_test]
+    # Combine base scores (train + test) if both are present
+    all_base_scores = None
+    if train_base_scores is not None and test_base_scores is not None:
+        all_base_scores = np.hstack([train_base_scores, test_base_scores])  # Shape: [I*J, K_train + K_test]
     
     # Compute statistics
     total_items = config.K_train + config.K_test
@@ -380,25 +407,43 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     # Create missing_ratings_indexes_in_test_instance: indices of missing ratings that are from test set
     missing_ratings_indexes_in_test_instance = [i for i, rating in enumerate(missing_ratings) if rating["instance"] == "test"]
     
-    return GroundTruthBundle(
-        embeddings=all_embeddings,
-        mean_preferences=mean_preferences,
-        annotator_preferences=annotator_preferences,
-        rating_probs=rating_probs,
-        rating_cumprobs=rating_cumprobs,
-        rating_thresholds_z=rating_thresholds_z,
-        base_scores=all_base_scores,
-        all_ratings=all_ratings,
-        all_pairwise=all_pairwise,
-        observed_ratings=observed_ratings,
-        missing_ratings=missing_ratings,
-        missing_ratings_indexes_in_test_instance=missing_ratings_indexes_in_test_instance,
-        observed_pairwise=observed_pairwise,
-        missing_pairwise=missing_pairwise,
-        stats=stats,
-        train_posterior_rating_probs=train_posterior_rating_probs,
-        test_posterior_rating_probs=test_posterior_rating_probs,
-    )
+    # Build bundle with only fields that are present
+    bundle_kwargs = {
+        "all_ratings": all_ratings,
+        "all_pairwise": all_pairwise,
+        "observed_ratings": observed_ratings,
+        "missing_ratings": missing_ratings,
+        "missing_ratings_indexes_in_test_instance": missing_ratings_indexes_in_test_instance,
+        "observed_pairwise": observed_pairwise,
+        "missing_pairwise": missing_pairwise,
+        "stats": stats,
+    }
+    
+    # Add optional standard fields if present
+    if all_embeddings is not None:
+        bundle_kwargs["embeddings"] = all_embeddings
+    if mean_preferences is not None:
+        bundle_kwargs["mean_preferences"] = mean_preferences
+    if annotator_preferences is not None:
+        bundle_kwargs["annotator_preferences"] = annotator_preferences
+    if rating_probs is not None:
+        bundle_kwargs["rating_probs"] = rating_probs
+    if rating_cumprobs is not None:
+        bundle_kwargs["rating_cumprobs"] = rating_cumprobs
+    if rating_thresholds_z is not None:
+        bundle_kwargs["rating_thresholds_z"] = rating_thresholds_z
+    if all_base_scores is not None:
+        bundle_kwargs["base_scores"] = all_base_scores
+    if train_posterior_rating_probs is not None:
+        bundle_kwargs["train_posterior_rating_probs"] = train_posterior_rating_probs
+    if test_posterior_rating_probs is not None:
+        bundle_kwargs["test_posterior_rating_probs"] = test_posterior_rating_probs
+    
+    # Add extra ground truth if any
+    if extra_ground_truth:
+        bundle_kwargs["extra_ground_truth"] = extra_ground_truth
+    
+    return GroundTruthBundle(**bundle_kwargs)
 
 
 def apply_mcar_protocol(bundle: GroundTruthBundle, missing_rate: float, seed: Optional[int] = None) -> GroundTruthBundle:
@@ -504,25 +549,41 @@ def apply_mcar_protocol(bundle: GroundTruthBundle, missing_rate: float, seed: Op
     missing_ratings_indexes_in_test_instance = [i for i, rating in enumerate(missing_ratings) if rating["instance"] == "test"]
 
     # Create new bundle with MCAR observation pattern
-    return GroundTruthBundle(
-        embeddings=bundle.embeddings,
-        mean_preferences=bundle.mean_preferences,
-        annotator_preferences=bundle.annotator_preferences,
-        rating_probs=bundle.rating_probs,
-        rating_cumprobs=bundle.rating_cumprobs,
-        rating_thresholds_z=bundle.rating_thresholds_z,
-        base_scores=bundle.base_scores,
-        all_ratings=all_ratings,
-        all_pairwise=all_pairwise,
-        observed_ratings=observed_ratings,
-        missing_ratings=missing_ratings,
-        missing_ratings_indexes_in_test_instance=missing_ratings_indexes_in_test_instance,
-        observed_pairwise=observed_pairwise,
-        missing_pairwise=missing_pairwise,
-        stats=stats,
-        train_posterior_rating_probs=bundle.train_posterior_rating_probs,
-        test_posterior_rating_probs=bundle.test_posterior_rating_probs,
-    )
+    # Preserve all optional fields dynamically
+    bundle_kwargs = {
+        "all_ratings": all_ratings,
+        "all_pairwise": all_pairwise,
+        "observed_ratings": observed_ratings,
+        "missing_ratings": missing_ratings,
+        "missing_ratings_indexes_in_test_instance": missing_ratings_indexes_in_test_instance,
+        "observed_pairwise": observed_pairwise,
+        "missing_pairwise": missing_pairwise,
+        "stats": stats,
+    }
+    
+    # Copy optional fields if present
+    if bundle.embeddings is not None:
+        bundle_kwargs["embeddings"] = bundle.embeddings
+    if bundle.mean_preferences is not None:
+        bundle_kwargs["mean_preferences"] = bundle.mean_preferences
+    if bundle.annotator_preferences is not None:
+        bundle_kwargs["annotator_preferences"] = bundle.annotator_preferences
+    if bundle.rating_probs is not None:
+        bundle_kwargs["rating_probs"] = bundle.rating_probs
+    if bundle.rating_cumprobs is not None:
+        bundle_kwargs["rating_cumprobs"] = bundle.rating_cumprobs
+    if bundle.rating_thresholds_z is not None:
+        bundle_kwargs["rating_thresholds_z"] = bundle.rating_thresholds_z
+    if bundle.base_scores is not None:
+        bundle_kwargs["base_scores"] = bundle.base_scores
+    if bundle.train_posterior_rating_probs is not None:
+        bundle_kwargs["train_posterior_rating_probs"] = bundle.train_posterior_rating_probs
+    if bundle.test_posterior_rating_probs is not None:
+        bundle_kwargs["test_posterior_rating_probs"] = bundle.test_posterior_rating_probs
+    if bundle.extra_ground_truth is not None:
+        bundle_kwargs["extra_ground_truth"] = bundle.extra_ground_truth
+    
+    return GroundTruthBundle(**bundle_kwargs)
 
 
 def apply_pairwise_observation_rate(bundle: GroundTruthBundle, observation_rate: float, seed: Optional[int] = None) -> GroundTruthBundle:
@@ -591,22 +652,38 @@ def apply_pairwise_observation_rate(bundle: GroundTruthBundle, observation_rate:
     stats["pairwise_observation_rate"] = observation_rate
 
     # Create new bundle with updated pairwise observation pattern
-    return GroundTruthBundle(
-        embeddings=bundle.embeddings,
-        mean_preferences=bundle.mean_preferences,
-        annotator_preferences=bundle.annotator_preferences,
-        rating_probs=bundle.rating_probs,
-        rating_cumprobs=bundle.rating_cumprobs,
-        rating_thresholds_z=bundle.rating_thresholds_z,
-        base_scores=bundle.base_scores,
-        all_ratings=bundle.all_ratings,
-        all_pairwise=bundle.all_pairwise,
-        observed_ratings=bundle.observed_ratings,
-        missing_ratings=bundle.missing_ratings,
-        missing_ratings_indexes_in_test_instance=bundle.missing_ratings_indexes_in_test_instance,
-        observed_pairwise=observed_pairwise,
-        missing_pairwise=missing_pairwise,
-        stats=stats,
-        train_posterior_rating_probs=bundle.train_posterior_rating_probs,
-        test_posterior_rating_probs=bundle.test_posterior_rating_probs,
-    )
+    # Preserve all optional fields dynamically
+    bundle_kwargs = {
+        "all_ratings": bundle.all_ratings,
+        "all_pairwise": bundle.all_pairwise,
+        "observed_ratings": bundle.observed_ratings,
+        "missing_ratings": bundle.missing_ratings,
+        "missing_ratings_indexes_in_test_instance": bundle.missing_ratings_indexes_in_test_instance,
+        "observed_pairwise": observed_pairwise,
+        "missing_pairwise": missing_pairwise,
+        "stats": stats,
+    }
+    
+    # Copy optional fields if present
+    if bundle.embeddings is not None:
+        bundle_kwargs["embeddings"] = bundle.embeddings
+    if bundle.mean_preferences is not None:
+        bundle_kwargs["mean_preferences"] = bundle.mean_preferences
+    if bundle.annotator_preferences is not None:
+        bundle_kwargs["annotator_preferences"] = bundle.annotator_preferences
+    if bundle.rating_probs is not None:
+        bundle_kwargs["rating_probs"] = bundle.rating_probs
+    if bundle.rating_cumprobs is not None:
+        bundle_kwargs["rating_cumprobs"] = bundle.rating_cumprobs
+    if bundle.rating_thresholds_z is not None:
+        bundle_kwargs["rating_thresholds_z"] = bundle.rating_thresholds_z
+    if bundle.base_scores is not None:
+        bundle_kwargs["base_scores"] = bundle.base_scores
+    if bundle.train_posterior_rating_probs is not None:
+        bundle_kwargs["train_posterior_rating_probs"] = bundle.train_posterior_rating_probs
+    if bundle.test_posterior_rating_probs is not None:
+        bundle_kwargs["test_posterior_rating_probs"] = bundle.test_posterior_rating_probs
+    if bundle.extra_ground_truth is not None:
+        bundle_kwargs["extra_ground_truth"] = bundle.extra_ground_truth
+    
+    return GroundTruthBundle(**bundle_kwargs)

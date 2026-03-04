@@ -153,6 +153,14 @@ class DataConverter:
             K = self.num_items
             I = self.num_attributes
         
+        # Infer dimensions from data if embedding fields are not available
+        if bundle.all_ratings:
+            K = max(r["item"] for r in bundle.all_ratings)
+            I = max(r["attribute"] for r in bundle.all_ratings)
+        else:
+            K = bundle.stats.get("total_items", 0)
+            I = bundle.stats.get("I", 0)  # May not be in stats
+        
         # Check rating data integrity
         for rating in bundle.all_ratings:
             if rating['value'] < 1 or rating['value'] > self.num_likert_classes:

@@ -154,9 +154,9 @@ run_axis_mode() {
         --kappa $BASE_KAPPA \
         --run-name $run_name \
         --overwrite-existing-data \
-        $( [ "$hold_I" == "1" ] && echo "--hold-I-constant" ) \
-        $( [ "$hold_J" == "1" ] && echo "--hold-J-constant" ) \
-        $( [ "$hold_K" == "1" ] && echo "--hold-K-constant" ) \
+        $( [ "$hold_I" == "1" ] && echo "--stan-arg hold_I_constant=1" ) \
+        $( [ "$hold_J" == "1" ] && echo "--stan-arg hold_J_constant=1" ) \
+        $( [ "$hold_K" == "1" ] && echo "--stan-arg hold_K_constant=1" ) \
         $protocol_args </dev/null
 
     if [ $? -ne 0 ]; then

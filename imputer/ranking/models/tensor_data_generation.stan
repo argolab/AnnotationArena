@@ -15,14 +15,9 @@ data {
     // Hyperparameters
     real<lower=0> sigma_annotator;    // unused in CP model, kept for pipeline compatibility
     real<lower=0> sigma_measurement;  // measurement noise std
-    real<lower=0> alpha_dirichlet;    // Dirichlet concentration for global thresholds
+    real<lower=0> kappa;    // Dirichlet concentration for global thresholds
     real<lower=0> temperature;        // unused, kept for pipeline compatibility
     real<lower=0> factor_decay;       // T_d = factor_decay^(d-1), controls rank structure
-
-    // Axis invariance controls (0 = full dependence, 1 = hold axis constant)
-    int<lower=0, upper=1> hold_I_constant;
-    int<lower=0, upper=1> hold_J_constant;
-    int<lower=0, upper=1> hold_K_constant;
 
     // Annotator model flags (unused in CP model, kept for pipeline compatibility)
     int<lower=0, upper=1> use_factored_annotator;
@@ -156,9 +151,7 @@ generated quantities {
 
     // ===== GENERATE ATTRIBUTE LOADINGS v_i =====
     {
-        if (hold_I_constant == 1) {
-            // Single shared loading across all attributes
-            row_vector[D] shared_v;
+        for (i in 1:I) {
             for (d in 1:D) {
                 shared_v[d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
             }
@@ -172,15 +165,12 @@ generated quantities {
                 }
             }
         }
-        // Store in mean_preferences for pipeline compatibility
         mean_preferences = v_loadings;
     }
 
     // ===== GENERATE ANNOTATOR LOADINGS u_j =====
     {
-        if (hold_J_constant == 1) {
-            // Single shared loading across all annotators
-            row_vector[D] shared_u;
+        for (j in 1:J) {
             for (d in 1:D) {
                 shared_u[d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
             }
@@ -230,51 +220,12 @@ generated quantities {
     // This maximizes threshold variability — same annotator rates different
     // attributes with different scales.
     {
-        if (hold_I_constant == 1 && hold_J_constant == 1) {
-            // Single global threshold set
-            vector[C] shared_probs = dirichlet_rng(rep_vector(alpha_dirichlet / C, C));
-            vector[C] shared_cumprobs = cumulative_sum(shared_probs);
-            for (i in 1:I) {
-                for (j in 1:J) {
-                    int idx = (i-1)*J + j;
-                    rating_probs[idx] = shared_probs;
-                    rating_cumprobs[idx] = shared_cumprobs;
-                }
-            }
-        } else if (hold_I_constant == 1) {
-            // Per-j only (no I dependence)
-            array[J] vector[C] annot_probs;
+        // Full (i,j) dependence — independent Dirichlet for each pair
+        for (i in 1:I) {
             for (j in 1:J) {
-                annot_probs[j] = dirichlet_rng(rep_vector(alpha_dirichlet / C, C));
-            }
-            for (i in 1:I) {
-                for (j in 1:J) {
-                    int idx = (i-1)*J + j;
-                    rating_probs[idx] = annot_probs[j];
-                    rating_cumprobs[idx] = cumulative_sum(annot_probs[j]);
-                }
-            }
-        } else if (hold_J_constant == 1) {
-            // Per-i only (no J dependence)
-            array[I] vector[C] attr_probs;
-            for (i in 1:I) {
-                attr_probs[i] = dirichlet_rng(rep_vector(alpha_dirichlet / C, C));
-            }
-            for (i in 1:I) {
-                for (j in 1:J) {
-                    int idx = (i-1)*J + j;
-                    rating_probs[idx] = attr_probs[i];
-                    rating_cumprobs[idx] = cumulative_sum(attr_probs[i]);
-                }
-            }
-        } else {
-            // Full (i,j) dependence — independent Dirichlet for each pair
-            for (i in 1:I) {
-                for (j in 1:J) {
-                    int idx = (i-1)*J + j;
-                    rating_probs[idx] = dirichlet_rng(rep_vector(alpha_dirichlet / C, C));
-                    rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
-                }
+                int idx = (i-1)*J + j;
+                rating_probs[idx] = dirichlet_rng(rep_vector(alpha_dirichlet / C, C));
+                rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
             }
         }
     }
@@ -303,8 +254,7 @@ generated quantities {
     }
 
     // ===== GENERATE TRAINING ITEM EMBEDDINGS =====
-    if (hold_K_constant == 1) {
-        row_vector[D] shared_e;
+    for (k in 1:K_train) {
         for (d in 1:D) {
             shared_e[d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
         }
@@ -330,8 +280,7 @@ generated quantities {
     }
 
     // ===== GENERATE TEST ITEM EMBEDDINGS =====
-    if (hold_K_constant == 1) {
-        row_vector[D] shared_e_test;
+    for (k in 1:K_test) {
         for (d in 1:D) {
             shared_e_test[d] = (use_normal_loadings == 1) ? normal_rng(0, 1) : exponential_rng(1.0);
         }

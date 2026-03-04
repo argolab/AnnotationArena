@@ -109,8 +109,8 @@ generate_data() {
         --J $J_val \
         --D $D_val \
         --C $BASE_C \
-        --d-annotator $D_val \
-        --factor-decay $decay \
+        --stan-arg d_annotator=$BASE_D_ANNOTATOR \
+        --stan-arg factor_decay=$BASE_FACTOR_DECAY \
         --observation-protocol mcar \
         --mcar-missing-rate 0.5 \
         --sigma-annotator $BASE_SIGMA_ANNOTATOR \

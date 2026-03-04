@@ -18,7 +18,7 @@ BUNDLE="${BUNDLE:-hard}"
 
 if [ "$BUNDLE" == "dist" ]; then
     DATA_DIR="OUTPUT/generated_data/llm_rubric_dist"
-    RUN_NAME="llm_rubric_marformer_dist_DFF_128_ITEM_DROP_0.5_MIXED_INIT_TRANSD"
+    RUN_NAME="TEST"
 else
     DATA_DIR="OUTPUT/generated_data/llm_rubric"
     RUN_NAME="llm_rubric_marformer"
@@ -35,13 +35,13 @@ echo ""
 
 # ── Marformer hyperparameters (identical to all_datagen_marformer.sh) ─────────
 EMBEDDING_DIM=72
-W_INIT="identity"
+W_INIT="identity" # Other options: xavier, random
 ENCODER_LAYERS=4
 ATTENTION_HEADS=4
 NUM_FFN_LAYERS=1
 D_FF=128
 DROPOUT=0.1
-EMBEDDING_DROPOUT=0.5
+EMBEDDING_DROPOUT=0.7
 WEIGHT_DECAY=0.01
 
 EPOCHS=180
@@ -97,8 +97,8 @@ python imputer/run_imputer.py \
     --human-observed-rate 0.2 \
     --item-embedding-dropout $EMBEDDING_DROPOUT \
     --w-init $W_INIT \
-    --loss-fn kl \
-    --transductive_learning \
+    --loss-fn ce \
+    --llm-input-dist \
     $cosine_flags
 
 echo ""

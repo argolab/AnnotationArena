@@ -7,6 +7,7 @@ from imputer.abstractions import RankingEmbeddingProviderBase
 from imputer.data import RankingData
 import logging
 import sys
+import math
 
 logger = logging.getLogger(__name__)
 
@@ -144,7 +145,7 @@ class AtomCompositonalEmbeddingProvider(RankingEmbeddingProviderBase):
             # When flag is off, or token is human (one-hot, max==1): falls through to LOGIT_HIGH at argmax.
             if self.llm_input_dist and rating_dist is not None and max(rating_dist) < 1.0 - 1e-6:
                 for c, p in enumerate(rating_dist):
-                    parameter[c + 1] = self.LOGIT_HIGH * float(p)
+                    parameter[c + 1] = max(math.log(float(p)), -self.LOGIT_HIGH)
             else:
                 parameter[rating_value + 1] = self.LOGIT_HIGH  # One-hot-like encoding of rating logit
 

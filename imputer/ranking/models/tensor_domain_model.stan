@@ -1,6 +1,8 @@
 /*
- * Domain model for mixed annotation inference using MCMC
- * Learns embeddings and preferences from ratings, comparisons, and rankings
+ * Domain model for CP tensor decomposition inference using MCMC
+ * Learns CP factors (v_i, u_j, e_k) and component weights T_d from ratings and comparisons
+ * Score: Z_ijk = sum_d v_id * u_jd * e_kd * T_d where T_d = factor_decay^(d-1)
+ * Loadings are real-valued (normal prior) so the model can fit dot-product and other signed data.
  */
 
 data {
@@ -8,7 +10,7 @@ data {
     int<lower=1> K;  // number of items in this instance
     int<lower=1> I;  // number of criteria (attributes)
     int<lower=1> J;  // number of annotators  
-    int<lower=1> D;  // embedding dimension
+    int<lower=1> D;  // CP rank (number of components)
     int<lower=1> C;  // number of rating categories
     
     // Observed ratings
@@ -17,7 +19,6 @@ data {
     array[N_ratings] int<lower=1, upper=J> rating_annotators;
     array[N_ratings] int<lower=1, upper=K> rating_items;
     array[N_ratings] int<lower=1, upper=C> rating_values;
-    
     
     // Observed pairwise rankings (Bradley-Terry model)
     int<lower=0> N_pairwise_rankings;
@@ -38,120 +39,202 @@ data {
     array[N_missing_pairwise_rankings, 2] int<lower=1, upper=K> missing_pairwise_ranking_items;
     
     // Hyperparameters
-    real<lower=0> sigma_annotator;
-    real<lower=0> sigma_measurement;
-    real<lower=0> kappa;
-    real<lower=0> temperature;
+    real<lower=0> sigma_annotator;    // unused in CP model, kept for pipeline compatibility
+    real<lower=0> sigma_measurement;  // measurement noise std
+    real<lower=0> kappa;    // Dirichlet concentration for rating thresholds
+    real<lower=0> temperature;        // unused, kept for pipeline compatibility
+    real<lower=0> factor_decay;       // T_d = factor_decay^(d-1), controls rank structure
     
+    // Pipeline compatibility (d_annotator should equal D for CP)
+    int<lower=1> d_annotator;
+    // Debug init: set to 1 via --stan-arg DEBUG_INIT=1 to reject() with which variable is non-finite
+    int<lower=0,upper=1> DEBUG_INIT;
 }
 
 transformed data {
     // Debug printing flag (0 = off, 1 = on). Toggle here.
     int DEBUG_PRINT;
     DEBUG_PRINT = 0;
+    
+    // Component weights: T_d = factor_decay^(d-1) TODO: this is currently known by setting factor_decay, but can also be learned with a exp/flat prior.
+    vector[D] T_weights;
+    for (d in 1:D) {
+        T_weights[d] = pow(factor_decay, d - 1);
+    }
+    
+    // Score centering: with normal(0,1) loadings E[v*u*e]=0 so E[Z]=0
+    real score_center = 0;
 }
 
 parameters {
-    // Item embeddings: e_k ~ N(0, I)
-    matrix[K, D] embeddings;
+    // CP factor loadings (real-valued so model can fit dot-product and other signed data)
+    // v_id: attribute loadings
+    matrix[I, D] v_loadings;
     
-    // Mean preferences per criteria: v_i ~ N(0, I)
-    matrix[I, D] mean_preferences;
+    // u_jd: annotator loadings
+    matrix[J, D] u_loadings;
     
-    // Annotator-specific preferences: v_ij ~ N(v_i, σ_a²I)
-    matrix[I*J, D] annotator_preferences;
+    // e_kd: item embeddings
+    matrix[K, D] e_loadings;
     
     // Rating probabilities: p_ij ~ Dir(α/C, ..., α/C)
-    array[I*J] simplex[C] rating_probs;
+    // Shared per annotator j (not per (i,j)) for CP model
+    array[J] simplex[C] rating_probs;
 }
 
 transformed parameters {
-    // Base utility scores: z_ijk = v_ij · e_k
+    // Effective annotator preferences: annotator_preferences[ij, d] = v_i[d] * u_j[d] * T_d
+    // This allows base_score = dot_product(annotator_preferences[ij], e_k) = Z_ijk
+    matrix[I*J, D] annotator_preferences;
+    
+    // Base utility scores: z_ijk = sum_d v_id * u_jd * e_kd * T_d - score_center
     matrix[I*J, K] base_scores;
     
     // Rating thresholds: q_ij = Φ⁻¹(cumsum(p_ij))
     array[I*J] vector[C+1] rating_thresholds;
     
     // Total standard deviation per annotator-criterion for rating binning
-    // Binning is based on distribution of v*e + epsilon with std = sqrt(||v||^2 + sigma_measurement^2)
-    array[I*J] real total_std;  // sqrt(||v_ij||^2 + sigma_measurement^2)
+    // Binning is based on distribution of Z + epsilon with std = sqrt(||annotator_preferences[ij]||^2 + sigma_measurement^2)
+    array[I*J] real total_std;
     
-    // Compute base scores: z_ij_k = v_ij · e_k  
+    // Compute effective annotator preferences
+    for (i in 1:I) {
+        for (j in 1:J) {
+            int idx = (i-1)*J + j;
+            for (d in 1:D) {
+                annotator_preferences[idx, d] = v_loadings[i, d] * u_loadings[j, d] * T_weights[d];
+            }
+        }
+    }
+    
+    // Compute base scores: z_ijk = sum_d v_id * u_jd * e_kd * T_d - score_center
+    // = dot_product(annotator_preferences[ij], e_k) - score_center
     for (i in 1:I) {
         for (j in 1:J) {
             int idx = (i-1)*J + j;
             for (k in 1:K) {
-                base_scores[idx, k] = dot_product(annotator_preferences[idx], embeddings[k]);
+                base_scores[idx, k] = dot_product(annotator_preferences[idx], e_loadings[k]) - score_center;
             }
         }
     }
     
     // Convert probabilities to thresholds using inverse normal CDF
-    for (ij in 1:(I*J)) {
-        rating_thresholds[ij][1] = negative_infinity();  // -∞ for category 1
-        
-        // Convert cumulative probabilities to thresholds
-        for (c in 2:C) {
-            real cum_prob = sum(rating_probs[ij][1:(c-1)]);
-            cum_prob = fmin(fmax(cum_prob, 1e-6), 1.0 - 1e-6);
-            rating_thresholds[ij][c] = inv_Phi(cum_prob);
+    // Rating probabilities are shared per annotator j (replicated across attributes i)
+    for (i in 1:I) {
+        for (j in 1:J) {
+            int idx = (i-1)*J + j;
+            rating_thresholds[idx][1] = negative_infinity();  // -∞ for category 1
+            
+            // Convert cumulative probabilities to thresholds (clamp to avoid inf gradient at 0/1)
+            for (c in 2:C) {
+                real cum_prob = sum(rating_probs[j][1:(c-1)]);
+                cum_prob = fmin(fmax(cum_prob, 1e-6), 1.0 - 1e-6);
+                rating_thresholds[idx][c] = inv_Phi(cum_prob);
+            }
+            
+            rating_thresholds[idx][C+1] = positive_infinity();  // +∞ for category C
         }
-        
-        rating_thresholds[ij][C+1] = positive_infinity();  // +∞ for category C
     }
     
-    // Compute total_std per ij for rating binning
-    // Binning is based on distribution of v*e + epsilon with std = sqrt(||v||^2 + sigma_measurement^2)
+    // Compute total_std per ij for rating binning (bounded below to avoid 0/0 or NaN in Phi)
+    // Binning is based on distribution of Z + epsilon with std = sqrt(||annotator_preferences[ij]||^2 + sigma_measurement^2)
     for (i in 1:I) {
         for (j in 1:J) {
             int ij_idx = (i-1)*J + j;
             real pref_norm_sq = dot_self(annotator_preferences[ij_idx]);
-            total_std[ij_idx] = sqrt(pref_norm_sq + sigma_measurement * sigma_measurement);
+            total_std[ij_idx] = fmax(sqrt(pref_norm_sq + sigma_measurement * sigma_measurement), 1e-10);
         }
     }
 
     // ===== DEBUG: print a few rating_probs and thresholds per draw =====
     if (DEBUG_PRINT == 1) {
-        int max_ij_print = (I*J < 3) ? I*J : 3;
-        for (ij in 1:max_ij_print) {
-            print("[DEBUG TP] ij=", ij, " rating_probs=", rating_probs[ij]);
-            print("[DEBUG TP] ij=", ij, " thresholds=", rating_thresholds[ij]);
+        int max_j_print = (J < 3) ? J : 3;
+        for (j in 1:max_j_print) {
+            print("[DEBUG TP] j=", j, " rating_probs=", rating_probs[j]);
+            int idx = j;  // i=1
+            print("[DEBUG TP] ij=", idx, " thresholds=", rating_thresholds[idx]);
         }
+        print("[DEBUG TP] T_weights=", T_weights);
+        print("[DEBUG TP] score_center=", score_center);
     }
 }
 
 model {
+    // ===== DEBUG INIT: locate non-finite gradient (set DEBUG_INIT=1 via --stan-arg) =====
+    if (DEBUG_INIT == 1) {
+        if (temperature <= 0 || is_nan(temperature) || is_inf(temperature))
+            reject("DEBUG_INIT: temperature is non-positive or non-finite, value=", temperature);
+        if (sigma_measurement <= 0 || is_nan(sigma_measurement) || is_inf(sigma_measurement))
+            reject("DEBUG_INIT: sigma_measurement is non-positive or non-finite, value=", sigma_measurement);
+        for (i in 1:I)
+            for (d in 1:D)
+                if (is_nan(v_loadings[i,d]) || is_inf(v_loadings[i,d]))
+                    reject("DEBUG_INIT: v_loadings[", i, ",", d, "] non-finite, value=", v_loadings[i,d]);
+        for (j in 1:J)
+            for (d in 1:D)
+                if (is_nan(u_loadings[j,d]) || is_inf(u_loadings[j,d]))
+                    reject("DEBUG_INIT: u_loadings[", j, ",", d, "] non-finite, value=", u_loadings[j,d]);
+        for (k in 1:K)
+            for (d in 1:D)
+                if (is_nan(e_loadings[k,d]) || is_inf(e_loadings[k,d]))
+                    reject("DEBUG_INIT: e_loadings[", k, ",", d, "] non-finite, value=", e_loadings[k,d]);
+        for (idx in 1:(I*J)) {
+            if (is_nan(total_std[idx]) || is_inf(total_std[idx]) || total_std[idx] <= 0)
+                reject("DEBUG_INIT: total_std[", idx, "] is bad, value=", total_std[idx]);
+        }
+        for (idx in 1:(I*J)) {
+            for (c in 1:(C+1)) {
+                real th = rating_thresholds[idx][c];
+                if (c > 1 && c <= C && (is_nan(th) || is_inf(th)))
+                    reject("DEBUG_INIT: rating_thresholds[", idx, ",", c, "] is non-finite, value=", th);
+            }
+        }
+        for (idx in 1:(I*J)) {
+            for (k in 1:K) {
+                real bs = base_scores[idx, k];
+                if (is_nan(bs) || is_inf(bs))
+                    reject("DEBUG_INIT: base_scores[", idx, ",", k, "] is non-finite, value=", bs);
+            }
+        }
+        for (j in 1:J) {
+            for (c in 1:C) {
+                real p = rating_probs[j][c];
+                if (is_nan(p) || is_inf(p))
+                    reject("DEBUG_INIT: rating_probs[", j, ",", c, "] is non-finite, value=", p);
+            }
+        }
+    }
     // ===== PRIORS =====
     
-    // Item embeddings: e_k ~ N(0, I)
+    // CP factor loadings: normal(0, 1) so scores can be negative (fits dot-product and misspecified data)
+    // Softer than lognormal: finite gradient at init, and all data have positive probability
+    for (i in 1:I) {
+        for (d in 1:D) {
+            v_loadings[i, d] ~ normal(0, 1);
+        }
+    }
+    for (j in 1:J) {
+        for (d in 1:D) {
+            u_loadings[j, d] ~ normal(0, 1);
+        }
+    }
     for (k in 1:K) {
-        embeddings[k] ~ normal(0, 1);
-    }
-    
-    // Mean preferences: v_i ~ N(0, I) 
-    for (i in 1:I) {
-        mean_preferences[i] ~ normal(0, 1);
-    }
-
-    // Annotator preferences: v_ij ~ N(v_i, σ_a²I)
-    for (i in 1:I) {
-        for (j in 1:J) {
-            int idx = (i-1)*J + j;
-            annotator_preferences[idx] ~ normal(mean_preferences[i], sigma_annotator);
+        for (d in 1:D) {
+            e_loadings[k, d] ~ normal(0, 1);
         }
     }
     
-    // Rating probabilities: p_ij ~ Dir(α/C, ..., α/C)
-    for (ij in 1:(I*J)) {
-        rating_probs[ij] ~ dirichlet(rep_vector(kappa / C, C));
+    // Rating probabilities: p_j ~ Dir(α/C, ..., α/C) per annotator
+    for (j in 1:J) {
+        rating_probs[j] ~ dirichlet(rep_vector(kappa / C, C));
     }
     
     // ===== LIKELIHOODS =====
     
     // 1. RATING LIKELIHOOD
-    // Binning is based on distribution of v*e + epsilon with std = sqrt(||v||^2 + sigma_measurement^2)
-    // Conditional distribution: v*e + epsilon | v, e ~ N(v*e, sigma_measurement^2)
-    // Standardize to match binning space: mean = (v*e) / total_std, std = sigma_measurement / total_std
+    // Binning is based on distribution of Z + epsilon with std = sqrt(||annotator_preferences[ij]||^2 + sigma_measurement^2)
+    // Conditional distribution: Z + epsilon | v, u, e ~ N(Z, sigma_measurement^2)
+    // Standardize to match binning space: mean = base_score / total_std, std = sigma_measurement / total_std
     for (n in 1:N_ratings) {
         int i = rating_attributes[n];
         int j = rating_annotators[n]; 
@@ -164,23 +247,28 @@ model {
         real lower_threshold = rating_thresholds[ij_idx][c];  // threshold in z-space
         
         // Compute P(category c | base_score) using conditional distribution
-        // Conditional: v*e + epsilon | v, e ~ N(v*e, sigma_measurement^2)
+        // Conditional: Z + epsilon | v, u, e ~ N(Z, sigma_measurement^2)
         // Standardized: mean = base_score / total_std, std = sigma_measurement / total_std
         real mean_std = base_score / total_std[ij_idx];
-        real cond_std = sigma_measurement / total_std[ij_idx];
+        real cond_std = fmax(sigma_measurement / total_std[ij_idx], 1e-10);  // avoid 0 -> inf gradient
         
         real upper_prob, lower_prob;
+        // Clamp Phi argument to finite range to avoid NaN/Inf from bad proposals (Phi(-20)~0, Phi(20)~1)
+        real raw_upper = (upper_threshold - mean_std) / cond_std;
+        real raw_lower = (lower_threshold - mean_std) / cond_std;
+        real phi_arg_upper = (upper_threshold == positive_infinity()) ? 20.0 : (is_nan(raw_upper) ? 0.0 : fmax(fmin(raw_upper, 20.0), -20.0));
+        real phi_arg_lower = (lower_threshold == negative_infinity()) ? -20.0 : (is_nan(raw_lower) ? 0.0 : fmax(fmin(raw_lower, 20.0), -20.0));
         
         if (upper_threshold == positive_infinity()) {
             upper_prob = 1.0;
         } else {
-            upper_prob = Phi((upper_threshold - mean_std) / cond_std);
+            upper_prob = Phi(phi_arg_upper);
         }
         
         if (lower_threshold == negative_infinity()) {
             lower_prob = 0.0;
         } else {
-            lower_prob = Phi((lower_threshold - mean_std) / cond_std);
+            lower_prob = Phi(phi_arg_lower);
         }
         
         real bin_prob = upper_prob - lower_prob;
@@ -202,20 +290,20 @@ model {
         // Pairwise comparison: [item1, item2] with order 1 or 2
         int item1 = pairwise_ranking_items[n, 1];
         int item2 = pairwise_ranking_items[n, 2];
-        int order = pairwise_ranking_orders[n];  // 1 if item1 > item2, 2 if item2 > item1 TODO: double check this convention.
+        int order = pairwise_ranking_orders[n];  // 1 if item1 > item2, 2 if item2 > item1
         
-        // Base scores scaled by temperature: z_ijk/T
-        real score1 = base_scores[ij_idx, item1] / temperature;
-        real score2 = base_scores[ij_idx, item2] / temperature;
+        // Base scores scaled by temperature: z_ijk/T (bound temperature to avoid inf gradient)
+        real safe_temp = fmax(temperature, 1e-10);
+        real score1 = base_scores[ij_idx, item1] / safe_temp;
+        real score2 = base_scores[ij_idx, item2] / safe_temp;
         
         // Bradley-Terry likelihood: P(item1 > item2) = exp(score1) / (exp(score1) + exp(score2))
         // This is equivalent to log_inv_logit(score1 - score2)
         if (order == 1) {  // item1 > item2
             target += log_inv_logit(score1 - score2);
-        } else if (order==2) {  // item2 > item1
+        } else if (order == 2) {  // item2 > item1
             target += log_inv_logit(score2 - score1);
-        }
-        else {
+        } else {
             reject("Error: pairwise_ranking_orders[n] must be 1 or 2.");
         }
     }
@@ -234,6 +322,26 @@ generated quantities {
     // Predicted distributions for missing variables (for evaluation)
     array[N_missing_ratings] vector[C] missing_rating_probs;        // Predicted probability distribution over Likert scale
     array[N_missing_pairwise_rankings] real missing_pairwise_logits; // Predicted Bradley-Terry logits
+    
+    // Pipeline compatibility: mean_preferences and annotator_embeddings for bundle compatibility
+    matrix[I, D] mean_preferences;              // = v_loadings (attribute loadings)
+    matrix[J, d_annotator] annotator_embeddings; // = u_loadings (annotator loadings, truncated to d_annotator)
+    
+    // Compute compatibility arrays
+    for (i in 1:I) {
+        for (d in 1:D) {
+            mean_preferences[i, d] = v_loadings[i, d];
+        }
+    }
+    for (j in 1:J) {
+        for (d in 1:min(d_annotator, D)) {
+            annotator_embeddings[j, d] = u_loadings[j, d];
+        }
+        // Pad if d_annotator > D
+        for (d in (D+1):d_annotator) {
+            annotator_embeddings[j, d] = 0;
+        }
+    }
     
     // Compute observed log-likelihoods (same as in model block)
     for (n in 1:N_ratings) {
@@ -330,7 +438,8 @@ generated quantities {
                   " min=", min_bs, " max=", max_bs);
         }
         print("[DEBUG HYPER] sigma_measurement=", sigma_measurement,
-              " sigma_annotator=", sigma_annotator,
+              " factor_decay=", factor_decay,
+              " T_weights=", T_weights,
               " temperature=", temperature,
               " N_ratings=", N_ratings,
               " N_pairwise=", N_pairwise_rankings);
@@ -345,11 +454,11 @@ generated quantities {
         int k = missing_rating_items[n];
         int ij_idx = (i-1)*J + j;
         
-        // Base score: z_ijk = v_ij · e_k
+        // Base score: z_ijk = sum_d v_id * u_jd * e_kd * T_d - score_center
         real base_score = base_scores[ij_idx, k];
         
         // Compute predicted probability distribution over Likert scale
-        // Conditional distribution: v*e + epsilon | v, e ~ N(v*e, sigma_measurement^2)
+        // Conditional distribution: Z + epsilon | v, u, e ~ N(Z, sigma_measurement^2)
         // Standardize to match binning space: mean = base_score / total_std, std = sigma_measurement / total_std
         real mean_std = base_score / total_std[ij_idx];
         real cond_std = sigma_measurement / total_std[ij_idx];
@@ -417,7 +526,7 @@ generated quantities {
         missing_pairwise_logits[n] = score1 - score2;
         
         // Sample ranking using Gumbel noise (same as in data generation)
-        real gumbel1 = -log(-log(uniform_rng(0, 1)));  // Gumbel noise G1, standard normal since we already normalized.
+        real gumbel1 = -log(-log(uniform_rng(0, 1)));  // Gumbel noise G1
         real gumbel2 = -log(-log(uniform_rng(0, 1)));  // Gumbel noise G2
         
         real utility1 = score1 + gumbel1;  // U1 = z_ijk1/T + G1
@@ -427,7 +536,7 @@ generated quantities {
         missing_pairwise_ranking_predictions[n] = (utility1 > utility2) ? 1 : 2;
 
         // ===== DEBUG: print first few missing pairwise predictives per draw =====
-        if (n <= 10) {
+        if (DEBUG_PRINT == 1 && n <= 10) {
             real logit12 = score1 - score2;
             real p12 = inv_logit(logit12);
             print("[DEBUG MPAIR] n=", n,
