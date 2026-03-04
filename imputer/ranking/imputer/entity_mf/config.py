@@ -12,13 +12,12 @@ class EntityMarformerConfig:
     added later as needed.
     """
 
-    embedding_dim: int = 66
+    embedding_dim: int = 67
     num_layers: int = 4
     attention_heads: int = 4
     dropout: float = 0.1
-    d_ff: int = 256
-    num_ffn_layers: int = 2
+    d_ff: int = 128
+    num_ffn_layers: int = 1
     logit_high: float = 20.0
     temperature: float = 1.0
-    normalize_parameter: bool = False
 

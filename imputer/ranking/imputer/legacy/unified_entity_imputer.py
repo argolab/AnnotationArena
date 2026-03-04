@@ -21,7 +21,7 @@ import logging
 from typing import List, Dict
 
 from imputer.data import RankingData
-from imputer.unified_entity_transformer import UnifiedEntityBlock
+from imputer.legacy.unified_entity_transformer import UnifiedEntityBlock
 from imputer.transformer import NormLayer
 
 logger = logging.getLogger(__name__)
