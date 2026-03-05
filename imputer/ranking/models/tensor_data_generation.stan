@@ -15,7 +15,7 @@ data {
     // Hyperparameters
     real<lower=0> sigma_annotator;    // unused in CP model, kept for pipeline compatibility
     real<lower=0> sigma_measurement;  // measurement noise std
-    real<lower=0> kappa;    // Dirichlet concentration for global thresholds
+    real<lower=0> alpha_dirichlet;    // Dirichlet concentration for global thresholds
     real<lower=0> temperature;        // unused, kept for pipeline compatibility
     real<lower=0> factor_decay;       // T_d = factor_decay^(d-1), controls rank structure
 

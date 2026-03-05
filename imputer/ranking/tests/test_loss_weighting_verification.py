@@ -42,7 +42,7 @@ def create_test_config():
             D=16,
             sigma_annotator=0.1,
             sigma_measurement=0.1,
-            kappa=2.0,
+            alpha_dirichlet=2.0,
             temperature=0.5,
             sigma_embedding_prior=0.5,
             sigma_preference_prior=0.5,

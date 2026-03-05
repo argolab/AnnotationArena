@@ -104,7 +104,7 @@ def test_config_validation():
     assert config_default.pairwise_cap_per_item == 10
     assert config_default.sigma_annotator == 0.3
     assert config_default.sigma_measurement == 0.1
-    assert config_default.kappa == 2.0
+    assert config_default.alpha_dirichlet == 2.0
     assert config_default.temperature == 0.5
-    assert config_default.enable_third_annotator == True
-    assert config_default.enable_pairwise_rankings == True
+    assert config_default.enable_third_annotator is True
+    assert config_default.enable_pairwise_rankings is True

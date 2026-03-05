@@ -22,7 +22,7 @@ run_stan_eval_halfD() {
         --chains $STAN_CHAINS \
         --iter-sampling $STAN_ITER \
         --iter-warmup $STAN_WARMUP \
-        --override-D $half_D \
+        --stan-arg D=$half_D \
         --run-name ${stan_name} \
         --overwrite-existing-data </dev/null
 

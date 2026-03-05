@@ -40,7 +40,7 @@ data {
     // Hyperparameters
     real<lower=0> sigma_annotator;
     real<lower=0> sigma_measurement;
-    real<lower=0> kappa;
+    real<lower=0> alpha_dirichlet;
     real<lower=0> temperature;
     
 }
@@ -143,7 +143,7 @@ model {
     
     // Rating probabilities: p_ij ~ Dir(α/C, ..., α/C)
     for (ij in 1:(I*J)) {
-        rating_probs[ij] ~ dirichlet(rep_vector(kappa / C, C));
+        rating_probs[ij] ~ dirichlet(rep_vector(alpha_dirichlet / C, C));
     }
     
     // ===== LIKELIHOODS =====

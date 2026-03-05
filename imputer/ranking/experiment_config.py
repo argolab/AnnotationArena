@@ -27,7 +27,7 @@ class DataConfig:
     # Data generation parameters
     sigma_annotator: float = 0.3
     sigma_measurement: float = 0.1
-    kappa: float = 2.0  # Dirichlet concentration for rating thresholds (was alpha_dirichlet)
+    alpha_dirichlet: float = 2.0  # Dirichlet concentration for rating thresholds
     temperature: float = 0.5
     sigma_embedding_prior: float = 1.0
     sigma_preference_prior: float = 1.0

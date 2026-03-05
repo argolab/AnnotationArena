@@ -106,7 +106,7 @@ generate_data() {
         --mcar-missing-rate 0.5 \
         --sigma-annotator $SIGMA_ANNOTATOR \
         --sigma-measurement $SIGMA_MEASUREMENT \
-        --kappa $KAPPA \
+        --alpha-dirichlet $KAPPA \
         $ranking_args \
         --run-name "$DATA_NAME" \
         --overwrite-existing-data </dev/null
@@ -126,7 +126,7 @@ run_stan() {
 
     local override_flag=""
     if [ -n "$override_D" ]; then
-        override_flag="--override-D $override_D"
+        override_flag="--stan-arg D=$override_D"
         echo "[stan] ${stan_name} (D=${override_D})"
     else
         echo "[stan] ${stan_name} (D=${D})"

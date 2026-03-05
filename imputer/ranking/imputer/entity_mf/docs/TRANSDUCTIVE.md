@@ -1,12 +1,11 @@
 ## Entity Marformer Transductive Behavior
-Here’s a minimal Mermaid example in Markdown (works in places that support Mermaid rendering):
 
 ```mermaid
 flowchart TD
   cfg["Config(flags)"] --> transFlag["transductive=true/false"]
 
-  subgraph dataPrep ["DataSplits (Lightning __init__)"]
-    bundle["GroundTruthBundle"] --> trainObs["train_observed"]
+  subgraph dataPrep ["__init__() persistent splits"]
+    bundle["GroundTruthBundle"] -->|converter.create_variables_from_bundle| trainObs["train_observed"]
     bundle --> trainMiss["train_missing"]
     bundle --> testObs["test_observed"]
     bundle --> testMiss["test_missing"]
@@ -17,26 +16,34 @@ flowchart TD
     testMiss --> testAll
   end
 
-  subgraph trainingStep ["training_step()"]
+  subgraph trainingStep ["training_step() (per item-chunk)"]
     direction LR
-    trainObsSrc["self.train_observed"] --> obsSrc["observed_sources"]
-    trainMissSrc["self.train_missing"] --> missSrc["missing_sources"]
-    testObsSrc["self.test_observed"] -->|if transductive| obsSrc
-    testMissSrc["self.test_missing"] -->|if transductive| missSrc
+    transFlag -->|false| obsSrc["observed_sources = train_observed"]
+    transFlag -->|false| missSrc["missing_sources = train_missing"]
+    transFlag -->|true| obsSrcT["observed_sources = train_observed + test_observed"]
+    transFlag -->|true| missSrcT["missing_sources = train_missing + test_missing"]
 
-    obsSrc --> chunkMask["masking_strategy.mask(chunk_observed)"]
-    missSrc --> chunkSel["select chunk_missing by items"]
+    obsSrc --> items["all_items = union(item_ids)"]
+    missSrc --> items
+    obsSrcT --> items
+    missSrcT --> items
+
+    items --> chunking["item_chunks (optional max_item)"]
+    chunking --> chunkSel["filter vars whose items in chunk"]
+
+    chunkSel --> chunkMask["masked_or_observed = masking_strategy.mask(chunk_observed)"]
+    chunkSel --> chunkMiss["chunk_missing"]
     chunkMask --> varsChunk["train_vars = masked_or_observed + chunk_missing"]
-    chunkSel --> varsChunk
-    varsChunk --> graphBuild["variable_list_to_entity_graph"]
-    graphBuild --> forward["model(graph)"]
-    forward --> trainLoss["compute_trainable_loss (masked-only)"]
+    chunkMiss --> varsChunk
+    varsChunk --> graphBuild["variable_list_to_entity_graph(train_vars, types)"]
+    graphBuild --> forward["params = model(entity_graph)"]
+    forward --> trainLoss["trainable_loss = compute_trainable_loss (masked-only)"]
   end
 
   subgraph epochEnd ["on_train_epoch_end()"]
     direction LR
-    trainAll --> nonTransTrain["eval_split(train_all, 'train')"]
-    testAll  --> anyTestEval["eval_split(test_all, 'test')"]
+    trainAll --> nonTransTrain["evaluate_entity_marformer_split(split='train', variables=train_all)"]
+    testAll  --> anyTestEval["evaluate_entity_marformer_split(split='test', variables=test_all)"]
 
     transFlag -->|true| combBranch["transductive path"]
     transFlag -->|false| nonTransBranch["non-transductive path"]
@@ -45,7 +52,7 @@ flowchart TD
     nonTransBranch --> anyTestEval
 
     combBranch --> combVars["combined = train_all + test_all"]
-    combVars --> combEval["eval_split(combined, 'combined')"]
+    combVars --> combEval["evaluate_entity_marformer_split(split='combined', variables=combined)"]
     combBranch --> anyTestEval
   end
 ```
@@ -71,6 +78,8 @@ flowchart TD
     - `missing_sources  += self.test_missing`
 - For each item-chunk:
   - Filter `observed_sources` / `missing_sources` by the items in the chunk.
+  - If `max_item` is set, `training_step` splits items into multiple chunks and combines
+    chunk losses as a weighted average by the number of masked tokens (fallback weight = 1).
   - Apply `masking_strategy.mask(chunk_observed)` to get `masked_or_observed`.
   - Build `train_vars = masked_or_observed + chunk_missing`.
   - Convert to an `EntityGraph` using `variable_list_to_entity_graph(train_vars, types)`.

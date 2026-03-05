@@ -15,7 +15,7 @@ data {
     // Hyperparameters
     real<lower=0> sigma_annotator;
     real<lower=0> sigma_measurement;
-    real<lower=0> kappa;
+    real<lower=0> alpha_dirichlet;
     real<lower=0> temperature;
 
     // Annotator model selection
@@ -239,7 +239,7 @@ generated quantities {
         for (i in 1:I) {
             for (j in 1:J) {
                 int idx = (i-1)*J + j;
-                rating_probs[idx] = dirichlet_rng(rep_vector(kappa/C, C));
+                rating_probs[idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
                 rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
             }
         }
@@ -674,7 +674,7 @@ generated quantities {
     // ===== DEBUG: print a few posterior rating probabilities =====
 
     if (DEBUG_PRINT == 1) {
-        print("kappa=", kappa);
+        print("alpha_dirichlet=", alpha_dirichlet);
         print("rating_probs[1]=", rating_probs[1]);
         print("rating_cumprobs[1]=", rating_cumprobs[1]);
         print("rating_thresholds_z[1]=", rating_thresholds_z[1]);

@@ -121,7 +121,7 @@ def _generate_data_args(st: str) -> list:
         "--J", str(BASE_J),
         "--C", str(BASE_C),
         "--sigma-measurement", str(BASE_SIGMA_MEASUREMENT),
-        "--kappa", str(BASE_KAPPA),
+        "--alpha-dirichlet", str(BASE_KAPPA),
         "--temperature", str(BASE_TEMPERATURE),
         "--stan-type", st,
     ]

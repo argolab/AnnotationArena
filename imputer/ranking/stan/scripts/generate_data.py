@@ -90,7 +90,7 @@ def main():
                         help="Annotator preference noise (embedding/tensor types)")
     parser.add_argument("--sigma-measurement", type=float, default=0.1,
                         help="Measurement noise standard deviation")
-    parser.add_argument("--kappa", "--alpha-dirichlet", dest="kappa", type=float, default=2.0,
+    parser.add_argument("--alpha-dirichlet", "--kappa", dest="alpha_dirichlet", type=float, default=2.0,
                         help="Dirichlet concentration (rating thresholds)")
     parser.add_argument("--temperature", type=float, default=0.5,
                         help="Temperature for pairwise ranking generation")
@@ -126,7 +126,7 @@ def main():
         "d_annotator": args.d_annotator if args.d_annotator is not None else args.D,
         "sigma_annotator": args.sigma_annotator,
         "sigma_measurement": args.sigma_measurement,
-        "kappa": args.kappa,
+        "alpha_dirichlet": args.alpha_dirichlet,
         "temperature": args.temperature,
         "factor_decay": args.factor_decay,
         "use_log_scores": 0,

@@ -96,7 +96,7 @@ generate_data() {
         --mcar-missing-rate 0.5 \
         --sigma-annotator $SIGMA_ANNOTATOR \
         --sigma-measurement $SIGMA_MEASUREMENT \
-        --kappa $KAPPA \
+        --alpha-dirichlet $KAPPA \
         $tcp_flag \
         $ranking_args \
         $extra_flags \

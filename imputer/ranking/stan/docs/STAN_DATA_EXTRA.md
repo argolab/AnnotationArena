@@ -27,7 +27,7 @@ These keys are always present in Stan data and come from the config.
 Every Stan-data field that can vary by model is an **explicit attribute** on `DataGenConfig`, each defaulting to `None`:
 
 - `D`, `M`, `S`
-- `sigma_annotator`, `sigma_measurement`, `kappa`, `temperature`
+- `sigma_annotator`, `sigma_measurement`, `alpha_dirichlet`, `temperature`
 - `use_factored_annotator`, `derive_thresholds_from_annotator` (0/1)
 - `d_annotator`, `factor_decay`
 - Tensor-only misspecification / loading flags (0/1): `use_log_scores`, `use_logistic_link`, `use_normal_loadings`
@@ -51,28 +51,28 @@ For a given `stan_type`, **exactly** the set of fields listed for that type in Â
 
 ### 3.1 `discrete`
 
-- **Required (exactly):** `M`, `S`, `sigma_measurement`, `kappa`, `temperature`
+- **Required (exactly):** `M`, `S`, `sigma_measurement`, `alpha_dirichlet`, `temperature`
 - **Meaning:** M item prototypes, S annotator styles; measurement noise, Dirichlet concentration, and temperature for pairwise generation. `sigma_annotator` and `D` do **not** apply to discrete; the discrete Stan data block still accepts `D` and `sigma_annotator` for compatibility (filled with placeholders in `to_stan_data()`).
 - **Not exposed:** `sigma_rubric_fuzz` is fixed in the data-generation Stan and inferred by the domain model, not passed as data.
 
 **CLI example:**  
 `--stan-type discrete --stan-arg M=6 --stan-arg S=3`  
-(Other params like `sigma_measurement`, `kappa`, `temperature` come from CLI defaults or `--stan-arg`.)
+(Other params like `sigma_measurement`, `alpha_dirichlet`, `temperature` come from CLI defaults or `--stan-arg`.)
 
 ### 3.2 `normal-noise-dot-product`
 
-- **Required (exactly):** `D`, `d_annotator`, `sigma_annotator`, `sigma_measurement`, `kappa`, `temperature`, `use_factored_annotator`, `derive_thresholds_from_annotator`
-- **Meaning:** Embedding dimension D; annotator dimension `d_annotator`; annotator/measurement noise; Dirichlet (kappa) and temperature; `use_factored_annotator=0`, `derive_thresholds_from_annotator=0` (spherical annotator model).
+- **Required (exactly):** `D`, `d_annotator`, `sigma_annotator`, `sigma_measurement`, `alpha_dirichlet`, `temperature`, `use_factored_annotator`, `derive_thresholds_from_annotator`
+- **Meaning:** Embedding dimension D; annotator dimension `d_annotator`; annotator/measurement noise; Dirichlet (`alpha_dirichlet`) and temperature; `use_factored_annotator=0`, `derive_thresholds_from_annotator=0` (spherical annotator model).
 
 ### 3.3 `factored-dot-product`
 
-- **Required (exactly):** `D`, `d_annotator`, `sigma_annotator`, `sigma_measurement`, `kappa`, `temperature`, `use_factored_annotator`, `derive_thresholds_from_annotator`
+- **Required (exactly):** `D`, `d_annotator`, `sigma_annotator`, `sigma_measurement`, `alpha_dirichlet`, `temperature`, `use_factored_annotator`, `derive_thresholds_from_annotator`
 - **Meaning:** Same as above with `use_factored_annotator=1`; `derive_thresholds_from_annotator` is 0 or 1 (thresholds from annotator embedding or independent Dirichlet).
 
 ### 3.4 `tensor`
 
 - **Required (exactly):**
-  - `D`, `factor_decay`, `sigma_annotator`, `sigma_measurement`, `kappa`, `temperature`
+  - `D`, `factor_decay`, `sigma_annotator`, `sigma_measurement`, `alpha_dirichlet`, `temperature`
   - Tensor-only misspecification / loading flags (all 0/1):  
     `use_log_scores`, `use_logistic_link`, `use_normal_loadings`
 - **Meaning:**
@@ -84,7 +84,7 @@ For a given `stan_type`, **exactly** the set of fields listed for that type in Â
 
 Typical CLI usage for tensor data generation:
 
-- Base hyperparameters (from flags or defaults): e.g. `--D 8 --sigma-annotator 0.3 --sigma-measurement 0.1 --kappa 2.0`.
+- Base hyperparameters (from flags or defaults): e.g. `--D 8 --sigma-annotator 0.3 --sigma-measurement 0.1 --alpha-dirichlet 2.0`.
 - Tensor-specific fields via `--stan-arg` (overriding any defaults):  
   `--stan-type tensor --stan-arg factor_decay=0.9 --stan-arg use_log_scores=1 --stan-arg use_logistic_link=1 --stan-arg use_normal_loadings=1`.
 

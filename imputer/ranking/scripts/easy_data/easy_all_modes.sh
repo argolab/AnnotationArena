@@ -151,7 +151,7 @@ run_axis_mode() {
         --observation-protocol $protocol \
         --sigma-annotator $BASE_SIGMA_ANNOTATOR \
         --sigma-measurement $BASE_SIGMA_MEASUREMENT \
-        --kappa $BASE_KAPPA \
+        --alpha-dirichlet $BASE_KAPPA \
         --run-name $run_name \
         --overwrite-existing-data \
         $( [ "$hold_I" == "1" ] && echo "--stan-arg hold_I_constant=1" ) \

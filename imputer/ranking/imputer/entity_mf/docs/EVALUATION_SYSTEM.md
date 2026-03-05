@@ -1,31 +1,27 @@
 ## Entity Marformer Evaluation System
 
 ```mermaid
-flowchart TD
-  subgraph forwardGraph ["Forward + Aggregation"]
-    varsIn["variables (RankingData list)"] --> eGraph["variable_list_to_entity_graph"]
-    eGraph --> params["params = model(graph)"]
-    params --> agg["_aggregate_loss_from_breakdowns"]
-    eGraph --> agg
-  end
+sequenceDiagram
+  participant Caller
+  participant Eval as evaluate_entity_marformer_split
+  participant Build as variable_list_to_entity_graph
+  participant Model as EntityMarformer
+  participant Agg as _aggregate_loss_from_breakdowns
+  participant Type as EntityType.compute_loss_breakdown
 
-  subgraph breakdown ["Breakdown by type & status"]
-    agg --> perType["per_type[status][type_name]{xent,n}"]
-    perType --> trainable["trainable_loss (masked-only)"]
+  Caller->>Eval: split, variables, types
+  Eval->>Build: variables, types
+  Build-->>Eval: entity_graph (graph.tokens)
+  Eval->>Model: model(entity_graph)
+  Model-->>Eval: params [1, L, P]
+  Eval->>Agg: params, entity_graph, types
+  loop for each type_name in types
+    Agg->>Type: compute_loss_breakdown(type_mask)
+    Type-->>Agg: LossBreakdown
   end
-
-  subgraph evaluateSplit ["evaluate_entity_marformer_split"]
-    varsIn --> evalCall["evaluate_entity_marformer_split(model, split, varsIn, ...)"]
-    evalCall --> forwardGraph
-    forwardGraph --> ratingLoop["Loop missing rating tokens"]
-    ratingLoop --> accCalc["compute CE + accuracy"]
-    accCalc --> metricsAug["per_type['missing']['rating']['acc'] = acc"]
-    metricsAug --> result["EntityEvalResults{split, metrics}"]
-  end
-
-  subgraph historyNode ["training_history.json"]
-    result --> epochEntry["epoch_metrics[split_eval]"]
-  end
+  Agg-->>Eval: per_type + trainable_loss
+  Eval->>Eval: if any missing rating: per_type['missing']['rating']['acc'] = acc
+  Eval-->>Caller: EntityEvalResults(split, metrics=per_type)
 ```
 
 ### Core pieces
@@ -117,17 +113,17 @@ flowchart TD
   epoch_metrics = {
       "epoch": current_epoch,
       "total_loss": total_train_loss,
-      # Non-transductive:
+      # Non-transductive only (if train_all non-empty):
       "train_eval": {
           "split": "train",
           "metrics": train_eval.metrics,
       },
-      # Always present:
+      # Usually present (if test_all non-empty):
       "test_eval": {
           "split": "test",
           "metrics": test_eval.metrics,
       },
-      # Transductive only:
+      # Transductive only (if combined_vars non-empty):
       "combined_eval": {
           "split": "combined",
           "metrics": combined_eval.metrics,
@@ -136,7 +132,7 @@ flowchart TD
   ```
 
 - This list of `epoch_metrics` dicts is written out as `training_history.json`
-  in the run directory at the end of training.
+  by `on_train_end` (when `run_dir` is set).
 - Any downstream tool (Python, notebook, plotting script, or another agent)
   can:
   - Load `training_history.json`,

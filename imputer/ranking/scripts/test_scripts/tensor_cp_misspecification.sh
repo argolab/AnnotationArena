@@ -115,7 +115,7 @@ generate_data() {
         --mcar-missing-rate 0.5 \
         --sigma-annotator $BASE_SIGMA_ANNOTATOR \
         --sigma-measurement $BASE_SIGMA_MEASUREMENT \
-        --kappa $BASE_KAPPA \
+        --alpha-dirichlet $BASE_KAPPA \
         --run-name "$run_name" \
         --overwrite-existing-data \
         $ranking_args \
@@ -263,7 +263,7 @@ echo "Parameters:"
 echo "  I=${BASE_I}, C=${BASE_C}"
 echo "  K_train=${BASE_K_TRAIN}, K_test=${BASE_K_TEST}, max_item=${MAX_ITEM}"
 echo "  sigma_a=${BASE_SIGMA_ANNOTATOR}, sigma_m=${BASE_SIGMA_MEASUREMENT}"
-echo "  kappa=${BASE_KAPPA}, protocol=mcar (missing_rate=0.5)"
+echo "  alpha_dirichlet=${BASE_KAPPA}, protocol=mcar (missing_rate=0.5)"
 echo "  epochs=${EPOCHS}, lr=${LR}, embedding_dim=${EMBEDDING_DIM}"
 echo "  encoder_layers=${ENCODER_LAYERS}, heads=${ATTENTION_HEADS}, d_ff=${D_FF}"
 echo ""

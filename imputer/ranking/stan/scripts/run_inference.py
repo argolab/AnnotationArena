@@ -147,9 +147,13 @@ def main():
         datagen_config = configs_data["datagen"]
     valid_keys = {f.name for f in fields(DataGenConfig)}
     datagen_filtered = {k: v for k, v in datagen_config.items() if k in valid_keys}
-    if "kappa" not in datagen_filtered and "alpha_dirichlet" in datagen_config:
-        print(f"kappa not in datagen_filtered and alpha_dirichlet in datagen_config: {datagen_config}! Replace it with kappa!")
-        datagen_filtered["kappa"] = datagen_config["alpha_dirichlet"]
+    # Backwards compatibility: older configs may use 'kappa' instead of 'alpha_dirichlet'.
+    if "alpha_dirichlet" not in datagen_filtered and "kappa" in datagen_config:
+        print(
+            f"alpha_dirichlet not in datagen_filtered and kappa in datagen_config: "
+            f"{datagen_config}! Replacing kappa with alpha_dirichlet."
+        )
+        datagen_filtered["alpha_dirichlet"] = datagen_config["kappa"]
     data_config = DataGenConfig(**datagen_filtered)
     # Stan type: CLI override or from config
     stan_type = args.stan_type if args.stan_type is not None else data_config.stan_type

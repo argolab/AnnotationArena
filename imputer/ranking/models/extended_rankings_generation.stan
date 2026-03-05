@@ -14,7 +14,7 @@ data {
     // Hyperparameters
     real<lower=0> sigma_annotator;
     real<lower=0> sigma_measurement;
-    real<lower=0> kappa;
+    real<lower=0> alpha_dirichlet;
     real<lower=0> temperature;
 }
 
@@ -93,7 +93,7 @@ generated quantities {
     for (i in 1:I) {
         for (j in 1:J) {
             int idx = (i-1)*J + j;
-            rating_probs[idx] = dirichlet_rng(rep_vector(kappa/C, C));
+            rating_probs[idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
             rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
         }
     }

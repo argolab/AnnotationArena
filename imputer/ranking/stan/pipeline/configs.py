@@ -15,13 +15,13 @@ CORE_STAN_KEYS: frozenset = frozenset({
 # set on the config (non-None). No other Stan-data field may be set for that type.
 # All values are passed from config into Stan data; there is no separate "extra" dict.
 STAN_TYPE_REQUIRED: Dict[str, Set[str]] = {
-    "discrete": {"M", "S", "sigma_measurement", "kappa", "temperature"},
+    "discrete": {"M", "S", "sigma_measurement", "alpha_dirichlet", "temperature"},
     "normal-noise-dot-product": {
-        "D", "d_annotator", "sigma_annotator", "sigma_measurement", "kappa", "temperature",
+        "D", "d_annotator", "sigma_annotator", "sigma_measurement", "alpha_dirichlet", "temperature",
         "use_factored_annotator", "derive_thresholds_from_annotator",
     },
     "factored-dot-product": {
-        "D", "d_annotator", "sigma_annotator", "sigma_measurement", "kappa", "temperature",
+        "D", "d_annotator", "sigma_annotator", "sigma_measurement", "alpha_dirichlet", "temperature",
         "use_factored_annotator", "derive_thresholds_from_annotator",
     },
     "tensor": {
@@ -29,7 +29,7 @@ STAN_TYPE_REQUIRED: Dict[str, Set[str]] = {
         "factor_decay",
         "sigma_annotator",
         "sigma_measurement",
-        "kappa",
+        "alpha_dirichlet",
         "temperature",
         # Misspecification flags and loading distribution for tensor-only data generation.
         "use_log_scores",
@@ -40,7 +40,7 @@ STAN_TYPE_REQUIRED: Dict[str, Set[str]] = {
 
 # All Stan-data field names that are type-specific (used for validation: only required set may be non-None).
 STAN_DATA_FIELDS: frozenset = frozenset({
-    "D", "M", "S", "sigma_annotator", "sigma_measurement", "kappa", "temperature",
+    "D", "M", "S", "sigma_annotator", "sigma_measurement", "alpha_dirichlet", "temperature",
     "use_factored_annotator", "derive_thresholds_from_annotator", "d_annotator", "factor_decay",
     # Tensor-only misspecification flags / loading distribution.
     "use_log_scores", "use_logistic_link", "use_normal_loadings",
@@ -106,7 +106,7 @@ class DataGenConfig:
     S: Optional[int] = None
     sigma_annotator: Optional[float] = None
     sigma_measurement: Optional[float] = None
-    kappa: Optional[float] = None
+    alpha_dirichlet: Optional[float] = None
     temperature: Optional[float] = None
     use_factored_annotator: Optional[int] = None  # 0 or 1
     derive_thresholds_from_annotator: Optional[int] = None  # 0 or 1
@@ -199,7 +199,7 @@ class DomainConfig:
     ranking_size: int = 2
     sigma_annotator: float = 0.3
     sigma_measurement: float = 0.1
-    kappa: float = 2.0
+    alpha_dirichlet: float = 2.0
     temperature: float = 0.5
     sigma_embedding_prior: float = 1.0
     sigma_preference_prior: float = 1.0

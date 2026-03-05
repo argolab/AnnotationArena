@@ -11,7 +11,7 @@ python stan/scripts/generate_data.py \
     --observation-protocol <protocol> \
     --sigma-annotator <sigma_annotator> \
     --sigma-measurement <sigma_measurement> \
-    --kappa <kappa> \
+    --alpha-dirichlet <alpha_dirichlet> \
     --run-name <run_name> \
     --overwrite-existing-data
 ```

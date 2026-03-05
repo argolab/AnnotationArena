@@ -128,7 +128,7 @@ python stan/scripts/generate_data.py \
     --observation-protocol $BASE_PROTOCOL \
     --sigma-annotator $BASE_SIGMA_ANNOTATOR \
     --sigma-measurement $BASE_SIGMA_MEASUREMENT \
-    --kappa $BASE_KAPPA \
+    --alpha-dirichlet $BASE_KAPPA \
     --stan-type "$STAN_TYPE" \
     --run-name $run_name \
     --overwrite-existing-data \

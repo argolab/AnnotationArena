@@ -53,16 +53,16 @@ run_stan_eval() {
 }
 
 # 1. Half D (D=3), correct hyperparams
-run_stan_eval "${EXP_PREFIX}_stan1c_halfD" "--override-D 3"
+run_stan_eval "${EXP_PREFIX}_stan1c_halfD" "--stan-arg D=3"
 
 # 2. Correct D (D=6), wrong sigma_measurement=0.5
-run_stan_eval "${EXP_PREFIX}_stan1c_wrongSigma" "--override-sigma-measurement 0.5"
+run_stan_eval "${EXP_PREFIX}_stan1c_wrongSigma" "--stan-arg sigma_measurement=0.5"
 
 # 3. Correct D (D=6), wrong alpha_dirichlet=2.0
-run_stan_eval "${EXP_PREFIX}_stan1c_wrongAlpha" "--override-alpha-dirichlet 2.0"
+run_stan_eval "${EXP_PREFIX}_stan1c_wrongAlpha" "--stan-arg alpha_dirichlet=2.0"
 
 # 4. Half D + wrong sigma + wrong alpha (all misspecified)
-run_stan_eval "${EXP_PREFIX}_stan1c_allWrong" "--override-D 3 --override-sigma-measurement 0.5 --override-alpha-dirichlet 2.0"
+run_stan_eval "${EXP_PREFIX}_stan1c_allWrong" "--stan-arg D=3 --stan-arg sigma_measurement=0.5 --stan-arg alpha_dirichlet=2.0"
 
 echo ""
 echo "All Stan ablations complete."
