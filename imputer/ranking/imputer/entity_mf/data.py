@@ -6,7 +6,6 @@ from typing import Dict, List, Tuple, Any
 import torch
 
 from imputer.data import RankingData
-from stan.pipeline.bundle import GroundTruthBundle
 
 from .types import EntityType
 
@@ -98,13 +97,12 @@ class EntityGraph:
         return edge_mask
 
 
-def bundle_to_entity_graph(
-    bundle: GroundTruthBundle,
+def variable_list_to_entity_graph(
     ranking_vars: List[RankingData],
     types: Dict[str, EntityType],
 ) -> EntityGraph:
     """
-    Convert a GroundTruthBundle + RankingData list into a single EntityGraph.
+    Convert a list of RankingData variables into a single EntityGraph.
 
     For domain 3, we create:
       - One token per rating / pairwise ranking variable.

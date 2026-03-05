@@ -21,9 +21,9 @@ from imputer.utils import sizes_from_configs
 
 from .config import EntityMarformerConfig
 from .types import build_default_domain3_types
-from .data import bundle_to_entity_graph
+from .data import variable_list_to_entity_graph
 from .model import EntityMarformer
-from .eval import LossStat, compute_loss_stat, evaluate_entity_marformer_split
+from .eval import compute_trainable_loss, evaluate_entity_marformer_split, EntityEvalResults
 from .masking import MaskingStrategy, build_default_masking_strategy
 
 
@@ -31,18 +31,20 @@ class EntityMarformerLightningModule(pl.LightningModule):
     """
     Minimal Lightning wrapper around EntityMarformer.
 
-    Each step we apply random training masking to observed vars, build the graph,
-    run forward, and compute per-type loss + deviation reg.
+    Each step we 
+    1. apply random training masking to observed vars, 
+    2. build the graph,
+    3. run forward, 
+    4. compute per-type loss + deviation reg.
+    5. log metrics.
     """
 
     def __init__(
         self,
         model: EntityMarformer,
-        train_observed: List[RankingData],
-        train_missing: List[RankingData],
         bundle: GroundTruthBundle,
+        converter: DataConverter,
         types: Dict[str, Any],
-        test_missing: List[RankingData] | None = None,
         masking_rate: float = 0.15,
         learning_rate: float = 1e-4,
         weight_decay: float = 0.0,
@@ -50,19 +52,38 @@ class EntityMarformerLightningModule(pl.LightningModule):
         human_observed_rate: float = 0.0,
         max_item: int | None = None,
         run_dir: Path | None = None,
+        transductive: bool = False,
     ):
         super().__init__()
         self.model = model
-        self.train_observed = train_observed
-        self.train_missing = train_missing
         self.bundle = bundle
+        self.converter = converter
         self.types = types
-        self.test_missing = test_missing
         self.masking_rate = masking_rate
         self.learning_rate = learning_rate
         self.weight_decay = weight_decay
         self.max_item = max_item
         self.run_dir = run_dir
+        self.transductive = bool(transductive)
+
+        # Build persistent splits from the bundle. Training-time graphs may merge
+        # train/test variables when transductive is enabled, but these remain as
+        # clean splits for evaluation and bookkeeping.
+        self.train_observed: List[RankingData] = converter.create_variables_from_bundle(
+            bundle, partition="train", status="observed"
+        )
+        self.train_missing: List[RankingData] = converter.create_variables_from_bundle(
+            bundle, partition="train", status="missing"
+        )
+        self.test_observed: List[RankingData] = converter.create_variables_from_bundle(
+            bundle, partition="test", status="observed"
+        )
+        self.test_missing: List[RankingData] = converter.create_variables_from_bundle(
+            bundle, partition="test", status="missing"
+        )
+        # Full per-partition variable lists for evaluation (observed + missing).
+        self.train_all: List[RankingData] = self.train_observed + self.train_missing
+        self.test_all: List[RankingData] = self.test_observed + self.test_missing
         # Masking strategy can be MCAR or structured (LLM vs human) depending on args.
         self.masking_strategy: MaskingStrategy = build_default_masking_strategy(
             masking_rate=masking_rate,
@@ -70,6 +91,32 @@ class EntityMarformerLightningModule(pl.LightningModule):
             human_observed_rate=human_observed_rate,
         )
         self.training_history: List[Dict[str, Any]] = []
+
+    def _print_var_count(
+        self,
+        graph,
+        masked_or_observed: List[RankingData],
+        chunk_missing: List[RankingData],
+    ) -> None:
+        """
+        Sanity-check that the graph contains the expected number of variable tokens
+        and print a short summary of:
+          - variable vs entity token counts
+          - how many variables are observed, masked, missing in this chunk.
+        """
+        num_var_tokens = sum(
+            1 for t in graph.tokens if t.type_name in ("rating", "ranking_pairwise")
+        )
+        num_entity_tokens = len(graph.tokens) - num_var_tokens
+
+        n_masked = sum(1 for v in masked_or_observed if v.is_masked)
+        n_observed = sum(1 for v in masked_or_observed if v.is_observed)
+        n_missing = sum(1 for v in chunk_missing if v.is_missing)
+
+        print(
+            f"[EntityMarformer] graph tokens: variables={num_var_tokens}, "
+            f"entities={num_entity_tokens} | masked={n_masked}, observed={n_observed}, missing={n_missing}"
+        )
 
     def configure_optimizers(self):
         return torch.optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
@@ -86,11 +133,23 @@ class EntityMarformerLightningModule(pl.LightningModule):
         """
         device = self.device
 
-        # Collect all unique items across all observed and missing variables
+        # Collect all unique items across the variables that participate in training.
+        # In non-transductive mode this is train-only; in transductive mode we merge
+        # train + test so test items receive gradient signal.
         all_items: set[int] = set()
-        for var in self.train_observed:
+        observed_sources: List[RankingData] = []
+        missing_sources: List[RankingData] = []
+
+        observed_sources.extend(self.train_observed)
+        missing_sources.extend(self.train_missing)
+
+        if self.transductive:
+            observed_sources.extend(self.test_observed)
+            missing_sources.extend(self.test_missing)
+
+        for var in observed_sources:
             all_items.update(var.item_ids)
-        for var in self.train_missing:
+        for var in missing_sources:
             all_items.update(var.item_ids)
 
         all_items_list = sorted(all_items)
@@ -105,28 +164,20 @@ class EntityMarformerLightningModule(pl.LightningModule):
         else:
             item_chunks = [all_items]
 
-        # Accumulate loss tensors (for a single scalar loss) and statistics for logging.
+        # Accumulate loss tensors (for a single scalar loss).
         loss_tensors: List[torch.Tensor] = []
         loss_weights: List[int] = []  # number of masked tokens per chunk
 
-        masked_loss_sum = 0.0
-        observed_loss_sum = 0.0
-        missing_loss_sum = 0.0
-
-        # Token/status accounting (based on RankingData statuses, to match Imputer).
-        n_masked_total = 0
-        n_observed_total = 0
-        n_missing_total = 0
 
         for available_items in item_chunks:
             # Filter variables to those whose items all lie in this chunk.
             chunk_observed: List[RankingData] = []
-            for v in self.train_observed:
+            for v in observed_sources:
                 if all(item_id in available_items for item_id in v.item_ids):
                     chunk_observed.append(v)
 
             chunk_missing: List[RankingData] = []
-            for v in self.train_missing:
+            for v in missing_sources:
                 if all(item_id in available_items for item_id in v.item_ids):
                     chunk_missing.append(v)
 
@@ -137,21 +188,17 @@ class EntityMarformerLightningModule(pl.LightningModule):
             masked_or_observed = self.masking_strategy.mask(chunk_observed)
             train_vars = masked_or_observed + chunk_missing
 
-            graph = bundle_to_entity_graph(self.bundle, train_vars, self.types)
+            graph = variable_list_to_entity_graph(train_vars, self.types)
 
-            expected_var_tokens = len(train_vars)
-            num_var_tokens = sum(
-                1 for t in graph.tokens if t.type_name in ("rating", "ranking_pairwise")
-            )
-            assert num_var_tokens == expected_var_tokens, (
-                f"Graph must contain all variable tokens: got {num_var_tokens}, expected {expected_var_tokens}"
-            )
+            self._print_var_count(graph, masked_or_observed, chunk_missing)
 
+            ################## Forward pass ########################
             params = self.model(graph, device=device)  # [1, L, P]
+            ########################################################
 
-            loss_stat = compute_loss_stat(
+            trainable_loss = compute_trainable_loss(
                 params, graph, self.model.types, self.model.global_param_dim, device
-            ) # gather loss over entities
+            )
 
             # Deviation regularization (per-entity deviations)
             reg_loss = torch.zeros((), device=device)
@@ -163,28 +210,17 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     continue
                 reg_loss = reg_loss + t.variation.reg_weight * table.pow(2).sum()
 
-            chunk_loss = loss_stat.trainable_loss + reg_loss
-
+            chunk_loss = trainable_loss + reg_loss
+            
             # Weight by number of masked tokens; if none, fall back to 1.
-            weight = loss_stat.n_masked if loss_stat.n_masked > 0 else 1
+            # We reuse the masked count from the loss aggregation helper.
+            n_masked = sum(
+                1 for t in graph.tokens
+                if t.type_name in ("rating", "ranking_pairwise") and t.status == 1
+            )
+            weight = n_masked if n_masked > 0 else 1
             loss_tensors.append(chunk_loss)
             loss_weights.append(weight)
-
-            # Aggregate loss stats for logging.
-            if loss_stat.n_masked > 0:
-                masked_loss_sum += loss_stat.loss_masked * loss_stat.n_masked
-            if loss_stat.n_observed > 0:
-                observed_loss_sum += loss_stat.loss_observed * loss_stat.n_observed
-            if loss_stat.n_missing > 0:
-                missing_loss_sum += loss_stat.loss_missing * loss_stat.n_missing
-
-            # Token/status counts based on RankingData (to line up with Imputer logging).
-            n_masked_chunk = sum(1 for v in masked_or_observed if v.is_masked)
-            n_observed_chunk = sum(1 for v in masked_or_observed if v.is_observed)
-            n_missing_chunk = sum(1 for v in chunk_missing if v.is_missing)
-            n_masked_total += n_masked_chunk
-            n_observed_total += n_observed_chunk
-            n_missing_total += n_missing_chunk
 
             if reg_loss.requires_grad and reg_loss.item() != 0:
                 self.log("train/reg_loss", reg_loss, prog_bar=False, on_step=True, on_epoch=True)
@@ -199,90 +235,140 @@ class EntityMarformerLightningModule(pl.LightningModule):
 
         self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
 
-        # Compute global mean losses for logging.
-        loss_masked = (
-            masked_loss_sum / n_masked_total if n_masked_total > 0 else 0.0
-        )
-        loss_observed = (
-            observed_loss_sum / n_observed_total if n_observed_total > 0 else 0.0
-        )
-        loss_missing = (
-            missing_loss_sum / n_missing_total if n_missing_total > 0 else 0.0
-        )
-
-        self.log("train/trainable_loss", loss, prog_bar=False, on_step=True, on_epoch=True)
-        self.log("train/loss_masked", loss_masked, prog_bar=True, on_step=False, on_epoch=True)
-        self.log("train/loss_observed", loss_observed, prog_bar=True, on_step=False, on_epoch=True)
-        self.log("train/loss_missing", loss_missing, prog_bar=True, on_step=False, on_epoch=True)
-
-        # Token counts for sanity-checking vs. Imputer.
-        tokens_total = float(n_masked_total + n_observed_total + n_missing_total)
-        tokens_masked = float(n_masked_total)
-        tokens_observed = float(n_observed_total)
-        tokens_missing = float(n_missing_total)
-        self.log("train/tokens_total", tokens_total, on_step=False, on_epoch=True)
-        self.log("train/tokens_masked", tokens_masked, on_step=False, on_epoch=True)
-        self.log("train/tokens_observed", tokens_observed, on_step=False, on_epoch=True)
-        self.log("train/tokens_missing", tokens_missing, on_step=False, on_epoch=True)
-
         return loss
 
     def on_train_epoch_end(self) -> None:
         """
-        Epoch-end summary print, similar to the standard Marformer Lightning trainer.
+        Epoch-end summary + evaluation.
+
+        Training_step focuses on optimizing the masked loss; here we run the
+        full evaluation path on train/test splits, goal is to get the loss on missing tokens
+        imputer behavior.
         """
         metrics = self.trainer.callback_metrics if hasattr(self, "trainer") else {}
         total = metrics.get("train/loss", torch.tensor(0.0, device=self.device))
-        loss_masked = metrics.get("train/loss_masked", torch.tensor(0.0, device=self.device))
-        loss_observed = metrics.get("train/loss_observed", torch.tensor(0.0, device=self.device))
-
-        # Convert to floats for pretty printing and history
         total_f = float(total.detach().cpu()) if isinstance(total, torch.Tensor) else float(total)
-        masked_f = float(loss_masked.detach().cpu()) if isinstance(loss_masked, torch.Tensor) else float(loss_masked)
-        observed_f = float(loss_observed.detach().cpu()) if isinstance(loss_observed, torch.Tensor) else float(loss_observed)
 
-        print(
-            f"[Epoch {self.current_epoch}] "
-            f"total={total_f:.4f}  "
-            f"masked_rating={masked_f:.4f}  "
-            f"observed_rating={observed_f:.4f}"
-        )
+        print(f"[Epoch {self.current_epoch}] total_train_loss={total_f:.4f}")
 
-        # Print token counts, similar to Imputer's epoch summary.
-        tokens_total = metrics.get("train/tokens_total", "?")
-        tokens_masked = metrics.get("train/tokens_masked", "?")
-        tokens_observed = metrics.get("train/tokens_observed", "?")
-        tokens_missing = metrics.get("train/tokens_missing", "?")
-        print(
-            f"  | tokens: total={tokens_total} masked={tokens_masked} observed={tokens_observed} missing={tokens_missing}"
-        )
-
-        # Record training history for later plotting.
-        epoch_metrics = {
+        # Record full evaluation results for later plotting (including observed/masked/missing).
+        epoch_metrics: Dict[str, Any] = {
             "epoch": int(self.current_epoch),
             "total_loss": total_f,
-            "masked_rating_loss": masked_f,
-            "observed_rating_loss": observed_f,
         }
-        self.training_history.append(epoch_metrics)
 
-        # Optional test-missing evaluation (mirrors Marformer [test_missing] print).
-        if self.test_missing:
-            try:
-                eval_res = evaluate_entity_marformer_split(
+        if self.transductive:
+            # In transductive mode, run a single evaluation on the combined split
+            # (train_all + test_all), plus a test-only evaluation for reporting.
+            combined_vars = self.train_all + self.test_all
+            if combined_vars:
+                combined_eval: EntityEvalResults = evaluate_entity_marformer_split(
                     model=self.model,
-                    bundle=self.bundle,
-                    variables=self.test_missing,
+                    split="combined",
+                    variables=combined_vars,
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
                 )
-                acc_str = f"{eval_res.missing_accuracy:.4f}"
-                xent_str = f"{eval_res.missing_xent:.4f}"
+                rating_missing = (
+                    combined_eval.metrics.get("missing", {}).get("rating", {})
+                    if combined_eval.metrics
+                    else {}
+                )
+                acc_val = rating_missing.get("acc", None)
+                xent_val = rating_missing.get("xent", None)
+                acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
+                xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
+                print(f"  [combined_missing] acc={acc_str}  xent={xent_str}")
+                epoch_metrics["combined_eval"] = {
+                    "split": combined_eval.split,
+                    "metrics": combined_eval.metrics,
+                }
+            else:
+                print("No combined variables to evaluate on")
+
+            # Test-only metrics (primary reported numbers).
+            if self.test_all:
+                test_eval: EntityEvalResults = evaluate_entity_marformer_split(
+                    model=self.model,
+                    split="test",
+                    variables=self.test_all,
+                    types=self.model.types,
+                    global_param_dim=self.model.global_param_dim,
+                    device=self.device,
+                )
+                rating_missing = (
+                    test_eval.metrics.get("missing", {}).get("rating", {})
+                    if test_eval.metrics
+                    else {}
+                )
+                acc_val = rating_missing.get("acc", None)
+                xent_val = rating_missing.get("xent", None)
+                acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
+                xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
                 print(f"  [test_missing] acc={acc_str}  xent={xent_str}")
-            except Exception as e:
-                # Avoid breaking training if evaluation fails.
-                print(f"  [test_missing] evaluation failed: {e}")
+                epoch_metrics["test_eval"] = {
+                    "split": test_eval.split,
+                    "metrics": test_eval.metrics,
+                }
+            else:
+                print("No test variables to evaluate on")
+        else:
+            # Non-transductive: evaluate train and test splits separately.
+            if self.train_all:
+                train_eval: EntityEvalResults = evaluate_entity_marformer_split(
+                    model=self.model,
+                    split="train",
+                    variables=self.train_all,
+                    types=self.model.types,
+                    global_param_dim=self.model.global_param_dim,
+                    device=self.device,
+                )
+                rating_missing = (
+                    train_eval.metrics.get("missing", {}).get("rating", {})
+                    if train_eval.metrics
+                    else {}
+                )
+                acc_val = rating_missing.get("acc", None)
+                xent_val = rating_missing.get("xent", None)
+                acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
+                xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
+                print(f"  [train_missing] acc={acc_str}  xent={xent_str}")
+                epoch_metrics["train_eval"] = {
+                    "split": train_eval.split,
+                    "metrics": train_eval.metrics,
+                }
+            else:
+                print("No train variables to evaluate on")
+
+            if self.test_all:
+                test_eval: EntityEvalResults = evaluate_entity_marformer_split(
+                    model=self.model,
+                    split="test",
+                    variables=self.test_all,
+                    types=self.model.types,
+                    global_param_dim=self.model.global_param_dim,
+                    device=self.device,
+                )
+                rating_missing = (
+                    test_eval.metrics.get("missing", {}).get("rating", {})
+                    if test_eval.metrics
+                    else {}
+                )
+                acc_val = rating_missing.get("acc", None)
+                xent_val = rating_missing.get("xent", None)
+                acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
+                xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
+                print(f"  [test_missing] acc={acc_str}  xent={xent_str}")
+                epoch_metrics["test_eval"] = {
+                    "split": test_eval.split,
+                    "metrics": test_eval.metrics,
+                }
+            else:
+                print("No test variables to evaluate on")
+
+        self.training_history.append(epoch_metrics)
+
 
     def on_train_end(self) -> None:
         """Save training history to run_dir/training_history.json for post-hoc plotting."""
@@ -293,6 +379,10 @@ class EntityMarformerLightningModule(pl.LightningModule):
                 print(f"Warning: failed to save training history to {self.run_dir}: {e}")
 
 
+########################################################
+# Helper functions for loading bundle and converter
+########################################################
+
 def load_bundle_and_converter(data_dir: Path) -> tuple[GroundTruthBundle, DataConverter, Dict[str, int]]:
     bundle_path = data_dir / "data_bundle.json"
     configs_path = data_dir / "configs.json"
@@ -302,11 +392,6 @@ def load_bundle_and_converter(data_dir: Path) -> tuple[GroundTruthBundle, DataCo
         raise FileNotFoundError(f"configs.json not found in {data_dir}")
 
     import json
-
-    with open(bundle_path, "r") as f:
-        bundle_dict = json.load(f)
-    bundle = GroundTruthBundle.from_dict(bundle_dict)
-
     with open(configs_path, "r") as f:
         configs = json.load(f)
 
@@ -323,6 +408,8 @@ def load_bundle_and_converter(data_dir: Path) -> tuple[GroundTruthBundle, DataCo
         num_likert_classes=sizes["num_likert_classes"],
         max_rank_size=max_rank_size,
     )
+
+    bundle = converter.load_bundle_data(bundle_path)
 
     sizes["max_rank_size"] = max_rank_size
     return bundle, converter, sizes
@@ -357,7 +444,7 @@ def build_entity_marformer_from_bundle(
     # Global param dimension: 1 + max(C, R), matching existing design.
     global_param_dim = 1 + max(sizes["num_likert_classes"], converter.max_rank_size)
 
-    graph = bundle_to_entity_graph(bundle, train_all, types)
+    graph = variable_list_to_entity_graph(train_all, types)
     model = EntityMarformer(
         config=config,
         types=types,
@@ -416,11 +503,6 @@ def main():
 
     bundle, converter, sizes = load_bundle_and_converter(data_dir)
 
-    train_observed = converter.create_variables_from_bundle(bundle, partition="train", status="observed")
-    train_missing = converter.create_variables_from_bundle(bundle, partition="train", status="missing")
-    test_observed = converter.create_variables_from_bundle(bundle, partition="test", status="observed")
-    test_missing = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
-
     config = EntityMarformerConfig()
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
@@ -431,22 +513,19 @@ def main():
         logit_high=config.logit_high,
     )
     global_param_dim = 1 + max(sizes["num_likert_classes"], converter.max_rank_size)
-    # Build one graph to get num_relationships and init model
-    train_all = train_observed + train_missing
-    graph0 = bundle_to_entity_graph(bundle, train_all, types)
+    # Build one graph (train partition) to get num_relationships and init model.
+    # EntityMarformerLightningModule will build its own train/test splits from
+    # the bundle and converter.
+    train_observed_tmp = converter.create_variables_from_bundle(bundle, partition="train", status="observed")
+    train_missing_tmp = converter.create_variables_from_bundle(bundle, partition="train", status="missing")
+    train_all = train_observed_tmp + train_missing_tmp
+    graph0 = variable_list_to_entity_graph(train_all, types)
     model = EntityMarformer(
         config=config,
         types=types,
         global_param_dim=global_param_dim,
         num_relationships=graph0.num_relationships,
     )
-
-    # Transductive learning: optionally include test_observed in training vars (like run_imputer.py).
-    train_observed_for_trainer = train_observed
-    if args.transductive_learning:
-        print("\033[93mTransductive mode: including test_observed in training.\033[0m")
-        print(f"  +{len(test_observed)} test_observed tokens added to train_observed.")
-        train_observed_for_trainer = train_observed_for_trainer + test_observed
 
     # Create run directory for this Entity Marformer run.
     output_root = Path(args.output_root)
@@ -492,11 +571,9 @@ def main():
 
     lightning_module = EntityMarformerLightningModule(
         model=model,
-        train_observed=train_observed_for_trainer,
-        train_missing=train_missing,
         bundle=bundle,
+        converter=converter,
         types=types,
-        test_missing=test_missing,
         masking_rate=args.masking_rate,
         learning_rate=args.lr,
         weight_decay=args.weight_decay,
@@ -504,6 +581,7 @@ def main():
         human_observed_rate=args.human_observed_rate,
         max_item=args.max_item,
         run_dir=run_dir,
+        transductive=bool(args.transductive_learning),
     )
 
     accelerator = "gpu" if args.device == "cuda" and torch.cuda.is_available() else "cpu"

@@ -173,7 +173,7 @@ class ItemEntityType(NullEntityType):
     def __init__(self, num_items: int):
         super().__init__(
             name="item",
-            variation=VariationConfig(enabled=False, num_entities=num_items, reg_weight=0.0),
+            variation=VariationConfig(enabled=True, num_entities=num_items, reg_weight=0.0),
         )
 
 
