@@ -160,3 +160,53 @@ sequenceDiagram
     - `2` = observed (only for metrics).
   - This keeps the evaluation layer robust to how variables are grouped into
     splits (train/test/combined); the semantics are always driven by status.
+
+### Plotting training history
+
+- **Where metrics are stored**:
+  - During training, `EntityMarformerLightningModule.on_train_epoch_end` appends a per-epoch
+    summary dict to `self.training_history` and `on_train_end` writes it as
+    `training_history.json` into the run directory (alongside `train_config.json`).
+- **Plotting utility**:
+  - The module `imputer/entity_mf/plot_training_history.py` can be invoked as:
+    - `python -m imputer.entity_mf.plot_training_history --runs-root OUTPUT/ENTITY_MF --per-run`
+      - Generates, for each run with `training_history.json`:
+        - `train_loss.png`: total train loss vs. epoch.
+        - `loss_decomposition.png`: per-split loss curves over epochs (status/type × xent).
+    - `python -m imputer.entity_mf.plot_training_history --runs-root OUTPUT/ENTITY_MF --compare`
+      - Produces multi-run comparison plots under `OUTPUT/ENTITY_MF/plots/`, including:
+        - `multi_run_total_loss.png`: total train loss vs. epoch for all runs.
+        - `multi_run_test_eval_missing_rating_xent.png` (by default), comparing
+          `test_eval/missing/rating/xent` across runs.
+    - You can change the comparison metric via:
+      - `--metric test_eval/missing/rating/xent`
+      - `--metric train_eval/masked/ranking_pairwise/xent`
+      - `--metric combined_eval/missing/rating/xent` (for transductive runs).
+- **Interpreting plots**:
+  - Run labels encode key training settings (e.g. transductive vs non-transductive,
+    `max_item`, and number of epochs), making it easy to compare hyperparameter sweeps.
+  - Loss decomposition plots use the nested metrics described above to show how
+    cross-entropy evolves across:
+    - statuses (`observed`, `masked`, `missing`),
+    - variable types (`rating`, `ranking_pairwise`),
+    - and splits (`train_eval`, `test_eval`, `combined_eval`, when available).
+
+examples:
+From repo root:
+Per-run diagnostics:
+run
+    python -m imputer.entity_mf.plot_training_history \      --runs-root OUTPUT/ENTITY_MF \      --per-run
+Multi-run comparisons (default metric: test_eval/missing/rating/xent):
+ imputer.entity_mf.plot_training_history \
+      --runs-root OUTPUT/ENTITY_MF \
+      --compare
+Multi-run comparisons with a custom metric:
+    python -m imputer.entity_mf.plot_training_history \
+      --runs-root OUTPUT/ENTITY_MF \
+      --compare \
+      --metric combined_eval/missing/rating/xent
+To restrict to specific runs:
+    python -m imputer.entity_mf.plot_training_history \
+      --runs-root OUTPUT/ENTITY_MF \
+      --runs run_001 run_002 \
+      --per-run --compare
