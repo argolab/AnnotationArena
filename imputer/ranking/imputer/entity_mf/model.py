@@ -16,14 +16,14 @@ from .types import EntityType
 
 class RelationalAttentionBlock(nn.Module):
     """
-    Relational self-attention with per-relationship key rotations.
+    Relational self-attention where the last R dimensions of the query
+    act as relationship-specific weights.
 
-    For each relationship r, we learn a matrix R_r and add
-
-        Q R_r K^T
-
-    onto the base attention scores wherever that relationship is present
-    in the edge mask.
+    For each query position i and key position j, we:
+      - take the last R dims of Q_i as a length-R vector of relationship logits
+      - take edge_mask[i, j, :] as a multi-hot vector over R relationships
+      - compute a scalar relational bias by dotting these two vectors
+      - add that bias to the base attention score for (i, j) across all heads
     """
 
     def __init__(
@@ -42,14 +42,6 @@ class RelationalAttentionBlock(nn.Module):
         self.K = nn.Linear(model_dim, model_dim)
         self.V = nn.Linear(model_dim, model_dim)
         self.out = nn.Linear(model_dim, model_dim)
-
-        # One rotation matrix per relationship. MVP: unconstrained, initialized near identity.
-        self.R = nn.ParameterList(
-            [
-                nn.Parameter(torch.eye(model_dim) + 1e-3 * torch.randn(model_dim, model_dim))
-                for _ in range(num_relationships)
-            ]
-        )
 
         self.dropout = nn.Dropout(dropout)
 
@@ -76,27 +68,30 @@ class RelationalAttentionBlock(nn.Module):
         K = self.K(x)
         V = self.V(x)
 
-        # Reshape for multi-head: [B, H, L, head_dim]
-        Qh = Q.view(B, L, H, head_dim).transpose(1, 2)
-        Kh = K.view(B, L, H, head_dim).transpose(1, 2)
-        Vh = V.view(B, L, H, head_dim).transpose(1, 2)
+        R = self.num_relationships
+        assert D >= R, f"model_dim {D} must be >= num_relationships {R}"
+        assert (D - R) % H == 0, f"(model_dim - num_relationships) must be divisible by num_heads"
+
+        # Base scores use only the first (D - R) dims; last R dims reserved for relational bias.
+        Q_base = Q[..., :-R]   # [B, L, D-R]
+        K_base = K[..., :-R]   # [B, L, D-R]
+        base_head_dim = (D - R) // H
+        Qh = Q_base.view(B, L, H, base_head_dim).transpose(1, 2)  # [B, H, L, base_head_dim]
+        Kh = K_base.view(B, L, H, base_head_dim).transpose(1, 2)
+        Vh = V.view(B, L, H, head_dim).transpose(1, 2)  # V still uses full D
 
         # Base scores: [B, H, L, L]
-        base_scores = torch.matmul(Qh, Kh.transpose(-2, -1)) / math.sqrt(head_dim)
+        base_scores = torch.matmul(Qh, Kh.transpose(-2, -1)) / math.sqrt(base_head_dim)
 
-        # Edge_mask is [L, L, R] (no batch); broadcast to [B, 1, L, L, R].
-        edge_mask_exp = edge_mask.view(1, 1, L, L, self.num_relationships)
-
-        # Relational contributions
-        rel_scores = 0.0
-        for r_idx in range(self.num_relationships):
-            R_r = self.R[r_idx]  # [D, D]
-            # Apply rotation in the full model space then slice per head implicitly.
-            Q_rot = torch.matmul(Q, R_r)  # [B, L, D]
-            Q_rot_h = Q_rot.view(B, L, H, head_dim).transpose(1, 2)  # [B, H, L, head_dim]
-            scores_r = torch.matmul(Q_rot_h, Kh.transpose(-2, -1)) / math.sqrt(head_dim)  # [B, H, L, L]
-            rel_mask = edge_mask_exp[..., r_idx]  # [B, 1, L, L]
-            rel_scores = rel_scores + scores_r * rel_mask
+        # Relational bias using last R dims of the queries and a multi-hot edge mask.
+        Q_rel = Q[..., -R:]  # [B, L, R]
+        # Expand queries and edge mask so each query position i uses Q_rel[:, i, :]
+        Q_rel_exp = Q_rel.unsqueeze(2)  # [B, L, 1, R]
+        edge_mask_exp = edge_mask.to(Q_rel.dtype).unsqueeze(0)  # [1, L, L, R]
+        # Sum over relationship dimension -> [B, L, L]
+        rel_scores = (Q_rel_exp * edge_mask_exp).sum(-1)
+        # Broadcast over heads: [B, 1, L, L]
+        rel_scores = rel_scores.unsqueeze(1)
 
         scores = base_scores + rel_scores
 
