@@ -1,7 +1,8 @@
 #!/bin/bash
-# Sweep Entity Marformer over model size:
+# Sweep Entity Marformer over model size and annotator reg:
 #   - num_layers in {2, 4, 6, 8, 10}
 #   - embedding_dim in {32, 72, 128, 256}
+#   - annotator_reg_weight in {0, 2, 5}
 # Always uses max_item = 10.
 #
 # Usage (from repo root):
@@ -30,13 +31,12 @@ MAX_ITEM_ENTITY=10
 OVERWRITE_EXISTING_DATA="${OVERWRITE_EXISTING_DATA:-0}"
 
 # # Values to sweep.
-# NUM_LAYERS_VALUES=("4" "6" "8" "10")
-# EMBEDDING_DIM_VALUES=("32" "72" "128" "256")
+NUM_LAYERS_VALUES=("4" "8" "12")
+EMBEDDING_DIM_VALUES=("32" "96" "256")
+# NUM_LAYERS_VALUES=( "12")
+# EMBEDDING_DIM_VALUES=("256")
 
-
-# Values to sweep.
-NUM_LAYERS_VALUES=( "10")
-EMBEDDING_DIM_VALUES=("256")
+ANNOTATOR_REG_WEIGHT_VALUES=("0" "2" "5")
 
 # Whether to use transductive learning. We sweep both settings.
 # TRANSDUCTIVE_VALUES=("true" "false")
@@ -44,20 +44,22 @@ TRANSDUCTIVE_VALUES=("false")
 
 echo "============================================================"
 echo "Entity Marformer model-size sweep"
-echo "  bundle:            $BUNDLE"
-echo "  data_dir:          $DATA_DIR"
-echo "  num_layers values: ${NUM_LAYERS_VALUES[*]}"
-echo "  embedding_dim:     ${EMBEDDING_DIM_VALUES[*]}"
-echo "  max_item:          $MAX_ITEM_ENTITY"
-echo "  transductive:      ${TRANSDUCTIVE_VALUES[*]}"
+echo "  bundle:                  $BUNDLE"
+echo "  data_dir:                $DATA_DIR"
+echo "  num_layers values:       ${NUM_LAYERS_VALUES[*]}"
+echo "  embedding_dim:           ${EMBEDDING_DIM_VALUES[*]}"
+echo "  annotator_reg_weight:    ${ANNOTATOR_REG_WEIGHT_VALUES[*]}"
+echo "  max_item:                $MAX_ITEM_ENTITY"
+echo "  transductive:            ${TRANSDUCTIVE_VALUES[*]}"
 echo "============================================================"
 echo ""
 
 for TRANSDUCTIVE in "${TRANSDUCTIVE_VALUES[@]}"; do
     for EMBEDDING_DIM in "${EMBEDDING_DIM_VALUES[@]}"; do
         for NUM_LAYERS in "${NUM_LAYERS_VALUES[@]}"; do
+            for ANNOT_REG in "${ANNOTATOR_REG_WEIGHT_VALUES[@]}"; do
             echo ""
-            echo ">>> Running Entity Marformer with layers=${NUM_LAYERS}, D=${EMBEDDING_DIM}, max_item=${MAX_ITEM_ENTITY}, transductive=${TRANSDUCTIVE}"
+            echo ">>> Running Entity Marformer with layers=${NUM_LAYERS}, D=${EMBEDDING_DIM}, annotator_reg_weight=${ANNOT_REG}, max_item=${MAX_ITEM_ENTITY}, transductive=${TRANSDUCTIVE}"
 
             # Build transductive flag: include only when true
             TRANSDUCTIVE_FLAG=()
@@ -65,7 +67,7 @@ for TRANSDUCTIVE in "${TRANSDUCTIVE_VALUES[@]}"; do
                 TRANSDUCTIVE_FLAG=(--transductive-learning)
             fi
 
-            RUN_NAME="modelsize_L${NUM_LAYERS}_D${EMBEDDING_DIM}_T${TRANSDUCTIVE}"
+            RUN_NAME="modelsize_L${NUM_LAYERS}_D${EMBEDDING_DIM}_R${ANNOT_REG}_T${TRANSDUCTIVE}"
 
             OVERWRITE_FLAG=()
             if [ "$OVERWRITE_EXISTING_DATA" = "1" ]; then
@@ -84,11 +86,13 @@ for TRANSDUCTIVE in "${TRANSDUCTIVE_VALUES[@]}"; do
                 --max-item "$MAX_ITEM_ENTITY" \
                 --embedding-dim "$EMBEDDING_DIM" \
                 --num-layers "$NUM_LAYERS" \
+                --annotator-reg-weight "$ANNOT_REG" \
                 --run-name "$RUN_NAME" \
                 "${OVERWRITE_FLAG[@]}" \
                 "${TRANSDUCTIVE_FLAG[@]}"
 
-            echo "<<< Finished run with layers=${NUM_LAYERS}, D=${EMBEDDING_DIM}, max_item=${MAX_ITEM_ENTITY}, transductive=${TRANSDUCTIVE}"
+            echo "<<< Finished run with layers=${NUM_LAYERS}, D=${EMBEDDING_DIM}, annotator_reg_weight=${ANNOT_REG}, max_item=${MAX_ITEM_ENTITY}, transductive=${TRANSDUCTIVE}"
+            done
         done
     done
 done

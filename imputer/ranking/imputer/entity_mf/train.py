@@ -420,6 +420,7 @@ def build_entity_marformer_from_bundle(
     converter: DataConverter,
     sizes: Dict[str, int],
     config: EntityMarformerConfig,
+    annotator_reg_weight: float = 0.0,
 ) -> tuple[EntityMarformer, Any]:
     # Reuse DataConverter to create RankingData variables for train partition.
     train_observed: List[RankingData] = converter.create_variables_from_bundle(
@@ -439,6 +440,7 @@ def build_entity_marformer_from_bundle(
         num_likert_classes=sizes["num_likert_classes"],
         max_rank_size=converter.max_rank_size,
         logit_high=config.logit_high,
+        annotator_reg_weight=annotator_reg_weight,
     )
 
     graph = variable_list_to_entity_graph(train_all, types)
@@ -510,6 +512,12 @@ def main():
         action="store_true",
         help="If set and --run-name is used, (re)use that run directory instead of failing when it exists.",
     )
+    parser.add_argument(
+        "--annotator-reg-weight",
+        type=float,
+        default=0.0,
+        help="L2 regularization weight for annotator deviation embeddings (AnnotatorEntityType).",
+    )
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -528,6 +536,7 @@ def main():
         num_likert_classes=sizes["num_likert_classes"],
         max_rank_size=sizes.get("max_rank_size", converter.max_rank_size),
         logit_high=config.logit_high,
+        annotator_reg_weight=args.annotator_reg_weight,
     )
     # Build one graph (train partition) to get num_relationships and init model.
     # EntityMarformerLightningModule will build its own train/test splits from
@@ -579,6 +588,7 @@ def main():
             "llm_annotator_id": args.llm_annotator_id,
             "human_observed_rate": args.human_observed_rate,
             "max_item": args.max_item,
+            "annotator_reg_weight": args.annotator_reg_weight,
             "device": args.device,
         },
         "run": {

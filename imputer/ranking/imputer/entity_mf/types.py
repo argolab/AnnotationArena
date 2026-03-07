@@ -496,13 +496,14 @@ def build_default_domain3_types(
     num_likert_classes: int,
     max_rank_size: int,
     logit_high: float = 20.0,
+    annotator_reg_weight: float = 0.0,
 ) -> Dict[str, EntityType]:
     """
     Convenience helper that builds the canonical domain-3 type registry.
     """
     return {
         "attribute": AttributeEntityType(num_attributes=num_attributes),
-        "annotator": AnnotatorEntityType(num_annotators=num_annotators, reg_weight=0.0),
+        "annotator": AnnotatorEntityType(num_annotators=num_annotators, reg_weight=annotator_reg_weight),
         "item": ItemEntityType(num_items=num_items),
         "rating": RatingVariableType(num_classes=num_likert_classes, logit_high=logit_high),
         "ranking_pairwise": PairwiseRankingVariableType(max_rank_size=max_rank_size, logit_high=logit_high),
