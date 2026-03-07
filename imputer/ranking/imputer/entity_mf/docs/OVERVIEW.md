@@ -135,8 +135,10 @@ This lets the model operate directly on existing bundles with no changes to the 
 ### Config
 
 - **`EntityMarformerConfig`**:
-  - `embedding_dim`, `num_layers`, `attention_heads`, `dropout`,
-  - `d_ff` (FFN size), `logit_high`, `temperature`, `normalize_parameter`.
+  - `embedding_dim`: total model dimension (`feature_dim + global_param_dim`), must be divisible by `attention_heads`.
+  - `num_layers`, `attention_heads`, `dropout`,
+  - `d_ff` (FFN size), `num_ffn_layers`,
+  - `logit_high`, `temperature`.
 
 ### EntityMarformer
 
@@ -151,10 +153,11 @@ At a high level:
    - Streams are concatenated and processed similarly to the legacy imputer (FFN on combined, then split).
 3. **Relational attention**
    - `RelationalAttentionBlock` uses:
-     - Standard multi-head Q/K/V projections.
+     - Standard multi-head attention over the **combined feature+param stream**.
      - Edge masks `edge_mask[L, L, R]` from the graph.
-     - Relationship parameters to modulate attention scores by edge type (ROPE-like idea).
+     - Extra relationship-specific channels in the Q/K projections (dimension `R`) whose dot product with the multi-hot edge vector adds a bias to the attention scores.
 4. **Output**
+   - `global_param_dim` is inferred as `max(t.param_dim for t in types.values())`.
    - The model returns a tensor `params` of shape `[1, L, global_param_dim]`.
    - Variable types read their slice of this param stream in `compute_loss_breakdown`.
 
