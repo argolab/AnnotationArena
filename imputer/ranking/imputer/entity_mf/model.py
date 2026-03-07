@@ -37,9 +37,11 @@ class RelationalAttentionBlock(nn.Module):
         self.model_dim = model_dim
         self.num_heads = num_heads
         self.num_relationships = num_relationships
+        assert model_dim % num_heads == 0, (
+            f"model_dim {model_dim} must be divisible by num_heads {num_heads}"
+        )
 
-        # Q, K project from base dim D to D + R, where the last R dims
-        # are used only for relational biases. V stays in base dim.
+        # Q, K project D -> D+R; first D dims for base attention, extra R for relational bias only.
         self.Q = nn.Linear(model_dim, model_dim + num_relationships)
         self.K = nn.Linear(model_dim, model_dim + num_relationships)
         self.V = nn.Linear(model_dim, model_dim)
@@ -72,7 +74,7 @@ class RelationalAttentionBlock(nn.Module):
         K_full = self.K(x)
         V = self.V(x)
 
-        # Base scores use only the first D dims; extra R dims reserved for relational bias.
+        # Base scores use full input dim D (feature + param); extra R from Q/K only for rel bias.
         Q_base = Q_full[..., :D]   # [B, L, D]
         K_base = K_full[..., :D]   # [B, L, D]
         Qh = Q_base.view(B, L, H, head_dim).transpose(1, 2)  # [B, H, L, head_dim]
@@ -82,7 +84,7 @@ class RelationalAttentionBlock(nn.Module):
         # Base scores: [B, H, L, L]
         base_scores = torch.matmul(Qh, Kh.transpose(-2, -1)) / math.sqrt(head_dim)
 
-        # Relational bias using last R dims of the queries and a multi-hot edge mask.
+        # Relational bias using extra R dims from Q projection and multi-hot edge mask.
         Q_rel = Q_full[..., D:]  # [B, L, R]
         # Expand queries and edge mask so each query position i uses Q_rel[:, i, :]
         Q_rel_exp = Q_rel.unsqueeze(2)  # [B, L, 1, R]
@@ -120,17 +122,25 @@ class EntityMarformer(nn.Module):
         self,
         config: EntityMarformerConfig,
         types: Dict[str, EntityType],
-        global_param_dim: int,
         num_relationships: int,
     ):
         super().__init__()
         self.config = config
         self.types = types
-        self.global_param_dim = global_param_dim
 
-        self.feature_dim = config.embedding_dim
-        self.param_dim = global_param_dim
-        self.model_dim = self.feature_dim + self.param_dim
+        # Global param dim = max over types (no longer passed in).
+        self.global_param_dim = max(t.param_dim for t in types.values())
+        self.param_dim = self.global_param_dim
+
+        # Config embedding_dim = total model dim (feature + param). Must be divisible by heads.
+        self.model_dim = config.embedding_dim
+        assert self.model_dim % config.attention_heads == 0, (
+            f"embedding_dim {self.model_dim} must be divisible by attention_heads {config.attention_heads}"
+        )
+        assert self.model_dim > self.param_dim, (
+            f"embedding_dim {self.model_dim} must be > global_param_dim {self.param_dim}"
+        )
+        self.feature_dim = self.model_dim - self.param_dim
 
         # Per-type base embeddings (centroids)
         self.type_embeddings = nn.ParameterDict(
@@ -161,7 +171,12 @@ class EntityMarformer(nn.Module):
                 num_relationships=num_relationships,
                 dropout=config.dropout,
             )
-            ff = FeedForward(self.model_dim, d_ff=config.d_ff, dropout=config.dropout, num_layers=config.num_ffn_layers)
+            ff = FeedForward(
+                self.model_dim,
+                d_ff=config.d_ff,
+                dropout=config.dropout,
+                num_layers=config.num_ffn_layers,
+            )
             proj_out = nn.Linear(self.model_dim, self.feature_dim)
             W_param = nn.Linear(self.model_dim, self.param_dim)
             blocks.append(

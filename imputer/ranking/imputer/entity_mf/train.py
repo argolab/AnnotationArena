@@ -441,14 +441,10 @@ def build_entity_marformer_from_bundle(
         logit_high=config.logit_high,
     )
 
-    # Global param dimension: 1 + max(C, R), matching existing design.
-    global_param_dim = 1 + max(sizes["num_likert_classes"], converter.max_rank_size)
-
     graph = variable_list_to_entity_graph(train_all, types)
     model = EntityMarformer(
         config=config,
         types=types,
-        global_param_dim=global_param_dim,
         num_relationships=graph.num_relationships,
     )
     return model, graph
@@ -512,7 +508,6 @@ def main():
         max_rank_size=sizes.get("max_rank_size", converter.max_rank_size),
         logit_high=config.logit_high,
     )
-    global_param_dim = 1 + max(sizes["num_likert_classes"], converter.max_rank_size)
     # Build one graph (train partition) to get num_relationships and init model.
     # EntityMarformerLightningModule will build its own train/test splits from
     # the bundle and converter.
@@ -523,7 +518,6 @@ def main():
     model = EntityMarformer(
         config=config,
         types=types,
-        global_param_dim=global_param_dim,
         num_relationships=graph0.num_relationships,
     )
 
@@ -550,7 +544,7 @@ def main():
             "num_ffn_layers": config.num_ffn_layers,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
-            "global_param_dim": global_param_dim,
+            "global_param_dim": model.global_param_dim,
         },
         "training": {
             "epochs": args.epochs,

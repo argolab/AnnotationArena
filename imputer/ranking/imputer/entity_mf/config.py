@@ -8,11 +8,12 @@ class EntityMarformerConfig:
     """
     Minimal configuration for the Entity Marformer.
 
-    This is intentionally small for fast iteration; additional knobs can be
-    added later as needed.
+    embedding_dim is the total base model dimension (feature_dim + param_dim).
+    Must be divisible by attention_heads and greater than max type param_dim;
+    global_param_dim is computed from types and feature_dim = embedding_dim - global_param_dim.
     """
 
-    embedding_dim: int = 67
+    embedding_dim: int = 72
     num_layers: int = 4
     attention_heads: int = 4
     dropout: float = 0.1
