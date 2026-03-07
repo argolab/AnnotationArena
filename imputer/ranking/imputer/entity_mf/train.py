@@ -493,6 +493,18 @@ def main():
         default=None,
         help="Experimental: max number of items per Entity Marformer forward pass (item-chunking).",
     )
+    parser.add_argument(
+        "--embedding-dim",
+        type=int,
+        default=None,
+        help="Override EntityMarformerConfig.embedding_dim (total model dim).",
+    )
+    parser.add_argument(
+        "--num-layers",
+        type=int,
+        default=None,
+        help="Override EntityMarformerConfig.num_layers (depth of Entity Marformer).",
+    )
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -500,6 +512,10 @@ def main():
     bundle, converter, sizes = load_bundle_and_converter(data_dir)
 
     config = EntityMarformerConfig()
+    if args.embedding_dim is not None:
+        config.embedding_dim = args.embedding_dim
+    if args.num_layers is not None:
+        config.num_layers = args.num_layers
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
