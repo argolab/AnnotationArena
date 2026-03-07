@@ -505,6 +505,11 @@ def main():
         default=None,
         help="Override EntityMarformerConfig.num_layers (depth of Entity Marformer).",
     )
+    parser.add_argument(
+        "--overwrite-existing-data",
+        action="store_true",
+        help="If set and --run-name is used, (re)use that run directory instead of failing when it exists.",
+    )
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -540,11 +545,14 @@ def main():
     # Create run directory for this Entity Marformer run.
     output_root = Path(args.output_root)
     output_root.mkdir(parents=True, exist_ok=True)
-    try:
-        run_dir = new_run_dir(output_root, run_name=args.run_name)
-    except FileExistsError as e:
-        # If the user reuses a run-name, fail loudly to avoid overwriting.
-        raise RuntimeError(f"Run directory already exists for Entity Marformer: {e}") from e
+    if args.overwrite_existing_data and args.run_name:
+        run_dir = output_root / args.run_name
+        run_dir.mkdir(parents=True, exist_ok=True)
+    else:
+        try:
+            run_dir = new_run_dir(output_root, run_name=args.run_name)
+        except FileExistsError as e:
+            raise RuntimeError(f"Run directory already exists for Entity Marformer: {e}") from e
 
     # Save a minimal train configuration snapshot.
     train_config = {

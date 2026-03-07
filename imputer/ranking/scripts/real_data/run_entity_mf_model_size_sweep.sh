@@ -26,9 +26,17 @@ LLM_ANNOTATOR_ID_ENTITY=24
 HUMAN_OBSERVED_RATE_ENTITY=0.2
 MAX_ITEM_ENTITY=10
 
+# Set to 1 to pass --overwrite-existing-data (reuse run dir when run-name exists).
+OVERWRITE_EXISTING_DATA="${OVERWRITE_EXISTING_DATA:-0}"
+
+# # Values to sweep.
+# NUM_LAYERS_VALUES=("4" "6" "8" "10")
+# EMBEDDING_DIM_VALUES=("32" "72" "128" "256")
+
+
 # Values to sweep.
-NUM_LAYERS_VALUES=("2" "4" "6" "8" "10")
-EMBEDDING_DIM_VALUES=("32" "72" "128" "256")
+NUM_LAYERS_VALUES=( "10")
+EMBEDDING_DIM_VALUES=("256")
 
 # Whether to use transductive learning. We sweep both settings.
 # TRANSDUCTIVE_VALUES=("true" "false")
@@ -59,6 +67,11 @@ for TRANSDUCTIVE in "${TRANSDUCTIVE_VALUES[@]}"; do
 
             RUN_NAME="modelsize_L${NUM_LAYERS}_D${EMBEDDING_DIM}_T${TRANSDUCTIVE}"
 
+            OVERWRITE_FLAG=()
+            if [ "$OVERWRITE_EXISTING_DATA" = "1" ]; then
+                OVERWRITE_FLAG=(--overwrite-existing-data)
+            fi
+
             python -m imputer.entity_mf.train \
                 --data-dir "$DATA_DIR" \
                 --epochs "$EPOCHS_ENTITY" \
@@ -72,6 +85,7 @@ for TRANSDUCTIVE in "${TRANSDUCTIVE_VALUES[@]}"; do
                 --embedding-dim "$EMBEDDING_DIM" \
                 --num-layers "$NUM_LAYERS" \
                 --run-name "$RUN_NAME" \
+                "${OVERWRITE_FLAG[@]}" \
                 "${TRANSDUCTIVE_FLAG[@]}"
 
             echo "<<< Finished run with layers=${NUM_LAYERS}, D=${EMBEDDING_DIM}, max_item=${MAX_ITEM_ENTITY}, transductive=${TRANSDUCTIVE}"
