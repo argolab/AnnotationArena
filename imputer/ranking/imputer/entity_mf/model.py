@@ -38,8 +38,10 @@ class RelationalAttentionBlock(nn.Module):
         self.num_heads = num_heads
         self.num_relationships = num_relationships
 
-        self.Q = nn.Linear(model_dim, model_dim)
-        self.K = nn.Linear(model_dim, model_dim)
+        # Q, K project from base dim D to D + R, where the last R dims
+        # are used only for relational biases. V stays in base dim.
+        self.Q = nn.Linear(model_dim, model_dim + num_relationships)
+        self.K = nn.Linear(model_dim, model_dim + num_relationships)
         self.V = nn.Linear(model_dim, model_dim)
         self.out = nn.Linear(model_dim, model_dim)
 
@@ -59,32 +61,29 @@ class RelationalAttentionBlock(nn.Module):
         """
         B, L, D = x.shape
         H = self.num_heads
+        R = self.num_relationships
 
-        # Simple equal head split; require divisibility.
+        # Simple equal head split on the base dim; require divisibility.
         head_dim = D // H
         assert head_dim * H == D, f"model_dim {D} must be divisible by num_heads {H}"
 
-        Q = self.Q(x)  # [B, L, D]
-        K = self.K(x)
+        # Q_full, K_full: [B, L, D + R]; V: [B, L, D]
+        Q_full = self.Q(x)
+        K_full = self.K(x)
         V = self.V(x)
 
-        R = self.num_relationships
-        assert D >= R, f"model_dim {D} must be >= num_relationships {R}"
-        assert (D - R) % H == 0, f"(model_dim - num_relationships) must be divisible by num_heads"
-
-        # Base scores use only the first (D - R) dims; last R dims reserved for relational bias.
-        Q_base = Q[..., :-R]   # [B, L, D-R]
-        K_base = K[..., :-R]   # [B, L, D-R]
-        base_head_dim = (D - R) // H
-        Qh = Q_base.view(B, L, H, base_head_dim).transpose(1, 2)  # [B, H, L, base_head_dim]
-        Kh = K_base.view(B, L, H, base_head_dim).transpose(1, 2)
-        Vh = V.view(B, L, H, head_dim).transpose(1, 2)  # V still uses full D
+        # Base scores use only the first D dims; extra R dims reserved for relational bias.
+        Q_base = Q_full[..., :D]   # [B, L, D]
+        K_base = K_full[..., :D]   # [B, L, D]
+        Qh = Q_base.view(B, L, H, head_dim).transpose(1, 2)  # [B, H, L, head_dim]
+        Kh = K_base.view(B, L, H, head_dim).transpose(1, 2)
+        Vh = V.view(B, L, H, head_dim).transpose(1, 2)
 
         # Base scores: [B, H, L, L]
-        base_scores = torch.matmul(Qh, Kh.transpose(-2, -1)) / math.sqrt(base_head_dim)
+        base_scores = torch.matmul(Qh, Kh.transpose(-2, -1)) / math.sqrt(head_dim)
 
         # Relational bias using last R dims of the queries and a multi-hot edge mask.
-        Q_rel = Q[..., -R:]  # [B, L, R]
+        Q_rel = Q_full[..., D:]  # [B, L, R]
         # Expand queries and edge mask so each query position i uses Q_rel[:, i, :]
         Q_rel_exp = Q_rel.unsqueeze(2)  # [B, L, 1, R]
         edge_mask_exp = edge_mask.to(Q_rel.dtype).unsqueeze(0)  # [1, L, L, R]
