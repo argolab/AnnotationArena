@@ -114,7 +114,51 @@ def main():
                         help="0-indexed annotator ID of the LLM. When set, masks ALL human annotations and keeps only LLM as observed during training.")
     parser.add_argument("--human-observed-rate", type=float, default=0.0,
                         help="Fraction of human annotations to keep as observed (not masked) when --llm-annotator-id is set. Default 0.0 = mask all humans.")
+
+    # TEMPORARY: Ablation study flags. Remove when ablation study is complete.
+    parser.add_argument("--ablation-no-dropout", action="store_true", help="[ABLATION] Disable all dropout")
+    parser.add_argument("--ablation-no-mask-augmentation", action="store_true", help="[ABLATION] Set mask_augmentations=1")
+    parser.add_argument("--ablation-no-random-masking", action="store_true", help="[ABLATION] Set masking_rate=1.0 (mask all observed)")
+    parser.add_argument("--ablation-no-cosine-schedule", action="store_true", help="[ABLATION] Disable cosine LR schedule")
+    parser.add_argument("--ablation-no-transductive", action="store_true", help="[ABLATION] Disable transductive learning")
+    parser.add_argument("--ablation-no-pointer-mechanism", action="store_true", help="[ABLATION] Disable pointer/edge-indicator mechanism")
+    parser.add_argument("--ablation-no-parameter-normalization", action="store_true", help="[ABLATION] Disable parameter normalization in transformer blocks")
+    parser.add_argument("--ablation-no-human-supervision", action="store_true", help="[ABLATION] Set human_observed_rate=0")
+    parser.add_argument("--ablation-no-weight-decay", action="store_true", help="[ABLATION] Set weight_decay=0")
     args = parser.parse_args()
+
+    # TEMPORARY: Apply ablation overrides (mutate args before model/trainer construction)
+    active_ablations: List[str] = []
+    if args.ablation_no_dropout:
+        args.dropout = 0.0
+        args.item_embedding_dropout = 0.0
+        args.annotator_dropout = 0.0
+        active_ablations.append("ablation-no-dropout")
+    if args.ablation_no_mask_augmentation:
+        args.mask_augmentations = 1
+        active_ablations.append("ablation-no-mask-augmentation")
+    if args.ablation_no_random_masking:
+        args.masking_rate = 1.0
+        active_ablations.append("ablation-no-random-masking")
+    if args.ablation_no_cosine_schedule:
+        args.use_cosine_schedule = False
+        active_ablations.append("ablation-no-cosine-schedule")
+    if args.ablation_no_transductive:
+        args.transductive_learning = False
+        active_ablations.append("ablation-no-transductive")
+    if args.ablation_no_pointer_mechanism:
+        active_ablations.append("ablation-no-pointer-mechanism")
+    if args.ablation_no_parameter_normalization:
+        args.normalize_parameter = False
+        active_ablations.append("ablation-no-parameter-normalization")
+    if args.ablation_no_human_supervision:
+        args.human_observed_rate = 0.0
+        active_ablations.append("ablation-no-human-supervision")
+    if args.ablation_no_weight_decay:
+        args.weight_decay = 0.0
+        active_ablations.append("ablation-no-weight-decay")
+    if active_ablations:
+        print(f"[ABLATION] Active ablations: {active_ablations}")
 
     # PyTorch Lightning DDP re-runs this script in each worker process.
     # Gate filesystem side-effects (mkdir/rmtree/writes/most prints) to rank 0 to avoid races and spam.
@@ -258,7 +302,7 @@ def main():
             temperature=args.temperature,
             use_concat_embedding=bool(args.use_concat_embedding),
             batch_size=args.batch_size,
-            enable_pointer_mechanism=True,
+            enable_pointer_mechanism=not args.ablation_no_pointer_mechanism,
             logit_high=args.logit_high,
             item_embedding_dropout=args.item_embedding_dropout,
             w_init=args.w_init,
@@ -424,7 +468,8 @@ def main():
         },
         "run": {
             "run_dir": str(run_dir)
-        }
+        },
+        "ablations": active_ablations,
     }
     if is_rank0:
         with open(run_dir / "train_config.json", "w") as f:
