@@ -14,8 +14,11 @@ set -e
 BUNDLE="${BUNDLE:-hard}"  # or set BUNDLE=dist
 if [ "$BUNDLE" == "dist" ]; then
     DATA_DIR="OUTPUT/generated_data/llm_rubric_dist"
+    OUTPUT_ROOT="OUTPUT/ENTITY_MF_DIST"   # Separate output so dist runs don't overwrite hard
+    OVERWRITE_EXISTING_DATA=0             # Never overwrite when using dist bundle
 else
     DATA_DIR="OUTPUT/generated_data/llm_rubric"
+    OUTPUT_ROOT="OUTPUT/ENTITY_MF"
 fi
 
 EPOCHS_ENTITY=180
@@ -46,6 +49,8 @@ echo "============================================================"
 echo "Entity Marformer model-size sweep"
 echo "  bundle:                  $BUNDLE"
 echo "  data_dir:                $DATA_DIR"
+echo "  output_root:             $OUTPUT_ROOT"
+echo "  overwrite_existing:      $OVERWRITE_EXISTING_DATA"
 echo "  num_layers values:       ${NUM_LAYERS_VALUES[*]}"
 echo "  embedding_dim:           ${EMBEDDING_DIM_VALUES[*]}"
 echo "  annotator_reg_weight:    ${ANNOTATOR_REG_WEIGHT_VALUES[*]}"
@@ -76,6 +81,7 @@ for TRANSDUCTIVE in "${TRANSDUCTIVE_VALUES[@]}"; do
 
             python -m imputer.entity_mf.train \
                 --data-dir "$DATA_DIR" \
+                --output-root "$OUTPUT_ROOT" \
                 --epochs "$EPOCHS_ENTITY" \
                 --lr "$LR_ENTITY" \
                 --weight-decay "$WEIGHT_DECAY_ENTITY" \

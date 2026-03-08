@@ -123,6 +123,7 @@ def plot_train_loss(
     ax.plot(epochs, losses, label=label)
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Train loss")
+    ax.set_ylim(0, 5)
     ax.grid(True, linestyle="--", alpha=0.3)
 
 
@@ -163,13 +164,14 @@ def plot_loss_decomposition_grid(
         ax.set_title(split_key)
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Cross-entropy (xent)")
+        ax.set_ylim(0, 5)
         ax.grid(True, linestyle="--", alpha=0.3)
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.02, 1))
 
     fig.suptitle(f"Loss decomposition: {run_label}")
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path)
+    fig.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -219,11 +221,11 @@ def plot_per_run(runs: Sequence[RunData], output_root: Path) -> None:
             plot_train_loss(ax, epochs, losses, label=run.label)
             ax.set_title(f"Train loss: {run.label}")
             if run.label:
-                ax.legend()
+                ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=8)
             fig.tight_layout()
             out_path = output_root / run.run_dir.name / "train_loss.png"
             out_path.parent.mkdir(parents=True, exist_ok=True)
-            fig.savefig(out_path)
+            fig.savefig(out_path, bbox_inches="tight")
             plt.close(fig)
 
         # Loss decomposition grid
@@ -242,10 +244,10 @@ def plot_multi_run_total_loss(runs: Sequence[RunData], output_path: Path) -> Non
             continue
         plot_train_loss(ax, epochs, losses, label=run.label)
     ax.set_title("Total train loss across runs")
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.02, 1))
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path)
+    fig.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -287,12 +289,13 @@ def plot_multi_run_metric(
     ax.set_xlabel("Epoch")
     ax.set_ylabel(metric_key)
     ax.set_title(f"{metric_spec} across runs")
+    ax.set_ylim(0, 5)
     ax.grid(True, linestyle="--", alpha=0.3)
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.02, 1))
 
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path)
+    fig.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -335,12 +338,13 @@ def plot_multi_run_combined_or_test_missing_rating_xent(
     ax.set_xlabel("Epoch")
     ax.set_ylabel("xent")
     ax.set_title("missing.rating.xent (combined for transductive, test for non-transductive)")
+    ax.set_ylim(0, 5)
     ax.grid(True, linestyle="--", alpha=0.3)
-    ax.legend(fontsize=8)
+    ax.legend(fontsize=8, loc="upper left", bbox_to_anchor=(1.02, 1))
 
     fig.tight_layout()
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(output_path)
+    fig.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
 
 
