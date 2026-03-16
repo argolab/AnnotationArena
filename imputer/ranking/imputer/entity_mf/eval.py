@@ -23,6 +23,7 @@ def _aggregate_loss_from_breakdowns(
     and counts, and optionally a per-(status, type_name) breakdown.
     """
     weighted_masked_sum = torch.zeros((), device=device)
+    weighted_observed_sum = torch.zeros((), device=device)
     sum_observed = 0.0
     sum_masked = 0.0
     sum_missing = 0.0
@@ -53,6 +54,7 @@ def _aggregate_loss_from_breakdowns(
         if b.n_masked > 0:
             weighted_masked_sum = weighted_masked_sum + b.trainable_loss * b.n_masked
         if b.n_observed > 0:
+            weighted_observed_sum = weighted_observed_sum + b.observed_loss_tensor * b.n_observed
             sum_observed += b.loss_observed * b.n_observed
             n_observed += b.n_observed
             per_type["observed"][type_name] = {
@@ -85,8 +87,9 @@ def _aggregate_loss_from_breakdowns(
         "n_observed": n_observed,
         "n_masked": n_masked,
         "n_missing": n_missing,
-        # For training, the backprop objective is the masked loss.
-        "trainable_loss": weighted_masked_sum / n_masked if n_masked else torch.zeros((), device=device),
+        # For training: masked and observed losses as separate tensors (with grad).
+        "trainable_masked_loss": weighted_masked_sum / n_masked if n_masked else torch.zeros((), device=device),
+        "trainable_observed_loss": weighted_observed_sum / n_observed if n_observed else torch.zeros((), device=device),
     }
     out["per_type"] = per_type
     return out
@@ -117,13 +120,25 @@ def compute_trainable_loss(
     types: Dict[str, Any],
     global_param_dim: int,
     device: torch.device,
-) -> torch.Tensor:
+    masked_loss_weight: float = 1.0,
+    observed_loss_weight: float = 0.0,
+) -> tuple:
     """
-    Compute the scalar trainable loss (mean over all masked variables) from
-    per-type LossBreakdown objects.
+    Compute the scalar trainable loss as a weighted combination of masked and observed losses.
+
+    total = masked_loss_weight * masked_loss + observed_loss_weight * observed_loss
+
+    Returns:
+        (loss_tensor, raw_masked_ce, raw_observed_ce)
+        - loss_tensor: weighted objective (has grad, used for backprop)
+        - raw_masked_ce: unweighted mean CE on masked tokens (float, for logging)
+        - raw_observed_ce: unweighted mean CE on observed tokens (float, for logging)
     """
     out = _aggregate_loss_from_breakdowns(params, graph, types, global_param_dim, device)
-    return out["trainable_loss"]
+    loss = masked_loss_weight * out["trainable_masked_loss"]
+    if observed_loss_weight > 0:
+        loss = loss + observed_loss_weight * out["trainable_observed_loss"]
+    return loss, out["loss_masked"], out["loss_observed"]
 
 
 def evaluate_entity_marformer_split(

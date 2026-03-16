@@ -16,14 +16,25 @@ from .types import EntityType
 
 class RelationalAttentionBlock(nn.Module):
     """
-    Relational self-attention where the last R dimensions of the query
-    act as relationship-specific weights.
+    Relational self-attention with two selectable designs:
 
-    For each query position i and key position j, we:
-      - take the last R dims of Q_i as a length-R vector of relationship logits
-      - take edge_mask[i, j, :] as a multi-hot vector over R relationships
-      - compute a scalar relational bias by dotting these two vectors
-      - add that bias to the base attention score for (i, j) across all heads
+    use_per_head_rel=True  (default, new design):
+      Q: D -> D  (each head gets k_content_dim content dims + R relational dims)
+      K: D -> H * k_content_dim  (content only)
+      scores = (Q_content @ K_content^T + einsum(Q_rel, edge_mask)) / sqrt(head_dim)
+      Each head learns independent relational weights.
+      Requires: head_dim > R  (i.e. model_dim // num_heads > num_relationships).
+
+    use_per_head_rel=False  (old/shared-bias design):
+      Q: D -> D + R  (D content dims shared across heads, R shared relational dims)
+      K: D -> D      (content only)
+      scores = (Q_content @ K_content^T) / sqrt(head_dim)  +  Q_rel @ edge_mask^T
+      Single shared relational bias added identically to all heads.
+
+    Optional extensions (both modes):
+      use_pointer:     K_aug obs-obs shared-identity bias (3 extra shared Q dims, like old Marformer).
+      use_rel_value:   V_{ij} = V(x_j) + sum_r e_r * edge_mask[i,j,r].
+      use_addone_attn: attn = exp(s) / (1 + sum_j exp(s_j)), sum <= 1.
     """
 
     def __init__(
@@ -32,20 +43,50 @@ class RelationalAttentionBlock(nn.Module):
         num_heads: int,
         num_relationships: int,
         dropout: float,
+        use_per_head_rel: bool = True,
+        use_pointer: bool = False,
+        use_rel_value: bool = False,
+        use_addone_attn: bool = False,
     ):
         super().__init__()
         self.model_dim = model_dim
         self.num_heads = num_heads
         self.num_relationships = num_relationships
+        self.use_per_head_rel = use_per_head_rel
+        self.use_pointer = use_pointer
+        self.use_rel_value = use_rel_value
+        self.use_addone_attn = use_addone_attn
         assert model_dim % num_heads == 0, (
             f"model_dim {model_dim} must be divisible by num_heads {num_heads}"
         )
+        self.head_dim = model_dim // num_heads
+        R = num_relationships
 
-        # Q, K project D -> D+R; first D dims for base attention, extra R for relational bias only.
-        self.Q = nn.Linear(model_dim, model_dim + num_relationships)
-        self.K = nn.Linear(model_dim, model_dim + num_relationships)
+        if use_per_head_rel:
+            # Per-head: each head has (head_dim - R) content dims + R relational dims
+            self.k_content_dim = self.head_dim - R
+            assert self.k_content_dim > 0, (
+                f"head_dim {self.head_dim} must be > num_relationships {R}. "
+                f"Increase model_dim or reduce num_heads."
+            )
+            q_out_dim = model_dim + (3 if use_pointer else 0)
+            self.Q = nn.Linear(model_dim, q_out_dim)
+            self.K = nn.Linear(model_dim, num_heads * self.k_content_dim)
+        else:
+            # Shared-bias: full head_dim for content, separate R-dim shared relational vector
+            self.k_content_dim = self.head_dim  # full head_dim used for content
+            q_out_dim = model_dim + R + (3 if use_pointer else 0)
+            self.Q = nn.Linear(model_dim, q_out_dim)
+            self.K = nn.Linear(model_dim, model_dim)  # content only
+
         self.V = nn.Linear(model_dim, model_dim)
         self.out = nn.Linear(model_dim, model_dim)
+
+        # Relation-specific value embeddings: e_r per head, init to zero (no-op at start)
+        if use_rel_value:
+            self.rel_value_emb = nn.Parameter(
+                torch.zeros(num_heads, R, self.head_dim)
+            )
 
         self.dropout = nn.Dropout(dropout)
 
@@ -54,58 +95,89 @@ class RelationalAttentionBlock(nn.Module):
         x: torch.Tensor,
         edge_mask: torch.Tensor,
         attn_mask: torch.Tensor | None = None,
+        K_aug: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Args:
-            x: [B, L, D] combined feature+param representation.
-            edge_mask: [L, L, R] binary edge indicators (batch size 1 assumption).
+            x:         [B, L, D] combined feature+param representation.
+            edge_mask: [L, L, R] binary edge indicators.
             attn_mask: [B, L] bool mask for valid tokens.
+            K_aug:     [L, L, 3] obs-obs shared-identity indicators (optional, for pointer).
         """
         B, L, D = x.shape
         H = self.num_heads
         R = self.num_relationships
+        hd = self.head_dim
+        kc = self.k_content_dim
+        edge_mask_f = edge_mask.to(x.dtype)                        # [L, L, R]
 
-        # Simple equal head split on the base dim; require divisibility.
-        head_dim = D // H
-        assert head_dim * H == D, f"model_dim {D} must be divisible by num_heads {H}"
+        V_base = self.V(x).view(B, L, H, hd).transpose(1, 2)     # [B, H, L, hd]
 
-        # Q_full, K_full: [B, L, D + R]; V: [B, L, D]
-        Q_full = self.Q(x)
-        K_full = self.K(x)
-        V = self.V(x)
+        if self.use_per_head_rel:
+            # ── Per-head relational attention ───────────────────────────────────
+            # Q: D -> D (+ 3 for pointer); split per head into [content | rel]
+            Q_proj = self.Q(x)                                     # [B, L, D] or [B, L, D+3]
+            Q_full = Q_proj[..., :D].view(B, L, H, hd).transpose(1, 2)  # [B, H, L, hd]
+            if self.use_pointer:
+                Q_ptr = Q_proj[..., D:]                            # [B, L, 3]
+            K_full = self.K(x).view(B, L, H, kc).transpose(1, 2) # [B, H, L, kc]
+            Q_content = Q_full[..., :kc]                          # [B, H, L, kc]
+            Q_rel     = Q_full[..., kc:]                          # [B, H, L, R]
+            content_scores = torch.matmul(Q_content, K_full.transpose(-2, -1))       # [B, H, L, L]
+            rel_scores     = torch.einsum("bhir,ijr->bhij", Q_rel, edge_mask_f)      # [B, H, L, L]
+            scores = (content_scores + rel_scores) / math.sqrt(hd)
+        else:
+            # ── Shared-bias relational attention (old design) ───────────────────
+            # Q: D -> D+R (+ 3 for pointer); K: D -> D; rel bias shared across heads
+            Q_proj = self.Q(x)                                     # [B, L, D+R] or [B, L, D+R+3]
+            Q_content = Q_proj[..., :D]                            # [B, L, D]
+            Q_rel_shared = Q_proj[..., D:D+R]                     # [B, L, R]  (shared across heads)
+            if self.use_pointer:
+                Q_ptr = Q_proj[..., D+R:]                          # [B, L, 3]
+            K_content = self.K(x)                                  # [B, L, D]
+            Qh = Q_content.view(B, L, H, hd).transpose(1, 2)     # [B, H, L, hd]
+            Kh = K_content.view(B, L, H, hd).transpose(1, 2)     # [B, H, L, hd]
+            content_scores = torch.matmul(Qh, Kh.transpose(-2, -1)) / math.sqrt(hd) # [B, H, L, L]
+            # Relational bias: [B, L, L] -> broadcast over heads [B, 1, L, L]
+            rel_scores = (Q_rel_shared.unsqueeze(2) * edge_mask_f.unsqueeze(0)).sum(-1).unsqueeze(1)
+            scores = content_scores + rel_scores
 
-        # Base scores use full input dim D (feature + param); extra R from Q/K only for rel bias.
-        Q_base = Q_full[..., :D]   # [B, L, D]
-        K_base = K_full[..., :D]   # [B, L, D]
-        Qh = Q_base.view(B, L, H, head_dim).transpose(1, 2)  # [B, H, L, head_dim]
-        Kh = K_base.view(B, L, H, head_dim).transpose(1, 2)
-        Vh = V.view(B, L, H, head_dim).transpose(1, 2)
+        # ── Pointer bias (shared across heads) ─────────────────────────────────
+        if self.use_pointer and K_aug is not None:
+            # Q_ptr: [B, L, 3], K_aug: [L, L, 3]
+            ptr_bias = (Q_ptr.unsqueeze(2) * K_aug.unsqueeze(0)).sum(-1)  # [B, L, L]
+            scores = scores + ptr_bias.unsqueeze(1)                        # broadcast over H
 
-        # Base scores: [B, H, L, L]
-        base_scores = torch.matmul(Qh, Kh.transpose(-2, -1)) / math.sqrt(head_dim)
-
-        # Relational bias using extra R dims from Q projection and multi-hot edge mask.
-        Q_rel = Q_full[..., D:]  # [B, L, R]
-        # Expand queries and edge mask so each query position i uses Q_rel[:, i, :]
-        Q_rel_exp = Q_rel.unsqueeze(2)  # [B, L, 1, R]
-        edge_mask_exp = edge_mask.to(Q_rel.dtype).unsqueeze(0)  # [1, L, L, R]
-        # Sum over relationship dimension -> [B, L, L]
-        rel_scores = (Q_rel_exp * edge_mask_exp).sum(-1)
-        # Broadcast over heads: [B, 1, L, L]
-        rel_scores = rel_scores.unsqueeze(1)
-
-        scores = base_scores + rel_scores
-
+        # ── Attention mask ──────────────────────────────────────────────────────
         if attn_mask is not None:
             if attn_mask.dtype != torch.bool:
                 attn_mask = attn_mask.bool()
-            key_mask = attn_mask[:, None, None, :]  # [B, 1, 1, L]
+            key_mask = attn_mask[:, None, None, :]                # [B, 1, 1, L]
             scores = scores.masked_fill(~key_mask, torch.finfo(scores.dtype).min)
 
-        attn = F.softmax(scores, dim=-1)
+        # ── Softmax or add-one attention ────────────────────────────────────────
+        if self.use_addone_attn:
+            # Numerically stable: shift by max before exp
+            scores_shifted = scores - scores.max(dim=-1, keepdim=True).values
+            exp_s = torch.exp(scores_shifted)
+            if attn_mask is not None:
+                exp_s = exp_s.masked_fill(~key_mask, 0.0)
+            attn = exp_s / (1.0 + exp_s.sum(dim=-1, keepdim=True))
+        else:
+            attn = F.softmax(scores, dim=-1)
+
         attn = self.dropout(attn)
 
-        out = torch.matmul(attn, Vh)  # [B, H, L, head_dim]
+        # ── Value aggregation + optional relation value augmentation ───────────
+        out = torch.matmul(attn, V_base)   # [B, H, L, hd]
+
+        if self.use_rel_value:
+            # attn_r_mass[b, h, i, r] = sum_j attn[b,h,i,j] * edge_mask[i,j,r]
+            attn_r_mass = torch.einsum("bhij, ijr -> bhir", attn, edge_mask_f)  # [B, H, L, R]
+            # rel_aug[b, h, i, :] = sum_r attn_r_mass[b,h,i,r] * rel_value_emb[h, r, :]
+            rel_aug = torch.einsum("bhir, hrd -> bhid", attn_r_mass, self.rel_value_emb)  # [B, H, L, hd]
+            out = out + rel_aug
+
         out = out.transpose(1, 2).contiguous().view(B, L, D)
         return self.out(out)
 
@@ -127,6 +199,10 @@ class EntityMarformer(nn.Module):
         super().__init__()
         self.config = config
         self.types = types
+        self.use_per_head_rel = config.use_per_head_rel
+        self.use_pointer = config.use_pointer
+        self.use_rel_value = config.use_rel_value
+        self.use_addone_attn = config.use_addone_attn
 
         # Global param dim = max over types (no longer passed in).
         self.global_param_dim = max(t.param_dim for t in types.values())
@@ -149,6 +225,7 @@ class EntityMarformer(nn.Module):
                 for name in types.keys()
             }
         )
+        # TODO: Check initialization of these embeddings.
         for p in self.type_embeddings.values():
             nn.init.kaiming_normal_(p, mode="fan_out", nonlinearity="relu")
 
@@ -170,6 +247,10 @@ class EntityMarformer(nn.Module):
                 num_heads=config.attention_heads,
                 num_relationships=num_relationships,
                 dropout=config.dropout,
+                use_per_head_rel=config.use_per_head_rel,
+                use_pointer=config.use_pointer,
+                use_rel_value=config.use_rel_value,
+                use_addone_attn=config.use_addone_attn,
             )
             ff = FeedForward(
                 self.model_dim,
@@ -182,6 +263,7 @@ class EntityMarformer(nn.Module):
             blocks.append(
                 nn.ModuleDict(
                     {
+                        "norm_1": NormLayer(self.model_dim),
                         "attn": attn,
                         "norm_2": NormLayer(self.model_dim),
                         "ff": ff,
@@ -219,7 +301,12 @@ class EntityMarformer(nn.Module):
             if token.type_name in self.deviation_tables and token.entity_id >= 0:
                 dev_table = self.deviation_tables[token.type_name]
                 if 0 <= token.entity_id < dev_table.shape[0]:
-                    feat_vec = feat_vec + dev_table[token.entity_id].unsqueeze(0)
+                    dev = dev_table[token.entity_id].unsqueeze(0)
+                    # Deviation dropout: drop with probability dropout_rate during training
+                    if self.training and t.variation.dropout_rate > 0:
+                        if torch.rand(1).item() < t.variation.dropout_rate:
+                            dev = torch.zeros_like(dev)
+                    feat_vec = feat_vec + dev
             features[0, idx] = feat_vec
 
             p = t.build_param(token.raw_data or {}, device=device, global_param_dim=self.param_dim)
@@ -247,9 +334,36 @@ class EntityMarformer(nn.Module):
         features, params, attn_mask = self._build_initial_streams(graph, device=device)
         edge_mask = graph.build_edge_masks(device=device)  # [L, L, R]
 
+        # Build K_aug for pointer mechanism: [L, L, 3] obs-obs shared-identity indicators
+        K_aug: torch.Tensor | None = None
+        if self.use_pointer:
+            L = graph.num_tokens
+            attr_ids  = torch.full((L,), -1, dtype=torch.long, device=device)
+            annot_ids = torch.full((L,), -1, dtype=torch.long, device=device)
+            item_ids  = torch.full((L,), -1, dtype=torch.long, device=device)
+            for idx, token in enumerate(graph.tokens):
+                if token.type_name in ("rating", "ranking_pairwise") and token.raw_data:
+                    attr_ids[idx]  = token.raw_data.get("attribute_id", -1)
+                    annot_ids[idx] = token.raw_data.get("annotator_id", -1)
+                    # Use first item_id (like Marformer pointer)
+                    iids = token.raw_data.get("item_ids", [])
+                    item_ids[idx]  = iids[0] if iids else -1
+            # [L, L] indicator: 1 if same id AND both valid (id >= 0)
+            def _same(ids: torch.Tensor) -> torch.Tensor:
+                eq = (ids.unsqueeze(0) == ids.unsqueeze(1)).float()  # [L, L]
+                valid = (ids >= 0).float()
+                return eq * valid.unsqueeze(0) * valid.unsqueeze(1)
+            K_aug = torch.stack([_same(attr_ids), _same(annot_ids), _same(item_ids)], dim=-1)  # [L, L, 3]
+
         for block in self.blocks:
             combined = torch.cat([features, params], dim=-1)  # [1, L, model_dim]
-            attn_out = block["attn"](combined, edge_mask=edge_mask, attn_mask=attn_mask)  # [1, L, model_dim]
+            # Pre-LN: norm before attention
+            attn_out = block["attn"](
+                block["norm_1"](combined),
+                edge_mask=edge_mask,
+                attn_mask=attn_mask,
+                K_aug=K_aug,
+            )  # [1, L, model_dim]
 
             combined = combined + attn_out
 

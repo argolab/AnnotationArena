@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import sys
 from dataclasses import dataclass
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Sequence
+
+import math
 
 import torch
 import torch.nn as nn
@@ -16,6 +19,7 @@ class LossBreakdown:
     """Per-type loss breakdown by status. trainable_loss is masked-only (for backprop); others for metrics."""
 
     trainable_loss: torch.Tensor  # scalar, masked only
+    observed_loss_tensor: torch.Tensor  # scalar, observed only (with grad for backprop)
     loss_observed: float
     loss_masked: float
     loss_missing: float
@@ -31,6 +35,7 @@ class VariationConfig:
     enabled: bool = False
     num_entities: int = 0  # number of entities of this type (define the size of the variational matrix)
     reg_weight: float = 0.0  # L2 regularization weight for deviations
+    dropout_rate: float = 0.0  # probability of dropping the deviation during training (1.0 = always drop)
 
 
 class EntityType(ABC):
@@ -104,6 +109,7 @@ class EntityType(ABC):
         z = torch.zeros((), device=device)
         return LossBreakdown(
             trainable_loss=z,
+            observed_loss_tensor=z,
             loss_observed=0.0,
             loss_masked=0.0,
             loss_missing=0.0,
@@ -170,10 +176,10 @@ class AnnotatorEntityType(NullEntityType):
 class ItemEntityType(NullEntityType):
     """Item entity: always new at test time, no deviation, no direct prediction."""
 
-    def __init__(self, num_items: int):
+    def __init__(self, num_items: int, dropout_rate: float = 1.0):
         super().__init__(
             name="item",
-            variation=VariationConfig(enabled=True, num_entities=num_items, reg_weight=0.0),
+            variation=VariationConfig(enabled=True, num_entities=num_items, reg_weight=0.0, dropout_rate=dropout_rate),
         )
 
 
@@ -188,7 +194,7 @@ class RatingVariableType(EntityType):
       - rating_dist: Optional[List[float]]
     """
 
-    def __init__(self, num_classes: int, logit_high: float = 20.0):
+    def __init__(self, num_classes: int, logit_high: float = 20.0, llm_input_dist: bool = False):
         super().__init__(
             name="rating",
             is_variable=True,
@@ -197,10 +203,10 @@ class RatingVariableType(EntityType):
         )
         self.num_classes = num_classes
         self.logit_high = float(logit_high)
+        self.llm_input_dist = llm_input_dist
         self.ce_loss = nn.CrossEntropyLoss(reduction="none")
 
     def build_param(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
-        # TODO: Input can be distribution, change this to accept "rating_dist" from the raw_data.
         p = torch.zeros(global_param_dim, device=device)
         is_missing = bool(raw_data.get("is_missing", False))
         is_masked = bool(raw_data.get("is_masked", False))
@@ -209,15 +215,33 @@ class RatingVariableType(EntityType):
             p[0] = 1.0
             return p
 
+        p[0] = 0.0
+
+        # Soft distribution input: encode log-probabilities when llm_input_dist is enabled
+        # and a non-one-hot rating_dist is available.
+        if self.llm_input_dist:
+            rating_dist = raw_data.get("rating_dist", None)
+            if rating_dist is not None:
+                dist_t = torch.tensor(rating_dist, dtype=torch.float32, device=device)
+                if dist_t.shape[0] == self.num_classes and not self._is_one_hot(dist_t):
+                    # log(max(p, exp(-logit_high))) — clamp prevents -inf
+                    log_dist = torch.log(torch.clamp(dist_t, min=math.exp(-self.logit_high)))
+                    p[1 : 1 + self.num_classes] = log_dist
+                    return p
+
+        # Hard label encoding: one-hot logit
         rating_value = raw_data.get("rating_value", None)
         if rating_value is None:
             raise ValueError("rating_value must be provided for observed ratings")
         if not (0 <= rating_value < self.num_classes):
             raise ValueError(f"rating_value {rating_value} out of range [0, {self.num_classes})")
-
-        p[0] = 0.0
         p[1 + rating_value] = self.logit_high
         return p
+
+    @staticmethod
+    def _is_one_hot(dist: torch.Tensor, tol: float = 1e-6) -> bool:
+        """Check if a distribution is effectively one-hot."""
+        return bool((dist.max() > 1.0 - tol) and (dist.sum() < 1.0 + tol))
 
     def compute_loss(
         self,
@@ -285,9 +309,11 @@ class RatingVariableType(EntityType):
         assert B == 1
         params = predicted_params[0]
         mask_flat = type_mask[0]
+        z = torch.zeros((), device=device)
         if not mask_flat.any():
             return LossBreakdown(
-                trainable_loss=torch.zeros((), device=device),
+                trainable_loss=z,
+                observed_loss_tensor=z,
                 loss_observed=0.0,
                 loss_masked=0.0,
                 loss_missing=0.0,
@@ -295,12 +321,16 @@ class RatingVariableType(EntityType):
                 n_masked=0,
                 n_missing=0,
             )
-        idx = mask_flat.nonzero(as_tuple=False).squeeze(-1)  # only masked indices  [M]
-        params_sel = params[idx]  # [M, P] (P = global_param_dim = max dim of all entity types)
+        idx = mask_flat.nonzero(as_tuple=False).squeeze(-1)  # [M]
+        params_sel = params[idx]  # [M, P]
         logits = params_sel[:, 1 : 1 + self.num_classes]  # [M, C]
-        # Build targets and status per token; require rating_value for all (observed, masked, missing)
-        targets_list: List[int] = []
+
+        # Build targets and status per token.
+        # Use soft targets (float [M, C]) when rating_dist is available; else hard int targets.
         status_list: List[int] = []
+        has_soft = False
+        soft_targets = torch.zeros(len(idx), self.num_classes, device=device)
+        hard_targets_list: List[int] = []
         for j, i in enumerate(idx.tolist()):
             t = tokens[i]
             raw = t.raw_data or {}
@@ -308,26 +338,53 @@ class RatingVariableType(EntityType):
             rv = raw.get("rating_value", None)
             if rv is None:
                 raise ValueError("rating_value must be present for rating tokens (observed/masked/missing)")
-            targets_list.append(int(rv))
-        targets = torch.tensor(targets_list, device=device, dtype=torch.long)
-        losses = self.ce_loss(logits, targets)  # [M]
+            hard_targets_list.append(int(rv))
+            # Build soft target from rating_dist if available
+            rating_dist = raw.get("rating_dist", None)
+            if rating_dist is not None and len(rating_dist) == self.num_classes:
+                soft_targets[j] = torch.tensor(rating_dist, dtype=torch.float32, device=device)
+                has_soft = True
+            else:
+                # One-hot fallback
+                soft_targets[j, int(rv)] = 1.0
+
+        # Compute per-token losses
+        if has_soft:
+            # CrossEntropyLoss with float targets [M, C]: -sum(p * log_softmax(logits))
+            log_probs = F.log_softmax(logits, dim=-1)  # [M, C]
+            losses = -(soft_targets * log_probs).sum(dim=-1)  # [M]
+        else:
+            hard_targets = torch.tensor(hard_targets_list, device=device, dtype=torch.long)
+            losses = self.ce_loss(logits, hard_targets)  # [M]
+
         n_observed = sum(1 for s in status_list if s == 2)
         n_masked = sum(1 for s in status_list if s == 1)
         n_missing = sum(1 for s in status_list if s == 0)
         masked_mask = torch.tensor([s == 1 for s in status_list], device=device, dtype=torch.bool)
         observed_mask = torch.tensor([s == 2 for s in status_list], device=device, dtype=torch.bool)
         missing_mask = torch.tensor([s == 0 for s in status_list], device=device, dtype=torch.bool)
+
         if masked_mask.any():
             trainable_loss = losses[masked_mask].mean()
             loss_masked_f = trainable_loss.detach().item()
         else:
-            trainable_loss = torch.zeros((), device=device)
+            trainable_loss = z
             loss_masked_f = 0.0
-        loss_observed = float(losses[observed_mask].mean().item()) if observed_mask.any() else 0.0
+
+        # Observed loss as tensor with grad (for optional backprop)
+        if observed_mask.any():
+            observed_loss_tensor = losses[observed_mask].mean()
+            loss_observed_f = observed_loss_tensor.detach().item()
+        else:
+            observed_loss_tensor = z
+            loss_observed_f = 0.0
+
         loss_missing = float(losses[missing_mask].mean().item()) if missing_mask.any() else 0.0
+
         return LossBreakdown(
             trainable_loss=trainable_loss,
-            loss_observed=loss_observed,
+            observed_loss_tensor=observed_loss_tensor,
+            loss_observed=loss_observed_f,
             loss_masked=loss_masked_f,
             loss_missing=loss_missing,
             n_observed=n_observed,
@@ -435,9 +492,11 @@ class PairwiseRankingVariableType(EntityType):
         assert B == 1
         params = predicted_params[0]
         mask_flat = type_mask[0]
+        z = torch.zeros((), device=device)
         if not mask_flat.any():
             return LossBreakdown(
-                trainable_loss=torch.zeros((), device=device),
+                trainable_loss=z,
+                observed_loss_tensor=z,
                 loss_observed=0.0,
                 loss_masked=0.0,
                 loss_missing=0.0,
@@ -474,13 +533,15 @@ class PairwiseRankingVariableType(EntityType):
             mask_s = pl_mask[:, sel]
             return self.pl_loss(logits_s, targets_s, mask_s)
 
-        trainable_loss = _pl_for_status(1) if n_masked > 0 else torch.zeros((), device=device)
-        loss_observed = _pl_for_status(2).detach().item() if n_observed > 0 else 0.0
+        trainable_loss = _pl_for_status(1) if n_masked > 0 else z
+        observed_loss_tensor = _pl_for_status(2) if n_observed > 0 else z
+        loss_observed_f = observed_loss_tensor.detach().item() if n_observed > 0 else 0.0
         loss_missing = _pl_for_status(0).detach().item() if n_missing > 0 else 0.0
         loss_masked_f = trainable_loss.detach().item() if n_masked > 0 else 0.0
         return LossBreakdown(
             trainable_loss=trainable_loss,
-            loss_observed=loss_observed,
+            observed_loss_tensor=observed_loss_tensor,
+            loss_observed=loss_observed_f,
             loss_masked=loss_masked_f,
             loss_missing=loss_missing,
             n_observed=n_observed,
@@ -497,6 +558,8 @@ def build_default_domain3_types(
     max_rank_size: int,
     logit_high: float = 20.0,
     annotator_reg_weight: float = 0.0,
+    llm_input_dist: bool = False,
+    item_dropout_rate: float = 1.0,
 ) -> Dict[str, EntityType]:
     """
     Convenience helper that builds the canonical domain-3 type registry.
@@ -504,8 +567,8 @@ def build_default_domain3_types(
     return {
         "attribute": AttributeEntityType(num_attributes=num_attributes),
         "annotator": AnnotatorEntityType(num_annotators=num_annotators, reg_weight=annotator_reg_weight),
-        "item": ItemEntityType(num_items=num_items),
-        "rating": RatingVariableType(num_classes=num_likert_classes, logit_high=logit_high),
+        "item": ItemEntityType(num_items=num_items, dropout_rate=item_dropout_rate),
+        "rating": RatingVariableType(num_classes=num_likert_classes, logit_high=logit_high, llm_input_dist=llm_input_dist),
         "ranking_pairwise": PairwiseRankingVariableType(max_rank_size=max_rank_size, logit_high=logit_high),
     }
 

@@ -122,6 +122,10 @@ def variable_list_to_entity_graph(
         raw_data: Dict[str, Any] = {
             "is_missing": var.is_missing,
             "is_masked": var.is_masked,
+            # Store obs identity for K_aug pointer mechanism
+            "attribute_id": var.attribute_id,
+            "annotator_id": var.annotator_id,
+            "item_ids": list(var.item_ids),
         }
         if var.is_listwise:
             raw_data["ranking_order"] = list(var.ranking_order or [])

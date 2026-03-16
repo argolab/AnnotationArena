@@ -6,6 +6,7 @@ python -m imputer.entity_mf.train   --data-dir path/to/your/bundle_dir   --epoch
 """
 from __future__ import annotations
 
+import sys
 import argparse
 from pathlib import Path
 from typing import Dict, List, Any
@@ -53,6 +54,9 @@ class EntityMarformerLightningModule(pl.LightningModule):
         max_item: int | None = None,
         run_dir: Path | None = None,
         transductive: bool = False,
+        mask_augmentations: int = 5,
+        masked_loss_weight: float = 15.0,
+        observed_loss_weight: float = 1.0,
     ):
         super().__init__()
         self.model = model
@@ -65,6 +69,9 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.max_item = max_item
         self.run_dir = run_dir
         self.transductive = bool(transductive)
+        self.mask_augmentations = mask_augmentations
+        self.masked_loss_weight = masked_loss_weight
+        self.observed_loss_weight = observed_loss_weight
 
         # Build persistent splits from the bundle. Training-time graphs may merge
         # train/test variables when transductive is enabled, but these remain as
@@ -122,8 +129,9 @@ class EntityMarformerLightningModule(pl.LightningModule):
         return torch.optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
 
     def train_dataloader(self):
-        """Dummy dataloader; data lives in train_observed + train_missing, graph built each step."""
-        ds = torch.utils.data.TensorDataset(torch.zeros(1))
+        """Dummy dataloader with mask_augmentations entries per epoch.
+        Each entry triggers a training_step with fresh random masking."""
+        ds = torch.utils.data.TensorDataset(torch.zeros(self.mask_augmentations))
         return torch.utils.data.DataLoader(ds, batch_size=1)
 
     def training_step(self, batch, batch_idx):
@@ -167,6 +175,11 @@ class EntityMarformerLightningModule(pl.LightningModule):
         # Accumulate loss tensors (for a single scalar loss).
         loss_tensors: List[torch.Tensor] = []
         loss_weights: List[int] = []  # number of masked tokens per chunk
+        # Accumulate raw (unweighted) CEs for readable logging.
+        masked_ce_accum: float = 0.0
+        masked_ce_count: int = 0
+        observed_ce_accum: float = 0.0
+        observed_ce_count: int = 0
 
 
         for available_items in item_chunks:
@@ -193,11 +206,16 @@ class EntityMarformerLightningModule(pl.LightningModule):
             self._print_var_count(graph, masked_or_observed, chunk_missing)
 
             ################## Forward pass ########################
+            # print(f"\nINPUT: {train_vars[300]}\n")
+            # print(f"OUTPUT: {params[0]}")
+            # sys.exit()
             params = self.model(graph, device=device)  # [1, L, P]
             ########################################################
 
-            trainable_loss = compute_trainable_loss(
-                params, graph, self.model.types, self.model.global_param_dim, device
+            trainable_loss, chunk_masked_ce, chunk_observed_ce = compute_trainable_loss(
+                params, graph, self.model.types, self.model.global_param_dim, device,
+                masked_loss_weight=self.masked_loss_weight,
+                observed_loss_weight=self.observed_loss_weight,
             )
 
             # Deviation regularization (per-entity deviations)
@@ -218,9 +236,18 @@ class EntityMarformerLightningModule(pl.LightningModule):
                 1 for t in graph.tokens
                 if t.type_name in ("rating", "ranking_pairwise") and t.status == 1
             )
+            n_observed_chunk = sum(
+                1 for t in graph.tokens
+                if t.type_name in ("rating", "ranking_pairwise") and t.status == 2
+            )
             weight = n_masked if n_masked > 0 else 1
             loss_tensors.append(chunk_loss)
             loss_weights.append(weight)
+            # Accumulate raw CEs weighted by token counts for averaging across chunks.
+            masked_ce_accum += chunk_masked_ce * n_masked
+            masked_ce_count += n_masked
+            observed_ce_accum += chunk_observed_ce * n_observed_chunk
+            observed_ce_count += n_observed_chunk
 
             if reg_loss.requires_grad and reg_loss.item() != 0:
                 self.log("train/reg_loss", reg_loss, prog_bar=False, on_step=True, on_epoch=True)
@@ -234,6 +261,11 @@ class EntityMarformerLightningModule(pl.LightningModule):
             loss = torch.zeros((), device=device, requires_grad=True)
 
         self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
+        # Raw unweighted CEs — comparable scale to test xent (~1.3 for random on 4-class).
+        if masked_ce_count > 0:
+            self.log("train/masked_ce", masked_ce_accum / masked_ce_count, prog_bar=True, on_step=True, on_epoch=True)
+        if observed_ce_count > 0:
+            self.log("train/observed_ce", observed_ce_accum / observed_ce_count, prog_bar=False, on_step=True, on_epoch=True)
 
         return loss
 
@@ -421,6 +453,8 @@ def build_entity_marformer_from_bundle(
     sizes: Dict[str, int],
     config: EntityMarformerConfig,
     annotator_reg_weight: float = 0.0,
+    llm_input_dist: bool = False,
+    item_dropout_rate: float = 1.0,
 ) -> tuple[EntityMarformer, Any]:
     # Reuse DataConverter to create RankingData variables for train partition.
     train_observed: List[RankingData] = converter.create_variables_from_bundle(
@@ -441,6 +475,8 @@ def build_entity_marformer_from_bundle(
         max_rank_size=converter.max_rank_size,
         logit_high=config.logit_high,
         annotator_reg_weight=annotator_reg_weight,
+        llm_input_dist=llm_input_dist,
+        item_dropout_rate=item_dropout_rate,
     )
 
     graph = variable_list_to_entity_graph(train_all, types)
@@ -508,6 +544,57 @@ def main():
         help="Override EntityMarformerConfig.num_layers (depth of Entity Marformer).",
     )
     parser.add_argument(
+        "--attention-heads",
+        type=int,
+        default=None,
+        help="Override EntityMarformerConfig.attention_heads.",
+    )
+    parser.add_argument(
+        "--d-ff",
+        type=int,
+        default=None,
+        help="Override EntityMarformerConfig.d_ff (feed-forward hidden dim).",
+    )
+    parser.add_argument(
+        "--num-ffn-layers",
+        type=int,
+        default=None,
+        help="Override EntityMarformerConfig.num_ffn_layers.",
+    )
+    parser.add_argument(
+        "--dropout",
+        type=float,
+        default=None,
+        help="Override EntityMarformerConfig.dropout.",
+    )
+    parser.add_argument(
+        "--use-per-head-rel",
+        action="store_true",
+        default=True,
+        help="Per-head relational bias: each head learns its own R-dim relation weights (default: True).",
+    )
+    parser.add_argument(
+        "--no-per-head-rel",
+        dest="use_per_head_rel",
+        action="store_false",
+        help="Use old shared-bias relational design: single shared R-dim bias added to all heads identically.",
+    )
+    parser.add_argument(
+        "--use-pointer",
+        action="store_true",
+        help="Enable K_aug obs-obs shared-identity pointer bias (like old Marformer).",
+    )
+    parser.add_argument(
+        "--use-rel-value",
+        action="store_true",
+        help="Enable relation-specific value augmentation V_{ij} = V(x_j) + sum_r e_r * edge_mask[i,j,r].",
+    )
+    parser.add_argument(
+        "--use-addone-attn",
+        action="store_true",
+        help="Enable add-one attention: attn = exp(s) / (1 + sum(exp(s))), allowing sum < 1.",
+    )
+    parser.add_argument(
         "--overwrite-existing-data",
         action="store_true",
         help="If set and --run-name is used, (re)use that run directory instead of failing when it exists.",
@@ -517,6 +604,35 @@ def main():
         type=float,
         default=0.0,
         help="L2 regularization weight for annotator deviation embeddings (AnnotatorEntityType).",
+    )
+    parser.add_argument(
+        "--mask-augmentations",
+        type=int,
+        default=5,
+        help="Number of independent masking draws per epoch (training steps per epoch).",
+    )
+    parser.add_argument(
+        "--masked-loss-weight",
+        type=float,
+        default=15.0,
+        help="Weight for masked loss in training objective.",
+    )
+    parser.add_argument(
+        "--observed-loss-weight",
+        type=float,
+        default=1.0,
+        help="Weight for observed loss in training objective.",
+    )
+    parser.add_argument(
+        "--llm-input-dist",
+        action="store_true",
+        help="Encode observed ratings as log-probability distributions (for soft LLM labels).",
+    )
+    parser.add_argument(
+        "--item-dropout-rate",
+        type=float,
+        default=1.0,
+        help="Probability of dropping item deviation embedding during training (1.0 = always drop).",
     )
     args = parser.parse_args()
 
@@ -529,6 +645,18 @@ def main():
         config.embedding_dim = args.embedding_dim
     if args.num_layers is not None:
         config.num_layers = args.num_layers
+    if args.attention_heads is not None:
+        config.attention_heads = args.attention_heads
+    if args.d_ff is not None:
+        config.d_ff = args.d_ff
+    if args.num_ffn_layers is not None:
+        config.num_ffn_layers = args.num_ffn_layers
+    if args.dropout is not None:
+        config.dropout = args.dropout
+    config.use_per_head_rel = args.use_per_head_rel
+    config.use_pointer      = args.use_pointer
+    config.use_rel_value    = args.use_rel_value
+    config.use_addone_attn  = args.use_addone_attn
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -537,6 +665,8 @@ def main():
         max_rank_size=sizes.get("max_rank_size", converter.max_rank_size),
         logit_high=config.logit_high,
         annotator_reg_weight=args.annotator_reg_weight,
+        llm_input_dist=args.llm_input_dist,
+        item_dropout_rate=args.item_dropout_rate,
     )
     # Build one graph (train partition) to get num_relationships and init model.
     # EntityMarformerLightningModule will build its own train/test splits from
@@ -575,6 +705,11 @@ def main():
             "attention_heads": config.attention_heads,
             "d_ff": config.d_ff,
             "num_ffn_layers": config.num_ffn_layers,
+            "dropout": config.dropout,
+            "use_per_head_rel": config.use_per_head_rel,
+            "use_pointer": config.use_pointer,
+            "use_rel_value": config.use_rel_value,
+            "use_addone_attn": config.use_addone_attn,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,
@@ -589,6 +724,11 @@ def main():
             "human_observed_rate": args.human_observed_rate,
             "max_item": args.max_item,
             "annotator_reg_weight": args.annotator_reg_weight,
+            "mask_augmentations": args.mask_augmentations,
+            "masked_loss_weight": args.masked_loss_weight,
+            "observed_loss_weight": args.observed_loss_weight,
+            "llm_input_dist": args.llm_input_dist,
+            "item_dropout_rate": args.item_dropout_rate,
             "device": args.device,
         },
         "run": {
@@ -610,6 +750,9 @@ def main():
         max_item=args.max_item,
         run_dir=run_dir,
         transductive=bool(args.transductive_learning),
+        mask_augmentations=args.mask_augmentations,
+        masked_loss_weight=args.masked_loss_weight,
+        observed_loss_weight=args.observed_loss_weight,
     )
 
     accelerator = "gpu" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
