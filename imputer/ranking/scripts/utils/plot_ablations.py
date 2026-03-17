@@ -14,6 +14,7 @@ Usage:
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -24,43 +25,84 @@ import matplotlib.ticker as ticker
 # Maps the short key extracted from the folder name to a human-readable legend label.
 # Folder name pattern: ablation_<key>_<rest>
 LABEL_MAP = {
-    "base":       "Base",
-    "noperhead":  "No Per-Head Rel",
-    "noptr":      "No Pointer",
-    "norelv":     "No Rel Value",
-    "llmhard":    "LLM Hard",
-    "human02":    "Human 0.2",
+    "base":         "Base",
+    "noperhead":    "No Per-Head Rel",
+    "noptr":        "No Pointer",
+    "norelv":       "No Rel Value",
+    "llmhard":      "LLM Hard",
+    "human02":      "Human 0.2",
+    "drop09":       "Item Drop 0.9",
+    "normalinit":   "Normal Init",
+    "scalednormal": "Scaled Normal Init",
 }
 
 # Base always drawn first and with a distinct style
 BASE_KEY = "base"
 
-# Color cycle — visually distinct for up to 6 runs
+# Color cycle — visually distinct for up to 9 runs
 COLORS = [
     "#1f77b4",  # blue     — Base
-    "#d62728",  # red      — No Per-Head Rel
-    "#ff7f0e",  # orange   — No Pointer
-    "#2ca02c",  # green    — No Rel Value
-    "#9467bd",  # purple   — LLM Hard
-    "#8c564b",  # brown    — Human 0.2
+    "#d62728",  # red      — No Per-Head Rel / Human 0.2
+    "#ff7f0e",  # orange   — No Pointer / Item Drop 0.9
+    "#2ca02c",  # green    — No Rel Value / Normal Init
+    "#9467bd",  # purple   — LLM Hard / Scaled Normal Init
+    "#8c564b",  # brown
+    "#e377c2",  # pink
+    "#7f7f7f",  # gray
+    "#17becf",  # cyan
 ]
+
+
+# ── Sweep label extraction ─────────────────────────────────────────────────────
+# Base values for the No Per-Head Rel sweep — runs matching all defaults are
+# labelled "Sweep Base". Folder name pattern: sweep_noperhead_<NL>L<NH>H_..._ffn<F>_..._itemdrop<D>_..._lr<LR>_...
+_SWEEP_BASE = {"layers": 6, "ffn": 1, "itemdrop": 0.7, "lr": "2e-4"}
+
+
+def _extract_sweep_label(folder_name: str) -> str:
+    """Parse a sweep_noperhead_... folder name and return the swept parameter as a label."""
+    layers_m = re.search(r"_(\d+)L\d+H_",      folder_name)
+    ffn_m    = re.search(r"_ffn(\d+)_",         folder_name)
+    idrop_m  = re.search(r"_itemdrop([\d.]+)_", folder_name)
+    lr_m     = re.search(r"_lr([^_]+)_",        folder_name)
+
+    layers   = int(layers_m.group(1))   if layers_m else _SWEEP_BASE["layers"]
+    ffn      = int(ffn_m.group(1))      if ffn_m    else _SWEEP_BASE["ffn"]
+    itemdrop = float(idrop_m.group(1))  if idrop_m  else _SWEEP_BASE["itemdrop"]
+    lr       = lr_m.group(1)            if lr_m     else _SWEEP_BASE["lr"]
+
+    parts = []
+    if layers != _SWEEP_BASE["layers"]:
+        parts.append(f"{layers} Layers")
+    if ffn != _SWEEP_BASE["ffn"]:
+        parts.append(f"{ffn} FFN Layers")
+    if abs(itemdrop - _SWEEP_BASE["itemdrop"]) > 1e-6:
+        parts.append(f"Item Drop {itemdrop}")
+    if lr != _SWEEP_BASE["lr"]:
+        parts.append(f"LR {lr}")
+
+    return ", ".join(parts) if parts else "Sweep Base"
 
 
 def _extract_label(folder_name: str) -> str:
     """
     Extract a human-readable legend label from a run folder name.
 
-    Tries LABEL_MAP first; falls back to the raw ablation key; then the folder name.
+    Handles three patterns:
+      ablation_<key>_... → LABEL_MAP lookup
+      sweep_noperhead_...  → parse swept parameter from name
+      anything else        → full folder name (fallback)
     """
-    # Pattern: ablation_<key>_...
     if folder_name.startswith("ablation_"):
         parts = folder_name.split("_")
         if len(parts) >= 2:
             key = parts[1]
             if key in LABEL_MAP:
                 return LABEL_MAP[key]
-            return key  # unknown ablation — use raw key
-    return folder_name  # not an ablation run — use full name
+            return key
+    if folder_name.startswith("sweep_"):
+        return _extract_sweep_label(folder_name)
+    return folder_name
 
 
 def _sort_key(label: str) -> int:
@@ -114,7 +156,7 @@ def plot(runs: list[dict], out_path: Path) -> None:
         return
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5))
-    fig.suptitle("Entity Marformer — Ablation Comparison (Test, Missing Ratings)", fontsize=13)
+    fig.suptitle("Entity Marformer — Run Comparison (Test, Missing Ratings)", fontsize=13)
 
     ax_loss, ax_acc = axes
 
@@ -171,7 +213,7 @@ def main():
     if not root.exists():
         raise FileNotFoundError(f"Output root not found: {root}")
 
-    out_path = args.out if args.out is not None else root / "ablation_comparison.png"
+    out_path = args.out if args.out is not None else root / "comparison.png"
 
     print(f"Scanning {root} for training_history.json files...")
     runs = load_runs(root)

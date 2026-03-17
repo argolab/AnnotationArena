@@ -595,6 +595,14 @@ def main():
         help="Enable add-one attention: attn = exp(s) / (1 + sum(exp(s))), allowing sum < 1.",
     )
     parser.add_argument(
+        "--type-embedding-init",
+        type=str,
+        default="normal",
+        choices=["normal", "scaled_normal", "kaiming"],
+        help="Initialization for type centroid embeddings: 'normal' (BERT-style std=0.02), "
+             "'scaled_normal' (std=1/sqrt(feature_dim)), 'kaiming' (legacy).",
+    )
+    parser.add_argument(
         "--overwrite-existing-data",
         action="store_true",
         help="If set and --run-name is used, (re)use that run directory instead of failing when it exists.",
@@ -653,10 +661,11 @@ def main():
         config.num_ffn_layers = args.num_ffn_layers
     if args.dropout is not None:
         config.dropout = args.dropout
-    config.use_per_head_rel = args.use_per_head_rel
-    config.use_pointer      = args.use_pointer
-    config.use_rel_value    = args.use_rel_value
-    config.use_addone_attn  = args.use_addone_attn
+    config.use_per_head_rel    = args.use_per_head_rel
+    config.use_pointer         = args.use_pointer
+    config.use_rel_value       = args.use_rel_value
+    config.use_addone_attn     = args.use_addone_attn
+    config.type_embedding_init = args.type_embedding_init
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -710,6 +719,7 @@ def main():
             "use_pointer": config.use_pointer,
             "use_rel_value": config.use_rel_value,
             "use_addone_attn": config.use_addone_attn,
+            "type_embedding_init": config.type_embedding_init,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,

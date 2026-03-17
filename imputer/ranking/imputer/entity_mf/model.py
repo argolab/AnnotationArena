@@ -182,6 +182,21 @@ class RelationalAttentionBlock(nn.Module):
         return self.out(out)
 
 
+def _init_type_embedding(p: nn.Parameter, mode: str, feature_dim: int) -> None:
+    """Initialize a type centroid embedding parameter."""
+    if mode == "normal":
+        nn.init.normal_(p, mean=0.0, std=0.02)
+    elif mode == "scaled_normal":
+        nn.init.normal_(p, mean=0.0, std=1.0 / math.sqrt(feature_dim))
+    elif mode == "kaiming":
+        nn.init.kaiming_normal_(p, mode="fan_out", nonlinearity="relu")
+    else:
+        raise ValueError(
+            f"Unknown type_embedding_init: {mode!r}. "
+            f"Choose from 'normal', 'scaled_normal', 'kaiming'."
+        )
+
+
 class EntityMarformer(nn.Module):
     """
     Minimal viable Entity Marformer with:
@@ -225,9 +240,8 @@ class EntityMarformer(nn.Module):
                 for name in types.keys()
             }
         )
-        # TODO: Check initialization of these embeddings.
         for p in self.type_embeddings.values():
-            nn.init.kaiming_normal_(p, mode="fan_out", nonlinearity="relu")
+            _init_type_embedding(p, config.type_embedding_init, self.feature_dim)
 
         # Per-entity deviations/variations (where enabled)
         self.deviation_tables = nn.ParameterDict()
