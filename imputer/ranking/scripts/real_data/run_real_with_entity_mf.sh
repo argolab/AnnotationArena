@@ -31,10 +31,10 @@ USE_LLM_INPUT_DIST=true  # true = encode observed LLM ratings as log-probabiliti
 
 # ── Model hyperparameters ────────────────────────────────────────────────────────
 EMBEDDING_DIM=80          # Total model dim (feature_dim + param_dim). Must be divisible by ATTENTION_HEADS.
-NUM_LAYERS=6              # Number of transformer encoder layers
+NUM_LAYERS=4              # Number of transformer encoder layers
 ATTENTION_HEADS=4         # Number of attention heads. head_dim = EMBEDDING_DIM/ATTENTION_HEADS = 20
 D_FF=128                  # Feed-forward hidden dimension
-NUM_FFN_LAYERS=1          # Number of MLP layers inside each FFN block
+NUM_FFN_LAYERS=2          # Number of MLP layers inside each FFN block
 DROPOUT=0.1               # Dropout rate (attention + FFN)
 ITEM_DROPOUT_RATE=0.7     # Probability of dropping item deviation during training (1.0 = always drop; items are unseen at test time)
 
