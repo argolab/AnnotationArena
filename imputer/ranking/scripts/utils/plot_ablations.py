@@ -34,6 +34,11 @@ LABEL_MAP = {
     "drop09":       "Item Drop 0.9",
     "normalinit":   "Normal Init",
     "scalednormal": "Scaled Normal Init",
+    "itemreg":      "Item L2 Reg",
+    "attrreg":      "Attr L2 Reg",
+    "bothreg":      "Item + Attr L2 Reg",
+    "devnorm":      "Deviation Norm",
+    "cosine":       "Cosine LR (2e-3→1e-5)",
 }
 
 # Base always drawn first and with a distinct style

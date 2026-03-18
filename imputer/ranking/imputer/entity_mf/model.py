@@ -320,6 +320,8 @@ class EntityMarformer(nn.Module):
                     if self.training and t.variation.dropout_rate > 0:
                         if torch.rand(1).item() < t.variation.dropout_rate:
                             dev = torch.zeros_like(dev)
+                    if self.config.use_deviation_norm:
+                        dev = self.deviation_norm(dev)
                     feat_vec = feat_vec + dev
             features[0, idx] = feat_vec
 

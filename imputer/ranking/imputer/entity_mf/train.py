@@ -57,6 +57,8 @@ class EntityMarformerLightningModule(pl.LightningModule):
         mask_augmentations: int = 5,
         masked_loss_weight: float = 15.0,
         observed_loss_weight: float = 1.0,
+        lr_schedule: str = "none",
+        lr_min: float = 1e-5,
     ):
         super().__init__()
         self.model = model
@@ -72,6 +74,8 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.mask_augmentations = mask_augmentations
         self.masked_loss_weight = masked_loss_weight
         self.observed_loss_weight = observed_loss_weight
+        self.lr_schedule = lr_schedule
+        self.lr_min = lr_min
 
         # Build persistent splits from the bundle. Training-time graphs may merge
         # train/test variables when transductive is enabled, but these remain as
@@ -126,7 +130,13 @@ class EntityMarformerLightningModule(pl.LightningModule):
         )
 
     def configure_optimizers(self):
-        return torch.optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        if self.lr_schedule == "cosine":
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+                optimizer, T_max=self.trainer.max_epochs, eta_min=self.lr_min
+            )
+            return [optimizer], [{"scheduler": scheduler, "interval": "epoch"}]
+        return optimizer
 
     def train_dataloader(self):
         """Dummy dataloader with mask_augmentations entries per epoch.
@@ -642,6 +652,36 @@ def main():
         default=1.0,
         help="Probability of dropping item deviation embedding during training (1.0 = always drop).",
     )
+    parser.add_argument(
+        "--item-reg-weight",
+        type=float,
+        default=0.0,
+        help="L2 regularization weight for item deviation embeddings.",
+    )
+    parser.add_argument(
+        "--attribute-reg-weight",
+        type=float,
+        default=0.0,
+        help="L2 regularization weight for attribute deviation embeddings.",
+    )
+    parser.add_argument(
+        "--use-deviation-norm",
+        action="store_true",
+        help="Apply LayerNorm to each deviation before adding to its type centroid (bounds deviation scale).",
+    )
+    parser.add_argument(
+        "--lr-schedule",
+        type=str,
+        default="none",
+        choices=["none", "cosine"],
+        help="LR schedule: 'none' = constant LR, 'cosine' = CosineAnnealingLR from --lr down to --lr-min.",
+    )
+    parser.add_argument(
+        "--lr-min",
+        type=float,
+        default=1e-5,
+        help="Minimum LR for cosine schedule (eta_min). Only used when --lr-schedule cosine.",
+    )
     args = parser.parse_args()
 
     data_dir = Path(args.data_dir)
@@ -666,6 +706,7 @@ def main():
     config.use_rel_value       = args.use_rel_value
     config.use_addone_attn     = args.use_addone_attn
     config.type_embedding_init = args.type_embedding_init
+    config.use_deviation_norm  = args.use_deviation_norm
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -674,6 +715,8 @@ def main():
         max_rank_size=sizes.get("max_rank_size", converter.max_rank_size),
         logit_high=config.logit_high,
         annotator_reg_weight=args.annotator_reg_weight,
+        item_reg_weight=args.item_reg_weight,
+        attribute_reg_weight=args.attribute_reg_weight,
         llm_input_dist=args.llm_input_dist,
         item_dropout_rate=args.item_dropout_rate,
     )
@@ -720,6 +763,7 @@ def main():
             "use_rel_value": config.use_rel_value,
             "use_addone_attn": config.use_addone_attn,
             "type_embedding_init": config.type_embedding_init,
+            "use_deviation_norm": config.use_deviation_norm,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,
@@ -734,6 +778,10 @@ def main():
             "human_observed_rate": args.human_observed_rate,
             "max_item": args.max_item,
             "annotator_reg_weight": args.annotator_reg_weight,
+            "item_reg_weight": args.item_reg_weight,
+            "attribute_reg_weight": args.attribute_reg_weight,
+            "lr_schedule": args.lr_schedule,
+            "lr_min": args.lr_min,
             "mask_augmentations": args.mask_augmentations,
             "masked_loss_weight": args.masked_loss_weight,
             "observed_loss_weight": args.observed_loss_weight,
@@ -763,6 +811,8 @@ def main():
         mask_augmentations=args.mask_augmentations,
         masked_loss_weight=args.masked_loss_weight,
         observed_loss_weight=args.observed_loss_weight,
+        lr_schedule=args.lr_schedule,
+        lr_min=args.lr_min,
     )
 
     accelerator = "gpu" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
