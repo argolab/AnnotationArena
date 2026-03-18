@@ -37,8 +37,12 @@ LABEL_MAP = {
     "itemreg":      "Item L2 Reg",
     "attrreg":      "Attr L2 Reg",
     "bothreg":      "Item + Attr L2 Reg",
-    "devnorm":      "Deviation Norm",
-    "cosine":       "Cosine LR (2e-3→1e-5)",
+    "devnorm":          "Deviation Norm",
+    "cosine":           "Cosine LR (2e-3→1e-5)",
+    # ablations_reg_2
+    "allreg":           "Item + Attr + Annot L2 Reg",
+    "bothregdevnorm":   "Item + Attr L2 + Dev Norm",
+    "cosinebothreg":    "Cosine LR + Item + Attr L2",
 }
 
 # Base always drawn first and with a distinct style
@@ -46,15 +50,18 @@ BASE_KEY = "base"
 
 # Color cycle — visually distinct for up to 9 runs
 COLORS = [
-    "#1f77b4",  # blue     — Base
-    "#d62728",  # red      — No Per-Head Rel / Human 0.2
-    "#ff7f0e",  # orange   — No Pointer / Item Drop 0.9
-    "#2ca02c",  # green    — No Rel Value / Normal Init
-    "#9467bd",  # purple   — LLM Hard / Scaled Normal Init
+    "#1f77b4",  # blue
+    "#d62728",  # red
+    "#ff7f0e",  # orange
+    "#2ca02c",  # green
+    "#9467bd",  # purple
     "#8c564b",  # brown
     "#e377c2",  # pink
     "#7f7f7f",  # gray
     "#17becf",  # cyan
+    "#bcbd22",  # yellow-green
+    "#aec7e8",  # light blue
+    "#ffbb78",  # light orange
 ]
 
 
@@ -98,13 +105,12 @@ def _extract_label(folder_name: str) -> str:
       sweep_noperhead_...  → parse swept parameter from name
       anything else        → full folder name (fallback)
     """
-    if folder_name.startswith("ablation_"):
-        parts = folder_name.split("_")
-        if len(parts) >= 2:
-            key = parts[1]
-            if key in LABEL_MAP:
-                return LABEL_MAP[key]
-            return key
+    parts = folder_name.split("_")
+    if parts[0].startswith("ablation") and len(parts) >= 2:
+        key = parts[1]
+        if key in LABEL_MAP:
+            return LABEL_MAP[key]
+        return key
     if folder_name.startswith("sweep_"):
         return _extract_sweep_label(folder_name)
     return folder_name
