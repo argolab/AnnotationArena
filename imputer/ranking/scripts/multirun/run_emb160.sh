@@ -4,7 +4,7 @@
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
 
-#SBATCH --job-name=EMF_SplitNorm_R2
+#SBATCH --job-name=EMF_Emb160
 #SBATCH --nodes=1
 #SBATCH --mem-per-cpu=18GB
 #SBATCH --gpus=1
@@ -19,22 +19,16 @@ cd /export/fs06/psingh54/EntityMarformer/imputer/ranking
 export PYTHONPATH=.
 set -e
 
-# ── Split-Stream Norm Run 2 ───────────────────────────────────────────────────
+# ── Hyperparam search: embedding_dim = 160 (vs base 80) ──────────────────────
+# feature_dim = 160 - 5 (param_dim) = 155
+# head_dim    = 160 / 4 heads = 40  (divisible ✓)
 
 BUNDLE="dist"
 DATA_DIR="OUTPUT/generated_data/llm_rubric_dist"
 
-USE_PER_HEAD_REL=false
-USE_POINTER=true
-USE_REL_VALUE=true
-USE_ADDONE_ATTN=true
-USE_LLM_INPUT_DIST=true
-SCALE_SHARED_REL=true
-USE_SPLIT_STREAM_NORM=true   # <-- ablated: on
-
 TYPE_EMBEDDING_INIT="kaiming"
 
-EMBEDDING_DIM=80
+EMBEDDING_DIM=160      # <-- ablated: 160 vs base 80
 NUM_LAYERS=8
 ATTENTION_HEADS=4
 D_FF=128
@@ -61,22 +55,15 @@ ITEM_REG_WEIGHT=1e-3
 ATTRIBUTE_REG_WEIGHT=1e-3
 ANNOTATOR_REG_WEIGHT=0.0
 
-RUN_NUMBER=2
-
-RUN_NAME="multirun_splitnorm_run${RUN_NUMBER}_${NUM_LAYERS}L${ATTENTION_HEADS}H_emb${EMBEDDING_DIM}_ffn${NUM_FFN_LAYERS}_${EPOCHS}ep"
+RUN_NAME="multirun_emb160_${NUM_LAYERS}L${ATTENTION_HEADS}H_emb${EMBEDDING_DIM}_ffn${NUM_FFN_LAYERS}_${EPOCHS}ep"
 RUN_NAME="${RUN_NAME}_itemdrop${ITEM_DROPOUT_RATE}_lr${LR}_sched${LR_SCHEDULE}"
 RUN_NAME="${RUN_NAME}_ireg${ITEM_REG_WEIGHT}_areg${ATTRIBUTE_REG_WEIGHT}_annotreg${ANNOTATOR_REG_WEIGHT}_init${TYPE_EMBEDDING_INIT}"
 RUN_NAME="${RUN_NAME}_relscale_shared_ptr_relv_addone_softinput_${BUNDLE}"
 
 echo ""
 echo "============================================================"
-echo " Multirun Split-Stream Norm Run ${RUN_NUMBER}"
-echo "  run_name:     $RUN_NAME"
-echo "  model:        ${NUM_LAYERS}L ${ATTENTION_HEADS}H emb=${EMBEDDING_DIM} ffn=${NUM_FFN_LAYERS}"
-echo "  lr:           ${LR}  schedule=${LR_SCHEDULE}"
-echo "  reg:          item=${ITEM_REG_WEIGHT}  attr=${ATTRIBUTE_REG_WEIGHT}  annot=${ANNOTATOR_REG_WEIGHT}"
-echo "  init:         ${TYPE_EMBEDDING_INIT}  scale_shared_rel=true  split_stream_norm=true"
-echo "  item_dropout: ${ITEM_DROPOUT_RATE}"
+echo " Hyperparam search: embedding_dim=160 (feature_dim=155, head_dim=40)"
+echo "  run_name: $RUN_NAME"
 echo "============================================================"
 echo ""
 
@@ -114,7 +101,6 @@ python -m imputer.entity_mf.train \
     --use-addone-attn      \
     --llm-input-dist       \
     --scale-shared-rel     \
-    --use-split-stream-norm \
     --overwrite-existing-data
 
 echo ""
