@@ -222,6 +222,7 @@ class EntityMarformer(nn.Module):
         self.use_pointer = config.use_pointer
         self.use_rel_value = config.use_rel_value
         self.use_addone_attn = config.use_addone_attn
+        self.use_split_stream_norm = config.use_split_stream_norm
 
         # Global param dim = max over types (no longer passed in).
         self.global_param_dim = max(t.param_dim for t in types.values())
@@ -279,19 +280,31 @@ class EntityMarformer(nn.Module):
             )
             proj_out = nn.Linear(self.model_dim, self.feature_dim)
             W_param = nn.Linear(self.model_dim, self.param_dim)
-            blocks.append(
-                nn.ModuleDict(
-                    {
-                        "norm_1": NormLayer(self.model_dim),
-                        "attn": attn,
-                        "norm_2": NormLayer(self.model_dim),
-                        "ff": ff,
-                        "proj_out": proj_out,
-                        "W_param": W_param,
-                        "dropout_2": nn.Dropout(config.dropout),
-                    }
-                )
-            )
+            if config.use_split_stream_norm:
+                block_dict = {
+                    # Pre-attention: separate norms per stream
+                    "norm_feat_attn":  NormLayer(self.feature_dim),
+                    "norm_param_attn": NormLayer(self.param_dim),
+                    "attn": attn,
+                    # Pre-FFN: separate norms on the feature/param slices of combined
+                    "norm_feat_ff":    NormLayer(self.feature_dim),
+                    "norm_param_ff":   NormLayer(self.param_dim),
+                    "ff": ff,
+                    "proj_out": proj_out,
+                    "W_param": W_param,
+                    "dropout_2": nn.Dropout(config.dropout),
+                }
+            else:
+                block_dict = {
+                    "norm_1": NormLayer(self.model_dim),
+                    "attn": attn,
+                    "norm_2": NormLayer(self.model_dim),
+                    "ff": ff,
+                    "proj_out": proj_out,
+                    "W_param": W_param,
+                    "dropout_2": nn.Dropout(config.dropout),
+                }
+            blocks.append(nn.ModuleDict(block_dict))
         self.blocks = nn.ModuleList(blocks)
 
     def _build_initial_streams(
@@ -379,8 +392,15 @@ class EntityMarformer(nn.Module):
         for block in self.blocks:
             combined = torch.cat([features, params], dim=-1)  # [1, L, model_dim]
             # Pre-LN: norm before attention
+            if self.use_split_stream_norm:
+                normed_attn = torch.cat([
+                    block["norm_feat_attn"](features),
+                    block["norm_param_attn"](params),
+                ], dim=-1)  # [1, L, model_dim]
+            else:
+                normed_attn = block["norm_1"](combined)
             attn_out = block["attn"](
-                block["norm_1"](combined),
+                normed_attn,
                 edge_mask=edge_mask,
                 attn_mask=attn_mask,
                 K_aug=K_aug,
@@ -389,7 +409,14 @@ class EntityMarformer(nn.Module):
             combined = combined + attn_out
 
             # Single FFN on combined stream
-            z_ff = block["ff"](block["norm_2"](combined))
+            if self.use_split_stream_norm:
+                normed_ff = torch.cat([
+                    block["norm_feat_ff"](combined[..., :self.feature_dim]),
+                    block["norm_param_ff"](combined[..., self.feature_dim:]),
+                ], dim=-1)  # [1, L, model_dim]
+            else:
+                normed_ff = block["norm_2"](combined)
+            z_ff = block["ff"](normed_ff)
             combined = combined + z_ff
 
             # Project back to the two streams and add as residuals

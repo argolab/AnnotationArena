@@ -612,6 +612,13 @@ def main():
              "matching the joint normalization used in per-head mode.",
     )
     parser.add_argument(
+        "--use-split-stream-norm",
+        action="store_true",
+        default=False,
+        help="Use separate LayerNorms for feature and param streams before attention and FFN "
+             "(4 independent norms per block instead of 2). Fixes scale asymmetry between streams.",
+    )
+    parser.add_argument(
         "--type-embedding-init",
         type=str,
         default="normal",
@@ -708,13 +715,14 @@ def main():
         config.num_ffn_layers = args.num_ffn_layers
     if args.dropout is not None:
         config.dropout = args.dropout
-    config.use_per_head_rel    = args.use_per_head_rel
-    config.use_pointer         = args.use_pointer
-    config.use_rel_value       = args.use_rel_value
-    config.use_addone_attn     = args.use_addone_attn
-    config.type_embedding_init = args.type_embedding_init
-    config.use_deviation_norm  = args.use_deviation_norm
-    config.scale_shared_rel    = args.scale_shared_rel
+    config.use_per_head_rel      = args.use_per_head_rel
+    config.use_pointer           = args.use_pointer
+    config.use_rel_value         = args.use_rel_value
+    config.use_addone_attn       = args.use_addone_attn
+    config.type_embedding_init   = args.type_embedding_init
+    config.use_deviation_norm    = args.use_deviation_norm
+    config.scale_shared_rel      = args.scale_shared_rel
+    config.use_split_stream_norm = args.use_split_stream_norm
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -773,6 +781,7 @@ def main():
             "type_embedding_init": config.type_embedding_init,
             "use_deviation_norm": config.use_deviation_norm,
             "scale_shared_rel": config.scale_shared_rel,
+            "use_split_stream_norm": config.use_split_stream_norm,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,

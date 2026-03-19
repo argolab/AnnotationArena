@@ -101,9 +101,10 @@ def _extract_label(folder_name: str) -> str:
     """
     Extract a human-readable legend label from a run folder name.
 
-    Handles three patterns:
-      ablation_<key>_... → LABEL_MAP lookup
+    Handles four patterns:
+      ablation_<key>_...   → LABEL_MAP lookup
       sweep_noperhead_...  → parse swept parameter from name
+      multirun_<key>_runN_... → "Base Run N" or "Split-Norm Run N"
       anything else        → full folder name (fallback)
     """
     parts = folder_name.split("_")
@@ -114,6 +115,20 @@ def _extract_label(folder_name: str) -> str:
         return key
     if folder_name.startswith("sweep_"):
         return _extract_sweep_label(folder_name)
+    if folder_name.startswith("multirun_") and len(parts) >= 3:
+        variant = parts[1]   # "base" or "splitnorm"
+        # Extract run number from "runN"
+        run_num = ""
+        for p in parts[2:]:
+            if p.startswith("run") and p[3:].isdigit():
+                run_num = p[3:]
+                break
+        suffix = f" Run {run_num}" if run_num else ""
+        if variant == "base":
+            return f"Base{suffix}"
+        if variant == "splitnorm":
+            return f"Split-Stream Norm{suffix}"
+        return f"{variant}{suffix}"
     return folder_name
 
 
