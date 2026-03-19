@@ -47,6 +47,7 @@ class RelationalAttentionBlock(nn.Module):
         use_pointer: bool = False,
         use_rel_value: bool = False,
         use_addone_attn: bool = False,
+        scale_shared_rel: bool = False,
     ):
         super().__init__()
         self.model_dim = model_dim
@@ -56,6 +57,7 @@ class RelationalAttentionBlock(nn.Module):
         self.use_pointer = use_pointer
         self.use_rel_value = use_rel_value
         self.use_addone_attn = use_addone_attn
+        self.scale_shared_rel = scale_shared_rel
         assert model_dim % num_heads == 0, (
             f"model_dim {model_dim} must be divisible by num_heads {num_heads}"
         )
@@ -140,6 +142,8 @@ class RelationalAttentionBlock(nn.Module):
             content_scores = torch.matmul(Qh, Kh.transpose(-2, -1)) / math.sqrt(hd) # [B, H, L, L]
             # Relational bias: [B, L, L] -> broadcast over heads [B, 1, L, L]
             rel_scores = (Q_rel_shared.unsqueeze(2) * edge_mask_f.unsqueeze(0)).sum(-1).unsqueeze(1)
+            if self.scale_shared_rel:
+                rel_scores = rel_scores / math.sqrt(hd)
             scores = content_scores + rel_scores
 
         # ── Pointer bias (shared across heads) ─────────────────────────────────
@@ -265,6 +269,7 @@ class EntityMarformer(nn.Module):
                 use_pointer=config.use_pointer,
                 use_rel_value=config.use_rel_value,
                 use_addone_attn=config.use_addone_attn,
+                scale_shared_rel=config.scale_shared_rel,
             )
             ff = FeedForward(
                 self.model_dim,

@@ -605,6 +605,13 @@ def main():
         help="Enable add-one attention: attn = exp(s) / (1 + sum(exp(s))), allowing sum < 1.",
     )
     parser.add_argument(
+        "--scale-shared-rel",
+        action="store_true",
+        default=False,
+        help="In shared-bias mode (--no-per-head-rel): scale rel_scores by 1/sqrt(head_dim), "
+             "matching the joint normalization used in per-head mode.",
+    )
+    parser.add_argument(
         "--type-embedding-init",
         type=str,
         default="normal",
@@ -707,6 +714,7 @@ def main():
     config.use_addone_attn     = args.use_addone_attn
     config.type_embedding_init = args.type_embedding_init
     config.use_deviation_norm  = args.use_deviation_norm
+    config.scale_shared_rel    = args.scale_shared_rel
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -764,6 +772,7 @@ def main():
             "use_addone_attn": config.use_addone_attn,
             "type_embedding_init": config.type_embedding_init,
             "use_deviation_norm": config.use_deviation_norm,
+            "scale_shared_rel": config.scale_shared_rel,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,

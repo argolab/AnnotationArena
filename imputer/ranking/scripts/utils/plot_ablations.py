@@ -43,6 +43,7 @@ LABEL_MAP = {
     "allreg":           "Item + Attr + Annot L2 Reg",
     "bothregdevnorm":   "Item + Attr L2 + Dev Norm",
     "cosinebothreg":    "Cosine LR + Item + Attr L2",
+    "bothregscale":     "Item + Attr L2 + Shared Rel Scale",
 }
 
 # Base always drawn first and with a distinct style
