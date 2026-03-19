@@ -4,7 +4,7 @@
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
 
-#SBATCH --job-name=EMF_Abl_RelVal
+#SBATCH --job-name=EMF_Best_R2
 #SBATCH --nodes=1
 #SBATCH --mem-per-cpu=18GB
 #SBATCH --gpus=1
@@ -19,12 +19,14 @@ cd /export/fs06/psingh54/EntityMarformer/imputer/ranking
 export PYTHONPATH=.
 set -e
 
-# ── Ablation: Base + relational value augmentation ───────────────────────────
-# Adds rel-value on top of ablation base.
-# V_{ij} = V(x_j) + sum_r e_r * edge_mask[i,j,r], per-head e_r init to zero.
+# ── Best Run Replication — Run 2 of 5 ────────────────────────────────────────
+# Exact replica of ablation4_bothregscale (best performing run).
+# 5 independent seeds to estimate variance and confirm stability.
 
 BUNDLE="dist"
 DATA_DIR="OUTPUT/generated_data/llm_rubric_dist"
+
+TYPE_EMBEDDING_INIT="kaiming"
 
 EMBEDDING_DIM=80
 NUM_LAYERS=8
@@ -33,7 +35,6 @@ D_FF=128
 NUM_FFN_LAYERS=1
 DROPOUT=0.1
 ITEM_DROPOUT_RATE=0.7
-TYPE_EMBEDDING_INIT="kaiming"
 
 EPOCHS=300
 LR=2e-4
@@ -54,14 +55,16 @@ ITEM_REG_WEIGHT=1e-3
 ATTRIBUTE_REG_WEIGHT=1e-3
 ANNOTATOR_REG_WEIGHT=0.0
 
-RUN_NAME="ablation_relvalue_${NUM_LAYERS}L${ATTENTION_HEADS}H_emb${EMBEDDING_DIM}_ffn${NUM_FFN_LAYERS}_${EPOCHS}ep"
+RUN_NUMBER=2
+
+RUN_NAME="best_run${RUN_NUMBER}_${NUM_LAYERS}L${ATTENTION_HEADS}H_emb${EMBEDDING_DIM}_ffn${NUM_FFN_LAYERS}_${EPOCHS}ep"
 RUN_NAME="${RUN_NAME}_itemdrop${ITEM_DROPOUT_RATE}_lr${LR}_sched${LR_SCHEDULE}"
-RUN_NAME="${RUN_NAME}_ireg${ITEM_REG_WEIGHT}_areg${ATTRIBUTE_REG_WEIGHT}_init${TYPE_EMBEDDING_INIT}"
-RUN_NAME="${RUN_NAME}_sharedbias_relscale_relv_softinput_${BUNDLE}"
+RUN_NAME="${RUN_NAME}_ireg${ITEM_REG_WEIGHT}_areg${ATTRIBUTE_REG_WEIGHT}_annotreg${ANNOTATOR_REG_WEIGHT}_init${TYPE_EMBEDDING_INIT}"
+RUN_NAME="${RUN_NAME}_relscale_shared_ptr_relv_addone_softinput_${BUNDLE}"
 
 echo ""
 echo "============================================================"
-echo " Ablation: Base + relational value augmentation"
+echo " Best Run Replication — Run ${RUN_NUMBER} of 5"
 echo "  run_name: $RUN_NAME"
 echo "============================================================"
 echo ""
@@ -95,9 +98,11 @@ python -m imputer.entity_mf.train \
     --attribute-reg-weight "$ATTRIBUTE_REG_WEIGHT"   \
     --annotator-reg-weight "$ANNOTATOR_REG_WEIGHT"   \
     --no-per-head-rel                                \
-    --scale-shared-rel                               \
+    --use-pointer                                    \
     --use-rel-value                                  \
+    --use-addone-attn                                \
     --llm-input-dist                                 \
+    --scale-shared-rel                               \
     --overwrite-existing-data
 
 echo ""

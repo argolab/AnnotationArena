@@ -289,3 +289,5 @@ imputer/ranking/test.sh
 imputer/ranking/run_single_kp10_random_as_key_fresh_lightning.sh
 imputer/ranking/models/tensor_domain_model
 imputer/ranking/lightning_logs/*
+
+imputer/ranking/ARCHITECTURE
