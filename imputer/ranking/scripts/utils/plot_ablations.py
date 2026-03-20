@@ -13,12 +13,14 @@ Usage:
 """
 
 import argparse
+import colorsys
 import json
 import re
 from pathlib import Path
 
 import matplotlib.pyplot as plt
 import matplotlib.ticker as ticker
+from matplotlib.lines import Line2D
 
 
 # ── Known ablation labels ──────────────────────────────────────────────────────
@@ -117,6 +119,24 @@ def _extract_label(folder_name: str) -> str:
         return key
     if folder_name.startswith("sweep_"):
         return _extract_sweep_label(folder_name)
+    if folder_name.startswith("final_") and len(parts) >= 2:
+        _FINAL_LABELS = {
+            "base":       "Base",
+            "pointer":    "Pointer",
+            "relvalue":   "Rel Value",
+            "perheadrel": "Per-Head Rel",
+            "addone":     "Add-One Attn",
+            "combo124":   "Combo (Ptr+RelV+AddOne)",
+            "itemreg":    "Item Reg",
+            "attrreg":    "Attr Reg",
+            "bothreg":    "Both Reg",
+            "devnorm":    "Dev Norm",
+            "all":        "All Together",
+        }
+        exp = parts[1]
+        run_num = parts[-1][3:] if parts[-1].startswith("run") and parts[-1][3:].isdigit() else ""
+        label = _FINAL_LABELS.get(exp, exp)
+        return f"{label} Run {run_num}" if run_num else label
     if folder_name.startswith("best_run") and len(parts) >= 2:
         run_num = parts[1][3:] if parts[1].startswith("run") else ""
         return f"Best Run {run_num}" if run_num else "Best Run"
@@ -135,6 +155,30 @@ def _extract_label(folder_name: str) -> str:
             return f"Split-Stream Norm{suffix}"
         return f"{variant}{suffix}"
     return folder_name
+
+
+# ── Experiment color helpers ───────────────────────────────────────────────────
+
+def _get_exp_name(label: str) -> str:
+    """Strip trailing ' Run N' to get experiment family name."""
+    return re.sub(r'\s+Run\s+\d+$', '', label)
+
+
+def _get_run_num(label: str) -> int:
+    """Extract run number from label, default 1 if not found."""
+    m = re.search(r'\s+Run\s+(\d+)$', label)
+    return int(m.group(1)) if m else 1
+
+
+def _make_shade(hex_color: str, run_num: int) -> str:
+    """Lighter/darker shade of hex_color: run 1=darkest, run 2=base, run 3=lightest."""
+    hex_color = hex_color.lstrip('#')
+    r, g, b = [int(hex_color[i:i+2], 16) / 255.0 for i in (0, 2, 4)]
+    h, l, s = colorsys.rgb_to_hls(r, g, b)
+    factors = {1: 0.70, 2: 1.0, 3: 1.38}
+    new_l = min(0.88, max(0.15, l * factors.get(run_num, 1.0)))
+    r2, g2, b2 = colorsys.hls_to_rgb(h, new_l, s)
+    return '#{:02x}{:02x}{:02x}'.format(int(r2 * 255), int(g2 * 255), int(b2 * 255))
 
 
 def _sort_key(label: str) -> int:
@@ -187,26 +231,34 @@ def plot(runs: list[dict], out_path: Path) -> None:
         print("No runs found — nothing to plot.")
         return
 
-    fig, axes = plt.subplots(1, 2, figsize=(13, 5))
+    # ── Assign one base color per experiment family ────────────────────────────
+    exp_names: list[str] = []
+    for run in runs:
+        name = _get_exp_name(run["label"])
+        if name not in exp_names:
+            exp_names.append(name)
+    exp_color = {name: COLORS[i % len(COLORS)] for i, name in enumerate(exp_names)}
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
     fig.suptitle("Entity Marformer — Run Comparison (Test, Missing Ratings)", fontsize=13)
 
     ax_loss, ax_acc = axes
 
-    for i, run in enumerate(runs):
-        color = COLORS[i % len(COLORS)]
-        lw = 2.2 if run["label"] == LABEL_MAP.get(BASE_KEY, "Base") else 1.6
-        alpha = 1.0 if run["label"] == LABEL_MAP.get(BASE_KEY, "Base") else 0.85
+    for run in runs:
+        exp_name = _get_exp_name(run["label"])
+        run_num  = _get_run_num(run["label"])
+        color    = _make_shade(exp_color[exp_name], run_num)
+        is_base  = exp_name == LABEL_MAP.get(BASE_KEY, "Base")
+        lw    = 2.2 if is_base else 1.6
+        alpha = 1.0 if is_base else 0.85
 
-        ax_loss.plot(run["epochs"], run["xent"], label=run["label"],
-                     color=color, linewidth=lw, alpha=alpha)
-        ax_acc.plot(run["epochs"],  run["acc"],  label=run["label"],
-                    color=color, linewidth=lw, alpha=alpha)
+        ax_loss.plot(run["epochs"], run["xent"], color=color, linewidth=lw, alpha=alpha)
+        ax_acc.plot(run["epochs"],  run["acc"],  color=color, linewidth=lw, alpha=alpha)
 
     # ── Loss plot ──────────────────────────────────────────────────────────────
     ax_loss.set_title("Test CE Loss (Missing)")
     ax_loss.set_xlabel("Epoch")
     ax_loss.set_ylabel("Cross-Entropy")
-    ax_loss.legend(fontsize=9)
     ax_loss.grid(True, alpha=0.3)
     ax_loss.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
 
@@ -215,11 +267,24 @@ def plot(runs: list[dict], out_path: Path) -> None:
     ax_acc.set_xlabel("Epoch")
     ax_acc.set_ylabel("Accuracy")
     ax_acc.set_ylim(bottom=0.0)
-    ax_acc.legend(fontsize=9)
     ax_acc.grid(True, alpha=0.3)
     ax_acc.xaxis.set_major_locator(ticker.MaxNLocator(integer=True))
 
+    # ── Single figure-level legend outside the plots (right side) ─────────────
+    legend_handles = [
+        Line2D([0], [0], color=exp_color[name], linewidth=2.0, label=name)
+        for name in exp_names
+    ]
+    fig.legend(
+        handles=legend_handles,
+        loc="center left",
+        bbox_to_anchor=(1.01, 0.5),
+        fontsize=9,
+        frameon=True,
+    )
+
     plt.tight_layout()
+    fig.subplots_adjust(right=0.86)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     plt.savefig(out_path, dpi=150, bbox_inches="tight")
     print(f"Saved: {out_path}")
