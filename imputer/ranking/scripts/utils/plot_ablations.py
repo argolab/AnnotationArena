@@ -44,6 +44,8 @@ LABEL_MAP = {
     "bothregdevnorm":   "Item + Attr L2 + Dev Norm",
     "cosinebothreg":    "Cosine LR + Item + Attr L2",
     "bothregscale":     "Item + Attr L2 + Shared Rel Scale",
+    # best run replications
+    "bestrun":          "Best Run",
 }
 
 # Base always drawn first and with a distinct style
@@ -115,6 +117,9 @@ def _extract_label(folder_name: str) -> str:
         return key
     if folder_name.startswith("sweep_"):
         return _extract_sweep_label(folder_name)
+    if folder_name.startswith("best_run") and len(parts) >= 2:
+        run_num = parts[1][3:] if parts[1].startswith("run") else ""
+        return f"Best Run {run_num}" if run_num else "Best Run"
     if folder_name.startswith("multirun_") and len(parts) >= 3:
         variant = parts[1]   # "base" or "splitnorm"
         # Extract run number from "runN"

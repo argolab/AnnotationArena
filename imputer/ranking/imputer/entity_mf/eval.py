@@ -157,8 +157,18 @@ def evaluate_entity_marformer_split(
         raise ValueError("No variables to evaluate on")
 
     # Build graph and run model to get parameter stream.
+    # Switch to eval mode so item dropout and nn.Dropout are disabled during
+    # evaluation — gives a clean, deterministic signal. try/finally guarantees
+    # training mode is always restored even if the forward pass raises.
     graph = variable_list_to_entity_graph(variables, types)
-    params = model(graph, device=device)  # [1, L, P]
+    was_training = model.training
+    model.eval()
+    try:
+        with torch.no_grad():
+            params = model(graph, device=device)  # [1, L, P]
+    finally:
+        if was_training:
+            model.train()
 
     # Aggregate loss breakdown over observed/masked/missing (with per-type details).
     loss_info = _aggregate_loss_from_breakdowns(params, graph, types, global_param_dim, device)
