@@ -48,6 +48,10 @@ LABEL_MAP = {
     "bothregscale":     "Item + Attr L2 + Shared Rel Scale",
     # best run replications
     "bestrun":          "Best Run",
+    # section 1: feature-only layernorm experiments
+    "lnbase":           "LN Base",
+    "lnpointer":        "LN Pointer",
+    "lnrelvalue":       "LN Rel Value",
 }
 
 # Base always drawn first and with a distinct style
@@ -137,6 +141,16 @@ def _extract_label(folder_name: str) -> str:
         run_num = parts[-1][3:] if parts[-1].startswith("run") and parts[-1][3:].isdigit() else ""
         label = _FINAL_LABELS.get(exp, exp)
         return f"{label} Run {run_num}" if run_num else label
+    if folder_name.startswith("lnexp_") and len(parts) >= 2:
+        _LN_LABELS = {
+            "base":     "LN Base",
+            "pointer":  "LN Pointer",
+            "relvalue": "LN Rel Value",
+        }
+        exp = parts[1]
+        run_num = parts[-1][3:] if parts[-1].startswith("run") and parts[-1][3:].isdigit() else ""
+        label = _LN_LABELS.get(exp, exp)
+        return f"{label} Run {run_num}" if run_num else label
     if folder_name.startswith("best_run") and len(parts) >= 2:
         run_num = parts[1][3:] if parts[1].startswith("run") else ""
         return f"Best Run {run_num}" if run_num else "Best Run"
@@ -151,8 +165,6 @@ def _extract_label(folder_name: str) -> str:
         suffix = f" Run {run_num}" if run_num else ""
         if variant == "base":
             return f"Base{suffix}"
-        if variant == "splitnorm":
-            return f"Split-Stream Norm{suffix}"
         return f"{variant}{suffix}"
     return folder_name
 

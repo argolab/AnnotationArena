@@ -84,10 +84,10 @@ class RelationalAttentionBlock(nn.Module):
         self.V = nn.Linear(model_dim, model_dim)
         self.out = nn.Linear(model_dim, model_dim)
 
-        # Relation-specific value embeddings: e_r per head, init to zero (no-op at start)
+        # Relation-specific value embeddings: shared across heads, init to zero (no-op at start)
         if use_rel_value:
-            self.rel_value_emb = nn.Parameter(
-                torch.zeros(num_heads, R, self.head_dim)
+            self.value_rel = nn.Parameter(
+                torch.zeros(R, model_dim)
             )
 
         self.dropout = nn.Dropout(dropout)
@@ -176,11 +176,15 @@ class RelationalAttentionBlock(nn.Module):
         out = torch.matmul(attn, V_base)   # [B, H, L, hd]
 
         if self.use_rel_value:
-            # attn_r_mass[b, h, i, r] = sum_j attn[b,h,i,j] * edge_mask[i,j,r]
-            attn_r_mass = torch.einsum("bhij, ijr -> bhir", attn, edge_mask_f)  # [B, H, L, R]
-            # rel_aug[b, h, i, :] = sum_r attn_r_mass[b,h,i,r] * rel_value_emb[h, r, :]
-            rel_aug = torch.einsum("bhir, hrd -> bhid", attn_r_mass, self.rel_value_emb)  # [B, H, L, hd]
-            out = out + rel_aug
+            # val_rel[i, j, d] = sum_r edge_mask[i, j, r] * value_rel[r, d]
+            val_rel = torch.einsum("ijr,rd->ijd", edge_mask_f, self.value_rel)          # [L, L, D]
+            # attn_mean[b, i, j] = mean over heads
+            attn_mean = attn.mean(dim=1)                                                  # [B, L, L]
+            # bias[b, i, d] = sum_j attn_mean[b, i, j] * val_rel[i, j, d]
+            bias = torch.einsum("bij,ijd->bid", attn_mean, val_rel)                      # [B, L, D]
+            # reshape to [B, H, L, head_dim] and add to out
+            bias_h = bias.view(B, L, H, hd).permute(0, 2, 1, 3).contiguous()            # [B, H, L, hd]
+            out = out + bias_h
 
         out = out.transpose(1, 2).contiguous().view(B, L, D)
         return self.out(out)
@@ -222,7 +226,6 @@ class EntityMarformer(nn.Module):
         self.use_pointer = config.use_pointer
         self.use_rel_value = config.use_rel_value
         self.use_addone_attn = config.use_addone_attn
-        self.use_split_stream_norm = config.use_split_stream_norm
 
         # Global param dim = max over types (no longer passed in).
         self.global_param_dim = max(t.param_dim for t in types.values())
@@ -280,30 +283,16 @@ class EntityMarformer(nn.Module):
             )
             proj_out = nn.Linear(self.model_dim, self.feature_dim)
             W_param = nn.Linear(self.model_dim, self.param_dim)
-            if config.use_split_stream_norm:
-                block_dict = {
-                    # Pre-attention: separate norms per stream
-                    "norm_feat_attn":  NormLayer(self.feature_dim),
-                    "norm_param_attn": NormLayer(self.param_dim),
-                    "attn": attn,
-                    # Pre-FFN: separate norms on the feature/param slices of combined
-                    "norm_feat_ff":    NormLayer(self.feature_dim),
-                    "norm_param_ff":   NormLayer(self.param_dim),
-                    "ff": ff,
-                    "proj_out": proj_out,
-                    "W_param": W_param,
-                    "dropout_2": nn.Dropout(config.dropout),
-                }
-            else:
-                block_dict = {
-                    "norm_1": NormLayer(self.model_dim),
-                    "attn": attn,
-                    "norm_2": NormLayer(self.model_dim),
-                    "ff": ff,
-                    "proj_out": proj_out,
-                    "W_param": W_param,
-                    "dropout_2": nn.Dropout(config.dropout),
-                }
+            norm_dim = self.feature_dim if config.use_feature_only_norm else self.model_dim
+            block_dict = {
+                "norm_1": NormLayer(norm_dim),
+                "attn": attn,
+                "norm_2": NormLayer(norm_dim),
+                "ff": ff,
+                "proj_out": proj_out,
+                "W_param": W_param,
+                "dropout_2": nn.Dropout(config.dropout),
+            }
             blocks.append(nn.ModuleDict(block_dict))
         self.blocks = nn.ModuleList(blocks)
 
@@ -392,11 +381,8 @@ class EntityMarformer(nn.Module):
         for block in self.blocks:
             combined = torch.cat([features, params], dim=-1)  # [1, L, model_dim]
             # Pre-LN: norm before attention
-            if self.use_split_stream_norm:
-                normed_attn = torch.cat([
-                    block["norm_feat_attn"](features),
-                    block["norm_param_attn"](params),
-                ], dim=-1)  # [1, L, model_dim]
+            if self.config.use_feature_only_norm:
+                normed_attn = torch.cat([block["norm_1"](features), params], dim=-1)
             else:
                 normed_attn = block["norm_1"](combined)
             attn_out = block["attn"](
@@ -409,11 +395,8 @@ class EntityMarformer(nn.Module):
             combined = combined + attn_out
 
             # Single FFN on combined stream
-            if self.use_split_stream_norm:
-                normed_ff = torch.cat([
-                    block["norm_feat_ff"](combined[..., :self.feature_dim]),
-                    block["norm_param_ff"](combined[..., self.feature_dim:]),
-                ], dim=-1)  # [1, L, model_dim]
+            if self.config.use_feature_only_norm:
+                normed_ff = torch.cat([block["norm_2"](combined[..., :self.feature_dim]), combined[..., self.feature_dim:]], dim=-1)
             else:
                 normed_ff = block["norm_2"](combined)
             z_ff = block["ff"](normed_ff)
