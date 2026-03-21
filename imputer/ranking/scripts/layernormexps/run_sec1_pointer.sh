@@ -79,7 +79,7 @@ RUN_BASE="${RUN_BASE}_itemdrop${ITEM_DROPOUT_RATE}_ireg${ITEM_REG_WEIGHT}_areg${
 
 echo ""
 echo "============================================================"
-echo " Sec 1 LayerNorm Exp: Base + Pointer + Feature-Only Norm (2 runs)"
+echo " Sec 1 LayerNorm Exp: Base + Pointer + Feature-Only Norm (3 runs)"
 echo "  itemdrop=${ITEM_DROPOUT_RATE}  ireg=${ITEM_REG_WEIGHT}  areg=${ATTRIBUTE_REG_WEIGHT}"
 echo "  flags: $PER_HEAD_FLAG $SCALE_FLAG $POINTER_FLAG $REL_VALUE_FLAG $ADDONE_FLAG $DEVNORM_FLAG $FEAT_NORM_FLAG"
 echo "============================================================"
@@ -87,7 +87,7 @@ echo "============================================================"
 # ── Helper ────────────────────────────────────────────────────────────────────
 _train() {
     local N=$1
-    echo ""; echo "--- Run ${N}/2: ${RUN_BASE}_run${N} ---"; echo ""
+    echo ""; echo "--- Run ${N}/3: ${RUN_BASE}_run${N} ---"; echo ""
     python -m imputer.entity_mf.train \
         --data-dir             "$DATA_DIR"                  \
         --run-name             "${RUN_BASE}_run${N}"        \
@@ -129,5 +129,6 @@ _train() {
 
 _train 1
 _train 2
+_train 3
 
-echo ""; echo "All 2 runs complete. Output: $OUTPUT_ROOT"
+echo ""; echo "All 3 runs complete. Output: $OUTPUT_ROOT"
