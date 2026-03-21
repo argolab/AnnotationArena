@@ -176,13 +176,12 @@ class RelationalAttentionBlock(nn.Module):
         out = torch.matmul(attn, V_base)   # [B, H, L, hd]
 
         if self.use_rel_value:
-            # val_rel[i, j, d] = sum_r edge_mask[i, j, r] * value_rel[r, d]
-            val_rel = torch.einsum("ijr,rd->ijd", edge_mask_f, self.value_rel)          # [L, L, D]
-            # attn_mean[b, i, j] = mean over heads
+            # Contract j first to avoid materializing [L, L, D] intermediate (OOM for large graphs).
+            # attn_r_mass[b, i, r] = sum_j attn_mean[b, i, j] * edge_mask[i, j, r]
             attn_mean = attn.mean(dim=1)                                                  # [B, L, L]
-            # bias[b, i, d] = sum_j attn_mean[b, i, j] * val_rel[i, j, d]
-            bias = torch.einsum("bij,ijd->bid", attn_mean, val_rel)                      # [B, L, D]
-            # reshape to [B, H, L, head_dim] and add to out
+            attn_r_mass = torch.einsum("bij,ijr->bir", attn_mean, edge_mask_f)           # [B, L, R]
+            # bias[b, i, d] = sum_r attn_r_mass[b, i, r] * value_rel[r, d]
+            bias = attn_r_mass @ self.value_rel                                           # [B, L, D]
             bias_h = bias.view(B, L, H, hd).permute(0, 2, 1, 3).contiguous()            # [B, H, L, hd]
             out = out + bias_h
 
