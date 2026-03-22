@@ -14,9 +14,11 @@ Setup:
 
 We use:
 - A single SyntheticRegressionType "tree_node" with (input_dim=1, output_dim=1)
-- VariationConfig(enabled=True, num_entities=13, reg_weight=10.0) so each node
-  has a per-entity deviation embedding with L2 regularization.
-- EntityMarformer with 2 layers, 1 head, small embedding dimension.
+- VariationConfig(enabled=False, num_entities=13, reg_weight=1.0).
+- EntityMarformer with 3 layers, 1 head, small embedding dimension.
+- Architecture knobs (use_per_head_rel, use_rel_value, use_addone_attn,
+  use_feature_only_norm, scale_shared_rel, type_embedding_init) are exposed
+  as function parameters for easy comparison.
 
 We generate multiple random trees, split into train/test, train the model, and
 monitor whether it generalizes the subtree counting behavior to held-out trees,
@@ -182,6 +184,7 @@ def _guided_init_attention(model: EntityMarformer, p2c_index: int) -> None:
       - out to behave approximately like identity
 
     This is a soft inductive bias, not an exact analytic solution.
+    Handles both per-head and shared-bias relational attention layouts.
     """
     D = model.model_dim
     F_dim = model.feature_dim
@@ -190,17 +193,26 @@ def _guided_init_attention(model: EntityMarformer, p2c_index: int) -> None:
     with torch.no_grad():
         for block in model.blocks:
             attn = block["attn"]
+            H = attn.num_heads
+            hd = attn.head_dim
+            R = attn.num_relationships
 
-            # Zero Q/K weights and biases first.
             attn.Q.weight.zero_()
             attn.Q.bias.zero_()
             attn.K.weight.zero_()
             attn.K.bias.zero_()
 
-            # Relational part of Q bias: add positive bias on the P2C relation dim.
-            # Q_full outputs [D + R]; relation dims are indices D..D+R-1.
-            if 0 <= p2c_index < attn.num_relationships:
-                attn.Q.bias[D + p2c_index] = 5.0
+            if 0 <= p2c_index < R:
+                if attn.use_per_head_rel:
+                    # Per-head: Q outputs [D]. Reshaped to [H, hd] per token.
+                    # Within each head, last R dims are relational:
+                    #   head h -> flat index h*hd + (hd - R) + p2c_index
+                    kc = hd - R
+                    for h in range(H):
+                        attn.Q.bias[h * hd + kc + p2c_index] = 5.0
+                else:
+                    # Shared-bias: Q outputs [D + R]. Relational dims at D..D+R-1.
+                    attn.Q.bias[D + p2c_index] = 5.0
 
             # V: copy param slice of combined [features, params] into the param slice,
             # scaled by the branching factor (3) so that, when attention uses a
@@ -217,8 +229,6 @@ def _guided_init_attention(model: EntityMarformer, p2c_index: int) -> None:
             for d in range(D):
                 attn.out.weight[d, d] = 1.0
 
-            # Optionally, make FFN initially close to zero so it does not disturb
-            # the initial attention behavior.
             ff = block["ff"]
             for name, param in ff.named_parameters():
                 if "weight" in name or "bias" in name:
@@ -226,9 +236,16 @@ def _guided_init_attention(model: EntityMarformer, p2c_index: int) -> None:
 
 def run_entity_mf_random_trees(
     device: torch.device | None = None,
-    shuffle_nodes: bool = False,
+    shuffle_nodes: bool = True,
     freeze_variation: bool = False,
     guide_attention: bool = False,
+    # Architecture knobs (mirror EntityMarformerConfig)
+    use_per_head_rel: bool = True,
+    use_rel_value: bool = False,
+    use_addone_attn: bool = False,
+    use_feature_only_norm: bool = False,
+    scale_shared_rel: bool = False,
+    type_embedding_init: str = "normal",
 ) -> None:
     if device is None:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -238,7 +255,6 @@ def run_entity_mf_random_trees(
     num_train = 10
     num_test = 10
 
-    # Build train/test samples (types registry is identical for all).
     train_samples: List[TreeSample] = []
     for _ in range(num_train):
         train_samples.append(build_random_depth2_tree(device=device, rng=rng, shuffle_nodes=shuffle_nodes))
@@ -247,7 +263,6 @@ def run_entity_mf_random_trees(
     for _ in range(num_test):
         test_samples.append(build_random_depth2_tree(device=device, rng=rng, shuffle_nodes=shuffle_nodes))
 
-    # Use types and relationships from the first train sample to build the model.
     ref_graph = train_samples[0].graph
     types = ref_graph.types
 
@@ -258,6 +273,12 @@ def run_entity_mf_random_trees(
         dropout=0.0,
         d_ff=32,
         num_ffn_layers=1,
+        use_per_head_rel=use_per_head_rel,
+        use_rel_value=use_rel_value,
+        use_addone_attn=use_addone_attn,
+        use_feature_only_norm=use_feature_only_norm,
+        scale_shared_rel=scale_shared_rel,
+        type_embedding_init=type_embedding_init,
     )
 
     model = EntityMarformer(
@@ -290,8 +311,12 @@ def run_entity_mf_random_trees(
     opt = torch.optim.Adam(model.parameters(), lr=5e-3)
 
     print(
-        "Starting EntityMarformer random-tree generalization experiment "
-        f"(shuffle_nodes={shuffle_nodes}, freeze_variation={freeze_variation}, guide_attention={guide_attention})..."
+        "Starting EntityMarformer random-tree generalization experiment\n"
+        f"  shuffle_nodes={shuffle_nodes}, freeze_variation={freeze_variation}, guide_attention={guide_attention}\n"
+        f"  use_per_head_rel={use_per_head_rel}, use_rel_value={use_rel_value}, "
+        f"use_addone_attn={use_addone_attn}\n"
+        f"  use_feature_only_norm={use_feature_only_norm}, scale_shared_rel={scale_shared_rel}, "
+        f"type_embedding_init={type_embedding_init}"
     )
     for step in range(1000):
         model.train()
@@ -369,11 +394,23 @@ def run_entity_mf_random_trees(
 
 
 if __name__ == "__main__":
-    # By default, run with node shuffling enabled and trainable variation.
-    # To test fixed-per-entity embeddings, call:
-    #   run_entity_mf_random_trees(shuffle_nodes=True, freeze_variation=True)
-    # To test attention-guided initialization, pass guide_attention=True.
-    run_entity_mf_random_trees(shuffle_nodes=True, freeze_variation=False, guide_attention=True)
+    # Default: per-head relational attention, node shuffling, guided init.
+    # Toggle architecture knobs to compare designs:
+    #   run_entity_mf_random_trees(use_per_head_rel=False, scale_shared_rel=True)  # shared-bias
+    #   run_entity_mf_random_trees(use_rel_value=True)     # relational value augmentation
+    #   run_entity_mf_random_trees(use_addone_attn=True)   # add-one attention
+    #   run_entity_mf_random_trees(use_feature_only_norm=True)  # norm feature stream only
+    # run_entity_mf_random_trees(shuffle_nodes=True, freeze_variation=False, guide_attention=False)
+    run_entity_mf_random_trees(shuffle_nodes=False, 
+                               freeze_variation=False, 
+                               guide_attention=False,
+                               use_per_head_rel=False,
+                               use_rel_value=True,
+                               use_addone_attn=False,
+                               use_feature_only_norm=False,
+                               scale_shared_rel=False,
+                               type_embedding_init="normal")
+        
 
 
 
