@@ -358,10 +358,15 @@ class EntityMarformerLightningModule(pl.LightningModule):
         else:
             # Non-transductive: evaluate train and test splits separately.
             if self.train_all:
+                # For train_eval, apply the same masking strategy used during training
+                # to create an artificial "masked" subset of the observed train vars.
+                masked_train_observed = self.masking_strategy.mask(self.train_observed)
+                train_eval_vars = masked_train_observed + self.train_missing
+
                 train_eval: EntityEvalResults = evaluate_entity_marformer_split(
                     model=self.model,
                     split="train",
-                    variables=self.train_all,
+                    variables=train_eval_vars,
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
