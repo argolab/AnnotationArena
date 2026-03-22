@@ -89,6 +89,21 @@ def main() -> None:
     parser.add_argument("--d-ff", type=int, default=128)
     parser.add_argument("--num-ffn-layers", type=int, default=1)
 
+    # Architecture knobs (EntityMarformerConfig) — defaults match synthetic sweep baseline
+    parser.add_argument("--use-per-head-rel", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--use-pointer", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--use-rel-value", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--use-addone-attn", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument(
+        "--type-embedding-init",
+        type=str,
+        default="normal",
+        choices=["normal", "scaled_normal", "kaiming"],
+    )
+    parser.add_argument("--use-deviation-norm", action=argparse.BooleanOptionalAction, default=False)
+    parser.add_argument("--scale-shared-rel", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--use-feature-only-norm", action=argparse.BooleanOptionalAction, default=True)
+
     # Tree task args
     parser.add_argument("--tree-depth", type=int, default=3)
     parser.add_argument("--tree-width", type=int, default=3)
@@ -136,6 +151,14 @@ def main() -> None:
         dropout=float(args.dropout),
         d_ff=int(args.d_ff),
         num_ffn_layers=int(args.num_ffn_layers),
+        use_per_head_rel=bool(args.use_per_head_rel),
+        use_pointer=bool(args.use_pointer),
+        use_rel_value=bool(args.use_rel_value),
+        use_addone_attn=bool(args.use_addone_attn),
+        type_embedding_init=str(args.type_embedding_init),
+        use_deviation_norm=bool(args.use_deviation_norm),
+        scale_shared_rel=bool(args.scale_shared_rel),
+        use_feature_only_norm=bool(args.use_feature_only_norm),
     )
     model = EntityMarformer(config=cfg, types=graph0.types, num_relationships=graph0.num_relationships).to(device)
 
@@ -164,6 +187,14 @@ def main() -> None:
             "d_ff": cfg.d_ff,
             "num_ffn_layers": cfg.num_ffn_layers,
             "global_param_dim": model.global_param_dim,
+            "use_per_head_rel": cfg.use_per_head_rel,
+            "use_pointer": cfg.use_pointer,
+            "use_rel_value": cfg.use_rel_value,
+            "use_addone_attn": cfg.use_addone_attn,
+            "type_embedding_init": cfg.type_embedding_init,
+            "use_deviation_norm": cfg.use_deviation_norm,
+            "scale_shared_rel": cfg.scale_shared_rel,
+            "use_feature_only_norm": cfg.use_feature_only_norm,
         },
     }
     (out_dir / "config.json").write_text(json.dumps(snapshot, indent=2))
@@ -184,6 +215,14 @@ def main() -> None:
         f" | layers={cfg.num_layers}"
         f" emb_dim={cfg.embedding_dim}"
         f" heads={cfg.attention_heads}"
+        f" per_head_rel={cfg.use_per_head_rel}"
+        f" pointer={cfg.use_pointer}"
+        f" rel_value={cfg.use_rel_value}"
+        f" addone_attn={cfg.use_addone_attn}"
+        f" type_emb_init={cfg.type_embedding_init}"
+        f" dev_norm={cfg.use_deviation_norm}"
+        f" scale_shared_rel={cfg.scale_shared_rel}"
+        f" feat_only_norm={cfg.use_feature_only_norm}"
         f" | epochs={args.epochs}"
         f" lr={args.lr}"
         f" num_train_graphs={args.num_train_graphs}"

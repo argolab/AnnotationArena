@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Checkpoint 1 sweep battery for EntityMarformer synthetic tree tasks.
-#
-# Each sweep group targets one hypothesis (see plan file for details).
+# Synthetic tree task sweeps for EntityMarformer (depth, width, edges, variants, etc.).
+# Architecture is fixed via COMMON (matches train_synthetic.py defaults). Edit COMMON or
+# duplicate this script to sweep other Marformer settings.
 
 PY=${PY:-python}
 BASE_OUT=${BASE_OUT:-OUTPUT/SYNTHETIC/tree}
 PLOT_ROOT=${PLOT_ROOT:-${BASE_OUT}/plots}
-COMMON="--task tree --epochs 25 --lr 1e-3 --num-train-graphs 200 --num-test-graphs 50 --seed 42 --embedding-dim 16 --attention-heads 4"
+# Default EntityMarformer architecture for all sweeps (matches train_synthetic.py defaults):
+#   use-per-head-rel: default false (not enabled; omit flag); shared relational bias + scaled rel scores,
+#   rel-value, add-one attn, feature-only norm, normal type init
+COMMON="--task tree --epochs 25 --lr 1e-3 --num-train-graphs 200 --num-test-graphs 50 --seed 42 --embedding-dim 16 --attention-heads 4 \
+  --use-rel-value --use-addone-attn --use-feature-only-norm --scale-shared-rel --type-embedding-init normal"
 
 echo "BASE_OUT=${BASE_OUT}"
 echo "PLOT_ROOT=${PLOT_ROOT}"
@@ -17,8 +21,8 @@ mkdir -p "${PLOT_ROOT}"
 ###############################################################################
 # Sweep 1: Depth vs Layers grid (core)
 ###############################################################################
-for depth in 1 2 3 4 5 6; do
-  for layers in 1 2 3 4 5 6; do
+for depth in 1 3 6 9; do
+  for layers in 1 2 3 5; do
     out="${BASE_OUT}/depth_vs_layers/d${depth}_L${layers}"
     ${PY} -m imputer.entity_mf.synthetic.train_synthetic \
       ${COMMON} \
