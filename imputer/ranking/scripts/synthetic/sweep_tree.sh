@@ -8,7 +8,7 @@ set -euo pipefail
 PY=${PY:-python}
 BASE_OUT=${BASE_OUT:-OUTPUT/SYNTHETIC/tree}
 PLOT_ROOT=${PLOT_ROOT:-${BASE_OUT}/plots}
-COMMON="--task tree --epochs 200 --lr 1e-3 --num-train-graphs 200 --num-test-graphs 50 --seed 42 --embedding-dim 64 --attention-heads 4"
+COMMON="--task tree --epochs 25 --lr 1e-3 --num-train-graphs 200 --num-test-graphs 50 --seed 42 --embedding-dim 16 --attention-heads 4"
 
 echo "BASE_OUT=${BASE_OUT}"
 echo "PLOT_ROOT=${PLOT_ROOT}"
