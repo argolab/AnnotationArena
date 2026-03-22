@@ -401,14 +401,14 @@ if __name__ == "__main__":
     #   run_entity_mf_random_trees(use_addone_attn=True)   # add-one attention
     #   run_entity_mf_random_trees(use_feature_only_norm=True)  # norm feature stream only
     # run_entity_mf_random_trees(shuffle_nodes=True, freeze_variation=False, guide_attention=False)
-    run_entity_mf_random_trees(shuffle_nodes=False, 
+    run_entity_mf_random_trees(shuffle_nodes=True, 
                                freeze_variation=False, 
                                guide_attention=False,
                                use_per_head_rel=False,
-                               use_rel_value=True,
-                               use_addone_attn=False,
+                               use_rel_value=False,
+                               use_addone_attn=True,
                                use_feature_only_norm=False,
-                               scale_shared_rel=False,
+                               scale_shared_rel=True,
                                type_embedding_init="normal")
         
 
