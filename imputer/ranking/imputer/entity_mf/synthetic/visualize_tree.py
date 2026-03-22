@@ -94,6 +94,7 @@ def main() -> None:
         empty_param=bool(args.empty_param),
         param_dim=int(args.param_dim),
         edge_direction=args.edge_direction,  # type: ignore[arg-type]
+        shuffle_nodes=False,
     )
 
     graph = generate_tree_graph(cfg, seed=int(args.seed))

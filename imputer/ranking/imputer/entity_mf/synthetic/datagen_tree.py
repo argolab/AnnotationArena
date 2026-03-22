@@ -45,6 +45,10 @@ class TreeTaskConfig:
     #   - "p2c":  only parent->child edges.
     #   - "c2p":  only child->parent edges.
     edge_direction: EdgeDirection = "both"
+    # If True, randomly permute node indices after building the canonical tree/forest so that
+    # token position is not a fixed function of depth/role. Targets/inputs move with nodes;
+    # edges are relabeled. Different seeds -> different permutations (reduces position memoization).
+    shuffle_nodes: bool = True
 
 
 def _build_relationships() -> List[Relationship]:
@@ -201,6 +205,47 @@ def _make_values(
     return values
 
 
+def _shuffle_tokens_and_edges(
+    rng: random.Random,
+    n: int,
+    global_parents: List[int],
+    input_values: List[List[float]],
+    target_values: List[List[float]],
+    edge_direction: EdgeDirection,
+) -> Tuple[List[Token], List[Tuple[int, int, str]]]:
+    """
+    Apply a random permutation to node indices: perm[new_idx] = old_idx.
+    Inputs/targets follow canonical nodes; edges are relabeled consistently.
+    """
+    perm = list(range(n))
+    rng.shuffle(perm)
+    inv_perm = [0] * n
+    for new_idx in range(n):
+        inv_perm[perm[new_idx]] = new_idx
+
+    tokens: List[Token] = []
+    for new_idx in range(n):
+        old_idx = perm[new_idx]
+        raw = {
+            "input_value": list(input_values[old_idx]),
+            "target_value": list(target_values[old_idx]),
+        }
+        tokens.append(Token(type_name="tree_node", entity_id=new_idx, status=2, raw_data=raw))
+
+    edges: List[Tuple[int, int, str]] = []
+    for v_old, p_old in enumerate(global_parents):
+        if p_old < 0:
+            continue
+        p_new = inv_perm[p_old]
+        v_new = inv_perm[v_old]
+        if edge_direction in ("both", "p2c"):
+            edges.append((p_new, v_new, "P2C"))
+        if edge_direction in ("both", "c2p"):
+            edges.append((v_new, p_new, "C2P"))
+
+    return tokens, edges
+
+
 def build_tree_task_types(cfg: TreeTaskConfig) -> Dict[str, EntityType]:
     if cfg.aggregate == "count":
         if cfg.empty_param:
@@ -218,6 +263,9 @@ def build_tree_task_types(cfg: TreeTaskConfig) -> Dict[str, EntityType]:
 def generate_tree_graph(cfg: TreeTaskConfig, seed: int) -> EntityGraph:
     """
     Generate one synthetic instance (one graph) for the tree/forest task.
+
+    When ``cfg.shuffle_nodes`` is True (default), node indices are randomly permuted so
+    token order does not align with a fixed BFS role; targets travel with nodes.
     """
     rng = random.Random(int(seed))
 
@@ -259,21 +307,29 @@ def generate_tree_graph(cfg: TreeTaskConfig, seed: int) -> EntityGraph:
         input_values = [[float(x) for x in v.tolist()] for v in values]
         target_values = [[float(x) for x in t.tolist()] for t in targets]
 
-    # Tokens
-    tokens: List[Token] = []
-    for u in range(n):
-        raw = {"input_value": input_values[u], "target_value": target_values[u]}
-        tokens.append(Token(type_name="tree_node", entity_id=u, status=2, raw_data=raw))
+    if cfg.shuffle_nodes:
+        tokens, edges = _shuffle_tokens_and_edges(
+            rng=rng,
+            n=n,
+            global_parents=global_parents,
+            input_values=input_values,
+            target_values=target_values,
+            edge_direction=cfg.edge_direction,
+        )
+    else:
+        tokens = []
+        for u in range(n):
+            raw = {"input_value": input_values[u], "target_value": target_values[u]}
+            tokens.append(Token(type_name="tree_node", entity_id=u, status=2, raw_data=raw))
 
-    # Edges
-    edges: List[Tuple[int, int, str]] = []
-    for v, p in enumerate(global_parents):
-        if p < 0:
-            continue
-        if cfg.edge_direction in ("both", "p2c"):
-            edges.append((p, v, "P2C"))
-        if cfg.edge_direction in ("both", "c2p"):
-            edges.append((v, p, "C2P"))
+        edges = []
+        for v, p in enumerate(global_parents):
+            if p < 0:
+                continue
+            if cfg.edge_direction in ("both", "p2c"):
+                edges.append((p, v, "P2C"))
+            if cfg.edge_direction in ("both", "c2p"):
+                edges.append((v, p, "C2P"))
 
     types = build_tree_task_types(cfg)
     relationships = _build_relationships()

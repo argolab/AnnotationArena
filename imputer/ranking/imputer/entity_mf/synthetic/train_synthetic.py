@@ -114,6 +114,12 @@ def main() -> None:
     parser.add_argument("--empty-param", action="store_true")
     parser.add_argument("--param-dim", type=int, default=1)
     parser.add_argument("--edge-direction", type=str, choices=["both", "p2c", "c2p"], default="both")
+    parser.add_argument(
+        "--shuffle-nodes",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Permute node indices after building the tree so position does not encode depth/role (default: on).",
+    )
 
     args = parser.parse_args()
 
@@ -135,6 +141,7 @@ def main() -> None:
             empty_param=bool(args.empty_param),
             param_dim=int(args.param_dim),
             edge_direction=str(args.edge_direction),  # type: ignore[assignment]
+            shuffle_nodes=bool(args.shuffle_nodes),
         )
         train_graphs, test_graphs = build_tree_datasets(
             task_cfg, num_train=int(args.num_train_graphs), num_test=int(args.num_test_graphs), seed=int(args.seed)
@@ -212,6 +219,7 @@ def main() -> None:
         f" empty_param={task_cfg.empty_param}"
         f" param_dim={task_cfg.param_dim}"
         f" edge_direction={task_cfg.edge_direction}"
+        f" shuffle_nodes={task_cfg.shuffle_nodes}"
         f" | layers={cfg.num_layers}"
         f" emb_dim={cfg.embedding_dim}"
         f" heads={cfg.attention_heads}"
