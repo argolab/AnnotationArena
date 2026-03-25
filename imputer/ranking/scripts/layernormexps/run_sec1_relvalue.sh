@@ -63,7 +63,6 @@ USE_POINTER=false
 USE_REL_VALUE=true
 USE_ADDONE_ATTN=false
 USE_DEVIATION_NORM=false
-USE_FEATURE_ONLY_NORM=true
 
 # ── Build CLI flags ───────────────────────────────────────────────────────────
 PER_HEAD_FLAG="";     [ "$USE_PER_HEAD_REL"       = "false" ] && PER_HEAD_FLAG="--no-per-head-rel"
@@ -72,7 +71,6 @@ POINTER_FLAG="";      [ "$USE_POINTER"             = "true"  ] && POINTER_FLAG="
 REL_VALUE_FLAG="";    [ "$USE_REL_VALUE"           = "true"  ] && REL_VALUE_FLAG="--use-rel-value"
 ADDONE_FLAG="";       [ "$USE_ADDONE_ATTN"         = "true"  ] && ADDONE_FLAG="--use-addone-attn"
 DEVNORM_FLAG="";      [ "$USE_DEVIATION_NORM"      = "true"  ] && DEVNORM_FLAG="--use-deviation-norm"
-FEAT_NORM_FLAG="";    [ "$USE_FEATURE_ONLY_NORM"   = "true"  ] && FEAT_NORM_FLAG="--use-feature-only-norm"
 
 # ── Run name base ─────────────────────────────────────────────────────────────
 EXP_LABEL="relvalue"
@@ -81,15 +79,16 @@ RUN_BASE="${RUN_BASE}_itemdrop${ITEM_DROPOUT_RATE}_ireg${ITEM_REG_WEIGHT}_areg${
 
 echo ""
 echo "============================================================"
-echo " Sec 1 LayerNorm Exp: Base + Rel Value + Feature-Only Norm (3 runs)"
+echo " Exp: Base + Rel Value (3 runs)"
 echo "  itemdrop=${ITEM_DROPOUT_RATE}  ireg=${ITEM_REG_WEIGHT}  areg=${ATTRIBUTE_REG_WEIGHT}"
-echo "  flags: $PER_HEAD_FLAG $SCALE_FLAG $POINTER_FLAG $REL_VALUE_FLAG $ADDONE_FLAG $DEVNORM_FLAG $FEAT_NORM_FLAG"
+echo "  flags: $PER_HEAD_FLAG $SCALE_FLAG $POINTER_FLAG $REL_VALUE_FLAG $ADDONE_FLAG $DEVNORM_FLAG"
 echo "============================================================"
 
 # ── Helper ────────────────────────────────────────────────────────────────────
 _train() {
     local N=$1
-    echo ""; echo "--- Run ${N}/3: ${RUN_BASE}_run${N} ---"; echo ""
+    local SEED=$2
+    echo ""; echo "--- Run ${N}/3: ${RUN_BASE}_run${N} (seed=${SEED}) ---"; echo ""
     python -m imputer.entity_mf.train \
         --data-dir             "$DATA_DIR"                  \
         --run-name             "${RUN_BASE}_run${N}"        \
@@ -124,13 +123,13 @@ _train() {
         $REL_VALUE_FLAG                                     \
         $ADDONE_FLAG                                        \
         $DEVNORM_FLAG                                       \
-        $FEAT_NORM_FLAG                                     \
         --llm-input-dist                                    \
+        --seed                 "$SEED"                      \
         --overwrite-existing-data
 }
 
-_train 1
-_train 2
-_train 3
+_train 1 42
+_train 2 42
+_train 3 42
 
 echo ""; echo "All 3 runs complete. Output: $OUTPUT_ROOT"

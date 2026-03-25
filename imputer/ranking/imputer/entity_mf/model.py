@@ -282,11 +282,10 @@ class EntityMarformer(nn.Module):
             )
             proj_out = nn.Linear(self.model_dim, self.feature_dim)
             W_param = nn.Linear(self.model_dim, self.param_dim)
-            norm_dim = self.feature_dim if config.use_feature_only_norm else self.model_dim
             block_dict = {
-                "norm_1": NormLayer(norm_dim),
+                "norm_1": NormLayer(self.model_dim),
                 "attn": attn,
-                "norm_2": NormLayer(norm_dim),
+                "norm_2": NormLayer(self.model_dim),
                 "ff": ff,
                 "proj_out": proj_out,
                 "W_param": W_param,
@@ -379,29 +378,19 @@ class EntityMarformer(nn.Module):
 
         for block in self.blocks:
             combined = torch.cat([features, params], dim=-1)  # [1, L, model_dim]
-            # Pre-LN: norm before attention
-            if self.config.use_feature_only_norm:
-                normed_attn = torch.cat([block["norm_1"](features), params], dim=-1)
-            else:
-                normed_attn = block["norm_1"](combined)
+            normed_attn = block["norm_1"](combined)
             attn_out = block["attn"](
                 normed_attn,
                 edge_mask=edge_mask,
                 attn_mask=attn_mask,
                 K_aug=K_aug,
             )  # [1, L, model_dim]
-
             combined = combined + attn_out
 
-            # Single FFN on combined stream
-            if self.config.use_feature_only_norm:
-                normed_ff = torch.cat([block["norm_2"](combined[..., :self.feature_dim]), combined[..., self.feature_dim:]], dim=-1)
-            else:
-                normed_ff = block["norm_2"](combined)
+            normed_ff = block["norm_2"](combined)
             z_ff = block["ff"](normed_ff)
             combined = combined + z_ff
 
-            # Project back to the two streams and add as residuals
             back_feat = block["proj_out"](combined)   # [1, L, feature_dim]
             back_param = block["W_param"](combined)   # [1, L, param_dim]
             features = features + block["dropout_2"](back_feat)

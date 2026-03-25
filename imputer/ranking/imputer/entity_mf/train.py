@@ -11,6 +11,8 @@ import argparse
 from pathlib import Path
 from typing import Dict, List, Any
 
+import random
+import numpy as np
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -612,13 +614,6 @@ def main():
              "matching the joint normalization used in per-head mode.",
     )
     parser.add_argument(
-        "--use-feature-only-norm",
-        action="store_true",
-        default=False,
-        help="Apply LayerNorm to feature stream only (feature_dim) before each sublayer; "
-             "concat raw params after. Avoids normalizing the structured param stream.",
-    )
-    parser.add_argument(
         "--type-embedding-init",
         type=str,
         default="normal",
@@ -696,7 +691,16 @@ def main():
         default=1e-5,
         help="Minimum LR for cosine schedule (eta_min). Only used when --lr-schedule cosine.",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Global random seed for reproducibility (controls init, dropout, masking, data ordering).",
+    )
     args = parser.parse_args()
+
+    # Seed everything before any model init or data loading.
+    pl.seed_everything(args.seed, workers=True)
 
     data_dir = Path(args.data_dir)
 
@@ -722,7 +726,6 @@ def main():
     config.type_embedding_init   = args.type_embedding_init
     config.use_deviation_norm    = args.use_deviation_norm
     config.scale_shared_rel      = args.scale_shared_rel
-    config.use_feature_only_norm = args.use_feature_only_norm
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -781,7 +784,6 @@ def main():
             "type_embedding_init": config.type_embedding_init,
             "use_deviation_norm": config.use_deviation_norm,
             "scale_shared_rel": config.scale_shared_rel,
-            "use_feature_only_norm": config.use_feature_only_norm,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,
@@ -809,6 +811,7 @@ def main():
         },
         "run": {
             "run_dir": str(run_dir),
+            "seed": args.seed,
         },
     }
     save_json(train_config, run_dir / "train_config.json")
