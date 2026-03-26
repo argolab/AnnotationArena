@@ -1,2 +1,1 @@
- bash scripts/real_data/normal_noise_dot_product_stan.sh
- bash scripts/synthetic_data/normal_noise_dot_product_stan.sh
+bash scripts/real_data/factored_dot_product_stan.sh

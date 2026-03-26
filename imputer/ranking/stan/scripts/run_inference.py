@@ -169,6 +169,8 @@ def build_stan_data(
         "alpha_dirichlet":            data_config.kappa,
         "temperature":                data_config.temperature,
         "alpha_llm":                  alpha_llm,
+        "d_annotator":                data_config.d_annotator,
+        "use_factored_annotator":     data_config.use_factored_annotator,
     }
 
 

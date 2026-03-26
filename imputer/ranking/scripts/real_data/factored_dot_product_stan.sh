@@ -18,8 +18,8 @@ RUN_BASE="${run_name}"
 
 # ── MCMC hyperparameters ──────────────────────────────────────────────────────
 CHAINS="${CHAINS:-1}"
-ITER_WARMUP="${ITER_WARMUP:-1}"
-ITER_SAMPLING="${ITER_SAMPLING:-1}"
+ITER_WARMUP="${ITER_WARMUP:-100}"
+ITER_SAMPLING="${ITER_SAMPLING:-300}"
 ADAPT_DELTA="${ADAPT_DELTA:-0.85}"
 MAX_TREEDEPTH="${MAX_TREEDEPTH:-12}"
 SEED="${SEED:-42}"

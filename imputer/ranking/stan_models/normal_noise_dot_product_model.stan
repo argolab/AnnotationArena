@@ -1,5 +1,6 @@
 /*
  * Domain model with Dirichlet likelihood for LLM distributional observations.
+ * Extended with factored annotator model (use_factored_annotator flag).
  *
  * Human annotators provide hard ratings:
  *   c_n ~ Categorical(pi_ijk)  →  log P(c_n | model) via ordinal probit
@@ -10,24 +11,30 @@
  * where pi_ijk = [P(1|model), ..., P(C|model)] from the ordinal-probit bin
  * probabilities for annotator j, criterion i, item k.
  *
- * This is more principled than the expected log-likelihood in stan_dist_model.stan
- * (which is equivalent to a multinomial "N independent draws" story).  The LLM
- * genuinely produces a single distribution as output, so a Dirichlet on the
- * simplex is the correct observation model.
+ * Two annotator models are supported (controlled by use_factored_annotator):
+ *
+ *   use_factored_annotator = 0  (OLD spherical model):
+ *     V_ij ~ N(v_i, sigma_annotator^2 * I_D)  independently
+ *     annotator_preferences is directly parameterized.
+ *
+ *   use_factored_annotator = 1  (NEW factored model):
+ *     V_ij = v_i + u_j * M_i
+ *     where u_j in R^{d_annotator} is the annotator embedding and
+ *     M_i in R^{d_annotator x D} is the attribute-specific transform.
+ *     annotator_preferences[idx] is derived as a transformed parameter.
  *
  * The alpha_llm hyperparameter encodes LLM reliability:
  *   - Large alpha_llm → LLM output concentrates tightly around pi_ijk (high signal)
  *   - Small alpha_llm → LLM output is diffuse regardless of pi_ijk (low signal)
  *
- * Parameters and priors are identical to domain_model.stan / stan_dist_model.stan.
- * Missing-rating generation quantities are identical — posterior predictive is
+ * Parameters and priors follow domain_model.stan / stan_dist_model.stan.
+ * Missing-rating generated quantities are identical — posterior predictive is
  * always over human ratings (ordinal probit), so evaluate_predictions.py is reusable.
  */
 
 functions {
 
     // Raw bin probability P(c | base_score, thresholds) via ordinal probit.
-    // Used to build the pi_ijk vector for the Dirichlet concentration.
     real ordinal_bin_prob(
         real base_score,
         real total_std_ij,
@@ -65,11 +72,17 @@ functions {
 data {
 
     // ── Dimensions ──────────────────────────────────────────────────────────
-    int<lower=1> K;   // total items  (K_train + K_test)
-    int<lower=1> I;   // attributes / criteria
-    int<lower=1> J;   // annotators  (humans + LLM)
-    int<lower=1> D;   // embedding dimension
-    int<lower=1> C;   // rating categories
+    int<lower=1> K;            // total items  (K_train + K_test)
+    int<lower=1> I;            // attributes / criteria
+    int<lower=1> J;            // annotators  (humans + LLM)
+    int<lower=1> D;            // embedding dimension
+    int<lower=1> C;            // rating categories
+    int<lower=1> d_annotator;  // annotator embedding dimension (used when use_factored_annotator=1)
+
+    // ── Annotator model selection ────────────────────────────────────────────
+    // 0 = old spherical model: V_ij ~ N(v_i, sigma^2) independently
+    // 1 = new factored model:  V_ij = v_i + u_j * M_i
+    int<lower=0, upper=1> use_factored_annotator;
 
     // ── Observed ratings ────────────────────────────────────────────────────
     int<lower=0> N_ratings;
@@ -78,11 +91,11 @@ data {
     array[N_ratings] int<lower=1, upper=K> rating_items;
 
     // Hard integer labels (1..C): used for human ratings (is_llm_rating==0).
-    // For LLM ratings set to the argmax value — it is not used in the likelihood.
+    // For LLM ratings set to the argmax — not used in the likelihood.
     array[N_ratings] int<lower=1, upper=C> rating_values;
 
     // Full distributions over C categories: used for LLM ratings (is_llm_rating==1).
-    // For human ratings set to the one-hot — it is not used in the likelihood.
+    // For human ratings set to the one-hot — not used in the likelihood.
     array[N_ratings] simplex[C] rating_dists;
 
     // Routing indicator: 0 = human (ordinal probit), 1 = LLM (Dirichlet).
@@ -111,8 +124,24 @@ parameters {
     // Mean preferences per attribute: v_i ~ N(0, I_D)
     matrix[I, D] mean_preferences;
 
-    // Per-annotator preferences: v_ij ~ N(v_i, sigma_annotator^2 I_D)
-    matrix[I*J, D] annotator_preferences;
+    // ── Annotator preference parameterization ────────────────────────────────
+    // OLD model (use_factored_annotator=0):
+    //   annotator_prefs_direct[idx] ~ N(mean_preferences[i], sigma_annotator^2)
+    //   directly used as V_ij.
+    // NEW model (use_factored_annotator=1):
+    //   annotator_embeddings[j] in R^{d_annotator}: per-annotator style vector
+    //   attr_transforms[i] in R^{d_annotator x D}: attribute-specific projection
+    //   V_ij = v_i + u_j * M_i  (assembled in transformed parameters)
+    //
+    // Both sets are always declared; the prior/likelihood below activates only
+    // the relevant block via if/else on use_factored_annotator.
+
+    // OLD model parameters
+    matrix[I*J, D] annotator_prefs_direct;   // V_ij directly (spherical model)
+
+    // NEW model parameters
+    matrix[J, d_annotator] annotator_embeddings;      // u_j
+    array[I] matrix[d_annotator, D] attr_transforms;  // M_i
 
     // Rating probability simplex per (i,j): p_ij ~ Dir(alpha_dirichlet/C, ...)
     array[I*J] simplex[C] rating_probs;
@@ -121,16 +150,32 @@ parameters {
 
 transformed parameters {
 
+    // Resolved annotator preferences V_ij (I*J x D).
+    // For old model: copy of annotator_prefs_direct.
+    // For new model: v_i + u_j * M_i.
+    matrix[I*J, D] annotator_preferences;
+
+    // Scale for M_i rows to match variance of old model:
+    //   Var(u_j * M_i) = sigma_annotator^2 * d_annotator  if rows of M_i ~ N(0, sigma_M^2)
+    //   => sigma_M = sigma_annotator / sqrt(d_annotator)
+    real sigma_M = sigma_annotator / sqrt(d_annotator);
+
+    if (use_factored_annotator == 1) {
+        for (i in 1:I) {
+            for (j in 1:J) {
+                int idx = (i-1)*J + j;
+                // u_j is [1, d_annotator], M_i is [d_annotator, D]
+                // annotator_embeddings[j] is a row vector here via row indexing
+                annotator_preferences[idx] = mean_preferences[i]
+                    + annotator_embeddings[j] * attr_transforms[i];
+            }
+        }
+    } else {
+        annotator_preferences = annotator_prefs_direct;
+    }
+
     // Base utility scores: z_ijk = v_ij · e_k
     matrix[I*J, K] base_scores;
-
-    // Ordinal thresholds derived from rating_probs via inverse-normal CDF.
-    // threshold[ij][1] = -inf,  threshold[ij][C+1] = +inf.
-    array[I*J] vector[C+1] rating_thresholds;
-
-    // total_std[ij] = sqrt(||v_ij||^2 + sigma_measurement^2)
-    array[I*J] real total_std;
-
     for (i in 1:I) {
         for (j in 1:J) {
             int idx = (i-1)*J + j;
@@ -140,6 +185,9 @@ transformed parameters {
         }
     }
 
+    // Ordinal thresholds derived from rating_probs via inverse-normal CDF.
+    // threshold[ij][1] = -inf,  threshold[ij][C+1] = +inf.
+    array[I*J] vector[C+1] rating_thresholds;
     for (ij in 1:(I*J)) {
         rating_thresholds[ij][1] = negative_infinity();
         for (c in 2:C) {
@@ -148,6 +196,8 @@ transformed parameters {
         rating_thresholds[ij][C+1] = positive_infinity();
     }
 
+    // total_std[ij] = sqrt(||v_ij||^2 + sigma_measurement^2)
+    array[I*J] real total_std;
     for (i in 1:I) {
         for (j in 1:J) {
             int ij_idx = (i-1)*J + j;
@@ -164,10 +214,38 @@ model {
     for (k in 1:K) embeddings[k] ~ normal(0, 1);
     for (i in 1:I) mean_preferences[i] ~ normal(0, 1);
 
-    for (i in 1:I) {
+    if (use_factored_annotator == 1) {
+        // NEW factored model priors
+        // u_j ~ N(0, I_{d_annotator})
         for (j in 1:J) {
-            int idx = (i-1)*J + j;
-            annotator_preferences[idx] ~ normal(mean_preferences[i], sigma_annotator);
+            annotator_embeddings[j] ~ normal(0, 1);
+        }
+        // M_i rows ~ N(0, sigma_M^2)
+        for (i in 1:I) {
+            for (r in 1:d_annotator) {
+                attr_transforms[i][r] ~ normal(0, sigma_M);
+            }
+        }
+        // annotator_prefs_direct unused — give it a weak prior to avoid improper posterior
+        for (idx in 1:(I*J)) {
+            annotator_prefs_direct[idx] ~ normal(0, 1);
+        }
+    } else {
+        // OLD spherical model prior: V_ij ~ N(v_i, sigma_annotator^2)
+        for (i in 1:I) {
+            for (j in 1:J) {
+                int idx = (i-1)*J + j;
+                annotator_prefs_direct[idx] ~ normal(mean_preferences[i], sigma_annotator);
+            }
+        }
+        // annotator_embeddings and attr_transforms unused — weak priors
+        for (j in 1:J) {
+            annotator_embeddings[j] ~ normal(0, 1);
+        }
+        for (i in 1:I) {
+            for (r in 1:d_annotator) {
+                attr_transforms[i][r] ~ normal(0, 1);
+            }
         }
     }
 
