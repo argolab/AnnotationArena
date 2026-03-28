@@ -6,13 +6,11 @@
 
 #SBATCH --job-name=EMF_ST_F_PTR
 #SBATCH --nodes=1
-#SBATCH --gres=gpu:1
-#SBATCH --qos=qos_gpu
-#SBATCH --partition=a100
-#SBATCH --account=psingh54_gpu
+#SBATCH --mem-per-cpu=18GB
+#SBATCH --gpus=1
+#SBATCH --partition=gpu-a100
+#SBATCH --account=a100acct
 #SBATCH --mail-user="psingh54@jhu.edu"
-#SBATCH --cpus-per-task=24
-#SBATCH --time=36:00:00
 
 source /home/psingh54/.bashrc
 module load cuda/12.1

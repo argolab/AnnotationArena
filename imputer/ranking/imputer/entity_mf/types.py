@@ -58,6 +58,14 @@ class EntityType(ABC):
         self.param_dim = param_dim
         self.variation = variation or VariationConfig(enabled=False, num_entities=0, reg_weight=0.0)
 
+    def build_simple_value(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
+        """
+        Binary value representation for use with learned embeddings (use_learned_embedding=True).
+        Same layout as build_param but values are binary {0, 1} — no prescribed scale.
+        Entity types return zeros (identity comes from type centroid + deviation, not value encoding).
+        """
+        return torch.zeros(global_param_dim, device=device)
+
     @abstractmethod
     def build_param(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
         """
@@ -205,6 +213,19 @@ class RatingVariableType(EntityType):
         self.logit_high = float(logit_high)
         self.llm_input_dist = llm_input_dist
         self.ce_loss = nn.CrossEntropyLoss(reduction="none")
+
+    def build_simple_value(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
+        """Binary encoding: mask_bit=1 or one-hot class with 1.0 (no logit_high scaling)."""
+        p = torch.zeros(global_param_dim, device=device)
+        is_missing = bool(raw_data.get("is_missing", False))
+        is_masked = bool(raw_data.get("is_masked", False))
+        if is_missing or is_masked:
+            p[0] = 1.0
+            return p
+        rating_value = raw_data.get("rating_value", None)
+        if rating_value is not None and 0 <= rating_value < self.num_classes:
+            p[1 + rating_value] = 1.0
+        return p
 
     def build_param(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
         p = torch.zeros(global_param_dim, device=device)

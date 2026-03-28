@@ -225,6 +225,7 @@ class EntityMarformer(nn.Module):
         self.use_pointer = config.use_pointer
         self.use_rel_value = config.use_rel_value
         self.use_addone_attn = config.use_addone_attn
+        self.use_learned_embedding = config.use_learned_embedding
 
         # Global param dim = max over types (no longer passed in).
         self.global_param_dim = max(t.param_dim for t in types.values())
@@ -238,9 +239,16 @@ class EntityMarformer(nn.Module):
         assert self.model_dim > self.param_dim, (
             f"embedding_dim {self.model_dim} must be > global_param_dim {self.param_dim}"
         )
-        self.feature_dim = self.model_dim - self.param_dim
 
-        # Per-type base embeddings (centroids)
+        # With learned embedding the full model_dim is used for the feature stream;
+        # without it the feature stream is model_dim - param_dim.
+        if config.use_learned_embedding:
+            self.feature_dim = self.model_dim
+        else:
+            self.feature_dim = self.model_dim - self.param_dim
+
+        # Per-type base embeddings (centroids) — used for entity tokens in both modes,
+        # and for variable tokens only when use_learned_embedding=False.
         self.type_embeddings = nn.ParameterDict(
             {
                 name: nn.Parameter(torch.empty(1, self.feature_dim))
@@ -259,8 +267,19 @@ class EntityMarformer(nn.Module):
 
         self.deviation_norm = NormLayer(self.feature_dim)
 
-        # Transformer blocks: one FFN on combined stream, then project back to feature/param
-        # (same pattern as current imputer so information flows between streams in the FFN)
+        # Learned value embedders: one per variable type (use_learned_embedding=True only).
+        # Maps binary simple-value representation (param_dim-dim) → model_dim.
+        # The bias of this Linear acts as the type embedding for variable tokens (bias b in Ax+b).
+        if config.use_learned_embedding:
+            self.value_embedders = nn.ModuleDict({
+                name: nn.Linear(self.param_dim, self.model_dim)
+                for name, t in types.items()
+                if t.is_variable
+            })
+            # Top-level unembedder: maps final h_L → param_dim output (replaces per-block W_param).
+            self.unembedder = nn.Linear(self.model_dim, self.param_dim)
+
+        # Transformer blocks
         blocks: List[nn.Module] = []
         for _ in range(config.num_layers):
             attn = RelationalAttentionBlock(
@@ -280,17 +299,27 @@ class EntityMarformer(nn.Module):
                 dropout=config.dropout,
                 num_layers=config.num_ffn_layers,
             )
-            proj_out = nn.Linear(self.model_dim, self.feature_dim)
-            W_param = nn.Linear(self.model_dim, self.param_dim)
-            block_dict = {
-                "norm_1": NormLayer(self.model_dim),
-                "attn": attn,
-                "norm_2": NormLayer(self.model_dim),
-                "ff": ff,
-                "proj_out": proj_out,
-                "W_param": W_param,
-                "dropout_2": nn.Dropout(config.dropout),
-            }
+            if config.use_learned_embedding:
+                # Single unified stream: proj_out maps model_dim → model_dim.
+                # No per-block W_param (unembedding happens once at the top via self.unembedder).
+                block_dict = {
+                    "norm_1": NormLayer(self.model_dim),
+                    "attn": attn,
+                    "norm_2": NormLayer(self.model_dim),
+                    "ff": ff,
+                    "proj_out": nn.Linear(self.model_dim, self.model_dim),
+                    "dropout_2": nn.Dropout(config.dropout),
+                }
+            else:
+                block_dict = {
+                    "norm_1": NormLayer(self.model_dim),
+                    "attn": attn,
+                    "norm_2": NormLayer(self.model_dim),
+                    "ff": ff,
+                    "proj_out": nn.Linear(self.model_dim, self.feature_dim),
+                    "W_param": nn.Linear(self.model_dim, self.param_dim),
+                    "dropout_2": nn.Dropout(config.dropout),
+                }
             blocks.append(nn.ModuleDict(block_dict))
         self.blocks = nn.ModuleList(blocks)
 
@@ -315,25 +344,30 @@ class EntityMarformer(nn.Module):
         for idx, token in enumerate(graph.tokens):
             t = self.types[token.type_name]
 
-            base = self.type_embeddings[token.type_name]  # [1, D]
-            feat_vec = base.expand(1, -1)  # [1, D]
-            if token.type_name in self.deviation_tables and token.entity_id >= 0:
-                dev_table = self.deviation_tables[token.type_name]
-                if 0 <= token.entity_id < dev_table.shape[0]:
-                    dev = dev_table[token.entity_id].unsqueeze(0)
-                    # Deviation dropout: drop with probability dropout_rate during training
-                    if self.training and t.variation.dropout_rate > 0:
-                        if torch.rand(1).item() < t.variation.dropout_rate:
-                            dev = torch.zeros_like(dev)
-                    if self.config.use_deviation_norm:
-                        dev = self.deviation_norm(dev)
-                    feat_vec = feat_vec + dev
-            features[0, idx] = feat_vec
+            if self.use_learned_embedding and t.is_variable:
+                # Learned embedding path: h0 = value_embedder(x) where x is binary simple value.
+                # The Linear bias acts as the type embedding b; no separate type_centroid used.
+                x = t.build_simple_value(token.raw_data or {}, device=device, global_param_dim=self.param_dim)
+                features[0, idx] = self.value_embedders[token.type_name](x)
+            else:
+                # Standard path: h0 = type_centroid + deviation (entity tokens always use this).
+                base = self.type_embeddings[token.type_name]  # [1, feature_dim]
+                feat_vec = base.expand(1, -1)
+                if token.type_name in self.deviation_tables and token.entity_id >= 0:
+                    dev_table = self.deviation_tables[token.type_name]
+                    if 0 <= token.entity_id < dev_table.shape[0]:
+                        dev = dev_table[token.entity_id].unsqueeze(0)
+                        if self.training and t.variation.dropout_rate > 0:
+                            if torch.rand(1).item() < t.variation.dropout_rate:
+                                dev = torch.zeros_like(dev)
+                        if self.config.use_deviation_norm:
+                            dev = self.deviation_norm(dev)
+                        feat_vec = feat_vec + dev
+                features[0, idx] = feat_vec
 
-            p = t.build_param(token.raw_data or {}, device=device, global_param_dim=self.param_dim)
-            params[0, idx] = p
+                p = t.build_param(token.raw_data or {}, device=device, global_param_dim=self.param_dim)
+                params[0, idx] = p
 
-            # All tokens are currently valid for attention; we may later mask permanently-missing ones.
             attn_mask[0, idx] = True
 
         return features, params, attn_mask
@@ -377,7 +411,12 @@ class EntityMarformer(nn.Module):
             K_aug = torch.stack([_same(attr_ids), _same(annot_ids), _same(item_ids)], dim=-1)  # [L, L, 3]
 
         for block in self.blocks:
-            combined = torch.cat([features, params], dim=-1)  # [1, L, model_dim]
+            if self.use_learned_embedding:
+                # Unified stream: features is already model_dim, no cat needed.
+                combined = features
+            else:
+                combined = torch.cat([features, params], dim=-1)  # [1, L, model_dim]
+
             normed_attn = block["norm_1"](combined)
             attn_out = block["attn"](
                 normed_attn,
@@ -391,10 +430,15 @@ class EntityMarformer(nn.Module):
             z_ff = block["ff"](normed_ff)
             combined = combined + z_ff
 
-            back_feat = block["proj_out"](combined)   # [1, L, feature_dim]
-            back_param = block["W_param"](combined)   # [1, L, param_dim]
+            back_feat = block["proj_out"](combined)   # [1, L, feature_dim or model_dim]
             features = features + block["dropout_2"](back_feat)
-            params = params + block["dropout_2"](back_param)
 
+            if not self.use_learned_embedding:
+                back_param = block["W_param"](combined)   # [1, L, param_dim]
+                params = params + block["dropout_2"](back_param)
+
+        if self.use_learned_embedding:
+            # Unembed once at the top: learned linear from final h_L → param_dim output.
+            return self.unembedder(features)
         return params
 

@@ -679,6 +679,11 @@ def main():
         help="Apply LayerNorm to each deviation before adding to its type centroid (bounds deviation scale).",
     )
     parser.add_argument(
+        "--use-learned-embedding",
+        action="store_true",
+        help="Replace fixed-scale build_param with learned Ax+b embedding; feature_dim=model_dim; unembed at top layer.",
+    )
+    parser.add_argument(
         "--lr-schedule",
         type=str,
         default="none",
@@ -726,6 +731,7 @@ def main():
     config.type_embedding_init   = args.type_embedding_init
     config.use_deviation_norm    = args.use_deviation_norm
     config.scale_shared_rel      = args.scale_shared_rel
+    config.use_learned_embedding = args.use_learned_embedding
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -784,6 +790,7 @@ def main():
             "type_embedding_init": config.type_embedding_init,
             "use_deviation_norm": config.use_deviation_norm,
             "scale_shared_rel": config.scale_shared_rel,
+            "use_learned_embedding": config.use_learned_embedding,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,
