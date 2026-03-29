@@ -70,6 +70,22 @@ class EntityGraph:
 
         self._rel_index: Dict[str, int] = {rel.name: i for i, rel in enumerate(self.relationships)}
 
+        # Pre-compute flat index arrays for vectorized build_edge_masks
+        _srcs, _tgts, _rels = [], [], []
+        L = len(tokens)
+        for src, tgt, rel_name in edges:
+            r_idx = self._rel_index.get(rel_name, -1)
+            if r_idx >= 0 and 0 <= src < L and 0 <= tgt < L:
+                _srcs.append(src)
+                _tgts.append(tgt)
+                _rels.append(r_idx)
+        self._edge_srcs: List[int] = _srcs
+        self._edge_tgts: List[int] = _tgts
+        self._edge_rels: List[int] = _rels
+        # Cache built tensors per device (graph topology never changes after construction)
+        self._edge_mask_cache: Dict[str, torch.Tensor] = {}
+        self._k_aug_cache: Dict[str, torch.Tensor] = {}
+
     @property
     def num_tokens(self) -> int:
         return len(self.tokens)
@@ -82,18 +98,21 @@ class EntityGraph:
         """
         Build binary edge mask tensor of shape [L, L, R].
 
-        TODO: think of ways we can tensorize this. It might be faster to compute in parallelbased on some rules.
         mask[q, k, r] = 1 if there is an edge of relationship r from q -> k.
+        Vectorized and cached per device — topology never changes for a given graph.
         """
+        dev_key = str(device)
+        if dev_key in self._edge_mask_cache:
+            return self._edge_mask_cache[dev_key]
         L = self.num_tokens
         R = self.num_relationships
         edge_mask = torch.zeros(L, L, R, device=device)
-        for src, tgt, rel_name in self.edges:
-            r_idx = self._rel_index.get(rel_name, None)
-            if r_idx is None:
-                continue
-            if 0 <= src < L and 0 <= tgt < L:
-                edge_mask[src, tgt, r_idx] = 1.0
+        if self._edge_srcs:
+            srcs = torch.tensor(self._edge_srcs, dtype=torch.long, device=device)
+            tgts = torch.tensor(self._edge_tgts, dtype=torch.long, device=device)
+            rels = torch.tensor(self._edge_rels, dtype=torch.long, device=device)
+            edge_mask[srcs, tgts, rels] = 1.0
+        self._edge_mask_cache[dev_key] = edge_mask
         return edge_mask
 
 

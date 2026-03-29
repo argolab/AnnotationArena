@@ -104,6 +104,10 @@ class EntityMarformerLightningModule(pl.LightningModule):
             human_observed_rate=human_observed_rate,
         )
         self.training_history: List[Dict[str, Any]] = []
+        # Pre-build per-chunk EntityGraphs for non-transductive mode.
+        # Graphs are reused every step; only variable token statuses are updated in-place.
+        # edge_mask and K_aug are cached on each graph object after the first forward pass.
+        self._cached_chunks: list | None = self._build_training_chunks()
 
     def _print_var_count(
         self,
@@ -131,6 +135,77 @@ class EntityMarformerLightningModule(pl.LightningModule):
             f"entities={num_entity_tokens} | masked={n_masked}, observed={n_observed}, missing={n_missing}"
         )
 
+    def _build_training_chunks(self) -> list | None:
+        """
+        Pre-build one EntityGraph per item chunk for non-transductive training.
+
+        The graphs are reused across all training steps; only variable token
+        statuses (observed vs masked) are updated in-place each step.
+        Returns None for transductive mode (graphs include test data, rebuilt fresh).
+        """
+        if self.transductive:
+            return None
+        observed_sources = list(self.train_observed)
+        missing_sources = list(self.train_missing)
+        all_items: set = set()
+        for var in observed_sources + missing_sources:
+            all_items.update(var.item_ids)
+        all_items_list = sorted(all_items)
+        num_items = len(all_items_list)
+        if self.max_item is not None and num_items > self.max_item:
+            item_chunks = [
+                set(all_items_list[i : i + self.max_item])
+                for i in range(0, num_items, self.max_item)
+            ]
+        else:
+            item_chunks = [all_items]
+        chunks = []
+        for available_items in item_chunks:
+            chunk_observed = [v for v in observed_sources if all(iid in available_items for iid in v.item_ids)]
+            chunk_missing  = [v for v in missing_sources  if all(iid in available_items for iid in v.item_ids)]
+            if not chunk_observed and not chunk_missing:
+                continue
+            graph = variable_list_to_entity_graph(chunk_observed + chunk_missing, self.types)
+            chunks.append({"chunk_observed": chunk_observed, "chunk_missing": chunk_missing, "graph": graph})
+        return chunks
+
+    def _compute_fresh_chunks(self) -> list:
+        """Build chunk list on-the-fly for transductive mode (includes test data)."""
+        observed_sources = list(self.train_observed) + list(self.test_observed)
+        missing_sources  = list(self.train_missing)  + list(self.test_missing)
+        all_items: set = set()
+        for var in observed_sources + missing_sources:
+            all_items.update(var.item_ids)
+        all_items_list = sorted(all_items)
+        num_items = len(all_items_list)
+        if self.max_item is not None and num_items > self.max_item:
+            item_chunks = [
+                set(all_items_list[i : i + self.max_item])
+                for i in range(0, num_items, self.max_item)
+            ]
+        else:
+            item_chunks = [all_items]
+        chunks = []
+        for available_items in item_chunks:
+            chunk_observed = [v for v in observed_sources if all(iid in available_items for iid in v.item_ids)]
+            chunk_missing  = [v for v in missing_sources  if all(iid in available_items for iid in v.item_ids)]
+            if chunk_observed or chunk_missing:
+                chunks.append({"chunk_observed": chunk_observed, "chunk_missing": chunk_missing})
+        return chunks
+
+    @staticmethod
+    def _refresh_variable_tokens(graph, masked_or_observed: List[RankingData]) -> None:
+        """
+        Update the first len(masked_or_observed) variable token statuses in-place.
+
+        Only status and is_masked change between steps; all other token fields
+        (entity ids, edges, rating_value, etc.) are identical to the template graph.
+        """
+        for i, var in enumerate(masked_or_observed):
+            tok = graph.tokens[i]
+            tok.status = var.status
+            tok.raw_data["is_masked"] = var.is_masked
+
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
         if self.lr_schedule == "cosine":
@@ -153,36 +228,13 @@ class EntityMarformerLightningModule(pl.LightningModule):
         """
         device = self.device
 
-        # Collect all unique items across the variables that participate in training.
-        # In non-transductive mode this is train-only; in transductive mode we merge
-        # train + test so test items receive gradient signal.
-        all_items: set[int] = set()
-        observed_sources: List[RankingData] = []
-        missing_sources: List[RankingData] = []
-
-        observed_sources.extend(self.train_observed)
-        missing_sources.extend(self.train_missing)
-
-        if self.transductive:
-            observed_sources.extend(self.test_observed)
-            missing_sources.extend(self.test_missing)
-
-        for var in observed_sources:
-            all_items.update(var.item_ids)
-        for var in missing_sources:
-            all_items.update(var.item_ids)
-
-        all_items_list = sorted(all_items)
-        num_items = len(all_items_list)
-
-        # Split into item chunks if max_item is set (mirrors ImputerLightningModule logic).
-        if self.max_item is not None and num_items > self.max_item:
-            item_chunks: List[set[int]] = []
-            for i in range(0, num_items, self.max_item):
-                chunk = set(all_items_list[i : i + self.max_item])
-                item_chunks.append(chunk)
+        # Use pre-built chunk graphs (non-transductive) or build fresh (transductive).
+        if self._cached_chunks is not None:
+            active_chunks = self._cached_chunks
+            use_graph_cache = True
         else:
-            item_chunks = [all_items]
+            active_chunks = self._compute_fresh_chunks()
+            use_graph_cache = False
 
         # Accumulate loss tensors (for a single scalar loss).
         loss_tensors: List[torch.Tensor] = []
@@ -193,27 +245,19 @@ class EntityMarformerLightningModule(pl.LightningModule):
         observed_ce_accum: float = 0.0
         observed_ce_count: int = 0
 
-
-        for available_items in item_chunks:
-            # Filter variables to those whose items all lie in this chunk.
-            chunk_observed: List[RankingData] = []
-            for v in observed_sources:
-                if all(item_id in available_items for item_id in v.item_ids):
-                    chunk_observed.append(v)
-
-            chunk_missing: List[RankingData] = []
-            for v in missing_sources:
-                if all(item_id in available_items for item_id in v.item_ids):
-                    chunk_missing.append(v)
-
-            if not chunk_observed and not chunk_missing:
-                continue
+        for chunk_data in active_chunks:
+            chunk_observed = chunk_data["chunk_observed"]
+            chunk_missing  = chunk_data["chunk_missing"]
 
             # Apply training mask to observed vars in this chunk.
             masked_or_observed = self.masking_strategy.mask(chunk_observed)
-            train_vars = masked_or_observed + chunk_missing
 
-            graph = variable_list_to_entity_graph(train_vars, self.types)
+            if use_graph_cache:
+                graph = chunk_data["graph"]
+                self._refresh_variable_tokens(graph, masked_or_observed)
+            else:
+                train_vars = masked_or_observed + chunk_missing
+                graph = variable_list_to_entity_graph(train_vars, self.types)
 
             self._print_var_count(graph, masked_or_observed, chunk_missing)
 

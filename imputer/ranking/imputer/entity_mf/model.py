@@ -392,23 +392,28 @@ class EntityMarformer(nn.Module):
         # Build K_aug for pointer mechanism: [L, L, 3] obs-obs shared-identity indicators
         K_aug: torch.Tensor | None = None
         if self.use_pointer:
-            L = graph.num_tokens
-            attr_ids  = torch.full((L,), -1, dtype=torch.long, device=device)
-            annot_ids = torch.full((L,), -1, dtype=torch.long, device=device)
-            item_ids  = torch.full((L,), -1, dtype=torch.long, device=device)
-            for idx, token in enumerate(graph.tokens):
-                if token.type_name in ("rating", "ranking_pairwise") and token.raw_data:
-                    attr_ids[idx]  = token.raw_data.get("attribute_id", -1)
-                    annot_ids[idx] = token.raw_data.get("annotator_id", -1)
-                    # Use first item_id (like Marformer pointer)
-                    iids = token.raw_data.get("item_ids", [])
-                    item_ids[idx]  = iids[0] if iids else -1
-            # [L, L] indicator: 1 if same id AND both valid (id >= 0)
-            def _same(ids: torch.Tensor) -> torch.Tensor:
-                eq = (ids.unsqueeze(0) == ids.unsqueeze(1)).float()  # [L, L]
-                valid = (ids >= 0).float()
-                return eq * valid.unsqueeze(0) * valid.unsqueeze(1)
-            K_aug = torch.stack([_same(attr_ids), _same(annot_ids), _same(item_ids)], dim=-1)  # [L, L, 3]
+            dev_key = str(device)
+            if dev_key not in graph._k_aug_cache:
+                L = graph.num_tokens
+                attr_ids  = torch.full((L,), -1, dtype=torch.long, device=device)
+                annot_ids = torch.full((L,), -1, dtype=torch.long, device=device)
+                item_ids  = torch.full((L,), -1, dtype=torch.long, device=device)
+                for idx, token in enumerate(graph.tokens):
+                    if token.type_name in ("rating", "ranking_pairwise") and token.raw_data:
+                        attr_ids[idx]  = token.raw_data.get("attribute_id", -1)
+                        annot_ids[idx] = token.raw_data.get("annotator_id", -1)
+                        # Use first item_id (like Marformer pointer)
+                        iids = token.raw_data.get("item_ids", [])
+                        item_ids[idx]  = iids[0] if iids else -1
+                # [L, L] indicator: 1 if same id AND both valid (id >= 0)
+                def _same(ids: torch.Tensor) -> torch.Tensor:
+                    eq = (ids.unsqueeze(0) == ids.unsqueeze(1)).float()  # [L, L]
+                    valid = (ids >= 0).float()
+                    return eq * valid.unsqueeze(0) * valid.unsqueeze(1)
+                graph._k_aug_cache[dev_key] = torch.stack(
+                    [_same(attr_ids), _same(annot_ids), _same(item_ids)], dim=-1
+                )  # [L, L, 3]
+            K_aug = graph._k_aug_cache[dev_key]
 
         for block in self.blocks:
             if self.use_learned_embedding:
