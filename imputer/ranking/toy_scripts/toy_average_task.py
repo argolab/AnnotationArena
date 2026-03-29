@@ -3,33 +3,29 @@ from __future__ import annotations
 """
 Toy generalization experiment for EntityMarformer on random bounded-depth trees.
 
-Key differences from the two-layer script:
-- We generate **random rooted trees** with:
-  - depth <= max_depth
-  - out-degree at each node <= max_degree
-  - total number of nodes <= max_nodes
-- The actual depth and total size **vary per sample**.
-- We optionally **shuffle node indices** so the model cannot rely on fixed
-  positions for any structural role (e.g., the root is not always index 0).
+**Task (subtree average):**
+- Each node i gets a scalar a_i (uniform i.i.d. in [scalar_low, scalar_high] per graph).
+- Target at node u is the mean of a_v over all v in the subtree rooted at u
+  (including u).
 
-**Subtree-sum task:**
-- Each node i gets a scalar a_i ~ Uniform(scalar_low, scalar_high) (default [-10, 10]),
-  unless ``sanity_all_ones=True``: then a_i = 1 for all nodes, so subtree targets are
-  **node counts** (sum of ones = counting sanity check).
-- Input is a_i; for each node u, the target is the **sum** of a_v over the subtree
-  rooted at u (including u).
+Graph generation (same as toy_final):
+- Random rooted trees with depth <= max_depth, out-degree <= max_degree,
+  size <= max_nodes; structure varies per sample.
+- Optional **shuffle node indices** so roles are not tied to fixed positions.
+
+Note: `guide_attention` uses a sum-leaning V init (from toy_final); for strict
+mean aggregation you may get better results with `guide_attention=False`.
 
 We use:
-- A single SyntheticRegressionType "tree_node" with (input_dim=1, output_dim=1)
+- A single SyntheticRegressionType "tree_node" with (input_dim=1, output_dim=1);
+  input is the node's scalar, target is its subtree mean.
 - VariationConfig with num_entities=MAX_NUM_ENTITIES (upper bound for all graphs).
 - EntityMarformer with a small configuration.
-- Architecture knobs (use_per_head_rel, use_rel_value, use_addone_attn,
-  use_feature_only_norm, scale_shared_rel, type_embedding_init) exposed on
-  run_entity_mf_random_trees for comparison with the two-layer toy script.
+- Architecture knobs on `run_entity_mf_random_trees`.
 
 Run from repo root:
 
-  python toy_final.py
+  python toy_average_task.py
 """
 
 import random
@@ -56,7 +52,7 @@ MAX_NUM_ENTITIES = 64
 @dataclass
 class TreeSample:
     graph: EntityGraph
-    targets: List[float]  # subtree sums of per-node scalars (aligned with tokens)
+    targets: List[float]  # subtree-mean targets per token index (aligned with tokens)
 
 
 def build_random_bounded_tree(
@@ -68,7 +64,6 @@ def build_random_bounded_tree(
     shuffle_nodes: bool = True,
     scalar_low: float = -10.0,
     scalar_high: float = 10.0,
-    sanity_all_ones: bool = False,
 ) -> TreeSample:
     """
     Build a random rooted tree with constraints:
@@ -76,10 +71,8 @@ def build_random_bounded_tree(
       - out-degree at each node <= max_degree
       - total number of nodes <= max_nodes
 
-    Each node draws a scalar a_i ~ Uniform(scalar_low, scalar_high), unless
-    ``sanity_all_ones`` is True, in which case a_i = 1.0 for all i (targets become
-    subtree **node counts**).
-    Targets are subtree *sums* of those scalars.
+    Each node gets a scalar input in [scalar_low, scalar_high] (uniform).
+    Targets are subtree means of those scalars (per node).
     """
     assert max_depth >= 0
     assert max_degree >= 0
@@ -117,27 +110,34 @@ def build_random_bounded_tree(
         Relationship(name="C2P", source_type="tree_node", target_type="tree_node", inverse="P2C"),
     ]
 
-    # Per-node scalars and subtree sums (canonical index).
-    if sanity_all_ones:
-        node_scalar = [1.0 for _ in range(N)]
-    else:
-        node_scalar = [
-            rng.uniform(scalar_low, scalar_high) for _ in range(N)
-        ]
+    # Per-node scalar (canonical index); used as input and to define subtree means.
+    node_scalar: List[float] = [
+        rng.uniform(scalar_low, scalar_high) for _ in range(N)
+    ]
+
+    # Subtree sum of scalars and subtree node counts -> mean = sum / count.
     children: List[List[int]] = [[] for _ in range(N)]
     for j in range(1, N):
         children[parents[j]].append(j)
 
     subtree_sum: List[float] = [0.0] * N
+    subtree_cnt: List[int] = [0] * N
 
     def _dfs_subtree(u: int) -> None:
         s = node_scalar[u]
+        c = 1
         for v in children[u]:
             _dfs_subtree(v)
             s += subtree_sum[v]
+            c += subtree_cnt[v]
         subtree_sum[u] = s
+        subtree_cnt[u] = c
 
     _dfs_subtree(0)
+
+    subtree_mean: List[float] = [
+        subtree_sum[i] / float(subtree_cnt[i]) for i in range(N)
+    ]
 
     # Optional node index shuffling.
     #
@@ -153,7 +153,7 @@ def build_random_bounded_tree(
         perm = list(range(N))  # identity
         inv_perm = {i: i for i in range(N)}
 
-    # Tokens: input = node scalar; target = subtree sum of scalars.
+    # Tokens: one type "tree_node" with scalar input=a_old and target=subtree mean.
     # We assign both token index and entity_id in the *new* index space, while
     # inputs/targets come from the corresponding canonical node (old_idx).
     tokens: List[Token] = []
@@ -162,10 +162,10 @@ def build_random_bounded_tree(
         old_idx = perm[new_idx]
         raw = {
             "input_value": [node_scalar[old_idx]],
-            "target_value": [subtree_sum[old_idx]],
+            "target_value": [subtree_mean[old_idx]],
         }
         tokens.append(Token(type_name="tree_node", entity_id=new_idx, status=2, raw_data=raw))
-        targets_shuffled.append(subtree_sum[old_idx])
+        targets_shuffled.append(subtree_mean[old_idx])
 
     # Edges: P2C and C2P using the *new* indices.
     edges: List[Tuple[int, int, str]] = []
@@ -294,7 +294,6 @@ def run_entity_mf_random_trees(
     num_test: int = 10,
     scalar_low: float = -10.0,
     scalar_high: float = 10.0,
-    sanity_all_ones: bool = False,
     # Architecture knobs (mirror EntityMarformerConfig)
     use_per_head_rel: bool = True,
     use_rel_value: bool = False,
@@ -321,7 +320,6 @@ def run_entity_mf_random_trees(
                 shuffle_nodes=shuffle_nodes,
                 scalar_low=scalar_low,
                 scalar_high=scalar_high,
-                sanity_all_ones=sanity_all_ones,
             )
         )
 
@@ -337,7 +335,6 @@ def run_entity_mf_random_trees(
                 shuffle_nodes=shuffle_nodes,
                 scalar_low=scalar_low,
                 scalar_high=scalar_high,
-                sanity_all_ones=sanity_all_ones,
             )
         )
 
@@ -347,7 +344,7 @@ def run_entity_mf_random_trees(
 
     cfg = EntityMarformerConfig(
         embedding_dim=8,
-        num_layers=2,
+        num_layers=1,
         attention_heads=1,
         dropout=0.0,
         d_ff=32,
@@ -394,12 +391,11 @@ def run_entity_mf_random_trees(
     opt = torch.optim.Adam(model.parameters(), lr=5e-3)
 
     print(
-        "Starting EntityMarformer bounded-random-tree (subtree SUM of scalars)\n"
+        "Starting EntityMarformer subtree-AVERAGE task (bounded random trees)\n"
         f"  max_depth={max_depth}, max_degree={max_degree}, max_nodes={max_nodes}, "
         f"num_train={num_train}, num_test={num_test}\n"
-        f"  sanity_all_ones={sanity_all_ones} | "
-        f"node scalars ~ {'all 1.0 (counting)' if sanity_all_ones else f'U({scalar_low}, {scalar_high})'}, "
-        f"target = sum(scalars in subtree)\n"
+        f"  node scalars ~ U({scalar_low}, {scalar_high}), "
+        f"target = mean(scalars in subtree)\n"
         f"  shuffle_nodes={shuffle_nodes}, freeze_variation={freeze_variation}, guide_attention={guide_attention}\n"
         f"  use_per_head_rel={use_per_head_rel}, use_rel_value={use_rel_value}, "
         f"use_addone_attn={use_addone_attn}\n"
@@ -490,10 +486,12 @@ if __name__ == "__main__":
                                guide_attention=False,
                                use_per_head_rel=False,
                                use_rel_value=True,
-                               use_addone_attn=True,
+                               use_addone_attn=False,
                                use_feature_only_norm=True,
                                scale_shared_rel=True,
-                               type_embedding_init="normal")
+                               type_embedding_init="normal",
+                               scalar_low=-10.0,
+                               scalar_high=10.0)
 
 
 
