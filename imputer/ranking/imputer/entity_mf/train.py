@@ -359,6 +359,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
+                    max_item=self.max_item,
                 )
                 rating_missing = (
                     combined_eval.metrics.get("missing", {}).get("rating", {})
@@ -386,6 +387,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
+                    max_item=self.max_item,
                 )
                 rating_missing = (
                     test_eval.metrics.get("missing", {}).get("rating", {})
@@ -413,6 +415,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
+                    max_item=self.max_item,
                 )
                 rating_missing = (
                     train_eval.metrics.get("missing", {}).get("rating", {})
@@ -439,6 +442,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
+                    max_item=self.max_item,
                 )
                 rating_missing = (
                     test_eval.metrics.get("missing", {}).get("rating", {})

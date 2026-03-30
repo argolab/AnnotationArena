@@ -141,6 +141,38 @@ def compute_trainable_loss(
     return loss, out["loss_masked"], out["loss_observed"]
 
 
+def _merge_chunk_results(split: str, chunk_results: List["EntityEvalResults"]) -> "EntityEvalResults":
+    """Aggregate per-chunk EntityEvalResults into a single result (weighted by n)."""
+    agg: Dict[str, Dict[str, Dict[str, float]]] = {}
+    for result in chunk_results:
+        for status, type_dict in result.metrics.items():
+            if status not in agg:
+                agg[status] = {}
+            for type_name, vals in type_dict.items():
+                if type_name not in agg[status]:
+                    agg[status][type_name] = {"xent_numer": 0.0, "n": 0.0}
+                n = vals.get("n", 0.0)
+                agg[status][type_name]["xent_numer"] += vals.get("xent", 0.0) * n
+                agg[status][type_name]["n"] += n
+                if "acc" in vals:
+                    if "acc_numer" not in agg[status][type_name]:
+                        agg[status][type_name]["acc_numer"] = 0.0
+                    agg[status][type_name]["acc_numer"] += vals["acc"] * n
+    merged: Dict[str, Dict[str, Dict[str, float]]] = {}
+    for status, type_dict in agg.items():
+        merged[status] = {}
+        for type_name, sums in type_dict.items():
+            n = sums["n"]
+            entry: Dict[str, float] = {
+                "xent": sums["xent_numer"] / n if n > 0 else 0.0,
+                "n": n,
+            }
+            if "acc_numer" in sums and n > 0:
+                entry["acc"] = sums["acc_numer"] / n
+            merged[status][type_name] = entry
+    return EntityEvalResults(split=split, metrics=merged)
+
+
 def evaluate_entity_marformer_split(
     model: torch.nn.Module,
     split: str,
@@ -148,13 +180,40 @@ def evaluate_entity_marformer_split(
     types: Dict[str, EntityType],
     global_param_dim: int,
     device: torch.device,
+    max_item: int | None = None,
 ) -> EntityEvalResults:
     """
     Evaluate Entity Marformer on a list of RankingData variables.
     Focus on rating tokens with status=0 (missing) for accuracy and xent.
+
+    If max_item is set and the variable list spans more items than max_item,
+    evaluation is run in item-chunks (matching the training graph size) and
+    results are aggregated with n-weighted averaging.
     """
     if not variables:
         raise ValueError("No variables to evaluate on")
+
+    # Chunked evaluation path: mirrors training chunking so graph sizes match.
+    if max_item is not None:
+        all_item_ids = sorted({iid for v in variables for iid in v.item_ids})
+        if len(all_item_ids) > max_item:
+            item_chunks = [
+                set(all_item_ids[i : i + max_item])
+                for i in range(0, len(all_item_ids), max_item)
+            ]
+            chunk_results: List[EntityEvalResults] = []
+            for item_set in item_chunks:
+                chunk_vars = [v for v in variables if all(iid in item_set for iid in v.item_ids)]
+                if not chunk_vars:
+                    continue
+                chunk_results.append(
+                    evaluate_entity_marformer_split(
+                        model, split, chunk_vars, types, global_param_dim, device, max_item=None
+                    )
+                )
+            if not chunk_results:
+                return EntityEvalResults(split=split, metrics={})
+            return _merge_chunk_results(split, chunk_results)
 
     # Build graph and run model to get parameter stream.
     graph = variable_list_to_entity_graph(variables, types)
