@@ -53,6 +53,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         weight_decay: float = 0.0,
         llm_annotator_id: int | None = None,
         human_observed_rate: float = 0.0,
+        always_observed_ids: List[int] | None = None,
         max_item: int | None = None,
         run_dir: Path | None = None,
         transductive: bool = False,
@@ -102,6 +103,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
             masking_rate=masking_rate,
             llm_annotator_id=llm_annotator_id,
             human_observed_rate=human_observed_rate,
+            always_observed_ids=always_observed_ids,
         )
         self.training_history: List[Dict[str, Any]] = []
         # Pre-build per-chunk EntityGraphs for non-transductive mode.
@@ -582,6 +584,15 @@ def main():
         help="Fraction of human annotations to keep observed when LLM annotator is set.",
     )
     parser.add_argument(
+        "--always-observed-ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help="One or more annotator IDs that are always kept observed during training "
+             "(e.g. --always-observed-ids 4 5 6 7 8 for SummEval turker slots). "
+             "Takes priority over --llm-annotator-id when set.",
+    )
+    parser.add_argument(
         "--max-item",
         type=int,
         default=None,
@@ -847,6 +858,7 @@ def main():
             "transductive_learning": bool(args.transductive_learning),
             "llm_annotator_id": args.llm_annotator_id,
             "human_observed_rate": args.human_observed_rate,
+            "always_observed_ids": args.always_observed_ids,
             "max_item": args.max_item,
             "annotator_reg_weight": args.annotator_reg_weight,
             "item_reg_weight": args.item_reg_weight,
@@ -877,6 +889,7 @@ def main():
         weight_decay=args.weight_decay,
         llm_annotator_id=args.llm_annotator_id,
         human_observed_rate=args.human_observed_rate,
+        always_observed_ids=args.always_observed_ids,
         max_item=args.max_item,
         run_dir=run_dir,
         transductive=bool(args.transductive_learning),
