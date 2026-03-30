@@ -1,34 +1,3 @@
-#!/bin/bash
-
-# Copyright
-# 2024, Johns Hopkins University (Author: Prabhav Singh)
-# Apache 2.0.
-
-#SBATCH --job-name=EMF_SumEval_Ptr
-#SBATCH --nodes=1
-#SBATCH --mem-per-cpu=18GB
-#SBATCH --gpus=1
-#SBATCH --partition=gpu-a100
-#SBATCH --account=a100acct
-#SBATCH --mail-user="psingh54@jhu.edu"
-
-source /home/psingh54/.bashrc
-module load cuda/12.1
-conda activate llm_rubric_env
-cd /export/fs06/psingh54/EntityMarformer/imputer/ranking
-export PYTHONPATH=.
-set -e
-
-# ── SummEval: Base + Pointer ──────────────────────────────────────────────────
-# Data: SummEval (1600 items = 100 docs x 16 models, 80/20 doc split)
-# Annotators: 3 experts (IDs 1-3, same in train+test) + 5 turker slots (IDs 4-8)
-# Observed: all turker ratings (train+test) + expert ratings (train only)
-# Missing/target: expert ratings on test items
-# Masking: MCAR (no --llm-annotator-id; no --llm-input-dist since hard integer ratings)
-#
-# Architecture: shared-bias relational attention + scale + pointer
-# Same arch flags as layernormexps/run_sec1_pointer.sh
-
 DATA_DIR="OUTPUT/generated_data/summeval"
 OUTPUT_ROOT="OUTPUT/ENTITY_MF/SUMMEVAL"
 BUNDLE="summeval"
@@ -47,15 +16,14 @@ LR_SCHEDULE="none"
 LR_MIN=1e-5
 WEIGHT_DECAY=0.01
 MASKING_RATE=0.15
-MASK_AUGMENTATIONS=5
+MASK_AUGMENTATIONS=1
 MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
 DEVICE="cuda"
 MAX_ITEM=10
 ANNOTATOR_REG_WEIGHT=0.0
-# Turker annotator IDs — 0-indexed (bundle IDs 4-8 → RankingData IDs 3-7).
-# Experts have bundle IDs 1-3 → RankingData IDs 0-2 → get masked.
-ALWAYS_OBSERVED_IDS="3 4 5 6 7"
+# Turker annotator IDs (slots 4-8) are always kept observed; experts (1-3) are masked.
+ALWAYS_OBSERVED_IDS="4 5 6 7 8"
 
 # ── Experiment-specific flags ─────────────────────────────────────────────────
 ITEM_DROPOUT_RATE=0.7
@@ -134,7 +102,5 @@ _train() {
 }
 
 _train 1 42
-_train 2 42
-_train 3 42
 
 echo ""; echo "All 3 runs complete. Output: $OUTPUT_ROOT"
