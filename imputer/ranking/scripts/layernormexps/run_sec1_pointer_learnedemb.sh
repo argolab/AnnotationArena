@@ -1,29 +1,3 @@
-#!/bin/bash
-
-# Copyright
-# 2024, Johns Hopkins University (Author: Prabhav Singh)
-# Apache 2.0.
-
-#SBATCH --job-name=EMF_LN_Ptr_LE
-#SBATCH --nodes=1
-#SBATCH --mem-per-cpu=18GB
-#SBATCH --gpus=1
-#SBATCH --partition=gpu-a100
-#SBATCH --account=a100acct
-#SBATCH --mail-user="psingh54@jhu.edu"
-
-source /home/psingh54/.bashrc
-module load cuda/12.1
-conda activate llm_rubric_env
-cd /export/fs06/psingh54/EntityMarformer/imputer/ranking
-export PYTHONPATH=.
-set -e
-
-# ── Section 1: Base + Pointer + Learned Embedding ────────────────────────────
-# Same as run_sec1_pointer.sh but with --use-learned-embedding.
-# Replaces fixed-scale build_param (logit_high=20) with learned Ax+b embedding.
-# feature_dim = model_dim = 80 (no separate param stream); unembeds at top layer.
-
 DATA_DIR="OUTPUT/generated_data/llm_rubric_dist"
 OUTPUT_ROOT="OUTPUT/ENTITY_MF/LAYERNORM_EXPS"
 BUNDLE="dist"
@@ -63,23 +37,23 @@ USE_ADDONE_ATTN=false
 USE_DEVIATION_NORM=false
 
 # ── Build CLI flags ───────────────────────────────────────────────────────────
-PER_HEAD_FLAG="";     [ "$USE_PER_HEAD_REL"  = "false" ] && PER_HEAD_FLAG="--no-per-head-rel"
-SCALE_FLAG="";        [ "$SCALE_SHARED_REL"  = "true"  ] && SCALE_FLAG="--scale-shared-rel"
-POINTER_FLAG="";      [ "$USE_POINTER"        = "true"  ] && POINTER_FLAG="--use-pointer"
-REL_VALUE_FLAG="";    [ "$USE_REL_VALUE"      = "true"  ] && REL_VALUE_FLAG="--use-rel-value"
-ADDONE_FLAG="";       [ "$USE_ADDONE_ATTN"    = "true"  ] && ADDONE_FLAG="--use-addone-attn"
-DEVNORM_FLAG="";      [ "$USE_DEVIATION_NORM" = "true"  ] && DEVNORM_FLAG="--use-deviation-norm"
+PER_HEAD_FLAG="";     [ "$USE_PER_HEAD_REL"       = "false" ] && PER_HEAD_FLAG="--no-per-head-rel"
+SCALE_FLAG="";        [ "$SCALE_SHARED_REL"        = "true"  ] && SCALE_FLAG="--scale-shared-rel"
+POINTER_FLAG="";      [ "$USE_POINTER"             = "true"  ] && POINTER_FLAG="--use-pointer"
+REL_VALUE_FLAG="";    [ "$USE_REL_VALUE"           = "true"  ] && REL_VALUE_FLAG="--use-rel-value"
+ADDONE_FLAG="";       [ "$USE_ADDONE_ATTN"         = "true"  ] && ADDONE_FLAG="--use-addone-attn"
+DEVNORM_FLAG="";      [ "$USE_DEVIATION_NORM"      = "true"  ] && DEVNORM_FLAG="--use-deviation-norm"
 
 # ── Run name base ─────────────────────────────────────────────────────────────
-EXP_LABEL="pointer_learnedemb"
+EXP_LABEL="pointer"
 RUN_BASE="lnexp_${EXP_LABEL}_${NUM_LAYERS}L${ATTENTION_HEADS}H_emb${EMBEDDING_DIM}_${EPOCHS}ep"
 RUN_BASE="${RUN_BASE}_itemdrop${ITEM_DROPOUT_RATE}_ireg${ITEM_REG_WEIGHT}_areg${ATTRIBUTE_REG_WEIGHT}_${BUNDLE}"
 
 echo ""
 echo "============================================================"
-echo " Exp: Base + Pointer + Learned Embedding (3 runs)"
+echo " Exp: Base + Pointer (3 runs)"
 echo "  itemdrop=${ITEM_DROPOUT_RATE}  ireg=${ITEM_REG_WEIGHT}  areg=${ATTRIBUTE_REG_WEIGHT}"
-echo "  flags: $PER_HEAD_FLAG $SCALE_FLAG $POINTER_FLAG $REL_VALUE_FLAG $ADDONE_FLAG $DEVNORM_FLAG --use-learned-embedding"
+echo "  flags: $PER_HEAD_FLAG $SCALE_FLAG $POINTER_FLAG $REL_VALUE_FLAG $ADDONE_FLAG $DEVNORM_FLAG"
 echo "============================================================"
 
 # ── Helper ────────────────────────────────────────────────────────────────────
@@ -122,7 +96,6 @@ _train() {
         $ADDONE_FLAG                                        \
         $DEVNORM_FLAG                                       \
         --llm-input-dist                                    \
-        --use-learned-embedding                             \
         --seed                 "$SEED"                      \
         --overwrite-existing-data
 }

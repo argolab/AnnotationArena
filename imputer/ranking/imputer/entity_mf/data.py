@@ -133,7 +133,6 @@ def variable_list_to_entity_graph(
 
     num_attributes = types["attribute"].variation.num_entities
     num_annotators = types["annotator"].variation.num_entities
-    num_items = types["item"].variation.num_entities
 
     # 1) Variable tokens (ratings + pairwise rankings)
     for var in ranking_vars:
@@ -173,10 +172,18 @@ def variable_list_to_entity_graph(
     for j in range(num_annotators):
         tokens.append(Token(type_name="annotator", entity_id=j, status=2, raw_data=None))
 
-    # 4) Item entity tokens
-    item_token_start = len(tokens)
-    for k in range(num_items):
-        tokens.append(Token(type_name="item", entity_id=k, status=2, raw_data=None))
+    # 4) Item entity tokens — only for items that actually appear in this variable list.
+    # Previously all num_items items were included regardless of the chunk, causing the
+    # graph to grow with the full dataset size even for small item chunks (OOM for large
+    # datasets like SummEval). Now only in-chunk items get entity tokens; their entity_id
+    # is preserved so deviation_tables are indexed correctly.
+    present_item_ids: List[int] = sorted(
+        {item_id for var in ranking_vars for item_id in var.item_ids}
+    )
+    item_id_to_token: Dict[int, int] = {}
+    for item_id in present_item_ids:
+        item_id_to_token[item_id] = len(tokens)
+        tokens.append(Token(type_name="item", entity_id=item_id, status=2, raw_data=None))
 
     # 5) Edges
     #    For each variable token v with (i, j, k):
@@ -203,8 +210,8 @@ def variable_list_to_entity_graph(
 
         # Item edges
         for item_id in item_ids:
-            if 0 <= item_id < num_items:
-                item_token_idx = item_token_start + item_id
+            item_token_idx = item_id_to_token.get(item_id, None)
+            if item_token_idx is not None:
                 edges.append((idx, item_token_idx, "ITEM"))
                 edges.append((item_token_idx, idx, "ITEM_INV"))
 
