@@ -21,7 +21,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from imputer.eval import EvaluationEngine, EvaluationResults
 from imputer.data import DataConverter, RankingData
 from imputer.ranking_imputer import MultiVariableImputer
-from imputer.trainer import ImputerTrainer, EvaluationCallback
+from imputer.legacy.trainer import ImputerTrainer, EvaluationCallback
 
 
 def create_test_data():
@@ -265,7 +265,6 @@ def test_comprehensive_evaluation():
         attention_heads=2,
         embedding_dim=32,
         dropout=0.1,
-        embedding_type="pairwise",
         device="cpu"
     )
 
@@ -327,7 +326,6 @@ def test_trainer_callback_integration():
         attention_heads=2,
         embedding_dim=32,
         dropout=0.1,
-        embedding_type="pairwise",
         device="cpu"
     )
 

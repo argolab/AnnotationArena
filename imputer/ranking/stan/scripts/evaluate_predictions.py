@@ -11,6 +11,7 @@ It use the bundle to get the missing attributes, then use the mcmc-dir to get th
 import argparse
 import json
 import pandas as pd
+import shutil
 from pathlib import Path
 import sys
 
@@ -32,8 +33,14 @@ def main():
     parser.add_argument("--output-dir", default="OUTPUT/domain_model/eval", help="Output directory for evaluation results")
     
     # Optional arguments
+    parser.add_argument("--run-name", type=str, default=None, help="Custom run name (default: auto-generated)")
     parser.add_argument("--csv-pattern", default="domain_model-*.csv", help="Pattern for MCMC CSV files")
     parser.add_argument("--verbose", action="store_true", help="Print detailed results")
+    parser.add_argument("--overwrite-existing-data", action="store_true", help="Overwrite existing output directory if it exists")
+    parser.add_argument("--use-test-only", action="store_true",
+                       help="Stan was run with --use-test-only; predictions correspond to test missing ratings only")
+    parser.add_argument("--use-train-only", action="store_true",
+                       help="Stan was run with --use-train-only; predictions correspond to train missing ratings only")
     
     args = parser.parse_args()
     
@@ -44,8 +51,17 @@ def main():
     
     bundle = GroundTruthBundle.from_dict(bundle_data)
     
+    # Handle --overwrite-existing-data flag: remove existing directory if it exists
+    output_root = Path(args.output_dir)
+    output_root.mkdir(parents=True, exist_ok=True)
+    if args.run_name:
+        potential_run_dir = output_root / args.run_name
+        if potential_run_dir.exists() and args.overwrite_existing_data:
+            print("\033[91mWARNING: Overwriting existing output directory: {}\033[0m".format(potential_run_dir))
+            shutil.rmtree(potential_run_dir)
+    
     # Create output directory
-    output_dir = new_run_dir(args.output_dir)
+    output_dir = new_run_dir(args.output_dir, run_name=args.run_name)
     print(f"Output directory: {output_dir}")
     
     # Load MCMC fit
@@ -73,30 +89,30 @@ def main():
     data_bundle_dir = Path(args.data_bundle).parent
     configs_path = data_bundle_dir / "configs.json"
     
-    if configs_path.exists():
+    # Prefer augmented_configs.json from the MCMC run dir (has D + all hyperparams).
+    # This is written by run_inference.py and captures any --override-* values.
+    augmented_path = mcmc_dir / "augmented_configs.json"
+    if augmented_path.exists():
+        with open(augmented_path, 'r') as f:
+            datagen_config = json.load(f)["datagen"]
+        print(f"Reading config from {augmented_path}")
+    elif configs_path.exists():
         with open(configs_path, 'r') as f:
             configs_data = json.load(f)
         datagen_config = configs_data["datagen"]
-        config = {
-            "K_train": datagen_config["K_train"],
-            "K_test": datagen_config["K_test"],
-            "I": datagen_config["I"],
-            "J": datagen_config["J"],
-            "D": datagen_config["D"],
-            "C": datagen_config["C"],
-            "temperature": datagen_config.get("temperature", 1.0),
-        }
+        print(f"Reading config from {configs_path}")
     else:
-        # Fallback to bundle stats if configs.json not found
-        config = {
-            "K_train": bundle.stats["K_train"],
-            "K_test": bundle.stats["K_test"],
-            "I": 3,  # Fallback defaults
-            "J": 6,
-            "D": 8,
-            "C": 5,
-            "temperature": 1.0,
-        }
+        raise ValueError(f"Neither {augmented_path} nor {configs_path} found")
+
+    config = {
+        "K_train": datagen_config["K_train"],
+        "K_test": datagen_config["K_test"],
+        "I": datagen_config["I"],
+        "J": datagen_config["J"],
+        "D": datagen_config.get("D", 8),
+        "C": datagen_config["C"],
+        "temperature": datagen_config.get("temperature", 1.0),
+    }
     
     print(f"\nConfiguration:")
     print(f"  K_train: {config['K_train']}")
@@ -107,7 +123,9 @@ def main():
     # Evaluate predictions
     print(f"\nEvaluating predictions...")
     try:
-        results = evaluate_predictives(fit, bundle, config)
+        results = evaluate_predictives(fit, bundle, config,
+                                      use_test_only=args.use_test_only,
+                                      use_train_only=args.use_train_only)
         
         print("Evaluation completed successfully!")
         

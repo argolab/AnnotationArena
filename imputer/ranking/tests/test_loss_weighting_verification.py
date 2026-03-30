@@ -24,7 +24,7 @@ from typing import List, Dict, Any
 from experiment_config import ExperimentConfig, DataConfig, ModelConfig, PretrainingConfig, FinetuningConfig, DomainConfig, EvaluationConfig
 from imputer.data import DataConverter, RankingData
 from imputer.ranking_imputer import MultiVariableImputer
-from imputer.multi_instance_trainer import SequentialMIT, GeneralMIT
+from imputer.legacy.multi_instance_trainer import SequentialMIT, GeneralMIT
 from imputer.eval import EvaluationEngine
 from imputer.losses import DefaultLossStrategy, adapt_batched_logits_to_predictions
 
@@ -56,7 +56,6 @@ def create_test_config():
             attention_heads=4,
             embedding_dim=16,
             dropout=0.1,
-            embedding_type="pairwise",
             max_rank_size=2,
             masked_loss_weight=3.0,    # KEY: Different weights
             observed_loss_weight=1.0   # KEY: Different weights
@@ -183,7 +182,6 @@ def test_mit_weight_propagation():
         attention_heads=config.model_config.attention_heads,
         embedding_dim=config.model_config.embedding_dim,
         dropout=config.model_config.dropout,
-        embedding_type=config.model_config.embedding_type,
         max_rank_size=config.model_config.max_rank_size
     ).to(config.device)
 
@@ -341,7 +339,6 @@ def test_end_to_end_weight_flow():
         attention_heads=config.model_config.attention_heads,
         embedding_dim=config.model_config.embedding_dim,
         dropout=config.model_config.dropout,
-        embedding_type=config.model_config.embedding_type,
         max_rank_size=config.model_config.max_rank_size
     ).to(config.device)
 

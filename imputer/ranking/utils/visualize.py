@@ -20,23 +20,28 @@ def load_run_data(run_dir: Path) -> Dict[str, Any]:
     """Load all JSON data from a run directory."""
     data = {}
 
-    # Load training histories
-    test_history_path = run_dir / "test_training_history.json"
-    train_history_path = run_dir / "train_training_history.json"
+    # Current Lightning naming convention
+    training_loss_history_path = run_dir / "training_loss_history.json"
+    train_instance_path = run_dir / "train_instance_training_history.json"
+    test_instance_path = run_dir / "test_instance_training_history.json"
 
-    if test_history_path.exists():
-        with open(test_history_path, 'r') as f:
-            data['test_history'] = json.load(f)
+    if training_loss_history_path.exists():
+        with open(training_loss_history_path, "r") as f:
+            data["training_loss_history"] = json.load(f)
+    if train_instance_path.exists():
+        with open(train_instance_path, "r") as f:
+            data["train_instance_history"] = json.load(f)
+    if test_instance_path.exists():
+        with open(test_instance_path, "r") as f:
+            data["test_instance_history"] = json.load(f)
 
-    if train_history_path.exists():
-        with open(train_history_path, 'r') as f:
-            data['train_history'] = json.load(f)
-
-    # Load predictions
-    predictives_path = run_dir / "predictives.json"
-    if predictives_path.exists():
-        with open(predictives_path, 'r') as f:
-            data['predictives'] = json.load(f)
+    # Load predictions: prefer test_predictives.json, fall back to predictives.json for compatibility
+    for name in ("test_predictives.json", "predictives.json"):
+        predictives_path = run_dir / name
+        if predictives_path.exists():
+            with open(predictives_path, 'r') as f:
+                data['predictives'] = json.load(f)
+            break
 
     # Load final metrics
     test_metrics_path = run_dir / "test_metrics.json"
@@ -62,33 +67,48 @@ def load_stan_metrics(stan_path: Optional[Path]) -> Optional[Dict[str, float]]:
         return json.load(f)
 
 
-def plot_learning_curves_train(train_history: List[Dict], stan_metrics: Optional[Dict], output_dir: Path):
-    """Plot learning curves for training set (observed, missing, overall)."""
-    epochs = [entry['epoch'] for entry in train_history]
+# Colors for multiple Stan baselines (dashed horizontal lines)
+STAN_BASELINE_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd"]
 
-    # Extract metrics
-    overall_loss = [entry['rating_loss'] for entry in train_history]
-    overall_acc = [entry['rating_accuracy'] for entry in train_history]
-    overall_rmse = [entry['rating_rmse'] for entry in train_history]
 
-    observed_loss = [entry['observed_metrics']['rating_loss'] for entry in train_history]
-    observed_acc = [entry['observed_metrics']['rating_accuracy'] for entry in train_history]
-    observed_rmse = [entry['observed_metrics']['rating_rmse'] for entry in train_history]
+def plot_learning_curves_train(
+    train_history: List[Dict],
+    stan_baselines: Optional[List[tuple]] = None,
+    output_dir: Path = None,
+) -> None:
+    """Plot learning curves for train instance (observed, missing, overall). Strict naming: never use total_loss for Missing/Observed."""
+    assert train_history, "train_history must not be empty"
+    assert "observed_metrics" in train_history[0], "train_history must contain observed_metrics (from EvaluationCallback)"
+    assert "missing_metrics" in train_history[0], "train_history must contain missing_metrics (from EvaluationCallback)"
+    
+    epochs = [entry["epoch"] for entry in train_history]
+    
+    # Overall metrics - rating_loss should always be present (from EvaluationCallback)
+    overall_loss = [entry["rating_loss"] for entry in train_history]
+    overall_acc = [entry["rating_accuracy"] for entry in train_history]
+    overall_rmse = [entry["rating_rmse"] for entry in train_history]
 
-    missing_loss = [entry['missing_metrics']['rating_loss'] for entry in train_history]
-    missing_acc = [entry['missing_metrics']['rating_accuracy'] for entry in train_history]
-    missing_rmse = [entry['missing_metrics']['rating_rmse'] for entry in train_history]
+    # Observed and missing metrics are always present (from EvaluationCallback)
+    observed_loss = [entry["observed_metrics"]["rating_loss"] for entry in train_history]
+    observed_acc = [entry["observed_metrics"]["rating_accuracy"] for entry in train_history]
+    observed_rmse = [entry["observed_metrics"]["rating_rmse"] for entry in train_history]
+
+    missing_loss = [entry["missing_metrics"]["rating_loss"] for entry in train_history]
+    missing_acc = [entry["missing_metrics"]["rating_accuracy"] for entry in train_history]
+    missing_rmse = [entry["missing_metrics"]["rating_rmse"] for entry in train_history]
 
     # Plot 1: Rating Loss (Train)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(epochs, overall_loss, label='Overall', linewidth=2, color='black')
-    ax.plot(epochs, observed_loss, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax.plot(epochs, missing_loss, label='Missing', linewidth=1.5, color='red', linestyle='--')
+    ax.plot(epochs, overall_loss, label="Overall", linewidth=2, color="black")
+    ax.plot(epochs, observed_loss, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax.plot(epochs, missing_loss, label="Missing", linewidth=1.5, color="red", linestyle="--")
 
-    if stan_metrics and 'rating_missing_log_likelihood' in stan_metrics:
-        # Stan reports negative log likelihood, convert to loss
-        stan_loss = -stan_metrics['rating_missing_log_likelihood']
-        ax.axhline(y=stan_loss, color='blue', linestyle=':', linewidth=2, label=f'Stan Baseline (Missing): {stan_loss:.3f}')
+    if stan_baselines:
+        for idx, (metrics, label) in enumerate(stan_baselines):
+            if metrics and 'rating_missing_log_likelihood' in metrics:
+                stan_loss = -metrics['rating_missing_log_likelihood']
+                color = STAN_BASELINE_COLORS[idx % len(STAN_BASELINE_COLORS)]
+                ax.axhline(y=stan_loss, color=color, linestyle='--', linewidth=2, label=f'{label}: {stan_loss:.3f}')
 
     ax.set_xlabel('Epoch', fontsize=12)
     ax.set_ylabel('Rating Loss (Cross-Entropy)', fontsize=12)
@@ -101,13 +121,16 @@ def plot_learning_curves_train(train_history: List[Dict], stan_metrics: Optional
 
     # Plot 2: Rating Accuracy (Train)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(epochs, overall_acc, label='Overall', linewidth=2, color='black')
-    ax.plot(epochs, observed_acc, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax.plot(epochs, missing_acc, label='Missing', linewidth=1.5, color='red', linestyle='--')
+    ax.plot(epochs, overall_acc, label="Overall", linewidth=2, color="black")
+    ax.plot(epochs, observed_acc, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax.plot(epochs, missing_acc, label="Missing", linewidth=1.5, color="red", linestyle="--")
 
-    if stan_metrics and 'rating_missing_accuracy' in stan_metrics:
-        stan_acc = stan_metrics['rating_missing_accuracy']
-        ax.axhline(y=stan_acc, color='blue', linestyle=':', linewidth=2, label=f'Stan Baseline (Missing): {stan_acc:.3f}')
+    if stan_baselines:
+        for idx, (metrics, label) in enumerate(stan_baselines):
+            if metrics and 'rating_missing_accuracy' in metrics:
+                stan_acc = metrics['rating_missing_accuracy']
+                color = STAN_BASELINE_COLORS[idx % len(STAN_BASELINE_COLORS)]
+                ax.axhline(y=stan_acc, color=color, linestyle='--', linewidth=2, label=f'{label}: {stan_acc:.3f}')
 
     ax.set_xlabel('Epoch', fontsize=12)
     ax.set_ylabel('Rating Accuracy', fontsize=12)
@@ -121,13 +144,16 @@ def plot_learning_curves_train(train_history: List[Dict], stan_metrics: Optional
 
     # Plot 3: Rating RMSE (Train)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(epochs, overall_rmse, label='Overall', linewidth=2, color='black')
-    ax.plot(epochs, observed_rmse, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax.plot(epochs, missing_rmse, label='Missing', linewidth=1.5, color='red', linestyle='--')
+    ax.plot(epochs, overall_rmse, label="Overall", linewidth=2, color="black")
+    ax.plot(epochs, observed_rmse, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax.plot(epochs, missing_rmse, label="Missing", linewidth=1.5, color="red", linestyle="--")
 
-    if stan_metrics and 'rating_missing_mae' in stan_metrics:
-        stan_mae = stan_metrics['rating_missing_mae']
-        ax.axhline(y=stan_mae, color='blue', linestyle=':', linewidth=2, label=f'Stan MAE (Missing): {stan_mae:.3f}')
+    if stan_baselines:
+        for idx, (metrics, label) in enumerate(stan_baselines):
+            if metrics and 'rating_missing_mae' in metrics:
+                stan_mae = metrics['rating_missing_mae']
+                color = STAN_BASELINE_COLORS[idx % len(STAN_BASELINE_COLORS)]
+                ax.axhline(y=stan_mae, color=color, linestyle='--', linewidth=2, label=f'{label} MAE: {stan_mae:.3f}')
 
     ax.set_xlabel('Epoch', fontsize=12)
     ax.set_ylabel('Rating RMSE', fontsize=12)
@@ -141,25 +167,29 @@ def plot_learning_curves_train(train_history: List[Dict], stan_metrics: Optional
     # Plot 4: Combined Loss + Accuracy (Train)
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10), sharex=True)
 
-    # Loss subplot
-    ax1.plot(epochs, overall_loss, label='Overall', linewidth=2, color='black')
-    ax1.plot(epochs, observed_loss, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax1.plot(epochs, missing_loss, label='Missing', linewidth=1.5, color='red', linestyle='--')
-    if stan_metrics and 'rating_missing_log_likelihood' in stan_metrics:
-        stan_loss = -stan_metrics['rating_missing_log_likelihood']
-        ax1.axhline(y=stan_loss, color='blue', linestyle=':', linewidth=2, label=f'Stan (Missing)')
-    ax1.set_ylabel('Rating Loss', fontsize=12)
-    ax1.set_title('Training Set: Loss and Accuracy', fontsize=14, fontweight='bold')
+    ax1.plot(epochs, overall_loss, label="Overall", linewidth=2, color="black")
+    ax1.plot(epochs, observed_loss, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax1.plot(epochs, missing_loss, label="Missing", linewidth=1.5, color="red", linestyle="--")
+    if stan_baselines:
+        for idx, (metrics, label) in enumerate(stan_baselines):
+            if metrics and "rating_missing_log_likelihood" in metrics:
+                stan_loss = -metrics["rating_missing_log_likelihood"]
+                color = STAN_BASELINE_COLORS[idx % len(STAN_BASELINE_COLORS)]
+                ax1.axhline(y=stan_loss, color=color, linestyle="--", linewidth=2, label=label)
+    ax1.set_ylabel("Rating Loss", fontsize=12)
+    ax1.set_title("Training Set: Loss and Accuracy", fontsize=14, fontweight="bold")
     ax1.legend(fontsize=9)
     ax1.grid(True, alpha=0.3)
 
-    # Accuracy subplot
-    ax2.plot(epochs, overall_acc, label='Overall', linewidth=2, color='black')
-    ax2.plot(epochs, observed_acc, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax2.plot(epochs, missing_acc, label='Missing', linewidth=1.5, color='red', linestyle='--')
-    if stan_metrics and 'rating_missing_accuracy' in stan_metrics:
-        stan_acc = stan_metrics['rating_missing_accuracy']
-        ax2.axhline(y=stan_acc, color='blue', linestyle=':', linewidth=2, label=f'Stan (Missing)')
+    ax2.plot(epochs, overall_acc, label="Overall", linewidth=2, color="black")
+    ax2.plot(epochs, observed_acc, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax2.plot(epochs, missing_acc, label="Missing", linewidth=1.5, color="red", linestyle="--")
+    if stan_baselines:
+        for idx, (metrics, label) in enumerate(stan_baselines):
+            if metrics and 'rating_missing_accuracy' in metrics:
+                stan_acc = metrics['rating_missing_accuracy']
+                color = STAN_BASELINE_COLORS[idx % len(STAN_BASELINE_COLORS)]
+                ax2.axhline(y=stan_acc, color=color, linestyle='--', linewidth=2, label=label)
     ax2.set_xlabel('Epoch', fontsize=12)
     ax2.set_ylabel('Rating Accuracy', fontsize=12)
     ax2.legend(fontsize=9)
@@ -171,32 +201,42 @@ def plot_learning_curves_train(train_history: List[Dict], stan_metrics: Optional
     plt.close()
 
 
-def plot_learning_curves_test(test_history: List[Dict], stan_metrics: Optional[Dict], output_dir: Path):
-    """Plot learning curves for test set (observed, missing, overall)."""
-    epochs = [entry['epoch'] for entry in test_history]
+def plot_learning_curves_test(
+    test_history: List[Dict],
+    stan_baselines: Optional[List[tuple]] = None,
+    output_dir: Path = None,
+) -> None:
+    """Plot learning curves for test instance (observed, missing, overall). Strict naming: never use total_loss for Missing/Observed."""
+    assert test_history, "test_history must not be empty"
+    assert "observed_metrics" in test_history[0], "test_history must contain observed_metrics (from EvaluationCallback)"
+    assert "missing_metrics" in test_history[0], "test_history must contain missing_metrics (from EvaluationCallback)"
+    
+    epochs = [entry["epoch"] for entry in test_history]
 
-    # Extract metrics
-    overall_loss = [entry['rating_loss'] for entry in test_history]
-    overall_acc = [entry['rating_accuracy'] for entry in test_history]
-    overall_rmse = [entry['rating_rmse'] for entry in test_history]
-
-    observed_loss = [entry['observed_metrics']['rating_loss'] for entry in test_history]
-    observed_acc = [entry['observed_metrics']['rating_accuracy'] for entry in test_history]
-    observed_rmse = [entry['observed_metrics']['rating_rmse'] for entry in test_history]
-
-    missing_loss = [entry['missing_metrics']['rating_loss'] for entry in test_history]
-    missing_acc = [entry['missing_metrics']['rating_accuracy'] for entry in test_history]
-    missing_rmse = [entry['missing_metrics']['rating_rmse'] for entry in test_history]
+    overall_loss = [entry["rating_loss"] for entry in test_history]
+    overall_acc = [entry["rating_accuracy"] for entry in test_history]
+    overall_rmse = [entry["rating_rmse"] for entry in test_history]
+    
+    # Observed and missing metrics are always present (from EvaluationCallback)
+    observed_loss = [entry["observed_metrics"]["rating_loss"] for entry in test_history]
+    observed_acc = [entry["observed_metrics"]["rating_accuracy"] for entry in test_history]
+    observed_rmse = [entry["observed_metrics"]["rating_rmse"] for entry in test_history]
+    missing_loss = [entry["missing_metrics"]["rating_loss"] for entry in test_history]
+    missing_acc = [entry["missing_metrics"]["rating_accuracy"] for entry in test_history]
+    missing_rmse = [entry["missing_metrics"]["rating_rmse"] for entry in test_history]
 
     # Plot 1: Rating Loss (Test)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(epochs, overall_loss, label='Overall', linewidth=2, color='black')
-    ax.plot(epochs, observed_loss, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax.plot(epochs, missing_loss, label='Missing', linewidth=1.5, color='red', linestyle='--')
+    ax.plot(epochs, overall_loss, label="Overall", linewidth=2, color="black")
+    ax.plot(epochs, observed_loss, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax.plot(epochs, missing_loss, label="Missing", linewidth=1.5, color="red", linestyle="--")
 
-    if stan_metrics and 'rating_missing_log_likelihood' in stan_metrics:
-        stan_loss = -stan_metrics['rating_missing_log_likelihood']
-        ax.axhline(y=stan_loss, color='blue', linestyle=':', linewidth=2, label=f'Stan Baseline (Missing): {stan_loss:.3f}')
+    if stan_baselines:
+        for idx, (metrics, label) in enumerate(stan_baselines):
+            if metrics and 'rating_missing_log_likelihood' in metrics:
+                stan_loss = -metrics['rating_missing_log_likelihood']
+                color = STAN_BASELINE_COLORS[idx % len(STAN_BASELINE_COLORS)]
+                ax.axhline(y=stan_loss, color=color, linestyle='--', linewidth=2, label=f'{label}: {stan_loss:.3f}')
 
     ax.set_xlabel('Epoch', fontsize=12)
     ax.set_ylabel('Rating Loss (Cross-Entropy)', fontsize=12)
@@ -209,13 +249,18 @@ def plot_learning_curves_test(test_history: List[Dict], stan_metrics: Optional[D
 
     # Plot 2: Rating Accuracy (Test)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(epochs, overall_acc, label='Overall', linewidth=2, color='black')
-    ax.plot(epochs, observed_acc, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax.plot(epochs, missing_acc, label='Missing', linewidth=1.5, color='red', linestyle='--')
+    ax.plot(epochs, overall_acc, label="Overall", linewidth=2, color="black")
+    if observed_acc is not None:
+        ax.plot(epochs, observed_acc, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    if missing_acc is not None:
+        ax.plot(epochs, missing_acc, label="Missing", linewidth=1.5, color="red", linestyle="--")
 
-    if stan_metrics and 'rating_missing_accuracy' in stan_metrics:
-        stan_acc = stan_metrics['rating_missing_accuracy']
-        ax.axhline(y=stan_acc, color='blue', linestyle=':', linewidth=2, label=f'Stan Baseline (Missing): {stan_acc:.3f}')
+    if stan_baselines:
+        for idx, (metrics, label) in enumerate(stan_baselines):
+            if metrics and "rating_missing_accuracy" in metrics:
+                stan_acc = metrics['rating_missing_accuracy']
+                color = STAN_BASELINE_COLORS[idx % len(STAN_BASELINE_COLORS)]
+                ax.axhline(y=stan_acc, color=color, linestyle='--', linewidth=2, label=f'{label}: {stan_acc:.3f}')
 
     ax.set_xlabel('Epoch', fontsize=12)
     ax.set_ylabel('Rating Accuracy', fontsize=12)
@@ -229,13 +274,16 @@ def plot_learning_curves_test(test_history: List[Dict], stan_metrics: Optional[D
 
     # Plot 3: Rating RMSE (Test)
     fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(epochs, overall_rmse, label='Overall', linewidth=2, color='black')
-    ax.plot(epochs, observed_rmse, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax.plot(epochs, missing_rmse, label='Missing', linewidth=1.5, color='red', linestyle='--')
+    ax.plot(epochs, overall_rmse, label="Overall", linewidth=2, color="black")
+    ax.plot(epochs, observed_rmse, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax.plot(epochs, missing_rmse, label="Missing", linewidth=1.5, color="red", linestyle="--")
 
-    if stan_metrics and 'rating_missing_mae' in stan_metrics:
-        stan_mae = stan_metrics['rating_missing_mae']
-        ax.axhline(y=stan_mae, color='blue', linestyle=':', linewidth=2, label=f'Stan MAE (Missing): {stan_mae:.3f}')
+    if stan_baselines:
+        for idx, (metrics, label) in enumerate(stan_baselines):
+            if metrics and "rating_missing_mae" in metrics:
+                stan_mae = metrics['rating_missing_mae']
+                color = STAN_BASELINE_COLORS[idx % len(STAN_BASELINE_COLORS)]
+                ax.axhline(y=stan_mae, color=color, linestyle='--', linewidth=2, label=f'{label} MAE: {stan_mae:.3f}')
 
     ax.set_xlabel('Epoch', fontsize=12)
     ax.set_ylabel('Rating RMSE', fontsize=12)
@@ -249,25 +297,29 @@ def plot_learning_curves_test(test_history: List[Dict], stan_metrics: Optional[D
     # Plot 4: Combined Loss + Accuracy (Test)
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 10), sharex=True)
 
-    # Loss subplot
-    ax1.plot(epochs, overall_loss, label='Overall', linewidth=2, color='black')
-    ax1.plot(epochs, observed_loss, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax1.plot(epochs, missing_loss, label='Missing', linewidth=1.5, color='red', linestyle='--')
-    if stan_metrics and 'rating_missing_log_likelihood' in stan_metrics:
-        stan_loss = -stan_metrics['rating_missing_log_likelihood']
-        ax1.axhline(y=stan_loss, color='blue', linestyle=':', linewidth=2, label=f'Stan (Missing)')
-    ax1.set_ylabel('Rating Loss', fontsize=12)
-    ax1.set_title('Test Set: Loss and Accuracy', fontsize=14, fontweight='bold')
+    ax1.plot(epochs, overall_loss, label="Overall", linewidth=2, color="black")
+    ax1.plot(epochs, observed_loss, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax1.plot(epochs, missing_loss, label="Missing", linewidth=1.5, color="red", linestyle="--")
+    if stan_baselines:
+        for idx, (metrics, label) in enumerate(stan_baselines):
+            if metrics and "rating_missing_log_likelihood" in metrics:
+                stan_loss = -metrics["rating_missing_log_likelihood"]
+                color = STAN_BASELINE_COLORS[idx % len(STAN_BASELINE_COLORS)]
+                ax1.axhline(y=stan_loss, color=color, linestyle="--", linewidth=2, label=label)
+    ax1.set_ylabel("Rating Loss", fontsize=12)
+    ax1.set_title("Test Set: Loss and Accuracy", fontsize=14, fontweight="bold")
     ax1.legend(fontsize=9)
     ax1.grid(True, alpha=0.3)
 
-    # Accuracy subplot
-    ax2.plot(epochs, overall_acc, label='Overall', linewidth=2, color='black')
-    ax2.plot(epochs, observed_acc, label='Observed', linewidth=1.5, color='green', linestyle='--')
-    ax2.plot(epochs, missing_acc, label='Missing', linewidth=1.5, color='red', linestyle='--')
-    if stan_metrics and 'rating_missing_accuracy' in stan_metrics:
-        stan_acc = stan_metrics['rating_missing_accuracy']
-        ax2.axhline(y=stan_acc, color='blue', linestyle=':', linewidth=2, label=f'Stan (Missing)')
+    ax2.plot(epochs, overall_acc, label="Overall", linewidth=2, color="black")
+    ax2.plot(epochs, observed_acc, label="Observed", linewidth=1.5, color="green", linestyle="--")
+    ax2.plot(epochs, missing_acc, label="Missing", linewidth=1.5, color="red", linestyle="--")
+    if stan_baselines:
+        for idx, (metrics, label) in enumerate(stan_baselines):
+            if metrics and "rating_missing_accuracy" in metrics:
+                stan_acc = metrics['rating_missing_accuracy']
+                color = STAN_BASELINE_COLORS[idx % len(STAN_BASELINE_COLORS)]
+                ax2.axhline(y=stan_acc, color=color, linestyle='--', linewidth=2, label=label)
     ax2.set_xlabel('Epoch', fontsize=12)
     ax2.set_ylabel('Rating Accuracy', fontsize=12)
     ax2.legend(fontsize=9)
@@ -472,7 +524,10 @@ def plot_confidence_analysis(predictions: List[Dict], output_dir: Path):
 def main():
     parser = argparse.ArgumentParser(description="Visualize imputer training run results")
     parser.add_argument("--run-dir", required=True, help="Path to imputer run directory")
-    parser.add_argument("--stan-metrics", default=None, help="Optional path to Stan predictive_metrics.json for baseline comparison")
+    parser.add_argument("--stan-metrics", nargs="*", default=None,
+                        help="Optional paths to Stan predictive_metrics.json (one or more) for baseline comparison")
+    parser.add_argument("--stan-labels", nargs="*", default=None,
+                        help="Optional labels for each Stan baseline (same order as --stan-metrics); default: Stan 1, Stan 2, ...")
 
     args = parser.parse_args()
 
@@ -487,31 +542,49 @@ def main():
     print(f"Loading data from {run_dir}...")
     data = load_run_data(run_dir)
 
-    # Load Stan metrics if provided
-    stan_metrics = None
+    # Load Stan baseline(s): list of (metrics_dict, label)
+    stan_baselines = []
     if args.stan_metrics:
-        stan_path = Path(args.stan_metrics)
-        stan_metrics = load_stan_metrics(stan_path)
-        if stan_metrics:
-            print(f"Loaded Stan baseline metrics from {stan_path}")
+        labels = args.stan_labels or [f"Stan {i+1}" for i in range(len(args.stan_metrics))]
+        if len(labels) < len(args.stan_metrics):
+            labels.extend([f"Stan {i+1}" for i in range(len(labels), len(args.stan_metrics))])
+        for path, label in zip(args.stan_metrics, labels):
+            m = load_stan_metrics(Path(path))
+            if m:
+                stan_baselines.append((m, label))
+                print(f"Loaded Stan baseline: {label} from {path}")
 
     # Generate plots
     print("\nGenerating learning curves...")
-    if 'train_history' in data:
-        plot_learning_curves_train(data['train_history'], stan_metrics, plots_dir)
-        print("  - Train learning curves saved")
+    if data.get("train_instance_history"):
+        train_src, train_name = data["train_instance_history"], "train_instance_history"
+    elif data.get("train_history"):
+        train_src, train_name = data["train_history"], "train_history"
+    elif data.get("training_loss_history"):
+        train_src, train_name = data["training_loss_history"], "training_loss_history"
+    else:
+        train_src = train_name = None
+    if train_src:
+        plot_learning_curves_train(train_src, stan_baselines if stan_baselines else None, plots_dir)
+        print(f"  - Train learning curves saved (from {train_name})")
 
-    if 'test_history' in data:
-        plot_learning_curves_test(data['test_history'], stan_metrics, plots_dir)
-        print("  - Test learning curves saved")
+    if data.get("test_instance_history"):
+        test_src, test_name = data["test_instance_history"], "test_instance_history"
+    else:
+        test_src = test_name = None
+    if test_src:
+        plot_learning_curves_test(test_src, stan_baselines if stan_baselines else None, plots_dir)
+        print(f"  - Test learning curves saved (from {test_name})")
 
     print("\nGenerating calibration plots...")
-    if 'predictives' in data and 'predictions' in data['predictives']:
+    if 'predictives' in data:
+        assert 'predictions' in data['predictives'], "predictives must contain 'predictions' key (from build_predictives)"
         plot_calibration(data['predictives']['predictions'], plots_dir)
         print("  - Calibration plots saved")
 
     print("\nGenerating confidence analysis plots...")
-    if 'predictives' in data and 'predictions' in data['predictives']:
+    if 'predictives' in data:
+        assert 'predictions' in data['predictives'], "predictives must contain 'predictions' key (from build_predictives)"
         plot_confidence_analysis(data['predictives']['predictions'], plots_dir)
         print("  - Confidence analysis plots saved")
 

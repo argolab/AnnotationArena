@@ -11,6 +11,7 @@ This package contains the refactored components for neural ranking imputation:
 
 from .ranking_imputer import MultiVariableImputer
 from .data import RankingData, DataConverter
-from .trainer import ImputerTrainer
+# ImputerTrainer moved to legacy - import from imputer.legacy.trainer if needed
+from .legacy.trainer import ImputerTrainer
 
 __all__ = ['MultiVariableImputer', 'DataConverter', 'ImputerTrainer', 'RankingData']

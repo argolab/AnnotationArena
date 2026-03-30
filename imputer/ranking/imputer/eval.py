@@ -9,6 +9,7 @@ import copy
 
 from imputer.data import RankingData
 from imputer.losses import DefaultLossStrategy, adapt_batched_logits_to_predictions
+from imputer.metrics import compute_rating_accuracy_rmse, compute_ranking_accuracy
 
 
 @dataclass
@@ -37,31 +38,109 @@ class EvaluationResults:
 class EvaluationEngine:
     """Engine for evaluating imputation models without masking (use observed + missing)."""
 
-    def __init__(self, config=None):
+    def __init__(self, config=None, loss_fn: str = "ce"):
         self.config = config
         # Loss strategy; weights don't matter in eval since masked subset is empty
-        self.loss_strategy = DefaultLossStrategy()
+        self.loss_strategy = DefaultLossStrategy(loss_fn=loss_fn)
 
-    def evaluate_model(self, model, variables: List[RankingData], converter=None, device='cuda') -> EvaluationResults:
-        """Evaluate on provided variables as-is; compute metrics/log-loss per status (observed/missing/masked)."""
+    def evaluate_model(self, model, variables: List[RankingData], converter=None, device='cuda', max_item=30) -> EvaluationResults:
+        """Evaluate on provided variables as-is; compute metrics/log-loss per status (observed/missing/masked).
+        
+        If the total number of unique items exceeds max_item, evaluation is done in chunks
+        to match training behavior and prevent train-test mismatch.
+        """
         if converter is None:
             raise ValueError("DataConverter required for evaluation")
 
         model.eval()
+        # Disable full_dropout for evaluation (if embedding provider supports it)
+        embed = getattr(model, "embedding_provider", None)
+        if embed is not None and hasattr(embed, "set_full_dropout"):
+            embed.set_full_dropout(False)
+        
         ref_variables = copy.deepcopy(variables)
 
         with torch.no_grad():
             model = model.to(device)
-            model_output = model(ref_variables)
-
-            # Build predictions once
-            rating_logits = model_output['rating']
-            ranking_logits = model_output['ranking']
-            predictions_full = adapt_batched_logits_to_predictions({'rating': rating_logits, 'ranking': ranking_logits})
+            
+            # Collect all unique items across all variables
+            all_items: Set[int] = set()
+            for var in ref_variables:
+                all_items.update(var.item_ids)
+            
+            # Create ordered list and split into chunks
+            all_items_list = sorted(all_items)
+            num_items = len(all_items_list)
+            
+            if max_item is not None and num_items > max_item:
+                # Split into chunks of max_item size
+                item_chunks = []
+                for i in range(0, num_items, max_item):
+                    chunk = set(all_items_list[i:i + max_item])
+                    item_chunks.append(chunk)
+            else:
+                # All items fit in one batch
+                item_chunks = [all_items]
+            
+            # Collect all logits and refs across chunks (for metric computation)
+            all_rating_logits: List[torch.Tensor] = []
+            all_ranking_logits: List[torch.Tensor] = []
+            all_refs: List[RankingData] = []
+            all_predictions: List = []
+            
+            for chunk_idx, available_items in enumerate(item_chunks):
+                # Filter variables for this chunk
+                chunk_vars: List[RankingData] = []
+                for var in ref_variables:
+                    if all(item_id in available_items for item_id in var.item_ids):
+                        chunk_vars.append(var)
+                
+                if not chunk_vars:
+                    continue
+                
+                # Forward pass for this chunk
+                model_output = model(chunk_vars)
+                
+                rating_logits = model_output['rating'][0]  # Remove batch dim
+                ranking_logits = model_output['ranking'][0]
+                
+                # Store for later
+                all_rating_logits.append(rating_logits)
+                all_ranking_logits.append(ranking_logits)
+                all_refs.extend(chunk_vars)
+                
+                # Build predictions for this chunk
+                predictions_chunk = adapt_batched_logits_to_predictions({
+                    'rating': model_output['rating'],
+                    'ranking': model_output['ranking']
+                })
+                all_predictions.extend(predictions_chunk)
+            
+            # Concatenate all logits
+            if all_rating_logits:
+                combined_rating_logits = torch.cat(all_rating_logits, dim=0)
+                combined_ranking_logits = torch.cat(all_ranking_logits, dim=0)
+            else:
+                # No variables processed
+                model.train()
+                return EvaluationResults(
+                    total_loss=0.0,
+                    rating_loss=0.0,
+                    ranking_loss=0.0,
+                    rating_accuracy=None,
+                    rating_rmse=None,
+                    ranking_accuracy=None,
+                    num_rating_evaluations=0,
+                    num_ranking_evaluations=0,
+                    observed_metrics={},
+                    missing_metrics={},
+                    masked_metrics={},
+                )
+            
             # Partition indices by status
-            observed_idx = [i for i, v in enumerate(ref_variables) if v.is_observed]
-            missing_idx = [i for i, v in enumerate(ref_variables) if v.is_missing]
-            masked_idx = [i for i, v in enumerate(ref_variables) if v.is_masked]
+            observed_idx = [i for i, v in enumerate(all_refs) if v.is_observed]
+            missing_idx = [i for i, v in enumerate(all_refs) if v.is_missing]
+            masked_idx = [i for i, v in enumerate(all_refs) if v.is_masked]
 
             # Helper to compute loss/metrics for a subset
             def compute_subset(indices: List[int]) -> Dict[str, Any]:
@@ -77,36 +156,8 @@ class EvaluationEngine:
                         'num_ranking_evaluations': 0,
                     }
 
-                # Build per-variable predictions and references for this subset
-                # - predictions: derived from model logits (already computed)
-                # - references: we use the exact original RankingData instances
-                #   (ground-truth lives on them; no need to reconstruct)
-                preds = []
-                refs: List[RankingData] = []
-                rating_preds_local: List[int] = []
-                rating_targets_local: List[int] = []
-                ranking_preds_local: List[List[int]] = []
-                ranking_targets_local: List[List[int]] = []
-
-                for i in indices:
-                    var = ref_variables[i]
-                    preds.append(predictions_full[i])
-                    # Use the original ref as-is
-                    refs.append(var)
-                    if not var.is_listwise:
-                        rating_preds_local.append(torch.argmax(rating_logits[0, i]).item())
-                        rating_targets_local.append(var.rating_value)
-                    else:
-                        # For ranking, we compute a simple pairwise prediction if size==2
-                        scores = ranking_logits[0, i].cpu().numpy()
-                        if len(var.ranking_order or []) == 2:
-                            probs = softmax(scores[:2])
-                            pred_first_wins = probs[0] > probs[1]
-                            pred_ranking = [1, 2] if pred_first_wins else [2, 1]
-                        else:
-                            pred_ranking = var.ranking_order
-                        ranking_preds_local.append(pred_ranking)
-                        ranking_targets_local.append(var.ranking_order)
+                preds = [all_predictions[i] for i in indices]
+                refs = [all_refs[i] for i in indices]
 
                 # Compute losses on this subset using the loss strategy
                 losses = self.loss_strategy.compute(preds, refs)
@@ -114,31 +165,22 @@ class EvaluationEngine:
                 rating_loss_local = losses['rating_loss']
                 ranking_loss_local = losses['ranking_loss']
 
-                rating_accuracy_local = None
-                rating_rmse_local = None
-                if len(rating_preds_local) > 0:
-                    correct = sum(p == t for p, t in zip(rating_preds_local, rating_targets_local))
-                    rating_accuracy_local = correct / len(rating_preds_local)
-                    pred_ratings = [p + 1 for p in rating_preds_local]
-                    true_ratings = [t + 1 for t in rating_targets_local]
-                    mse = np.mean([(p - t) ** 2 for p, t in zip(pred_ratings, true_ratings)])
-                    rating_rmse_local = float(np.sqrt(mse))
+                # Use shared metric computation functions (filter indices by type)
+                rating_indices = [i for i in indices if not all_refs[i].is_listwise and all_refs[i].rating_value is not None]
+                ranking_indices = [
+                    i for i in indices
+                    if all_refs[i].is_listwise
+                    and all_refs[i].ranking_order is not None
+                    and len(all_refs[i].ranking_order) == 2
+                ]
+                
+                rating_accuracy_local, rating_rmse_local = compute_rating_accuracy_rmse(
+                    combined_rating_logits, rating_indices, all_refs, combined_rating_logits.device
+                )
+                ranking_accuracy_local = compute_ranking_accuracy(
+                    combined_ranking_logits, ranking_indices, all_refs, combined_ranking_logits.device
+                )
 
-                ranking_accuracy_local = None
-                if len(ranking_preds_local) > 0:
-                    correct = 0
-                    for pred_r, true_r in zip(ranking_preds_local, ranking_targets_local):
-                        if len(pred_r) == 2 and len(true_r) == 2:
-                            pred_first = pred_r[0] < pred_r[1]
-                            true_first = true_r[0] < true_r[1]
-                            if pred_first == true_first:
-                                correct += 1
-                        else:
-                            if pred_r == true_r:
-                                correct += 1
-                    ranking_accuracy_local = correct / len(ranking_preds_local)
-
-                # Return a consistent metrics dict for this subset
                 return {
                     'total_loss': total_loss_local,
                     'rating_loss': rating_loss_local,
@@ -146,8 +188,8 @@ class EvaluationEngine:
                     'rating_accuracy': rating_accuracy_local,
                     'rating_rmse': rating_rmse_local,
                     'ranking_accuracy': ranking_accuracy_local,
-                    'num_rating_evaluations': len(rating_preds_local),
-                    'num_ranking_evaluations': len(ranking_preds_local),
+                    'num_rating_evaluations': len(rating_indices),
+                    'num_ranking_evaluations': len(ranking_indices),
                 }
 
             observed_metrics = compute_subset(observed_idx)
@@ -166,6 +208,7 @@ class EvaluationEngine:
             # Compute aggregated accuracies across all subsets for convenience
             all_idx = observed_idx + missing_idx + masked_idx
             overall_metrics = compute_subset(all_idx)
+            
             results = EvaluationResults(
                 total_loss=total_loss,
                 rating_loss=rating_loss,

@@ -34,6 +34,11 @@ class RankingData:
     instance: str
     rating_value: Optional[int] = None
     ranking_order: Optional[List[int]] = None
+    # Soft target distribution over rating categories [length C, sums to 1].
+    # None  → use one-hot of rating_value (synthetic / hard-label data).
+    # List  → use as soft CE target (real data: LLM gives full distribution,
+    #          human gives one-hot stored explicitly for uniform handling).
+    rating_dist: Optional[List[float]] = None
     
     @property
     def is_missing(self) -> bool:
@@ -109,7 +114,8 @@ class DataConverter:
                     item_ids=[rating['item'] - 1],
                     status=status_code,
                     instance=rating['instance'],
-                    rating_value=rating['value'] - 1
+                    rating_value=rating['value'] - 1,
+                    rating_dist=rating.get('rating_dist'),  # None for synthetic; list for real
                 ))
         
         # Process pairwise rankings
@@ -131,17 +137,29 @@ class DataConverter:
     def validate_bundle(self, bundle: GroundTruthBundle) -> List[str]:
         """Validate bundle data integrity and return list of errors."""
         errors = []
+
+        # Check dimensions — skip embedding shape checks for real data (embeddings=null/0-d array)
+        if bundle.embeddings is not None and bundle.embeddings.ndim == 2:
+            K, D = bundle.embeddings.shape
+            I, D_pref = bundle.mean_preferences.shape
+            IJ, D_ann = bundle.annotator_preferences.shape
+
+            if D != D_pref or D != D_ann:
+                errors.append("Embedding dimensions inconsistent across embeddings, mean_preferences, annotator_preferences")
+
+            if IJ != I * (IJ // I):
+                errors.append("Annotator preferences dimension mismatch with I*J")
+        else:
+            K = self.num_items
+            I = self.num_attributes
         
-        # Check dimensions
-        K, D = bundle.embeddings.shape
-        I, D_pref = bundle.mean_preferences.shape
-        IJ, D_ann = bundle.annotator_preferences.shape
-        
-        if D != D_pref or D != D_ann:
-            errors.append("Embedding dimensions inconsistent across embeddings, mean_preferences, annotator_preferences")
-        
-        if IJ != I * (IJ // I):
-            errors.append("Annotator preferences dimension mismatch with I*J")
+        # Infer dimensions from data if embedding fields are not available
+        if bundle.all_ratings:
+            K = max(r["item"] for r in bundle.all_ratings)
+            I = max(r["attribute"] for r in bundle.all_ratings)
+        else:
+            K = bundle.stats.get("total_items", 0)
+            I = bundle.stats.get("I", 0)  # May not be in stats
         
         # Check rating data integrity
         for rating in bundle.all_ratings:

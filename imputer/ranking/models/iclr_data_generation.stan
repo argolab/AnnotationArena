@@ -3,19 +3,31 @@ data {
     int<lower=1> K_train;  // number of items in training instance
     int<lower=1> K_test;   // number of items in test instance
     int<lower=1> I;        // number of criteria (attributes)
-    int<lower=1> J;         // number of annotators  
+    int<lower=1> J;         // number of annotators
     int<lower=1> D;         // embedding dimension
     int<lower=1> C;         // number of rating categories
-    
+    int<lower=1> d_annotator;  // annotator embedding dimension (can be <= D for low-rank)
+
     // Observation protocol controls
     int<lower=0, upper=1> enable_pairwise_rankings;  // Ablation: enable pairwise rankings
     int<lower=0> pairwise_cap_per_item;     // Max comparisons per item within its tied group
-    
+
     // Hyperparameters
     real<lower=0> sigma_annotator;
     real<lower=0> sigma_measurement;
     real<lower=0> alpha_dirichlet;
     real<lower=0> temperature;
+
+    // Annotator model selection
+    // 0 = old spherical model: V_ij ~ N(v_i, sigma^2) independently
+    // 1 = new factored model: V_ij = v_i + u_j * M_i (allows covariance learning)
+    int<lower=0, upper=1> use_factored_annotator;
+
+    // Rating threshold derivation
+    // 0 = independent Dirichlet samples for each (i,j) pair
+    // 1 = derive thresholds from annotator embedding u_j (reduces d.f., consistent annotator style)
+    // Only meaningful when use_factored_annotator=1; ignored otherwise
+    int<lower=0, upper=1> derive_thresholds_from_annotator;
 }
 
 generated quantities {
@@ -24,11 +36,20 @@ generated quantities {
     // Debug printing flag (0 = off, 1 = on). Toggle here.
     int DEBUG_PRINT;
     DEBUG_PRINT = 1;
+
     matrix[I, D] mean_preferences;              // Global criteria embeddings v_i
-    matrix[I*J, D] annotator_preferences;      // All annotator preferences v_ij
+    matrix[J, d_annotator] annotator_embeddings; // Annotator embeddings u_j
+    array[I] matrix[d_annotator, D] attr_transforms; // Attribute-specific transforms M_i
+    matrix[I*J, D] annotator_preferences;      // All annotator preferences V_ij = v_i + u_j * M_i
     array[I*J] simplex[C] rating_probs;        // Rating probabilities p_ij
     array[I*J] vector[C] rating_cumprobs;      // Cumulative probabilities q_ij = cumsum(p_ij) in (0,1]
     array[I*J] vector[C+1] rating_thresholds_z; // Z-cutpoints: [-inf, inv_Phi(cumprob[1..C-1]), +inf]
+
+    // Threshold transform matrix (used when derive_thresholds_from_annotator=1)
+    // Maps annotator embedding u_j to C-1 threshold logits
+    matrix[C-1, d_annotator] threshold_transform_W;
+    // Per-attribute threshold biases (optional attribute-specific style variation)
+    matrix[I, C-1] threshold_attr_bias;
     
     // ===== TRAINING INSTANCE =====
     matrix[K_train, D] train_embeddings;       // Training item embeddings e_k_train
@@ -71,30 +92,156 @@ generated quantities {
     array[I*J, K_test] vector[C] test_posterior_rating_probs;     // Posterior distribution over Likert scale for test ratings
     
     // ===== GENERATE SHARED COMPONENTS =====
-    
-    // Generate mean preferences: v_i ~ N(0,I) - SHARED across train/test
-    for (i in 1:I) {
-        for (d in 1:D) {
-            mean_preferences[i, d] = normal_rng(0, 1);
-        }
-    }
-    
-    // Generate annotator preferences: v_ij ~ N(v_i, σ²I) - SHARED across train/test
-    for (i in 1:I) {
-        for (j in 1:J) {
-            int idx = (i-1)*J + j;
+
+    // Two generative models supported:
+    // OLD (use_factored_annotator=0): V_ij ~ N(v_i, sigma^2) independently (spherical)
+    // NEW (use_factored_annotator=1): V_ij = v_i + u_j * M_i (factored, allows covariance)
+
+    // Scale factor for M_i to maintain similar variance as before
+    // Var(M_i^T u_j) = sigma^2 * d_annotator, so we scale by 1/sqrt(d_annotator)
+    real sigma_M = sigma_annotator / sqrt(d_annotator);
+
+    {
+        // Step 1: Generate attribute embeddings v_i
+        for (i in 1:I) {
             for (d in 1:D) {
-                annotator_preferences[idx, d] = normal_rng(mean_preferences[i, d], sigma_annotator);
+                mean_preferences[i, d] = normal_rng(0, 1);
+            }
+        }
+
+        if (use_factored_annotator == 1) {
+            // ===== NEW FACTORED MODEL =====
+            // V_ij = v_i + u_j * M_i
+
+            // Step 2: Generate annotator embeddings u_j
+            for (j in 1:J) {
+                for (d in 1:d_annotator) {
+                    annotator_embeddings[j, d] = normal_rng(0, 1);
+                }
+            }
+
+            // Step 3: Generate attribute-specific transforms M_i
+            for (i in 1:I) {
+                for (r in 1:d_annotator) {
+                    for (c in 1:D) {
+                        attr_transforms[i, r, c] = normal_rng(0, sigma_M);
+                    }
+                }
+            }
+
+            // Step 4: Compute V_ij = v_i + u_j * M_i
+            for (i in 1:I) {
+                for (j in 1:J) {
+                    int idx = (i-1)*J + j;
+                    // u_j is [1, d_annotator], M_i is [d_annotator, D]
+                    // u_j * M_i = [1, D] row vector
+                    annotator_preferences[idx] = mean_preferences[i] + annotator_embeddings[j] * attr_transforms[i];
+                }
+            }
+
+        } else {
+            // ===== OLD SPHERICAL MODEL =====
+            // V_ij ~ N(v_i, sigma^2) independently
+
+            // Initialize u_j and M_i to zeros (not used, but must be defined)
+            for (j in 1:J) {
+                for (d in 1:d_annotator) {
+                    annotator_embeddings[j, d] = 0;
+                }
+            }
+            for (i in 1:I) {
+                for (r in 1:d_annotator) {
+                    for (c in 1:D) {
+                        attr_transforms[i, r, c] = 0;
+                    }
+                }
+            }
+
+            for (i in 1:I) {
+                for (j in 1:J) {
+                    int idx = (i-1)*J + j;
+                    for (d in 1:D) {
+                        annotator_preferences[idx, d] = normal_rng(mean_preferences[i, d], sigma_annotator);
+                    }
+                }
             }
         }
     }
     
-    // Generate rating thresholds: p_ij ~ Dir(α/C, ..., α/C) - SHARED across train/test
-    for (i in 1:I) {
-        for (j in 1:J) {
-            int idx = (i-1)*J + j;
-            rating_probs[idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
-            rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
+    // ===== GENERATE THRESHOLD TRANSFORM (for derive_thresholds_from_annotator mode) =====
+    // Initialize threshold_transform_W and threshold_attr_bias
+    // These are used when derive_thresholds_from_annotator=1
+    {
+        real sigma_W = 1.0 / sqrt(d_annotator);  // Scale for stable logits
+        for (c in 1:(C-1)) {
+            for (d in 1:d_annotator) {
+                threshold_transform_W[c, d] = normal_rng(0, sigma_W);
+            }
+        }
+        // Small attribute-specific biases (for subtle per-attribute style differences)
+        real sigma_bias = 0.1;
+        for (i in 1:I) {
+            for (c in 1:(C-1)) {
+                threshold_attr_bias[i, c] = normal_rng(0, sigma_bias);
+            }
+        }
+    }
+
+    // Generate rating thresholds p_ij with optional tying along I/J
+    // Two modes: (1) independent Dirichlet, (2) derived from annotator embedding u_j
+
+    if (derive_thresholds_from_annotator == 1 && use_factored_annotator == 1) {
+        // ===== NEW: Derive thresholds from annotator embedding u_j =====
+        // This ensures consistent annotator "style" across all their ratings
+        // and reduces degrees of freedom (especially important for large C)
+        //
+        // Model: threshold_logits_ij = W @ u_j + bias_i
+        //        rating_probs_ij = softmax([0, threshold_logits_ij])
+        //
+        // The first category gets logit 0, others get W @ u_j + bias_i
+
+        for (i in 1:I) {
+            for (j in 1:J) {
+                int idx = (i-1)*J + j;
+
+                // Compute threshold logits from annotator embedding
+                vector[C-1] threshold_logits = threshold_transform_W * to_vector(annotator_embeddings[j]);
+
+                threshold_logits = threshold_logits + to_vector(threshold_attr_bias[i]);
+
+                // Convert logits to probability simplex via softmax
+                // Prepend 0 for the first category (reference)
+                vector[C] logits_full;
+                logits_full[1] = 0;
+                for (c in 2:C) {
+                    logits_full[c] = threshold_logits[c-1];
+                }
+
+                // Softmax to get probabilities
+                real max_logit = max(logits_full);
+                vector[C] exp_logits;
+                for (c in 1:C) {
+                    exp_logits[c] = exp(logits_full[c] - max_logit);
+                }
+                real sum_exp = sum(exp_logits);
+                for (c in 1:C) {
+                    rating_probs[idx][c] = exp_logits[c] / sum_exp;
+                }
+
+                // Compute cumulative probabilities
+                rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
+            }
+        }
+
+    } else {
+        // ===== ORIGINAL: Independent Dirichlet samples =====
+
+        for (i in 1:I) {
+            for (j in 1:J) {
+                int idx = (i-1)*J + j;
+                rating_probs[idx] = dirichlet_rng(rep_vector(alpha_dirichlet/C, C));
+                rating_cumprobs[idx] = cumulative_sum(rating_probs[idx]);
+            }
         }
     }
     
@@ -109,7 +256,6 @@ generated quantities {
     
     // ===== GENERATE TRAINING INSTANCE =====
     
-    // Generate training item embeddings: e_k_train ~ N(0,I)
     for (k in 1:K_train) {
         for (d in 1:D) {
             train_embeddings[k, d] = normal_rng(0, 1);
@@ -128,7 +274,6 @@ generated quantities {
     
     // ===== GENERATE TEST INSTANCE =====
     
-    // Generate test item embeddings: e_k_test ~ N(0,I) - DIFFERENT from training
     for (k in 1:K_test) {
         for (d in 1:D) {
             test_embeddings[k, d] = normal_rng(0, 1);
@@ -151,10 +296,11 @@ generated quantities {
             int idx = (i-1)*J + j;
             for (k in 1:K_train) {
                 // Generate rating with noise and binning: x_ijk_train = Bin(z_ijk_train + ε_ijk, σ_measurement)
+                // Binning is based on distribution of v*e + epsilon with std = sqrt(||v||^2 + sigma_measurement^2)
                 real noisy_score = train_base_scores[idx, k] + normal_rng(0, sigma_measurement);
-                real pref_norm = sqrt(dot_self(annotator_preferences[idx]));
-                real total_std = sqrt(pref_norm^2 + sigma_measurement^2);
-                real standardized_score = noisy_score / total_std;
+                real pref_norm_sq = dot_self(annotator_preferences[idx]);
+                real total_std = sqrt(pref_norm_sq + sigma_measurement * sigma_measurement);
+                real standardized_score = noisy_score / total_std;   // Standardize by total std of v*e + epsilon
                 real cdf_val = Phi(standardized_score);
                 
                 // Bin into rating categories using cumulative probabilities q_ij
@@ -177,10 +323,11 @@ generated quantities {
             int idx = (i-1)*J + j;
             for (k in 1:K_test) {
                 // Generate rating with noise and binning: x_ijk_test = Bin(z_ijk_test + ε_ijk, σ_measurement)
+                // Binning is based on distribution of v*e + epsilon with std = sqrt(||v||^2 + sigma_measurement^2)
                 real noisy_score = test_base_scores[idx, k] + normal_rng(0, sigma_measurement);
-                real pref_norm = sqrt(dot_self(annotator_preferences[idx]));
-                real total_std = sqrt(pref_norm^2 + sigma_measurement^2);
-                real standardized_score = noisy_score / total_std;
+                real pref_norm_sq = dot_self(annotator_preferences[idx]);
+                real total_std = sqrt(pref_norm_sq + sigma_measurement * sigma_measurement);
+                real standardized_score = noisy_score / total_std;   // Standardize by total std of v*e + epsilon
                 real cdf_val = Phi(standardized_score);
                 
                 // Bin into rating categories using cumulative probabilities q_ij
@@ -209,14 +356,17 @@ generated quantities {
                 // True base score: z_ijk_train = v_ij · e_k_train
                 real true_base_score = train_base_scores[idx, k];
 
-                // Precompute scaling terms
-                real pref_norm = sqrt(dot_self(annotator_preferences[idx]));
-                real total_std_val = sqrt(pref_norm^2 + sigma_measurement^2);
-                real mean_std = true_base_score / total_std_val;
+                // Binning is based on distribution of v*e + epsilon with std = sqrt(||v||^2 + sigma_measurement^2)
+                real pref_norm_sq = dot_self(annotator_preferences[idx]);
+                real total_std = sqrt(pref_norm_sq + sigma_measurement * sigma_measurement);
+                
+                // Conditional distribution: v*e + epsilon | v, e ~ N(v*e, sigma_measurement^2)
+                // Standardize to match binning space: mean = (v*e) / total_std, std = sigma_measurement / total_std
+                real mean_std = true_base_score / total_std;
+                real cond_std = sigma_measurement / total_std;
 
                 // Compute bin probabilities against z-cutpoints
-                real noise_sd = (sigma_measurement == 0) ? 0 : sigma_measurement / total_std_val;
-                if (noise_sd == 0) {
+                if (cond_std == 0) {
                     // Deterministic: assign by cutpoints in z-space
                     int one_c = 1;
                     for (c in 1:C) {
@@ -232,8 +382,8 @@ generated quantities {
                     for (c in 1:C) {
                         real upper_z = rating_thresholds_z[idx][c+1];
                         real lower_z = rating_thresholds_z[idx][c];
-                        real upper_prob = Phi((upper_z - mean_std) / noise_sd);
-                        real lower_prob = Phi((lower_z - mean_std) / noise_sd);
+                        real upper_prob = Phi((upper_z - mean_std) / cond_std);
+                        real lower_prob = Phi((lower_z - mean_std) / cond_std);
                         train_posterior_rating_probs[idx, k][c] = upper_prob - lower_prob;
                     }
                 }
@@ -249,14 +399,17 @@ generated quantities {
                 // True base score: z_ijk_test = v_ij · e_k_test
                 real true_base_score = test_base_scores[idx, k];
 
-                // Precompute scaling terms
-                real pref_norm = sqrt(dot_self(annotator_preferences[idx]));
-                real total_std_val = sqrt(pref_norm^2 + sigma_measurement^2);
-                real mean_std = true_base_score / total_std_val;
+                // Binning is based on distribution of v*e + epsilon with std = sqrt(||v||^2 + sigma_measurement^2)
+                real pref_norm_sq = dot_self(annotator_preferences[idx]);
+                real total_std = sqrt(pref_norm_sq + sigma_measurement * sigma_measurement);
+                
+                // Conditional distribution: v*e + epsilon | v, e ~ N(v*e, sigma_measurement^2)
+                // Standardize to match binning space: mean = (v*e) / total_std, std = sigma_measurement / total_std
+                real mean_std = true_base_score / total_std;
+                real cond_std = sigma_measurement / total_std;
 
                 // Compute bin probabilities against z-cutpoints
-                real noise_sd = (sigma_measurement == 0) ? 0 : sigma_measurement / total_std_val;
-                if (noise_sd == 0) {
+                if (cond_std == 0) {
                     // Deterministic: assign by cutpoints in z-space
                     int one_c = 1;
                     for (c in 1:C) {
@@ -272,8 +425,8 @@ generated quantities {
                     for (c in 1:C) {
                         real upper_z = rating_thresholds_z[idx][c+1];
                         real lower_z = rating_thresholds_z[idx][c];
-                        real upper_prob = Phi((upper_z - mean_std) / noise_sd);
-                        real lower_prob = Phi((lower_z - mean_std) / noise_sd);
+                        real upper_prob = Phi((upper_z - mean_std) / cond_std);
+                        real lower_prob = Phi((lower_z - mean_std) / cond_std);
                         test_posterior_rating_probs[idx, k][c] = upper_prob - lower_prob;
                     }
                 }
@@ -291,6 +444,9 @@ generated quantities {
     // ===== TRAINING INSTANCE OBSERVATION PROTOCOL =====
     for (k in 1:K_train) {  // for each training item
         // Sample 4 different annotators from training set
+        if ((train_annotator_end - train_annotator_start + 1) < 4) {
+            reject("Number of available training annotators is less than 4");
+        }
         array[4] int selected_annotators;
         int num_selected = 0;
         
@@ -328,6 +484,9 @@ generated quantities {
     // ===== TEST INSTANCE OBSERVATION PROTOCOL =====
     for (k in 1:K_test) {
         // Sample 4 different annotators from test set
+        if ((test_annotator_end - test_annotator_start + 1) < 4) {
+            reject("Number of available test annotators is less than 4");
+        }
         array[4] int selected_annotators;
         int num_selected = 0;
         
@@ -513,17 +672,27 @@ generated quantities {
     }
     
     // ===== DEBUG: print a few posterior rating probabilities =====
+
+    if (DEBUG_PRINT == 1) {
+        print("alpha_dirichlet=", alpha_dirichlet);
+        print("rating_probs[1]=", rating_probs[1]);
+        print("rating_cumprobs[1]=", rating_cumprobs[1]);
+        print("rating_thresholds_z[1]=", rating_thresholds_z[1]);
+    }
+
+
     if (DEBUG_PRINT == 1) {
         int max_i = (I < 1) ? I : 1;
         int max_j = (J < 2) ? J : 2;
-        int max_k_train = (K_train < 2) ? K_train : 2;
-        int max_k_test = (K_test < 2) ? K_test : 2;
+        int max_k_train = (K_train < 10) ? K_train : 10;
+        int max_k_test = (K_test < 30) ? K_test : 30;
         for (i in 1:max_i) {
             for (j in 1:max_j) {
                 int ij_idx = (i-1)*J + j;
                 for (k in 1:max_k_train) {
                     print("[DEBUG TRAIN POST] i=", i, " j=", j, " k=", k,
                           " probs=", train_posterior_rating_probs[ij_idx, k]);
+                    
                 }
                 for (k in 1:max_k_test) {
                     print("[DEBUG TEST POST]  i=", i, " j=", j, " k=", k,

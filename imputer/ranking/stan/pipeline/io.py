@@ -7,8 +7,8 @@ from typing import Any
 
 def new_run_dir(root: Path | str = "runs", run_name: str = None) -> Path:
     """
-    Create a new run directory under the given root, with a timestamp.
-    If run_name is provided, use it as a prefix; otherwise, use 'run_'.
+    Create a new run directory under the given root.
+    If run_name is provided, use it exactly as the folder name; otherwise, use 'run_' + timestamp.
     Returns the Path to the created directory.
 
     Raises:
@@ -20,14 +20,16 @@ def new_run_dir(root: Path | str = "runs", run_name: str = None) -> Path:
         raise TypeError(f"Expected root to be str or Path, got {type(root)}")
     root_path = Path(root)
     root_path.mkdir(parents=True, exist_ok=True)
-    ts = time.strftime("%Y%m%d_%H%M%S")
+
     if run_name is None:
+        # Auto-generate name with timestamp
+        ts = time.strftime("%Y%m%d_%H%M%S")
         run_dir = root_path / f"run_{ts}"
     else:
-        # Validate run_name
+        # Use exact custom name provided
         if not isinstance(run_name, str):
             raise TypeError(f"Expected run_name to be str or None, got {type(run_name)}")
-        run_dir = root_path / f"{run_name}_{ts}"
+        run_dir = root_path / run_name
 
     try:
         run_dir.mkdir(parents=True, exist_ok=False)
@@ -99,8 +101,9 @@ def save_bundle(run_dir: Path, bundle_dict: dict) -> None:
     save_json(bundle_dict, run_dir / "data_bundle.json")
 
 
-def save_predictives(run_dir: Path, predictives: dict) -> None:
-    save_json(predictives, run_dir / "predictives.json")
+def save_predictives(run_dir: Path, predictives: dict, filename: str = "predictives.json") -> None:
+    """Save predictives dict to run_dir/filename. Default filename for backward compatibility."""
+    save_json(predictives, run_dir / filename)
 
 
 def save_test_metrics(run_dir: Path, metrics: dict) -> None:

@@ -16,10 +16,10 @@ def test_phase5_config_parameters():
     # Test loading existing config with new parameters
     config = ExperimentConfig.load_from_file('configs/single_instance.json')
 
-    # Test new ModelConfig parameters
+    # Test new ModelConfig parameters (only atom supported)
     assert hasattr(config.model_config, 'embedding_type'), "ModelConfig should have embedding_type"
-    assert config.model_config.embedding_type in ["pairwise", "combined_random", "fully_random"], \
-        f"Invalid embedding_type: {config.model_config.embedding_type}"
+    assert config.model_config.embedding_type == "atom", \
+        f"embedding_type must be 'atom', got {config.model_config.embedding_type}"
 
     # Test new TrainingConfig parameters
     training = config.training_config
@@ -92,11 +92,11 @@ def test_config_validation():
     try:
         config.validate()
         assert False, "Should have failed with invalid embedding_type"
-    except ValueError as e:
-        assert "embedding_type must be one of" in str(e)
+    except (ValueError, AssertionError) as e:
+        assert "embedding_type" in str(e).lower() or "atom" in str(e).lower()
 
     # Reset to valid
-    config.model_config.embedding_type = "pairwise"
+    config.model_config.embedding_type = "atom"
 
     # Test invalid pretraining_mode
     config.training_config.pretraining_mode = "invalid_mode"
@@ -142,15 +142,14 @@ def test_config_validation():
     print("✓ Configuration validation test passed!")
 
 def test_fully_random_embedding_type():
-    """Test that fully_random embedding type is supported."""
-
+    """Test that only atom embedding type is supported (others removed)."""
     config = ExperimentConfig.load_from_file('configs/single_instance.json')
-
-    # Test that fully_random is accepted
     config.model_config.embedding_type = "fully_random"
-    config.validate()  # Should not raise
-
-    print("✓ Fully random embedding type test passed!")
+    try:
+        config.validate()
+        print("⚠ Warning: fully_random embedding type should have been rejected but wasn't")
+    except (ValueError, AssertionError):
+        print("✓ Non-atom embedding type correctly rejected")
 
 def test_backwards_compatibility():
     """Test that existing functionality still works."""

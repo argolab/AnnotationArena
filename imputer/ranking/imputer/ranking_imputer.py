@@ -9,7 +9,6 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import json
-import sys
 from typing import List, Dict
 import numpy as np
 from itertools import combinations
@@ -18,10 +17,10 @@ import logging
 from tqdm import tqdm
 
 # New modular components (use absolute imports)
-from imputer.embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider, FullyRandomizedEmbeddingProvider, AtomCompositonalEmbeddingProvider
+from imputer.embedding import AtomCompositonalEmbeddingProvider
 from imputer.transformer import TransformerBlock, NormLayer as _NormLayer
 from imputer.data import RankingData, DataConverter
-from imputer.trainer import ImputerTrainer
+from imputer.legacy.trainer import ImputerTrainer
 
 # Export for backward compatibility with experiment runner
 __all__ = ['MultiVariableImputer', 'DataConverter', 'ImputerTrainer', 'RankingData']
@@ -46,14 +45,19 @@ class MultiVariableImputer(nn.Module):
                  attention_heads=4,
                  embedding_dim=64,
                  dropout=0.1,
-                 embedding_type="atom",
                  device="cuda",
-                 randomness=True,
+                 item_embedding_dropout: float = 0.0,
+                 w_init: str = "random",
+                 llm_input_dist: bool = False,
                  use_gelu_after_attention=False,
                  use_final_norm=True,
                  normalize_parameter=False,
                  num_ffn_layers=4,
-                 temperature=1.0):
+                 temperature=1.0,
+                 use_concat_embedding: bool = False,
+                 batch_size: int = 1,
+                 enable_pointer_mechanism: bool = True,
+                 logit_high: float = 20.0):
         super().__init__()
         self.device = torch.device(device)
         # Defer moving to device until after all submodules are created
@@ -63,44 +67,37 @@ class MultiVariableImputer(nn.Module):
         self.num_likert_classes = num_likert_classes
         self.max_rank_size = max_rank_size
         self.embedding_dim = embedding_dim
-        self.embedding_type = embedding_type  # Store embedding type for checkpoint saving
+        self.embedding_type = "atom"
         self.use_gelu_after_attention = use_gelu_after_attention
         self.use_final_norm = use_final_norm
         self.num_ffn_layers = num_ffn_layers
         self.temperature = temperature
+        self.use_concat_embedding = use_concat_embedding
+        self.batch_size = batch_size
+        self.enable_pointer_mechanism = enable_pointer_mechanism
 
-        if embedding_type == "pairwise":
-            self.embedding_provider = PairwiseRankingProjectionEmbeddingProvider(
-                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
-            )
-        # Probably not needed for ICLR but will need this for later.
-        elif embedding_type == "outer_product":
-            self.embedding_provider = OuterProductRankingEmbeddingProvider(
-                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
-            )
-            print("WARNING - You shouldn't be here!")
-            sys.exit()
-        elif embedding_type == "combined_random":
-            self.embedding_provider = CombineRandomTrainedEmbeddingProvider(
-                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
-            )
-        elif embedding_type == "fully_random":
-            self.embedding_provider = FullyRandomizedEmbeddingProvider(
-                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device
-            )
-        elif embedding_type == "atom":
-            self.embedding_provider = AtomCompositonalEmbeddingProvider(
-                num_attributes, num_annotators, num_items, embedding_dim, num_likert_classes, max_rank_size, self.device, randomness
-            )
-        else:
-            print("WARNING - You shouldn't be here also!")
-            sys.exit()
-            pass
-        
+        self.embedding_provider = AtomCompositonalEmbeddingProvider(
+            num_attributes,
+            num_annotators,
+            num_items,
+            embedding_dim,
+            num_likert_classes,
+            max_rank_size,
+            self.device,
+            item_embedding_dropout=item_embedding_dropout,
+            use_concat_embedding=use_concat_embedding,
+            logit_high=logit_high,
+            w_init=w_init,
+            llm_input_dist=llm_input_dist,
+        )
+
         # Use provider-declared parameter dimension (includes missing-status bit)
         param_dim = self.embedding_provider.parameter_dimension
+        
         self.blocks = nn.ModuleList([
-            TransformerBlock(embedding_dim, param_dim, attention_heads, dropout, use_gelu_after_attention, normalize_parameter=normalize_parameter, num_ffn_layers=num_ffn_layers)
+            TransformerBlock(embedding_dim, param_dim, attention_heads, dropout, use_gelu_after_attention, 
+                           normalize_parameter=normalize_parameter, num_ffn_layers=num_ffn_layers,
+                           enable_pointer_mechanism=enable_pointer_mechanism)
             for _ in range(encoder_layers_num)
         ])
 
@@ -110,7 +107,9 @@ class MultiVariableImputer(nn.Module):
         else:
             self.final_norm = None
 
-        self.to(self.device)
+        # NOTE: Do not call self.to(self.device) here. When using PyTorch Lightning with DDP,
+        # Lightning handles device placement automatically. Calling .to() here causes CUDA conflicts
+        # when multiple processes try to initialize the model simultaneously.
 
     def load_state_dict_with_warnings(self, state_dict, strict=True):
         """Load state dict with warnings for extra/missing keys."""
@@ -134,10 +133,62 @@ class MultiVariableImputer(nn.Module):
             return hidden[:, :, 1:1 + self.max_rank_size]
 
 
-    def forward(self, ranking_data_list, attn_mask: torch.Tensor | None = None, return_intermediate: bool = False):
+    def forward(self, ranking_data_list, attn_mask: torch.Tensor | None = None, return_intermediate: bool = False, verbose=False):
         # Support both structured list inputs and legacy tensor inputs
+        
+        # Debug: Count tokens by type and status
+        total_tokens = len(ranking_data_list)
+        rating_tokens = sum(1 for var in ranking_data_list if not var.is_listwise)
+        pairwise_tokens = sum(1 for var in ranking_data_list if var.is_listwise)
+        status_counts = {0: 0, 1: 0, 2: 0}
+        for var in ranking_data_list:
+            if var.status in status_counts:
+                status_counts[var.status] += 1
+        if verbose:
+            print(
+                f"\033[96m[DEBUG] Forward pass: {total_tokens} total tokens "
+                f"({rating_tokens} ratings, {pairwise_tokens} pairwise rankings) | "
+                f"by status: missing={status_counts[0]}, masked={status_counts[1]}, observed={status_counts[2]}"
+                f"\033[0m"
+            )
+        # import traceback
+        # stack = traceback.format_stack(limit=5)
+        # print("\033[96m[DEBUG] Stack Trace (most recent call last):\033[0m")
+        # for line in stack:
+        #     print(f"\033[96m{line.strip()}\033[0m")
 
-        features, params = self.embedding_provider(ranking_data_list)
+        features, params = self.embedding_provider(ranking_data_list, batch_size=self.batch_size)
+
+        # Precompute indicator matrices for pointer mechanism
+        # Shape: [B, N, N, 3] where [b, i, j, :] = [attr_match, annot_match, item_match] for query i and key j
+        N = len(ranking_data_list)
+        device = features.device
+        
+        if self.enable_pointer_mechanism:
+            # Extract metadata for each token
+            # Debug: uncomment the line below to enable interactive debugging
+            # When running from bash script, use: DEBUG=1 ./run_single_kp10_random_as_key_fresh_lightning.sh
+            # import pdb; pdb.set_trace()
+            
+            attr_ids = torch.tensor([var.attribute_id for var in ranking_data_list], device=device)  # [N]
+            annot_ids = torch.tensor([var.annotator_id for var in ranking_data_list], device=device)  # [N]
+            # For item_ids, handle both rating (single item) and ranking (multiple items)
+            # For pointer mechanism, we'll use the first item for rankings
+            item_ids = torch.tensor([var.item_ids[0] if len(var.item_ids) > 0 else -1 for var in ranking_data_list], device=device)  # [N]
+            
+            # Create indicator matrices [N, N] for attribute/annotator/item sameness
+            # [i, j] = 1 if token i and token j share the same attribute/annotator/item
+            attr_indicator = (attr_ids.unsqueeze(0) == attr_ids.unsqueeze(1)).float()  # [N, N]
+            annot_indicator = (annot_ids.unsqueeze(0) == annot_ids.unsqueeze(1)).float()  # [N, N]
+            item_indicator = (item_ids.unsqueeze(0) == item_ids.unsqueeze(1)).float()  # [N, N]
+            
+            # Stack to get [N, N, 3] - for each query i and key j, we have [attr_match, annot_match, item_match]
+            # Then add batch dimension: [B, N, N, 3]
+            B = features.shape[0]
+            K_aug = torch.stack([attr_indicator, annot_indicator, item_indicator], dim=-1)  # [N, N, 3]
+            K_aug = K_aug.unsqueeze(0).expand(B, -1, -1, -1)  # [B, N, N, 3]
+        else:
+            K_aug = None
 
         hidden_intermediates = []
         if return_intermediate:
@@ -145,7 +196,7 @@ class MultiVariableImputer(nn.Module):
             hidden_intermediates.append([features, params])
 
         for block in self.blocks:
-            features, params = block(features, params, attn_mask=attn_mask)
+            features, params = block(features, params, attn_mask=attn_mask, K_aug=K_aug)
             if return_intermediate:
                 hidden_intermediates.append([features, params])
 
@@ -167,65 +218,9 @@ class MultiVariableImputer(nn.Module):
         return logits
 
 
-class MultiVariableImputerWithExternalEmbeddings(MultiVariableImputer):
-    """Subclass that provides a convenient constructor for external/ground-truth embeddings.
-
-    Use this when you wish to initialize the model with known embeddings and optionally
-    freeze some or all of them while training the remaining modules.
-    """
-
-    @classmethod
-    def from_true_embedding(
-        cls,
-        *,
-        attribute_embedding=None,
-        annotator_embedding=None,
-        item_embedding=None,
-        attribute_embedding_size: tuple | None = None,
-        annotator_embedding_size: tuple | None = None,
-        item_embedding_size: tuple | None = None,
-        num_likert_classes: int,
-        max_rank_size: int,
-        encoder_layers_num: int = 2,
-        attention_heads: int = 4,
-        dropout: float = 0.1,
-        freeze: bool | dict = False,
-    ) -> "MultiVariableImputerWithExternalEmbeddings":
-        # Build provider from external embeddings (supports partial + size hints)
-        provider = OuterProductRankingEmbeddingProvider._from_true_embedding(
-            attribute_embedding=attribute_embedding,
-            annotator_embedding=annotator_embedding,
-            item_embedding=item_embedding,
-            attribute_embedding_size=attribute_embedding_size,
-            annotator_embedding_size=annotator_embedding_size,
-            item_embedding_size=item_embedding_size,
-            num_likert_classes=num_likert_classes,
-            max_rank_size=max_rank_size,
-            freeze=freeze,
-        )
-
-        # Construct model using inferred sizes from the provider
-        instance = cls(
-            num_attributes=provider.num_attributes,
-            num_annotators=provider.num_annotators,
-            num_items=provider.num_items,
-            num_likert_classes=num_likert_classes,
-            max_rank_size=max_rank_size,
-            encoder_layers_num=encoder_layers_num,
-            attention_heads=attention_heads,
-            embedding_dim=provider.embedding_dim,
-            dropout=dropout,
-        )
-        # Inject the prepared provider
-        instance.embedding_provider = provider
-        return instance
-
 def main():
-    # Initialize components with smaller dataset
-    from data import DataConverter, RankingData
-    from embedding import OuterProductRankingEmbeddingProvider, PairwiseRankingProjectionEmbeddingProvider, CombineRandomTrainedEmbeddingProvider
-    from transformer import TransformerBlock, NormLayer as _NormLayer
-    from trainer import ImputerTrainer
+    from imputer.data import DataConverter, RankingData
+    from imputer.legacy.trainer import ImputerTrainer
     
     converter = DataConverter(
         num_attributes=2, num_annotators=2, num_items=3,

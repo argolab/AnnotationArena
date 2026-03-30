@@ -11,7 +11,7 @@ import os
 # Add parent directory to path so we can import from imputer
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from imputer.multi_instance_trainer import SequentialMIT, MixedMIT, GeneralMIT
+from imputer.legacy.multi_instance_trainer import SequentialMIT, MixedMIT, GeneralMIT
 from imputer.data import DataConverter, RankingData
 from imputer.ranking_imputer import MultiVariableImputer
 from imputer.eval import EvaluationEngine
