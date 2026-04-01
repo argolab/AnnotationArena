@@ -261,7 +261,8 @@ class EntityMarformerLightningModule(pl.LightningModule):
                 train_vars = masked_or_observed + chunk_missing
                 graph = variable_list_to_entity_graph(train_vars, self.types)
 
-            self._print_var_count(graph, masked_or_observed, chunk_missing)
+            if self.current_epoch == 0:
+                self._print_var_count(graph, masked_or_observed, chunk_missing)
 
             ################## Forward pass ########################
             # print(f"\nINPUT: {train_vars[300]}\n")

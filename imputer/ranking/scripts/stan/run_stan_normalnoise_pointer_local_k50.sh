@@ -1,48 +1,21 @@
-#!/bin/bash
-
-# Copyright
-# 2024, Johns Hopkins University (Author: Prabhav Singh)
-# Apache 2.0.
-
-#SBATCH --job-name=EMF_ST_NN_PTR
-#SBATCH --nodes=1
-#SBATCH --mem-per-cpu=18GB
-#SBATCH --gpus=1
-#SBATCH --partition=gpu-a100
-#SBATCH --account=a100acct
-#SBATCH --mail-user="psingh54@jhu.edu"
-
-source /home/psingh54/.bashrc
-module load cuda/12.1
-conda activate llm_rubric_env
-cd /export/fs06/psingh54/EntityMarformer/imputer/ranking
-export PYTHONPATH=.
-set -e
-
-# ── Stan Synthetic: Normal Noise Dot-Product + Pointer ────────────────────────
-# EF1 (pointer-enabled base) on Stan-generated synthetic data.
-# Normal noise dot-product model: K_train=200, K_test=25, I=9, J=25, C=4.
-# No LLM annotator — MCAR 15% masking applied to observed train ratings.
-# mask_augmentations=5 produces 5 genuinely different random masks per epoch.
-
-DATA_DIR="OUTPUT/generated_data/K_train_200_K_test_25_I_9_J_25_normal_noise_dot_product"
+DATA_DIR="OUTPUT/generated_data/K_train_50_K_test_25_I_9_J_25_normal_noise_dot_product"
 OUTPUT_ROOT="OUTPUT/ENTITY_MF/STAN_EXPS"
 BUNDLE="normalnoise"
 
 # ── Fixed hyperparams ─────────────────────────────────────────────────────────
 TYPE_EMBEDDING_INIT="kaiming"
 EMBEDDING_DIM=80
-NUM_LAYERS=8
+NUM_LAYERS=6
 ATTENTION_HEADS=4
 D_FF=128
 NUM_FFN_LAYERS=1
 DROPOUT=0.1
 EPOCHS=300
-LR=2e-4
+LR=2e-3
 LR_SCHEDULE="none"
 LR_MIN=1e-5
 WEIGHT_DECAY=0.01
-MASKING_RATE=0.50
+MASKING_RATE=0.35
 MASK_AUGMENTATIONS=5
 MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
@@ -70,13 +43,13 @@ ADDONE_FLAG="";     [ "$USE_ADDONE_ATTN"    = "true"  ] && ADDONE_FLAG="--use-ad
 DEVNORM_FLAG="";    [ "$USE_DEVIATION_NORM" = "true"  ] && DEVNORM_FLAG="--use-deviation-norm"
 
 # ── Run name base ─────────────────────────────────────────────────────────────
-EXP_LABEL="ef1_pointer_more_mask"
+EXP_LABEL="ef1_pointer_stan_k50_normal"
 RUN_BASE="stan_${BUNDLE}_${EXP_LABEL}_${NUM_LAYERS}L${ATTENTION_HEADS}H_emb${EMBEDDING_DIM}_${EPOCHS}ep"
 RUN_BASE="${RUN_BASE}_itemdrop${ITEM_DROPOUT_RATE}_ireg${ITEM_REG_WEIGHT}_areg${ATTRIBUTE_REG_WEIGHT}"
 
 echo ""
 echo "============================================================"
-echo " Stan Normal Noise: EF1 + Pointer (3 runs)"
+echo " Stan Normal Noise (K=50): EF1 + Pointer (1 run)"
 echo "  itemdrop=${ITEM_DROPOUT_RATE}  ireg=${ITEM_REG_WEIGHT}  areg=${ATTRIBUTE_REG_WEIGHT}"
 echo "  flags: $PER_HEAD_FLAG $SCALE_FLAG $POINTER_FLAG $REL_VALUE_FLAG $ADDONE_FLAG $DEVNORM_FLAG"
 echo "============================================================"
@@ -125,4 +98,4 @@ _train() {
 
 _train 1 42
 
-echo ""; echo "All 3 runs complete. Output: $OUTPUT_ROOT"
+echo ""; echo "Run complete. Output: $OUTPUT_ROOT"
