@@ -674,6 +674,12 @@ def main():
              "matching the joint normalization used in per-head mode.",
     )
     parser.add_argument(
+        "--use-graph-mask",
+        action="store_true",
+        help="Hard graph attention mask: allow attention only where edge_mask or K_aug pointer "
+             "exists (+ self-attention). All other pairs are masked to -inf.",
+    )
+    parser.add_argument(
         "--type-embedding-init",
         type=str,
         default="normal",
@@ -792,6 +798,7 @@ def main():
     config.use_deviation_norm    = args.use_deviation_norm
     config.scale_shared_rel      = args.scale_shared_rel
     config.use_learned_embedding = args.use_learned_embedding
+    config.use_graph_mask        = args.use_graph_mask
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -851,6 +858,7 @@ def main():
             "use_deviation_norm": config.use_deviation_norm,
             "scale_shared_rel": config.scale_shared_rel,
             "use_learned_embedding": config.use_learned_embedding,
+            "use_graph_mask": config.use_graph_mask,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,
