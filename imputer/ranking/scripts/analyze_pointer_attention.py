@@ -2,7 +2,12 @@
 """
 Pointer attention diagnostics for a trained EntityMarformer.
 
-Runs the model on the test partition (all test variables) and produces:
+Data splits match imputer/data.py / EntityMarformerLightningModule: only ``train`` and
+``test`` exist in the bundle (``instance`` field). There is no separate validation split;
+training reports metrics on the ``test`` holdout. Default for this script is ``test``,
+same as evaluate_entity_marformer_split(..., split="test") in train.py.
+
+Runs the model on one full EntityGraph for the chosen partition and produces:
   - scatter_layer{L}.png       : Exp 1  — mass_rel vs mass_ptr per relation (ATTR/ANNOT/ITEM)
   - entity_inv_hist_layer{L}.png : Exp 2 — inverse-edge mass histograms for item/annotator/attribute
   - logit_topk_layer{L}.png    : Exp 3a — centered top-K grouped bar chart for a few queries
@@ -10,13 +15,16 @@ Runs the model on the test partition (all test variables) and produces:
   - qscale_layer{L}.png        : Exp 3c — Q_ptr vs Q_rel_shared scale histograms
   - attention_debug.npz        : raw arrays for offline analysis
 
+``train_config.json`` may point at OUTPUT/... paths; if those are missing, resolution also
+tries ``<imputer/ranking>/OLD_DATA/<leaf>/`` where ``leaf`` is the last path component of
+``data.data_dir`` (e.g. ``llm_rubric_dist``). Override with ``--data-dir`` if needed.
+
 Usage:
-    cd /home/xwang397/AnnotationArena/imputer/ranking
+    cd imputer/ranking
     PYTHONPATH=. python scripts/analyze_pointer_attention.py \\
-        --run-dir OUTPUT/ENTITY_MF/POINTER_SWEEPS/ptrswp_valmcar_ptr1_drop0.7_8L4H_emb80_300ep_dist_run2 \\
-        --output-dir OUTPUT/ENTITY_MF/POINTER_SWEEPS/ptrswp_valmcar_ptr1_drop0.7_8L4H_emb80_300ep_dist_run2/attn_diagnostics \\
-        --max-graphs 80 \\
-        --topk-queries 3
+        --run-dir RESULTS/MARFORMER/my_run \\
+        --partition test \\
+        --data-dir OLD_DATA/llm_rubric_dist
 """
 from __future__ import annotations
 
@@ -40,6 +48,9 @@ from imputer.entity_mf.data import (
     EDGE_REL_ITEM, EDGE_REL_ITEM_INV,
 )
 from imputer.entity_mf.train import load_bundle_and_converter, build_entity_marformer_from_bundle
+
+# imputer/ranking (directory that contains scripts/ and package imputer/)
+RANKING_ROOT = Path(__file__).resolve().parents[1]
 
 
 # ── Relation / channel metadata ────────────────────────────────────────────────
@@ -68,6 +79,9 @@ def _resolve_data_dir(run_dir: Path, configured_data_dir: str) -> Path:
     Resolve data_dir from train_config robustly across cwd/run_dir layouts.
 
     We prefer the first candidate that contains data_bundle.json.
+
+    If OUTPUT/... paths from an old machine are absent, we also try
+    ``RANKING_ROOT / OLD_DATA / <basename(configured_data_dir)>`` (e.g. OLD_DATA/llm_rubric_dist).
     """
     raw = Path(configured_data_dir)
     candidates: List[Path] = []
@@ -80,6 +94,10 @@ def _resolve_data_dir(run_dir: Path, configured_data_dir: str) -> Path:
         # Also try relative to run_dir and its ancestors.
         candidates.append(run_dir / raw)
         candidates.extend(parent / raw for parent in run_dir.parents)
+
+    leaf = raw.name
+    if leaf:
+        candidates.append(RANKING_ROOT / "OLD_DATA" / leaf)
 
     seen = set()
     unique_candidates: List[Path] = []
@@ -97,39 +115,46 @@ def _resolve_data_dir(run_dir: Path, configured_data_dir: str) -> Path:
     raise FileNotFoundError(
         "Unable to resolve data_dir from train_config. Checked: "
         + ", ".join(str(c) for c in unique_candidates)
+        + ". Pass --data-dir explicitly (directory containing data_bundle.json)."
     )
 
 
-def load_model(run_dir: Path, device: torch.device):
+def load_model(run_dir: Path, device: torch.device, data_dir: Path | None = None):
     cfg_path = run_dir / "train_config.json"
     with open(cfg_path) as f:
         tc = json.load(f)
 
-    data_dir = _resolve_data_dir(run_dir, tc["data"]["data_dir"])
+    if data_dir is not None:
+        resolved = Path(data_dir).resolve()
+        if not (resolved / "data_bundle.json").exists():
+            raise FileNotFoundError(f"No data_bundle.json under --data-dir: {resolved}")
+    else:
+        resolved = _resolve_data_dir(run_dir, tc["data"]["data_dir"])
+    data_dir = resolved
 
+    print(f"Data dir  : {data_dir}")
     bundle, converter, sizes = load_bundle_and_converter(data_dir)
 
     mc = tc["model"]
+    # Keep in sync with imputer.entity_mf.config.EntityMarformerConfig (train.py builds similarly).
     config = EntityMarformerConfig(
         embedding_dim=mc["embedding_dim"],
         num_layers=mc["num_layers"],
         attention_heads=mc["attention_heads"],
+        dropout=mc.get("dropout", 0.1),
         d_ff=mc.get("d_ff", 128),
         num_ffn_layers=mc.get("num_ffn_layers", 1),
-        dropout=mc.get("dropout", 0.1),
-        use_per_head_rel=mc.get("use_per_head_rel", False),
+        logit_high=mc.get("logit_high", 20.0),
+        temperature=mc.get("temperature", 1.0),
+        use_per_head_rel=mc.get("use_per_head_rel", True),
         use_pointer=mc.get("use_pointer", False),
         use_rel_value=mc.get("use_rel_value", False),
         use_addone_attn=mc.get("use_addone_attn", False),
-        type_embedding_init=mc.get("type_embedding_init", "kaiming"),
+        type_embedding_init=mc.get("type_embedding_init", "normal"),
         use_deviation_norm=mc.get("use_deviation_norm", False),
         scale_shared_rel=mc.get("scale_shared_rel", False),
         use_learned_embedding=mc.get("use_learned_embedding", False),
-        logit_high=mc.get("logit_high", 20.0),
-        temperature=mc.get("temperature", 1.0),
-        global_param_dim=mc.get("global_param_dim", 5),
-        pointer_channels=mc.get("pointer_channels", None),
-        freeze_ptr=mc.get("freeze_ptr", False),
+        use_graph_mask=mc.get("use_graph_mask", False),
     )
 
     tr = tc.get("training", {})
@@ -166,8 +191,22 @@ def load_model(run_dir: Path, device: torch.device):
     return model, bundle, converter, sizes, tc
 
 
-def build_test_graphs(bundle, converter, sizes, tc, max_graphs: int):
-    """Build EntityGraph objects from the test partition."""
+def build_partition_graphs(
+    bundle,
+    converter,
+    sizes,
+    tc,
+    max_graphs: int,
+    partition: str,
+):
+    """Build one EntityGraph with all variables for ``partition`` (``train`` or ``test`` only).
+
+    Matches DataConverter.create_variables_from_bundle — there is no ``val`` split in the bundle.
+    Training code evaluates the holdout using ``partition="test"`` (see EntityMarformerLightningModule).
+    """
+    if partition not in ("train", "test"):
+        raise ValueError(f"partition must be 'train' or 'test', got {partition!r}")
+
     from imputer.entity_mf.types import build_default_domain3_types
     tr = tc.get("training", {})
     mc = tc["model"]
@@ -183,18 +222,21 @@ def build_test_graphs(bundle, converter, sizes, tc, max_graphs: int):
         item_dropout_rate=tr.get("item_dropout_rate", 1.0),
     )
 
-    test_obs  = converter.create_variables_from_bundle(bundle, partition="test", status="observed")
-    test_miss = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
-    test_all  = test_obs + test_miss
-    print(f"Test variables: {len(test_all)} total ({len(test_obs)} observed, {len(test_miss)} missing)")
+    obs = converter.create_variables_from_bundle(bundle, partition=partition, status="observed")
+    miss = converter.create_variables_from_bundle(bundle, partition=partition, status="missing")
+    all_vars = obs + miss
+    note = (
+        "same holdout as test_eval in train.py."
+        if partition == "test"
+        else "training fit partition (cf. test_eval in train.py)."
+    )
+    print(
+        f"Partition {partition!r}: {len(all_vars)} variables "
+        f"({len(obs)} observed, {len(miss)} missing); bundle has only train/test — {note}"
+    )
 
-    # Build one graph per variable (same as the evaluation loop in train.py)
-    # For attention diagnostics we want one graph that contains ALL test variables
-    # so we can see the full attention pattern — build a single large graph.
-    # Cap by using only the first max_graphs*10 variables, then build 1 graph.
-    # Actually: the model processes one graph at a time; the "graph" contains all
-    # the variables + entity tokens needed. There is only one graph for a dataset.
-    graph = variable_list_to_entity_graph(test_all, types)
+    # Single full graph for this partition (all variable tokens + entities).
+    graph = variable_list_to_entity_graph(all_vars, types)
     print(f"Graph: {graph.num_tokens} tokens")
     return [graph]  # list for consistent loop below
 
@@ -214,7 +256,7 @@ def _save(fig, path: Path):
     print(f"  Saved {path}")
 
 
-def plot_scatter(layer_idx: int, var_rows: List[int], debug: dict, out_dir: Path):
+def plot_scatter(layer_idx: int, var_rows: List[int], debug: dict, out_dir: Path, partition: str):
     """Exp 1: scatter of mass_rel vs mass_ptr for ATTR / ANNOT / ITEM."""
     mass_rel = debug.get("mass_rel")  # [B, L, R] numpy
     mass_ptr = debug.get("mass_ptr")  # [B, L, 3] numpy
@@ -222,7 +264,10 @@ def plot_scatter(layer_idx: int, var_rows: List[int], debug: dict, out_dir: Path
         return
 
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-    fig.suptitle(f"Layer {layer_idx}: rel-mass vs ptr-mass (variable tokens)", fontsize=11)
+    fig.suptitle(
+        f"Layer {layer_idx}: rel-mass vs ptr-mass (variable tokens) [partition={partition}]",
+        fontsize=11,
+    )
     for ax, (label, rel_idx, ptr_ch) in zip(axes, EXP1_CHANNELS):
         x = mass_rel[0, var_rows, rel_idx]  # [N_var]
         y = mass_ptr[0, var_rows, ptr_ch]   # [N_var]
@@ -236,14 +281,17 @@ def plot_scatter(layer_idx: int, var_rows: List[int], debug: dict, out_dir: Path
     _save(fig, out_dir / f"scatter_layer{layer_idx}.png")
 
 
-def plot_entity_inv_hist(layer_idx: int, entity_rows_by_type: dict, debug: dict, out_dir: Path):
+def plot_entity_inv_hist(layer_idx: int, entity_rows_by_type: dict, debug: dict, out_dir: Path, partition: str):
     """Exp 2: histograms of inverse-edge mass for item / annotator / attribute tokens."""
     mass_rel = debug.get("mass_rel")
     if mass_rel is None:
         return
 
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-    fig.suptitle(f"Layer {layer_idx}: entity token inverse-edge mass", fontsize=11)
+    fig.suptitle(
+        f"Layer {layer_idx}: entity token inverse-edge mass [partition={partition}]",
+        fontsize=11,
+    )
     for ax, (label, tok_type, rel_idx) in zip(axes, EXP2_ENTITY_INV):
         rows = entity_rows_by_type.get(tok_type, [])
         if not rows:
@@ -260,7 +308,7 @@ def plot_entity_inv_hist(layer_idx: int, entity_rows_by_type: dict, debug: dict,
 
 
 def plot_logit_topk(layer_idx: int, var_rows: List[int], debug: dict, out_dir: Path,
-                    topk_queries: int = 3, K: int = 10):
+                    partition: str, topk_queries: int = 3, K: int = 10):
     """Exp 3a: centered top-K grouped bar chart for a few example variable queries."""
     lc = debug.get("logit_content_mean")  # [B, L, L]
     lr = debug.get("logit_rel_mean")      # [B, L, L]
@@ -279,7 +327,10 @@ def plot_logit_topk(layer_idx: int, var_rows: List[int], debug: dict, out_dir: P
     query_indices = [var_rows[i] for i in top_q_local]
 
     fig, axes = plt.subplots(1, n_q, figsize=(5 * n_q, 5), squeeze=False)
-    fig.suptitle(f"Layer {layer_idx}: top-{K} key logit breakdown (centered)", fontsize=11)
+    fig.suptitle(
+        f"Layer {layer_idx}: top-{K} key logit breakdown (centered) [partition={partition}]",
+        fontsize=11,
+    )
 
     for col, qi in enumerate(query_indices):
         ax = axes[0][col]
@@ -313,7 +364,7 @@ def plot_logit_topk(layer_idx: int, var_rows: List[int], debug: dict, out_dir: P
     _save(fig, out_dir / f"logit_topk_layer{layer_idx}.png")
 
 
-def plot_logit_hist(layer_idx: int, var_rows: List[int], debug: dict, out_dir: Path, K: int = 10):
+def plot_logit_hist(layer_idx: int, var_rows: List[int], debug: dict, out_dir: Path, partition: str, K: int = 10):
     """Exp 3b: key-axis-centered softmax-normalized histograms over all variable queries."""
     lc = debug.get("logit_content_mean")
     lr = debug.get("logit_rel_mean")
@@ -355,7 +406,8 @@ def plot_logit_hist(layer_idx: int, var_rows: List[int], debug: dict, out_dir: P
 
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
     fig.suptitle(
-        f"Layer {layer_idx}: key-axis-centered softmax logit shares (top-{K} keys per query)",
+        f"Layer {layer_idx}: key-axis-centered softmax logit shares (top-{K} keys per query) "
+        f"[partition={partition}]",
         fontsize=11,
     )
     for ax, vals, label, color in zip(
@@ -373,7 +425,7 @@ def plot_logit_hist(layer_idx: int, var_rows: List[int], debug: dict, out_dir: P
     _save(fig, out_dir / f"logit_hist_layer{layer_idx}.png")
 
 
-def plot_qscale(layer_idx: int, var_rows: List[int], debug: dict, out_dir: Path):
+def plot_qscale(layer_idx: int, var_rows: List[int], debug: dict, out_dir: Path, partition: str):
     """Exp 3c: Q_ptr vs Q_rel_shared amplitude histograms (one per matched channel/relation)."""
     Q_ptr = debug.get("Q_ptr")          # [B, L, 3]
     Q_rel = debug.get("Q_rel_shared")   # [B, L, R]
@@ -382,7 +434,10 @@ def plot_qscale(layer_idx: int, var_rows: List[int], debug: dict, out_dir: Path)
 
     labels = [("ATTR", 0, 0), ("ANNOT", 1, 2), ("ITEM", 2, 4)]
     fig, axes = plt.subplots(1, 3, figsize=(12, 4))
-    fig.suptitle(f"Layer {layer_idx}: Q_ptr vs Q_rel amplitude (variable tokens)", fontsize=11)
+    fig.suptitle(
+        f"Layer {layer_idx}: Q_ptr vs Q_rel amplitude (variable tokens) [partition={partition}]",
+        fontsize=11,
+    )
 
     for ax, (name, ptr_ch, rel_idx) in zip(axes, labels):
         ptr_vals = Q_ptr[0, var_rows, ptr_ch]   # [N_var]
@@ -407,9 +462,20 @@ def main():
     parser = argparse.ArgumentParser(description="Pointer attention diagnostics for EntityMarformer.")
     parser.add_argument("--run-dir", required=True, help="Path to training run directory.")
     parser.add_argument("--output-dir", default=None, help="Where to save plots (default: <run-dir>/attn_diagnostics).")
+    parser.add_argument(
+        "--data-dir",
+        default=None,
+        help="Directory containing data_bundle.json (overrides resolution from train_config).",
+    )
+    parser.add_argument(
+        "--partition",
+        choices=("train", "test"),
+        default="test",
+        help="Bundle partition: only train/test exist (no val). Default test matches training holdout metrics.",
+    )
     parser.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     parser.add_argument("--max-graphs", type=int, default=1,
-                        help="Number of graphs to process. Use 1 for the full test graph.")
+                        help="Number of graphs to process (one full graph per partition).")
     parser.add_argument("--topk-queries", type=int, default=3,
                         help="Number of example queries for the 3a grouped-bar chart.")
     parser.add_argument("--topk-keys", type=int, default=10,
@@ -422,10 +488,14 @@ def main():
 
     print(f"Run dir   : {run_dir}")
     print(f"Output dir: {out_dir}")
+    print(f"Partition : {args.partition} (train/test only in bundle; default=test = holdout in train.py)")
     print(f"Device    : {device}")
 
-    model, bundle, converter, sizes, tc = load_model(run_dir, device)
-    graphs = build_test_graphs(bundle, converter, sizes, tc, args.max_graphs)
+    data_override = Path(args.data_dir).resolve() if args.data_dir else None
+    model, bundle, converter, sizes, tc = load_model(run_dir, device, data_dir=data_override)
+    graphs = build_partition_graphs(
+        bundle, converter, sizes, tc, args.max_graphs, partition=args.partition
+    )
 
     num_layers = model.config.num_layers
 
@@ -472,12 +542,14 @@ def main():
 
         print(f"\nLayer {layer_idx}: plotting ({len(var_rows)} var tokens) ...")
 
-        plot_scatter(layer_idx, var_rows, debug, out_dir)
-        plot_entity_inv_hist(layer_idx, entity_rows, debug, out_dir)
-        plot_logit_topk(layer_idx, var_rows, debug, out_dir,
-                        topk_queries=args.topk_queries, K=args.topk_keys)
-        plot_logit_hist(layer_idx, var_rows, debug, out_dir, K=args.topk_keys)
-        plot_qscale(layer_idx, var_rows, debug, out_dir)
+        plot_scatter(layer_idx, var_rows, debug, out_dir, args.partition)
+        plot_entity_inv_hist(layer_idx, entity_rows, debug, out_dir, args.partition)
+        plot_logit_topk(
+            layer_idx, var_rows, debug, out_dir, args.partition,
+            topk_queries=args.topk_queries, K=args.topk_keys,
+        )
+        plot_logit_hist(layer_idx, var_rows, debug, out_dir, args.partition, K=args.topk_keys)
+        plot_qscale(layer_idx, var_rows, debug, out_dir, args.partition)
 
     # ── Save raw arrays ────────────────────────────────────────────────────────
     npz_path = out_dir / "attention_debug.npz"
