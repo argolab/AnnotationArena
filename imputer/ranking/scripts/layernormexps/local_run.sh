@@ -1,29 +1,3 @@
-#!/bin/bash
-
-# Copyright
-# 2024, Johns Hopkins University (Author: Prabhav Singh)
-# Apache 2.0.
-
-#SBATCH --job-name=EMF_LN_GM
-#SBATCH --nodes=1
-#SBATCH --mem-per-cpu=18GB
-#SBATCH --gpus=1
-#SBATCH --partition=gpu-a100
-#SBATCH --account=a100acct
-#SBATCH --mail-user="psingh54@jhu.edu"
-
-source /home/psingh54/.bashrc
-module load cuda/12.1
-conda activate llm_rubric_env
-cd /export/fs06/psingh54/EntityMarformer/imputer/ranking
-export PYTHONPATH=.
-set -e
-
-# ── Section 1: Base + Pointer + Graph Mask ────────────────────────────────────
-# Same config as run_sec1_pointer.sh (shared-bias + scale, pointer enabled,
-# item_dropout=0.7) but with --use-graph-mask (hard attention masking).
-# Hard mask: allow attention only where edge_mask or K_aug pointer exists (+ self).
-
 DATA_DIR="OUTPUT/generated_data/llm_rubric_dist"
 OUTPUT_ROOT="OUTPUT/ENTITY_MF/LAYERNORM_EXPS"
 BUNDLE="dist"
@@ -48,7 +22,7 @@ OBSERVED_LOSS_WEIGHT=1.0
 DEVICE="cuda"
 LLM_ANNOTATOR_ID=24
 HUMAN_OBSERVED_RATE=0.0
-MAX_ITEM=10
+MAX_ITEM=0
 ANNOTATOR_REG_WEIGHT=0.0
 
 # ── Experiment-specific flags ─────────────────────────────────────────────────
@@ -73,7 +47,7 @@ DEVNORM_FLAG="";      [ "$USE_DEVIATION_NORM"  = "true"  ] && DEVNORM_FLAG="--us
 GRAPHMASK_FLAG="";    [ "$USE_GRAPH_MASK"      = "true"  ] && GRAPHMASK_FLAG="--use-graph-mask"
 
 # ── Run name base ─────────────────────────────────────────────────────────────
-EXP_LABEL="pointer_graphmask"
+EXP_LABEL="pointer_graphmask_0"
 RUN_BASE="lnexp_${EXP_LABEL}_${NUM_LAYERS}L${ATTENTION_HEADS}H_emb${EMBEDDING_DIM}_${EPOCHS}ep"
 RUN_BASE="${RUN_BASE}_itemdrop${ITEM_DROPOUT_RATE}_ireg${ITEM_REG_WEIGHT}_areg${ATTRIBUTE_REG_WEIGHT}_${BUNDLE}"
 
@@ -130,7 +104,3 @@ _train() {
 }
 
 _train 1 42
-_train 2 84
-_train 3 168
-
-echo ""; echo "All 3 runs complete. Output: $OUTPUT_ROOT"

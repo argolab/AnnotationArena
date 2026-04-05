@@ -137,7 +137,7 @@ _train() {
 }
 
 _train 1 42
-_train 2 42
-_train 3 42
+_train 2 84
+_train 3 168
 
 echo ""; echo "All 3 runs complete. Output: $OUTPUT_ROOT"
