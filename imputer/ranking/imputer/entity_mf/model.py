@@ -100,13 +100,15 @@ class RelationalAttentionBlock(nn.Module):
         edge_mask: torch.Tensor,
         attn_mask: torch.Tensor | None = None,
         K_aug: torch.Tensor | None = None,
+        attention_debug_sink: list | None = None,
     ) -> torch.Tensor:
         """
         Args:
-            x:         [B, L, D] combined feature+param representation.
-            edge_mask: [L, L, R] binary edge indicators.
-            attn_mask: [B, L] bool mask for valid tokens.
-            K_aug:     [L, L, 3] obs-obs shared-identity indicators (optional, for pointer).
+            x:                    [B, L, D] combined feature+param representation.
+            edge_mask:            [L, L, R] binary edge indicators.
+            attn_mask:            [B, L] bool mask for valid tokens.
+            K_aug:                [L, L, 3] obs-obs shared-identity indicators (optional, for pointer).
+            attention_debug_sink: if not None, a list to which one debug dict is appended.
         """
         B, L, D = x.shape
         H = self.num_heads
@@ -149,6 +151,7 @@ class RelationalAttentionBlock(nn.Module):
             scores = content_scores + rel_scores
 
         # ── Pointer bias (shared across heads) ─────────────────────────────────
+        ptr_bias: torch.Tensor | None = None
         if self.use_pointer and K_aug is not None:
             # Q_ptr: [B, L, 3], K_aug: [L, L, 3]
             ptr_bias = (Q_ptr.unsqueeze(2) * K_aug.unsqueeze(0)).sum(-1)  # [B, L, L]
@@ -179,6 +182,41 @@ class RelationalAttentionBlock(nn.Module):
             attn = exp_s / (1.0 + exp_s.sum(dim=-1, keepdim=True))
         else:
             attn = F.softmax(scores, dim=-1)
+
+        # ── Attention diagnostics (before dropout) ──────────────────────────────
+        if attention_debug_sink is not None:
+            with torch.no_grad():
+                attn_mean = attn.mean(dim=1)  # [B, L, L] — head-averaged softmax weights
+
+                # Softmax-mass summaries: fraction of each query's probability on each edge type
+                mass_rel = torch.einsum("bij,ijr->bir", attn_mean, edge_mask_f)  # [B, L, R]
+                record: dict = {"mass_rel": mass_rel.cpu()}
+
+                if K_aug is not None:
+                    mass_ptr = torch.einsum("bij,ijc->bic", attn_mean, K_aug)   # [B, L, 3]
+                    record["mass_ptr"] = mass_ptr.cpu()
+
+                # Q slices for scale comparison (3c): small tensors, always store
+                if self.use_pointer and ptr_bias is not None:
+                    record["Q_ptr"] = Q_ptr.cpu()  # [B, L, 3]
+                if not self.use_per_head_rel:
+                    record["Q_rel_shared"] = Q_rel_shared.cpu()  # [B, L, R]
+
+                # Head-mean logit breakdown for 3a / 3b.
+                # These sum to head-mean scores before the attention mask.
+                if self.use_per_head_rel:
+                    # Both terms are unscaled; they were divided together as (c+r)/sqrt(hd)
+                    inv_scale = 1.0 / math.sqrt(hd)
+                    record["logit_content_mean"] = (content_scores.mean(dim=1) * inv_scale).cpu()  # [B, L, L]
+                    record["logit_rel_mean"]     = (rel_scores.mean(dim=1) * inv_scale).cpu()      # [B, L, L]
+                else:
+                    # content_scores already divided; rel_scores already conditionally divided
+                    record["logit_content_mean"] = content_scores.mean(dim=1).cpu()  # [B, L, L]
+                    record["logit_rel_mean"]     = rel_scores.squeeze(1).cpu()       # [B, L, L]
+                if ptr_bias is not None:
+                    record["logit_ptr"] = ptr_bias.cpu()  # [B, L, L] — same for all heads
+
+                attention_debug_sink.append(record)
 
         attn = self.dropout(attn)
 
@@ -387,9 +425,15 @@ class EntityMarformer(nn.Module):
         self,
         graph: EntityGraph,
         device: torch.device | None = None,
+        attention_debug: list | None = None,
     ) -> torch.Tensor:
         """
         Forward pass over a single EntityGraph.
+
+        Args:
+            attention_debug: if not None, one dict per layer is appended (in order).
+                             Each dict contains softmax-mass summaries and logit tensors;
+                             see RelationalAttentionBlock.forward for keys.
 
         Returns:
             params: [1, L, D_param] final parameter stream.
@@ -434,12 +478,18 @@ class EntityMarformer(nn.Module):
                 combined = torch.cat([features, params], dim=-1)  # [1, L, model_dim]
 
             normed_attn = block["norm_1"](combined)
+            layer_sink: list | None = None
+            if attention_debug is not None:
+                layer_sink = []
             attn_out = block["attn"](
                 normed_attn,
                 edge_mask=edge_mask,
                 attn_mask=attn_mask,
                 K_aug=K_aug,
+                attention_debug_sink=layer_sink,
             )  # [1, L, model_dim]
+            if attention_debug is not None and layer_sink:
+                attention_debug.append(layer_sink[0])
             combined = combined + attn_out
 
             normed_ff = block["norm_2"](combined)
