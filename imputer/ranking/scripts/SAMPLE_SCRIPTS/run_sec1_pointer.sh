@@ -57,7 +57,7 @@ USE_POINTER=true
 USE_REL_VALUE=false
 USE_ADDONE_ATTN=false
 USE_DEVIATION_NORM=false
-USE_GRAPH_MASK=true
+USE_GRAPH_MASK=false
 
 # ── Build CLI flags ───────────────────────────────────────────────────────────
 PER_HEAD_FLAG="";     [ "$USE_PER_HEAD_REL"   = "false" ] && PER_HEAD_FLAG="--no-per-head-rel"
@@ -69,7 +69,7 @@ DEVNORM_FLAG="";      [ "$USE_DEVIATION_NORM"  = "true"  ] && DEVNORM_FLAG="--us
 GRAPHMASK_FLAG="";    [ "$USE_GRAPH_MASK"      = "true"  ] && GRAPHMASK_FLAG="--use-graph-mask"
 
 # ── Run name base ─────────────────────────────────────────────────────────────
-EXP_LABEL="pointer_graphmask"
+EXP_LABEL="pointer"
 RUN_BASE="lnexp_${EXP_LABEL}_${NUM_LAYERS}L${ATTENTION_HEADS}H_emb${EMBEDDING_DIM}_${EPOCHS}ep"
 RUN_BASE="${RUN_BASE}_itemdrop${ITEM_DROPOUT_RATE}_ireg${ITEM_REG_WEIGHT}_areg${ATTRIBUTE_REG_WEIGHT}_${BUNDLE}"
 
