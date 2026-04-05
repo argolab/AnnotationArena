@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional, Set
 
 # Core keys always present in Stan data (from config; not type-specific).
 CORE_STAN_KEYS: frozenset = frozenset({
-    "K_train", "K_test", "I", "J", "C",
+    "K_train", "K_test", "K_val", "I", "J", "C",
     "enable_pairwise_rankings", "pairwise_cap_per_item",
 })
 
@@ -81,7 +81,7 @@ class DataGenConfig:
     Configuration for Stan data generation and downstream inference.
 
     Design:
-    - Core: K_train, K_test, I, J, C, enable_pairwise_rankings, pairwise_cap_per_item.
+    - Core: K_train, K_test, K_val, I, J, C, enable_pairwise_rankings, pairwise_cap_per_item.
     - All other Stan-related fields are explicit attributes, default None. For a given
       stan_type, exactly the set in STAN_TYPE_REQUIRED[stan_type] must be set (non-None);
       all other Stan-data fields must be None (enforced by check_config_for_stan_type).
@@ -92,6 +92,7 @@ class DataGenConfig:
     # --- Core (always required) ---
     K_train: int
     K_test: int
+    K_val: int
     I: int
     J: int
     C: int
@@ -156,12 +157,13 @@ class DataGenConfig:
         base: Dict[str, Any] = {
             "K_train": self.K_train,
             "K_test": self.K_test,
+            "K_val": self.K_val,
             "I": self.I,
             "J": self.J,
             "C": self.C,
             "enable_pairwise_rankings": 1 if self.enable_pairwise_rankings else 0,
             "pairwise_cap_per_item": self.pairwise_cap_per_item,
-            "num_annotate_annotator": 4
+            "num_annotate_annotator": self.J
         }
 
         required = STAN_TYPE_REQUIRED[self.stan_type]
@@ -214,3 +216,77 @@ class McmcConfig:
     adapt_delta: float = 0.8
     max_treedepth: int = 15
     seed: Optional[int] = 42
+
+
+@dataclass
+class AnnotatorSplitConfig:
+    """
+    Configuration for annotator-split data generation.
+
+    Unlike DataGenConfig (which splits items into train/val/test instances),
+    this config keeps a single shared item set and splits annotators:
+      - J_train annotators (IDs 1..J_train) rate all K items -> "train" instance
+      - J_val annotators (IDs J_train+1..J_train+J_val) rate all K items -> "val" instance
+      - J_test annotators (IDs J_train+J_val+1..J) rate all K items -> "test" instance
+
+    Every annotator in each group rates every item (no num_annotate_annotator sampling).
+    Pairwise rankings are always disabled for this config.
+    """
+
+    # --- Core dimensions ---
+    K: int           # Number of shared items (same across all instances)
+    J_train: int     # Number of training annotators
+    J_val: int       # Number of validation annotators
+    J_test: int      # Number of test annotators
+    I: int           # Number of attributes
+    C: int           # Number of rating categories
+
+    # --- Stan-data fields (same generative model as DataGenConfig) ---
+    D: Optional[int] = None
+    d_annotator: Optional[int] = None
+    sigma_annotator: Optional[float] = None
+    sigma_measurement: Optional[float] = None
+    kappa: Optional[float] = None
+    temperature: Optional[float] = None
+    use_factored_annotator: Optional[int] = None
+    derive_thresholds_from_annotator: Optional[int] = None
+
+    # Observation protocol
+    observation_protocol: str = "mcar"     # "mcar" is the only supported protocol
+    mcar_missing_rate: float = 0.5
+    enable_pairwise_rankings: bool = False  # always disabled for annotator-split
+    pairwise_cap_per_item: int = 10
+
+    seed: Optional[int] = None
+    stan_type: str = "factored-dot-product"
+
+    @property
+    def J(self) -> int:
+        """Total number of annotators across all splits."""
+        return self.J_train + self.J_val + self.J_test
+
+    def to_stan_data(self) -> Dict[str, Any]:
+        """Build Stan data dict for the annotator-split model."""
+        for field in ("D", "d_annotator", "sigma_annotator", "sigma_measurement",
+                      "kappa", "temperature", "use_factored_annotator",
+                      "derive_thresholds_from_annotator"):
+            if getattr(self, field) is None:
+                raise ValueError(f"AnnotatorSplitConfig: {field!r} must be set")
+
+        return {
+            "K": self.K,
+            "J_train": self.J_train,
+            "J_val": self.J_val,
+            "J_test": self.J_test,
+            "J": self.J,
+            "I": self.I,
+            "C": self.C,
+            "D": self.D,
+            "d_annotator": self.d_annotator,
+            "sigma_annotator": self.sigma_annotator,
+            "sigma_measurement": self.sigma_measurement,
+            "kappa": self.kappa,
+            "temperature": self.temperature,
+            "use_factored_annotator": int(self.use_factored_annotator),
+            "derive_thresholds_from_annotator": int(self.derive_thresholds_from_annotator),
+        }

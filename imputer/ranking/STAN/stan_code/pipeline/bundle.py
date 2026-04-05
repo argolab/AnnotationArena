@@ -12,7 +12,7 @@ class GroundTruthBundle:
     #   'attribute': int(1..I), 'annotator': int(1..J),
     #   'items': [int(k1), int(k2)] with 1..K,
     #   'order': [1,2] if k1>k2 else [2,1],
-    #   'tied_rating': int(1..C) (rating bin that tied)  # stored butnot used in the current implementation
+    #   'tied_rating': int(1..C) (rating bin that tied)  # stored but not used in the current implementation
     # }
     all_pairwise: List[Dict[str, Any]]
 
@@ -37,8 +37,9 @@ class GroundTruthBundle:
     base_scores: Optional[np.ndarray] = None  # shape [I*J, K]
 
     # Posterior rating probabilities under measurement noise
-    # train: shape [I*J, K_train, C], test: shape [I*J, K_test, C]
+    # train: shape [I*J, K_train, C], val: shape [I*J, K_val, C], test: shape [I*J, K_test, C]
     train_posterior_rating_probs: Optional[np.ndarray] = None
+    val_posterior_rating_probs: Optional[np.ndarray] = None
     test_posterior_rating_probs: Optional[np.ndarray] = None
 
     # Generator-specific extra ground truth (e.g., factored annotator model, discrete prototypes)
@@ -77,11 +78,10 @@ class GroundTruthBundle:
             if key in data and data[key] is not None:
                 optional_fields[key] = np.array(data[key])
         
-        # Optional posterior probs
-        if "train_posterior_rating_probs" in data and data["train_posterior_rating_probs"] is not None:
-            optional_fields["train_posterior_rating_probs"] = np.array(data["train_posterior_rating_probs"])
-        if "test_posterior_rating_probs" in data and data["test_posterior_rating_probs"] is not None:
-            optional_fields["test_posterior_rating_probs"] = np.array(data["test_posterior_rating_probs"])
+        # Optional posterior probs (train, val, test)
+        for key in ["train_posterior_rating_probs", "val_posterior_rating_probs", "test_posterior_rating_probs"]:
+            if key in data and data[key] is not None:
+                optional_fields[key] = np.array(data[key])
         
         # Optional log likelihoods
         for key in ["log_lik_ratings_obs", "log_lik_ratings_missing", 
@@ -94,7 +94,7 @@ class GroundTruthBundle:
                         "observed_pairwise", "missing_pairwise", "stats",
                         "embeddings", "mean_preferences", "annotator_preferences",
                         "rating_probs", "rating_cumprobs", "rating_thresholds_z", "base_scores",
-                        "train_posterior_rating_probs", "test_posterior_rating_probs",
+                        "train_posterior_rating_probs", "val_posterior_rating_probs", "test_posterior_rating_probs",
                         "log_lik_ratings_obs", "log_lik_ratings_missing",
                         "log_lik_rankings_obs", "log_lik_rankings_missing"}
         extra_gt = {}
