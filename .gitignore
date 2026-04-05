@@ -294,5 +294,6 @@ imputer/ranking/lightning_logs/*
 imputer/ranking/DATA/OLD_DATA/
 !imputer/ranking/DATA/LLM_RUBRIC/**
 !imputer/ranking/DATA/SUMMEVAL/**
+!imputer/ranking/DATA/STAN/**
 
 imputer/ranking/ARCHITECTURE
