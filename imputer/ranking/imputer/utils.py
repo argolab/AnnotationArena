@@ -47,7 +47,7 @@ def sizes_from_configs(configs: Dict[str, Any]) -> Dict[str, int]:
     if missing:
         raise ValueError(f"configs.datagen missing keys: {missing}")
     return {
-        "num_items": int(dg["K_train"]) + int(dg["K_test"]),
+        "num_items": int(dg["K_train"]) + int(dg.get("K_val", 0)) + int(dg["K_test"]),
         "num_attributes": int(dg["I"]),
         "num_annotators": int(dg["J"]),
         "num_likert_classes": int(dg["C"]),

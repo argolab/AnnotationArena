@@ -20,7 +20,7 @@ class RankingData:
     - is_listwise: True for listwise ranking, False for rating
     - item_ids: for rating, a list with one item id; for ranking, the ranked item ids
     - status: status code (0=missing, 1=masked, 2=observed)
-    - instance: "train" or "test"
+    - instance: "train", "val", or "test"
     - rating_value: class index [0..C-1] if rating observed
     - ranking_order: list of positions in [1..R] aligned with item_ids when ranking observed
     """
@@ -74,7 +74,7 @@ class DataConverter:
 
         Args:
             bundle: Complete data bundle
-            partition: "train", "test"
+            partition: "train", "val", "test"
             status: "observed", "missing"
 
         Returns:
@@ -95,11 +95,11 @@ class DataConverter:
             raise ValueError(f"Invalid status: {status}. Must be 'observed' or 'missing'")
 
         # Apply partition filtering
-        if partition in ["train", "test"]:
+        if partition in ["train", "val", "test"]:
             ratings = [r for r in ratings if r['instance'] == partition]
             pairwise = [p for p in pairwise if p['instance'] == partition]
         else:
-            raise ValueError(f"Invalid partition: {partition}. Must be 'train', 'test'")
+            raise ValueError(f"Invalid partition: {partition}. Must be 'train', 'val', 'test'")
 
         # Process ratings
         for rating in ratings:
