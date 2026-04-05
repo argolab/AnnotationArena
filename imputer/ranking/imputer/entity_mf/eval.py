@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 import torch
@@ -97,20 +97,24 @@ def _aggregate_loss_from_breakdowns(
 @dataclass
 class EntityEvalResults:
     """
-    Minimal evaluation results for Entity Marformer on a single split.
-    
-    Only carries:
-      - `split`: name of the evaluated split (e.g., "train", "test").
-      - `metrics`: nested dict with per-(status, type_name) metrics.
-    
+    Evaluation results for Entity Marformer on a single split.
+
     metrics[status][type_name] = {
-        "xent": <cross-entropy per token for this (status,type)>,
-        "n":    <number of tokens in this bucket>,
-        # Optional fields like "acc" can be added by evaluation helpers.
+        "xent": <cross-entropy per token>,
+        "n":    <token count>,
+        "acc":  <accuracy, rating missing only>,
     }
+
+    missing_preds / missing_true  : expected-value predictions and true labels
+                                    (0-indexed) for missing rating tokens.
+    observed_preds / observed_true: same for observed rating tokens.
     """
     split: str
     metrics: Dict[str, Dict[str, Dict[str, float]]]
+    missing_preds: List[float] = field(default_factory=list)
+    missing_true:  List[int]   = field(default_factory=list)
+    observed_preds: List[float] = field(default_factory=list)
+    observed_true:  List[int]   = field(default_factory=list)
 
 
 # Used in train.py
@@ -170,7 +174,23 @@ def _merge_chunk_results(split: str, chunk_results: List["EntityEvalResults"]) -
             if "acc_numer" in sums and n > 0:
                 entry["acc"] = sums["acc_numer"] / n
             merged[status][type_name] = entry
-    return EntityEvalResults(split=split, metrics=merged)
+    m_preds: List[float] = []
+    m_true:  List[int]   = []
+    o_preds: List[float] = []
+    o_true:  List[int]   = []
+    for result in chunk_results:
+        m_preds.extend(result.missing_preds)
+        m_true.extend(result.missing_true)
+        o_preds.extend(result.observed_preds)
+        o_true.extend(result.observed_true)
+    return EntityEvalResults(
+        split=split,
+        metrics=merged,
+        missing_preds=m_preds,
+        missing_true=m_true,
+        observed_preds=o_preds,
+        observed_true=o_true,
+    )
 
 
 def evaluate_entity_marformer_split(
@@ -222,21 +242,26 @@ def evaluate_entity_marformer_split(
     # Aggregate loss breakdown over observed/masked/missing (with per-type details).
     loss_info = _aggregate_loss_from_breakdowns(params, graph, types, global_param_dim, device)
 
-    # Rating-only accuracy and cross-entropy on missing tokens.
+    # Rating accuracy, CE, and expected-value predictions for missing + observed.
     rating_type = types["rating"]
     num_classes = rating_type.num_classes
 
     ce_loss = torch.nn.CrossEntropyLoss(reduction="mean")
     logits_list: List[torch.Tensor] = []
     targets_list: List[int] = []
-
     correct = 0
     total = 0
+
+    missing_preds: List[float] = []
+    missing_true:  List[int]   = []
+    observed_preds: List[float] = []
+    observed_true:  List[int]   = []
+    arange = torch.arange(num_classes, device=device, dtype=torch.float32)
 
     # Variable tokens are first in the graph, in the same order as `variables`.
     for idx, var in enumerate(variables):
         tok = graph.tokens[idx]
-        if tok.type_name != "rating" or tok.status != 0:
+        if tok.type_name != "rating" or tok.status not in (0, 2):
             continue
 
         raw = tok.raw_data or {}
@@ -246,36 +271,46 @@ def evaluate_entity_marformer_split(
 
         # Slice out logits for classes 0..C-1 (skip the first mask bit dimension).
         logits = params[0, idx, 1 : 1 + num_classes]
-        logits_list.append(logits)
-        targets_list.append(int(rating_value))
+        probs = torch.softmax(logits, dim=-1)
+        expected = float((probs * arange).sum().item())
 
-        pred_class = int(torch.argmax(logits).item())
-        if pred_class == int(rating_value):
-            correct += 1
-        total += 1
+        if tok.status == 0:  # missing
+            logits_list.append(logits)
+            targets_list.append(int(rating_value))
+            pred_class = int(torch.argmax(logits).item())
+            if pred_class == int(rating_value):
+                correct += 1
+            total += 1
+            missing_preds.append(expected)
+            missing_true.append(int(rating_value))
+        else:  # status == 2, observed
+            observed_preds.append(expected)
+            observed_true.append(int(rating_value))
 
-    # If there are no missing rating tokens, we still return the per-type xent
-    # counts, but do not add any accuracy fields.
+    # If there are no missing rating tokens, return without accuracy fields.
     if total == 0 or not logits_list:
         return EntityEvalResults(
             split=split,
             metrics=loss_info["per_type"],
+            missing_preds=missing_preds,
+            missing_true=missing_true,
+            observed_preds=observed_preds,
+            observed_true=observed_true,
         )
 
-    logits_tensor = torch.stack(logits_list, dim=0)  # [N, C]
-    targets_tensor = torch.tensor(targets_list, device=device, dtype=torch.long)  # [N]
-    xent = float(ce_loss(logits_tensor, targets_tensor).item())
+    logits_tensor = torch.stack(logits_list, dim=0)   # [N, C]
+    targets_tensor = torch.tensor(targets_list, device=device, dtype=torch.long)
     acc = float(correct) / float(total)
-    
-    # Attach accuracy and CE for rating-on-missing into the per-type metrics tree.
+
     per_type_metrics = loss_info["per_type"]
-    rating_missing = per_type_metrics.setdefault("missing", {}).setdefault("rating", {})
-    rating_missing["acc"] = acc
-    # xent in per_type_metrics["missing"]["rating"]["xent"] is already the CE
-    # from the LossBreakdown; we leave it as-is for consistency.
+    per_type_metrics.setdefault("missing", {}).setdefault("rating", {})["acc"] = acc
 
     return EntityEvalResults(
         split=split,
         metrics=per_type_metrics,
+        missing_preds=missing_preds,
+        missing_true=missing_true,
+        observed_preds=observed_preds,
+        observed_true=observed_true,
     )
 
