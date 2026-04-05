@@ -1,0 +1,1 @@
+PYTHONPATH=. python3 scripts/analyze_pointer_attention.py --run-dir OUTPUT/ENTITY_MF/POINTER_SWEEPS/ptrswp_valmcar_ptr1_drop0.7_8L4H_emb80_300ep_dist_run2 --output-dir OUTPUT/ENTITY_MF/POINTER_SWEEPS/ptrswp_valmcar_ptr1_drop0.7_8L4H_emb80_300ep_dist_run2/attn_diagnostics --device cuda --topk-queries 3 --topk-keys 10

@@ -9,6 +9,15 @@ from imputer.data import RankingData
 
 from .types import EntityType
 
+# Edge relation indices — must stay in sync with the `relationships` list in
+# variable_list_to_entity_graph (lines ~218-225).
+EDGE_REL_ATTR      = 0  # variable → attribute entity
+EDGE_REL_ATTR_INV  = 1  # attribute entity → variable
+EDGE_REL_ANNOT     = 2  # variable → annotator entity
+EDGE_REL_ANNOT_INV = 3  # annotator entity → variable
+EDGE_REL_ITEM      = 4  # variable → item entity
+EDGE_REL_ITEM_INV  = 5  # item entity → variable
+
 
 @dataclass
 class Token:
