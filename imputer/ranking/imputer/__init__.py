@@ -1,17 +1,8 @@
 """Modular ranking imputer package.
 
-This package contains the refactored components for neural ranking imputation:
+Core modules used by entity_mf:
 - data: Data structures and conversion utilities
-- embedding: Embedding providers for rankings and ratings
 - transformer: Transformer architecture components
 - losses: Loss functions and strategies
-- trainer: Training utilities
-- ranking_imputer: Main model class
+- utils: Shared utility functions
 """
-
-from .ranking_imputer import MultiVariableImputer
-from .data import RankingData, DataConverter
-# ImputerTrainer moved to legacy - import from imputer.legacy.trainer if needed
-from .legacy.trainer import ImputerTrainer
-
-__all__ = ['MultiVariableImputer', 'DataConverter', 'ImputerTrainer', 'RankingData']

@@ -48,6 +48,7 @@ class RelationalAttentionBlock(nn.Module):
         use_rel_value: bool = False,
         use_addone_attn: bool = False,
         scale_shared_rel: bool = False,
+        use_graph_mask: bool = False,
     ):
         super().__init__()
         self.model_dim = model_dim
@@ -58,6 +59,7 @@ class RelationalAttentionBlock(nn.Module):
         self.use_rel_value = use_rel_value
         self.use_addone_attn = use_addone_attn
         self.scale_shared_rel = scale_shared_rel
+        self.use_graph_mask = use_graph_mask
         assert model_dim % num_heads == 0, (
             f"model_dim {model_dim} must be divisible by num_heads {num_heads}"
         )
@@ -151,6 +153,14 @@ class RelationalAttentionBlock(nn.Module):
             # Q_ptr: [B, L, 3], K_aug: [L, L, 3]
             ptr_bias = (Q_ptr.unsqueeze(2) * K_aug.unsqueeze(0)).sum(-1)  # [B, L, L]
             scores = scores + ptr_bias.unsqueeze(1)                        # broadcast over H
+
+        # ── Graph mask (hard): allow only edge_mask + K_aug + self ─────────────
+        if self.use_graph_mask:
+            graph_mask = edge_mask.any(dim=-1)                                   # [L, L]
+            if K_aug is not None:
+                graph_mask = graph_mask | K_aug.any(dim=-1)                      # [L, L]
+            graph_mask = graph_mask | torch.eye(L, dtype=torch.bool, device=x.device)
+            scores = scores.masked_fill(~graph_mask[None, None], torch.finfo(scores.dtype).min)
 
         # ── Attention mask ──────────────────────────────────────────────────────
         if attn_mask is not None:
@@ -292,6 +302,7 @@ class EntityMarformer(nn.Module):
                 use_rel_value=config.use_rel_value,
                 use_addone_attn=config.use_addone_attn,
                 scale_shared_rel=config.scale_shared_rel,
+                use_graph_mask=config.use_graph_mask,
             )
             ff = FeedForward(
                 self.model_dim,

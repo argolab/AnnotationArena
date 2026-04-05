@@ -12,14 +12,13 @@ from pathlib import Path
 from typing import Dict, List, Any
 
 import random
+import json
 import numpy as np
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 
 from imputer.data import DataConverter, RankingData
-from stan.pipeline.bundle import GroundTruthBundle
-from stan.pipeline.io import new_run_dir, save_json
 from imputer.utils import sizes_from_configs
 
 from .config import EntityMarformerConfig
@@ -28,6 +27,33 @@ from .data import variable_list_to_entity_graph
 from .model import EntityMarformer
 from .eval import compute_trainable_loss, evaluate_entity_marformer_split, EntityEvalResults
 from .masking import MaskingStrategy, build_default_masking_strategy
+
+
+def _save_json(data: Any, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    def _default(o):
+        if isinstance(o, np.floating):
+            return float(o)
+        if isinstance(o, np.integer):
+            return int(o)
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        raise TypeError(f"Object of type {type(o)} is not JSON serializable")
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2, default=_default)
+
+
+def _new_run_dir(output_root: Path, run_name: str | None = None) -> Path:
+    if run_name:
+        run_dir = output_root / run_name
+        if run_dir.exists():
+            raise FileExistsError(f"Run directory already exists: {run_dir}")
+        run_dir.mkdir(parents=True)
+        return run_dir
+    from datetime import datetime
+    run_dir = output_root / datetime.now().strftime("run_%Y%m%d_%H%M%S")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
 
 
 class EntityMarformerLightningModule(pl.LightningModule):
@@ -45,7 +71,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
     def __init__(
         self,
         model: EntityMarformer,
-        bundle: GroundTruthBundle,
+        bundle: Any,
         converter: DataConverter,
         types: Dict[str, Any],
         masking_rate: float = 0.15,
@@ -469,7 +495,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         """Save training history to run_dir/training_history.json for post-hoc plotting."""
         if self.run_dir is not None and self.training_history:
             try:
-                save_json(self.training_history, Path(self.run_dir) / "training_history.json")
+                _save_json(self.training_history, Path(self.run_dir) / "training_history.json")
             except Exception as e:
                 print(f"Warning: failed to save training history to {self.run_dir}: {e}")
 
@@ -478,7 +504,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
 # Helper functions for loading bundle and converter
 ########################################################
 
-def load_bundle_and_converter(data_dir: Path) -> tuple[GroundTruthBundle, DataConverter, Dict[str, int]]:
+def load_bundle_and_converter(data_dir: Path) -> tuple[Any, DataConverter, Dict[str, int]]:
     bundle_path = data_dir / "data_bundle.json"
     configs_path = data_dir / "configs.json"
     if not bundle_path.exists():
@@ -511,7 +537,7 @@ def load_bundle_and_converter(data_dir: Path) -> tuple[GroundTruthBundle, DataCo
 
 
 def build_entity_marformer_from_bundle(
-    bundle: GroundTruthBundle,
+    bundle: Any,
     converter: DataConverter,
     sizes: Dict[str, int],
     config: EntityMarformerConfig,
@@ -674,6 +700,12 @@ def main():
              "matching the joint normalization used in per-head mode.",
     )
     parser.add_argument(
+        "--use-graph-mask",
+        action="store_true",
+        help="Hard graph attention mask: allow attention only where edge_mask or K_aug pointer "
+             "exists (+ self-attention). All other pairs are masked to -inf.",
+    )
+    parser.add_argument(
         "--type-embedding-init",
         type=str,
         default="normal",
@@ -792,6 +824,7 @@ def main():
     config.use_deviation_norm    = args.use_deviation_norm
     config.scale_shared_rel      = args.scale_shared_rel
     config.use_learned_embedding = args.use_learned_embedding
+    config.use_graph_mask        = args.use_graph_mask
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -826,7 +859,7 @@ def main():
         run_dir.mkdir(parents=True, exist_ok=True)
     else:
         try:
-            run_dir = new_run_dir(output_root, run_name=args.run_name)
+            run_dir = _new_run_dir(output_root, run_name=args.run_name)
         except FileExistsError as e:
             raise RuntimeError(f"Run directory already exists for Entity Marformer: {e}") from e
 
@@ -851,6 +884,7 @@ def main():
             "use_deviation_norm": config.use_deviation_norm,
             "scale_shared_rel": config.scale_shared_rel,
             "use_learned_embedding": config.use_learned_embedding,
+            "use_graph_mask": config.use_graph_mask,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,
@@ -882,7 +916,7 @@ def main():
             "seed": args.seed,
         },
     }
-    save_json(train_config, run_dir / "train_config.json")
+    _save_json(train_config, run_dir / "train_config.json")
 
     lightning_module = EntityMarformerLightningModule(
         model=model,

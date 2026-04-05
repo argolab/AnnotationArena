@@ -4,7 +4,6 @@ from typing import Dict, Any, List
 import torch
 import numpy as np
 from imputer.data import RankingData
-from imputer.ranking_imputer import MultiVariableImputer
 
 
 def convert_to_json_serializable(obj: Any) -> Any:
@@ -54,76 +53,6 @@ def sizes_from_configs(configs: Dict[str, Any]) -> Dict[str, int]:
         "num_likert_classes": int(dg["C"]),
     }
 
-
-def build_predictives(model: MultiVariableImputer, variables: List[RankingData], max_item: int = 30) -> Dict[str, Any]:
-    """Create a serializable predictions dict for the given variables with probability distributions.
-
-    Evaluates in item-chunks of size max_item (matching training behaviour) so each variable
-    sees the same item-context it would have seen during training.  Predictions are returned
-    in the same order as the input variables list.
-    """
-    model.eval()
-
-    # Collect all unique items and split into chunks (mirrors EvaluationEngine.evaluate_model)
-    all_item_ids = sorted({iid for var in variables for iid in var.item_ids})
-    item_chunks = [
-        set(all_item_ids[i:i + max_item])
-        for i in range(0, len(all_item_ids), max_item)
-    ] if all_item_ids else [set()]
-
-    # Map original variable index → (rating_logit, ranking_logit) tensor
-    idx_to_logits: Dict[int, tuple] = {}
-
-    with torch.no_grad():
-        for available_items in item_chunks:
-            chunk_pairs = [
-                (orig_idx, var) for orig_idx, var in enumerate(variables)
-                if all(iid in available_items for iid in var.item_ids)
-            ]
-            if not chunk_pairs:
-                continue
-            chunk_vars = [var for _, var in chunk_pairs]
-            out = model(chunk_vars)
-            r_logits = out["rating"][0]   # [N_chunk, C]
-            rk_logits = out["ranking"][0]  # [N_chunk, R]
-            for local_idx, (orig_idx, _) in enumerate(chunk_pairs):
-                idx_to_logits[orig_idx] = (r_logits[local_idx], rk_logits[local_idx])
-
-    preds: List[Dict[str, Any]] = []
-    for i, var in enumerate(variables):
-        if i not in idx_to_logits:
-            continue
-        r_logit, rk_logit = idx_to_logits[i]
-        entry: Dict[str, Any] = {
-            "attribute": var.attribute_id,
-            "annotator": var.annotator_id,
-            "items": var.item_ids,
-            "is_listwise": var.is_listwise,
-            "status": var.status,
-            "instance": var.instance,
-        }
-        if not var.is_listwise:
-            entry["predicted_rating_class"] = int(torch.argmax(r_logit).item())
-            entry["rating_probabilities"] = torch.softmax(r_logit, dim=-1).cpu().numpy().tolist()
-            if var.rating_value is not None:
-                entry["true_rating_class"] = int(var.rating_value)
-        else:
-            scores = rk_logit.cpu().numpy()
-            entry["ranking_logits"] = scores.tolist()
-            if (var.ranking_order or []) and len(var.ranking_order) == 2:
-                probs = np.exp(scores[:2]) / np.exp(scores[:2]).sum()
-                pred_first_wins = probs[0] > probs[1]
-                pred_ranking = [1, 2] if pred_first_wins else [2, 1]
-                entry["ranking_probabilities"] = probs.tolist()
-            else:
-                pred_ranking = var.ranking_order
-            entry["predicted_ranking"] = pred_ranking
-            if var.ranking_order is not None:
-                entry["true_ranking"] = var.ranking_order
-        preds.append(entry)
-
-    model.train()
-    return {"predictions": preds}
 
 
 def calculate_rmse(predictions: List[int], targets: List[int]) -> float:
