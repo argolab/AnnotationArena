@@ -15,7 +15,7 @@
 source /home/psingh54/.bashrc
 module load cuda/12.1
 conda activate llm_rubric_env
-cd /export/fs06/psingh54/EntityMarformer/imputer/ranking
+cd /export/fs06/psingh54/MARFORMER/imputer/ranking
 export PYTHONPATH=.
 export PYTHONUNBUFFERED=1
 set -e
@@ -36,7 +36,7 @@ ATTENTION_HEADS=4
 D_FF=128
 NUM_FFN_LAYERS=1
 DROPOUT=0.1
-EPOCHS=300
+EPOCHS=200
 LR=2e-4
 LR_SCHEDULE="none"
 LR_MIN=1e-5
@@ -126,5 +126,6 @@ _train() {
 }
 
 _train 1 42
+_train 2 42
 
 echo ""; echo "Run complete. Output: $OUTPUT_ROOT"
