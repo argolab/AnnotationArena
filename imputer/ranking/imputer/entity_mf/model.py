@@ -101,6 +101,7 @@ class RelationalAttentionBlock(nn.Module):
         attn_mask: torch.Tensor | None = None,
         K_aug: torch.Tensor | None = None,
         attention_debug_sink: list | None = None,
+        store_full_attn_mean: bool = False,
     ) -> torch.Tensor:
         """
         Args:
@@ -109,6 +110,7 @@ class RelationalAttentionBlock(nn.Module):
             attn_mask:            [B, L] bool mask for valid tokens.
             K_aug:                [L, L, 3] obs-obs shared-identity indicators (optional, for pointer).
             attention_debug_sink: if not None, a list to which one debug dict is appended.
+            store_full_attn_mean: if True (with sink), also store head-mean attn weights ``attn_mean`` [B,L,L] on CPU (large).
         """
         B, L, D = x.shape
         H = self.num_heads
@@ -215,6 +217,9 @@ class RelationalAttentionBlock(nn.Module):
                     record["logit_rel_mean"]     = rel_scores.squeeze(1).cpu()       # [B, L, L]
                 if ptr_bias is not None:
                     record["logit_ptr"] = ptr_bias.cpu()  # [B, L, L] — same for all heads
+
+                if store_full_attn_mean:
+                    record["attn_mean"] = attn_mean.cpu()
 
                 attention_debug_sink.append(record)
 
@@ -426,6 +431,7 @@ class EntityMarformer(nn.Module):
         graph: EntityGraph,
         device: torch.device | None = None,
         attention_debug: list | None = None,
+        attention_debug_store_full_attn_mean: bool = False,
     ) -> torch.Tensor:
         """
         Forward pass over a single EntityGraph.
@@ -434,6 +440,7 @@ class EntityMarformer(nn.Module):
             attention_debug: if not None, one dict per layer is appended (in order).
                              Each dict contains softmax-mass summaries and logit tensors;
                              see RelationalAttentionBlock.forward for keys.
+            attention_debug_store_full_attn_mean: if True, each layer dict also includes ``attn_mean`` [B,L,L] on CPU.
 
         Returns:
             params: [1, L, D_param] final parameter stream.
@@ -487,6 +494,7 @@ class EntityMarformer(nn.Module):
                 attn_mask=attn_mask,
                 K_aug=K_aug,
                 attention_debug_sink=layer_sink,
+                store_full_attn_mean=attention_debug_store_full_attn_mean,
             )  # [1, L, model_dim]
             if attention_debug is not None and layer_sink:
                 attention_debug.append(layer_sink[0])

@@ -542,6 +542,8 @@ def build_entity_marformer_from_bundle(
     sizes: Dict[str, int],
     config: EntityMarformerConfig,
     annotator_reg_weight: float = 0.0,
+    item_reg_weight: float = 0.0,
+    attribute_reg_weight: float = 0.0,
     llm_input_dist: bool = False,
     item_dropout_rate: float = 1.0,
 ) -> tuple[EntityMarformer, Any]:
@@ -564,6 +566,8 @@ def build_entity_marformer_from_bundle(
         max_rank_size=converter.max_rank_size,
         logit_high=config.logit_high,
         annotator_reg_weight=annotator_reg_weight,
+        item_reg_weight=item_reg_weight,
+        attribute_reg_weight=attribute_reg_weight,
         llm_input_dist=llm_input_dist,
         item_dropout_rate=item_dropout_rate,
     )
