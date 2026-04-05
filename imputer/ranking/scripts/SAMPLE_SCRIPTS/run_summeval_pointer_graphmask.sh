@@ -17,6 +17,7 @@ module load cuda/12.1
 conda activate llm_rubric_env
 cd /export/fs06/psingh54/EntityMarformer/imputer/ranking
 export PYTHONPATH=.
+export PYTHONUNBUFFERED=1
 set -e
 
 # ── SummEval: Base + Pointer + Graph Mask ─────────────────────────────────────
@@ -97,7 +98,7 @@ _train() {
     local N=$1
     local SEED=$2
     echo ""; echo "--- Run ${N}/3: ${RUN_BASE}_run${N} (seed=${SEED}) ---"; echo ""
-    python -m imputer.entity_mf.train \
+    python -u -m imputer.entity_mf.train \
         --data-dir             "$DATA_DIR"                  \
         --run-name             "${RUN_BASE}_run${N}"        \
         --output-root          "$OUTPUT_ROOT"               \

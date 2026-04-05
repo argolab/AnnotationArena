@@ -1,3 +1,4 @@
+export PYTHONUNBUFFERED=1
 DATA_DIR="OUTPUT/generated_data/llm_rubric_dist"
 OUTPUT_ROOT="OUTPUT/ENTITY_MF/LAYERNORM_EXPS"
 BUNDLE="dist"
@@ -63,7 +64,7 @@ _train() {
     local N=$1
     local SEED=$2
     echo ""; echo "--- Run ${N}/3: ${RUN_BASE}_run${N} (seed=${SEED}) ---"; echo ""
-    python -m imputer.entity_mf.train \
+    python -u -m imputer.entity_mf.train \
         --data-dir             "$DATA_DIR"                  \
         --run-name             "${RUN_BASE}_run${N}"        \
         --output-root          "$OUTPUT_ROOT"               \
