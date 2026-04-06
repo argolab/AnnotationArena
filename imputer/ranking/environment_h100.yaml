@@ -5,7 +5,7 @@ channels:
   - defaults
 
 dependencies:
-  - python=3.10
+  - python=3.13.1
   - pip
 
   # Core scientific stack (conda-managed for speed)
@@ -14,12 +14,12 @@ dependencies:
   - matplotlib>=3.7
 
   - pip:
-      # PyTorch built against CUDA 11.8 (minimum for H100 / sm_90)
-      - torch==2.3.1+cu118 --index-url https://download.pytorch.org/whl/cu118
-      - torchvision==0.18.1+cu118 --index-url https://download.pytorch.org/whl/cu118
+      # PyTorch 2.5.1 — first release with full Python 3.13 support, CUDA 12.1 build
+      - torch==2.5.1+cu121 --index-url https://download.pytorch.org/whl/cu121
+      - torchvision==0.20.1+cu121 --index-url https://download.pytorch.org/whl/cu121
 
       # Lightning + logging
-      - pytorch-lightning==2.3.0
+      - pytorch-lightning==2.4.0
       - tensorboard>=2.14
 
       # STAN inference
