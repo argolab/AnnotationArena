@@ -1,0 +1,26 @@
+name: marformer_h100
+
+channels:
+  - conda-forge
+  - defaults
+
+dependencies:
+  - python=3.10
+  - pip
+
+  # Core scientific stack (conda-managed for speed)
+  - numpy>=1.24
+  - scipy>=1.10
+  - matplotlib>=3.7
+
+  - pip:
+      # PyTorch built against CUDA 11.8 (minimum for H100 / sm_90)
+      - torch==2.3.1+cu118 --index-url https://download.pytorch.org/whl/cu118
+      - torchvision==0.18.1+cu118 --index-url https://download.pytorch.org/whl/cu118
+
+      # Lightning + logging
+      - pytorch-lightning==2.3.0
+      - tensorboard>=2.14
+
+      # STAN inference
+      - cmdstanpy>=1.2
