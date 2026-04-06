@@ -17,6 +17,7 @@ import numpy as np
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
 
 from imputer.data import DataConverter, RankingData
 from imputer.utils import sizes_from_configs
@@ -121,8 +122,15 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.test_missing: List[RankingData] = converter.create_variables_from_bundle(
             bundle, partition="test", status="missing"
         )
+        self.val_observed: List[RankingData] = converter.create_variables_from_bundle(
+            bundle, partition="val", status="observed"
+        )
+        self.val_missing: List[RankingData] = converter.create_variables_from_bundle(
+            bundle, partition="val", status="missing"
+        )
         # Full per-partition variable lists for evaluation (observed + missing).
         self.train_all: List[RankingData] = self.train_observed + self.train_missing
+        self.val_all: List[RankingData] = self.val_observed + self.val_missing
         self.test_all: List[RankingData] = self.test_observed + self.test_missing
         # Masking strategy can be MCAR or structured (LLM vs human) depending on args.
         self.masking_strategy: MaskingStrategy = build_default_masking_strategy(
@@ -199,8 +207,8 @@ class EntityMarformerLightningModule(pl.LightningModule):
 
     def _compute_fresh_chunks(self) -> list:
         """Build chunk list on-the-fly for transductive mode (includes test data)."""
-        observed_sources = list(self.train_observed) + list(self.test_observed)
-        missing_sources  = list(self.train_missing)  + list(self.test_missing)
+        observed_sources = list(self.train_observed) + list(self.val_observed)
+        missing_sources  = list(self.train_missing)  + list(self.val_missing)
         all_items: set = set()
         for var in observed_sources + missing_sources:
             all_items.update(var.item_ids)
@@ -376,8 +384,8 @@ class EntityMarformerLightningModule(pl.LightningModule):
 
         if self.transductive:
             # In transductive mode, run a single evaluation on the combined split
-            # (train_all + test_all), plus a test-only evaluation for reporting.
-            combined_vars = self.train_all + self.test_all
+            # (train_all + val_all), plus a val-only evaluation for reporting.
+            combined_vars = self.train_all + self.val_all
             if combined_vars:
                 combined_eval: EntityEvalResults = evaluate_entity_marformer_split(
                     model=self.model,
@@ -405,35 +413,37 @@ class EntityMarformerLightningModule(pl.LightningModule):
             else:
                 print("No combined variables to evaluate on")
 
-            # Test-only metrics (primary reported numbers).
-            if self.test_all:
-                test_eval: EntityEvalResults = evaluate_entity_marformer_split(
+            # Val-only metrics (used for checkpointing).
+            if self.val_all:
+                val_eval: EntityEvalResults = evaluate_entity_marformer_split(
                     model=self.model,
-                    split="test",
-                    variables=self.test_all,
+                    split="val",
+                    variables=self.val_all,
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
                     max_item=self.max_item,
                 )
                 rating_missing = (
-                    test_eval.metrics.get("missing", {}).get("rating", {})
-                    if test_eval.metrics
+                    val_eval.metrics.get("missing", {}).get("rating", {})
+                    if val_eval.metrics
                     else {}
                 )
                 acc_val = rating_missing.get("acc", None)
                 xent_val = rating_missing.get("xent", None)
                 acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
                 xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
-                print(f"  [test_missing] acc={acc_str}  xent={xent_str}")
-                epoch_metrics["test_eval"] = {
-                    "split": test_eval.split,
-                    "metrics": test_eval.metrics,
+                print(f"  [val_missing] acc={acc_str}  xent={xent_str}")
+                if xent_val is not None:
+                    self.log("val/missing_ce", xent_val, prog_bar=True, on_epoch=True, on_step=False)
+                epoch_metrics["val_eval"] = {
+                    "split": val_eval.split,
+                    "metrics": val_eval.metrics,
                 }
             else:
-                print("No test variables to evaluate on")
+                print("No val variables to evaluate on")
         else:
-            # Non-transductive: evaluate train and test splits separately.
+            # Non-transductive: evaluate train and val splits separately.
             if self.train_all:
                 train_eval: EntityEvalResults = evaluate_entity_marformer_split(
                     model=self.model,
@@ -461,32 +471,34 @@ class EntityMarformerLightningModule(pl.LightningModule):
             else:
                 print("No train variables to evaluate on")
 
-            if self.test_all:
-                test_eval: EntityEvalResults = evaluate_entity_marformer_split(
+            if self.val_all:
+                val_eval: EntityEvalResults = evaluate_entity_marformer_split(
                     model=self.model,
-                    split="test",
-                    variables=self.test_all,
+                    split="val",
+                    variables=self.val_all,
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
                     max_item=self.max_item,
                 )
                 rating_missing = (
-                    test_eval.metrics.get("missing", {}).get("rating", {})
-                    if test_eval.metrics
+                    val_eval.metrics.get("missing", {}).get("rating", {})
+                    if val_eval.metrics
                     else {}
                 )
                 acc_val = rating_missing.get("acc", None)
                 xent_val = rating_missing.get("xent", None)
                 acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
                 xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
-                print(f"  [test_missing] acc={acc_str}  xent={xent_str}")
-                epoch_metrics["test_eval"] = {
-                    "split": test_eval.split,
-                    "metrics": test_eval.metrics,
+                print(f"  [val_missing] acc={acc_str}  xent={xent_str}")
+                if xent_val is not None:
+                    self.log("val/missing_ce", xent_val, prog_bar=True, on_epoch=True, on_step=False)
+                epoch_metrics["val_eval"] = {
+                    "split": val_eval.split,
+                    "metrics": val_eval.metrics,
                 }
             else:
-                print("No test variables to evaluate on")
+                print("No val variables to evaluate on")
 
         self.training_history.append(epoch_metrics)
 
@@ -941,7 +953,29 @@ def main():
 
     accelerator = "gpu" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
     logger = TensorBoardLogger(save_dir=str(run_dir), name="lightning_logs")
-    trainer = pl.Trainer(max_epochs=args.epochs, accelerator=accelerator, devices=1, logger=logger)
+
+    checkpoint_best = ModelCheckpoint(
+        dirpath=str(run_dir / "checkpoints"),
+        filename="best-{epoch:04d}",
+        monitor="val/missing_ce",
+        mode="min",
+        save_top_k=1,
+        save_last=True,
+    )
+    checkpoint_periodic = ModelCheckpoint(
+        dirpath=str(run_dir / "checkpoints"),
+        filename="periodic-{epoch:04d}",
+        every_n_epochs=25,
+        save_top_k=-1,
+    )
+
+    trainer = pl.Trainer(
+        max_epochs=args.epochs,
+        accelerator=accelerator,
+        devices=1,
+        logger=logger,
+        callbacks=[checkpoint_best, checkpoint_periodic],
+    )
     trainer.fit(lightning_module)
 
 
