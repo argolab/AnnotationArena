@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """
-Generate talk-quality plots for LLM Rubric results.
+Generate talk-quality plots for SummEval results.
 
 Outputs to PLOTS/TALK/:
-  1. llm_rubric_train_val_curves.png  — training masked CE (left) + val missing CE (right),
-                                        side-by-side, for Marformer vs Marformer Hard Mask.
-                                        Uses the largest split (175) as representative.
-  2. llm_rubric_test_log_loss.png     — test log loss vs training size for all methods
-                                        + at-random baseline.
+  1. summeval_train_val_curves.png  — training masked CE (left) + val missing CE (right),
+                                      side-by-side, for Marformer vs Marformer Hard Mask.
+                                      Uses the largest split (1280) as representative.
+  2. summeval_test_log_loss.png     — test log loss vs training size for all methods
+                                      + empirical marginal baseline.
 
 Usage (run from imputer/ranking):
-    python scripts/utils/plot_talk.py
+    python scripts/utils/plot_talk_summeval.py
 """
 
 import json
 import math
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -55,14 +56,13 @@ C_MF   = "#1f6fba"   # Marformer
 C_HM   = "#c0392b"   # Marformer Hard Mask
 C_SF   = "#27ae60"   # STAN Factor (transductive)
 C_SN   = "#e67e22"   # STAN Normal (transductive)
-C_MLP  = "#8e44ad"   # MLP Baseline
 C_RAND = "0.55"      # empirical marginal
 
-SPLIT_RE    = re.compile(r"LLMRubric_225_25_9_(\d+)$")
-STAN_T_RE   = re.compile(r"LLMRubric_225_25_9_(\d+)_nt_(Factor|Normal)_eval$")
+SPLIT_RE  = re.compile(r"SummEval_1600_8_4_(\d+)$")
+STAN_T_RE = re.compile(r"SummEval_1600_8_4_(\d+)_nt_(Factor|Normal)_eval$")
 
-LLM_RUBRIC_NUM_CLASSES = 4
-LLM_RUBRIC_DATA_ROOT   = Path("DATA/LLM_RUBRIC")
+SUMMEVAL_NUM_CLASSES = 5
+SUMMEVAL_DATA_ROOT   = Path("DATA/SUMMEVAL")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -76,7 +76,6 @@ def _read_tfevents(run_dir: Path) -> Tuple[List[float], List[float]]:
     if not log_root.exists():
         return [], []
 
-    # Pick the first version folder (version_0 normally)
     version_dirs = sorted(log_root.glob("version_*"))
     if not version_dirs:
         return [], []
@@ -113,48 +112,7 @@ def _load_stan_t_loss(eval_dir: Path) -> Optional[float]:
 
 
 def _mf_runs(model_type: str) -> Dict[int, Path]:
-    root = RESULTS_ROOT / model_type / "LLM_RUBRIC"
-    runs = {}
-    if not root.exists():
-        return runs
-    for d in sorted(root.iterdir()):
-        m = SPLIT_RE.match(d.name)
-        if m and d.is_dir():
-            runs[int(m.group(1))] = d
-    return runs
-
-
-def _empirical_marginal_baseline(sizes: List[int]) -> Dict[int, float]:
-    """
-    For each training size, compute the cross-entropy of predicting the training
-    observed marginal distribution against the test missing labels.
-    H(p_test, q_train) = -sum_c p_test(c) * log(q_train(c))
-    """
-    C = LLM_RUBRIC_NUM_CLASSES
-    result = {}
-    for size in sizes:
-        p = LLM_RUBRIC_DATA_ROOT / f"LLMRubric_225_25_9_{size}" / "data_bundle.json"
-        if not p.exists():
-            continue
-        b = json.load(open(p))
-        from collections import Counter
-        train_obs  = [r for r in b.get("observed_ratings", []) if r["instance"] == "train"]
-        test_miss  = [r for r in b.get("missing_ratings",  []) if r["instance"] == "test"]
-        if not train_obs or not test_miss:
-            continue
-        train_cnt  = Counter(r["value"] for r in train_obs)
-        test_cnt   = Counter(r["value"] for r in test_miss)
-        train_n    = len(train_obs)
-        test_n     = len(test_miss)
-        q = {c: train_cnt.get(c, 0) / train_n for c in range(1, C + 1)}
-        p_test = {c: test_cnt.get(c, 0) / test_n for c in range(1, C + 1)}
-        ce = -sum(p_test[c] * math.log(q[c] + 1e-12) for c in range(1, C + 1))
-        result[size] = ce
-    return result
-
-
-def _mlp_runs() -> Dict[int, Path]:
-    root = RESULTS_ROOT / "BASELINE_MLP" / "LLM_RUBRIC"
+    root = RESULTS_ROOT / model_type / "SUMMEVAL"
     runs = {}
     if not root.exists():
         return runs
@@ -166,7 +124,7 @@ def _mlp_runs() -> Dict[int, Path]:
 
 
 def _stan_t_runs(variant: str) -> Dict[int, Path]:
-    root = RESULTS_ROOT / "STAN" / "LLM_RUBRIC_T"
+    root = RESULTS_ROOT / "STAN" / "SUMMEVAL_T"
     runs = {}
     if not root.exists():
         return runs
@@ -177,18 +135,45 @@ def _stan_t_runs(variant: str) -> Dict[int, Path]:
     return runs
 
 
+def _empirical_marginal_baseline(sizes: List[int]) -> Dict[int, float]:
+    """
+    For each training size, compute H(p_test, q_train):
+        -sum_c p_test(c) * log(q_train(c))
+    using the training observed marginal as q and test missing as p.
+    """
+    C = SUMMEVAL_NUM_CLASSES
+    result = {}
+    for size in sizes:
+        p = SUMMEVAL_DATA_ROOT / f"SummEval_1600_8_4_{size}" / "data_bundle.json"
+        if not p.exists():
+            continue
+        b = json.load(open(p))
+        train_obs = [r for r in b.get("observed_ratings", []) if r["instance"] == "train"]
+        test_miss = [r for r in b.get("missing_ratings",  []) if r["instance"] == "test"]
+        if not train_obs or not test_miss:
+            continue
+        train_cnt = Counter(r["value"] for r in train_obs)
+        test_cnt  = Counter(r["value"] for r in test_miss)
+        train_n   = len(train_obs)
+        test_n    = len(test_miss)
+        q      = {c: train_cnt.get(c, 0) / train_n for c in range(1, C + 1)}
+        p_test = {c: test_cnt.get(c, 0)  / test_n  for c in range(1, C + 1)}
+        ce = -sum(p_test[c] * math.log(q[c] + 1e-12) for c in range(1, C + 1))
+        result[size] = ce
+    return result
+
+
 # ── Plot 1: training masked CE + val missing CE curves (largest split) ────────
 
-def plot_curves(split_size: int = 175) -> None:
+def plot_curves(split_size: int = 1280) -> None:
     fig, (ax_train, ax_val) = plt.subplots(1, 2, figsize=(14, 4.5))
 
     for model_type, label, color in [
-        ("MARFORMER",           "Marformer",             C_MF),
         ("MARFORMER_HARD_MASK", "Marformer + Hard Mask", C_HM),
     ]:
         run_dir = (
-            RESULTS_ROOT / model_type / "LLM_RUBRIC"
-            / f"LLMRubric_225_25_9_{split_size}"
+            RESULTS_ROOT / model_type / "SUMMEVAL"
+            / f"SummEval_1600_8_4_{split_size}"
         )
         if not run_dir.exists():
             print(f"  [skip] {run_dir.name} not found")
@@ -212,21 +197,20 @@ def plot_curves(split_size: int = 175) -> None:
         ax.set_title(title)
         ax.legend(loc="upper right")
 
-    fig.suptitle(f"LLM Rubric — Training Size {split_size}", y=1.02)
-    out = OUT_DIR / "llm_rubric_train_val_curves.png"
+    fig.suptitle(f"SummEval — Training Size {split_size}", y=1.02)
+    out = OUT_DIR / "summeval_train_val_curves.png"
     fig.savefig(out)
     plt.close(fig)
     print(f"  saved → {out}")
 
 
-# ── Plot 2: test log loss vs training size ─────────────────────────────────────
+# ── Plot 2: test log loss vs training size ────────────────────────────────────
 
 def plot_test_vs_size() -> None:
     fig, ax = plt.subplots(figsize=(8, 4.5))
 
     # ── Marformer series ──────────────────────────────────────────────────────
     for model_type, label, color, marker in [
-        ("MARFORMER",           "Marformer",             C_MF, "o"),
         ("MARFORMER_HARD_MASK", "Marformer + Hard Mask", C_HM, "s"),
     ]:
         runs = _mf_runs(model_type)
@@ -256,8 +240,8 @@ def plot_test_vs_size() -> None:
 
     # ── Empirical marginal baseline ───────────────────────────────────────────
     all_sizes = sorted(set(
-        list(_mf_runs("MARFORMER").keys()) +
-        list(_mf_runs("MARFORMER_HARD_MASK").keys())
+        list(_mf_runs("MARFORMER_HARD_MASK").keys()) +
+        list(_stan_t_runs("Factor").keys())
     ))
     marginal = _empirical_marginal_baseline(all_sizes)
     if marginal:
@@ -267,10 +251,10 @@ def plot_test_vs_size() -> None:
 
     ax.set_xlabel("Training Items")
     ax.set_ylabel("Test Log Loss")
-    ax.set_title("LLM Rubric — Test Log Loss vs Training Size")
+    ax.set_title("SummEval — Test Log Loss vs Training Size")
     ax.legend(loc="upper left", bbox_to_anchor=(1.01, 1), borderaxespad=0)
 
-    out = OUT_DIR / "llm_rubric_test_log_loss.png"
+    out = OUT_DIR / "summeval_test_log_loss.png"
     fig.savefig(out)
     plt.close(fig)
     print(f"  saved → {out}")
@@ -279,9 +263,9 @@ def plot_test_vs_size() -> None:
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main() -> None:
-    print("\n=== LLM Rubric — Talk Plots ===\n")
+    print("\n=== SummEval — Talk Plots ===\n")
     print("-- Plot 1: train masked CE + val missing CE curves --")
-    plot_curves(split_size=175)
+    plot_curves(split_size=1280)
 
     print("\n-- Plot 2: test log loss vs training size --")
     plot_test_vs_size()
