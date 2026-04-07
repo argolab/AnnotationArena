@@ -208,12 +208,10 @@ def evaluate_predictives(
     # ── Test missing ratings (the only ones Stan predicted) ───────────────────
     # missing_ratings_indexes_in_test_instance gives indices into bundle.missing_ratings
     # that belong to the test instance.
+    # reverted
     test_missing_indices = bundle.missing_ratings_indexes_in_test_instance
     test_missing_ratings = [bundle.missing_ratings[i] for i in test_missing_indices]
-    n_test_missing = len(test_missing_ratings)
-
-    # Stan predictions are indexed 0..N_test_missing-1 (passed in that order)
-    stan_indices = list(range(n_test_missing))
+    stan_indices = test_missing_indices  # index directly into Stan's full missing predictions
 
     rating_metrics = evaluate_rating_predictions(
         predictives["missing_rating_predictions"][:, stan_indices],
