@@ -25,6 +25,7 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+imputer/ranking/SLURM
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -297,3 +298,5 @@ imputer/ranking/DATA/OLD_DATA/
 !imputer/ranking/DATA/STAN/**
 
 imputer/ranking/ARCHITECTURE
+imputer/ranking/RESULTS/
+imputer/ranking/scripts/TESTING_SCRIPTS/

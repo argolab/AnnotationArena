@@ -175,10 +175,15 @@ class AttributeEntityType(NullEntityType):
 class AnnotatorEntityType(NullEntityType):
     """Annotator entity: per-annotator deviation with regularization weight, no direct prediction."""
 
-    def __init__(self, num_annotators: int, reg_weight: float = 0.0):
+    def __init__(self, num_annotators: int, reg_weight: float = 0.0, dropout_rate: float = 0.0):
         super().__init__(
             name="annotator",
-            variation=VariationConfig(enabled=True, num_entities=num_annotators, reg_weight=reg_weight),
+            variation=VariationConfig(
+                enabled=True,
+                num_entities=num_annotators,
+                reg_weight=reg_weight,
+                dropout_rate=dropout_rate,
+            ),
         )
 
 class ItemEntityType(NullEntityType):
@@ -583,13 +588,18 @@ def build_default_domain3_types(
     attribute_reg_weight: float = 0.0,
     llm_input_dist: bool = False,
     item_dropout_rate: float = 1.0,
+    annotator_dropout_rate: float = 0.0,
 ) -> Dict[str, EntityType]:
     """
     Convenience helper that builds the canonical domain-3 type registry.
     """
     return {
         "attribute": AttributeEntityType(num_attributes=num_attributes, reg_weight=attribute_reg_weight),
-        "annotator": AnnotatorEntityType(num_annotators=num_annotators, reg_weight=annotator_reg_weight),
+        "annotator": AnnotatorEntityType(
+            num_annotators=num_annotators,
+            reg_weight=annotator_reg_weight,
+            dropout_rate=annotator_dropout_rate,
+        ),
         "item": ItemEntityType(num_items=num_items, dropout_rate=item_dropout_rate, reg_weight=item_reg_weight),
         "rating": RatingVariableType(num_classes=num_likert_classes, logit_high=logit_high, llm_input_dist=llm_input_dist),
         "ranking_pairwise": PairwiseRankingVariableType(max_rank_size=max_rank_size, logit_high=logit_high),

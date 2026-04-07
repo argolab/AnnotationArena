@@ -18,6 +18,7 @@ import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.plugins.environments import LightningEnvironment
 
 from imputer.data import DataConverter, RankingData
 from imputer.utils import sizes_from_configs
@@ -556,6 +557,7 @@ def build_entity_marformer_from_bundle(
     annotator_reg_weight: float = 0.0,
     llm_input_dist: bool = False,
     item_dropout_rate: float = 1.0,
+    annotator_dropout_rate: float = 0.0,
 ) -> tuple[EntityMarformer, Any]:
     # Reuse DataConverter to create RankingData variables for train partition.
     train_observed: List[RankingData] = converter.create_variables_from_bundle(
@@ -578,6 +580,7 @@ def build_entity_marformer_from_bundle(
         annotator_reg_weight=annotator_reg_weight,
         llm_input_dist=llm_input_dist,
         item_dropout_rate=item_dropout_rate,
+        annotator_dropout_rate=annotator_dropout_rate,
     )
 
     graph = variable_list_to_entity_graph(train_all, types)
@@ -766,6 +769,12 @@ def main():
         help="Probability of dropping item deviation embedding during training (1.0 = always drop).",
     )
     parser.add_argument(
+        "--annotator-dropout-rate",
+        type=float,
+        default=0.0,
+        help="Probability of dropping annotator deviation embedding during training (0.0 = off; symmetric to item).",
+    )
+    parser.add_argument(
         "--item-reg-weight",
         type=float,
         default=0.0,
@@ -849,6 +858,7 @@ def main():
         attribute_reg_weight=args.attribute_reg_weight,
         llm_input_dist=args.llm_input_dist,
         item_dropout_rate=args.item_dropout_rate,
+        annotator_dropout_rate=args.annotator_dropout_rate,
     )
     # Build one graph (train partition) to get num_relationships and init model.
     # EntityMarformerLightningModule will build its own train/test splits from
@@ -921,6 +931,7 @@ def main():
             "observed_loss_weight": args.observed_loss_weight,
             "llm_input_dist": args.llm_input_dist,
             "item_dropout_rate": args.item_dropout_rate,
+            "annotator_dropout_rate": args.annotator_dropout_rate,
             "device": args.device,
         },
         "run": {
@@ -969,12 +980,15 @@ def main():
         save_top_k=-1,
     )
 
+    # Single-GPU training under sbatch: avoid Lightning's SlurmEnvironment, which validates
+    # SLURM_NTASKS / --ntasks and can raise if the submit script uses --ntasks (not ntasks-per-node).
     trainer = pl.Trainer(
         max_epochs=args.epochs,
         accelerator=accelerator,
         devices=1,
         logger=logger,
         callbacks=[checkpoint_best, checkpoint_periodic],
+        plugins=[LightningEnvironment()],
     )
     trainer.fit(lightning_module)
 
