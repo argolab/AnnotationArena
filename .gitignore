@@ -26,6 +26,8 @@ share/python-wheels/
 *.egg
 MANIFEST
 imputer/ranking/SLURM
+imputer/ranking/scripts/LLM_RUBRIC/BASELINE_MLP
+imputer/ranking/imputer/baseline_mlp
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

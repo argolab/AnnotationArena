@@ -172,20 +172,33 @@ class EntityMarformerLightningModule(pl.LightningModule):
             f"entities={num_entity_tokens} | masked={n_masked}, observed={n_observed}, missing={n_missing}"
         )
 
-    def _build_training_chunks(self) -> list | None:
+    def _build_training_chunks(self) -> list:
         """
-        Pre-build one EntityGraph per item chunk for non-transductive training.
+        Pre-build one EntityGraph per item chunk.
 
         The graphs are reused across all training steps; only variable token
-        statuses (observed vs masked) are updated in-place each step.
-        Returns None for transductive mode (graphs include test data, rebuilt fresh).
+        statuses (observed vs masked) are updated in-place each step via
+        _refresh_variable_tokens.
+
+        Transductive mode: val_observed and test_observed are added to the graph.
+          - maskable_sources (train + val observed): randomly masked each step;
+            occupy token indices 0..len(maskable)-1, refreshed by _refresh_variable_tokens.
+          - fixed_sources (test observed): always status=2, never masked, baked into
+            the graph at token indices len(maskable)..len(maskable)+len(fixed)-1.
+          - missing_sources (train + val missing): always status=0.
+        Graph topology is identical every step, so caching applies here too.
         """
         if self.transductive:
-            return None
-        observed_sources = list(self.train_observed)
-        missing_sources = list(self.train_missing)
+            maskable_sources = list(self.train_observed) + list(self.val_observed)
+            fixed_sources    = list(self.test_observed)
+            missing_sources  = list(self.train_missing)  + list(self.val_missing)
+        else:
+            maskable_sources = list(self.train_observed)
+            fixed_sources    = []
+            missing_sources  = list(self.train_missing)
+
         all_items: set = set()
-        for var in observed_sources + missing_sources:
+        for var in maskable_sources + fixed_sources + missing_sources:
             all_items.update(var.item_ids)
         all_items_list = sorted(all_items)
         num_items = len(all_items_list)
@@ -198,12 +211,14 @@ class EntityMarformerLightningModule(pl.LightningModule):
             item_chunks = [all_items]
         chunks = []
         for available_items in item_chunks:
-            chunk_observed = [v for v in observed_sources if all(iid in available_items for iid in v.item_ids)]
+            chunk_maskable = [v for v in maskable_sources if all(iid in available_items for iid in v.item_ids)]
+            chunk_fixed    = [v for v in fixed_sources    if all(iid in available_items for iid in v.item_ids)]
             chunk_missing  = [v for v in missing_sources  if all(iid in available_items for iid in v.item_ids)]
-            if not chunk_observed and not chunk_missing:
+            if not chunk_maskable and not chunk_fixed and not chunk_missing:
                 continue
-            graph = variable_list_to_entity_graph(chunk_observed + chunk_missing, self.types)
-            chunks.append({"chunk_observed": chunk_observed, "chunk_missing": chunk_missing, "graph": graph})
+            # maskable tokens must be first so _refresh_variable_tokens indexes them correctly.
+            graph = variable_list_to_entity_graph(chunk_maskable + chunk_fixed + chunk_missing, self.types)
+            chunks.append({"chunk_observed": chunk_maskable, "chunk_missing": chunk_missing, "graph": graph})
         return chunks
 
     def _compute_fresh_chunks(self) -> list:

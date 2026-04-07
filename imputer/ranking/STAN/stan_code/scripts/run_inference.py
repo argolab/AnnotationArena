@@ -271,6 +271,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stan-arg", action="append", metavar="KEY=VALUE",
                         help="Extra Stan data fields (repeatable). "
                              "E.g. --stan-arg DEBUG_INIT=1 for tensor.")
+    parser.add_argument("--real-data", type=bool, default=False)
 
     # ── MCMC ──────────────────────────────────────────────────────────────────
     parser.add_argument("--chains", type=int, default=4)
@@ -319,7 +320,18 @@ def main():
     if not configs_path.exists():
         raise FileNotFoundError(f"configs.json not found at {configs_path}")
 
-    data_config, mode = load_config(configs_path)
+    if not args.real_data:
+        data_config, mode = load_config(configs_path)
+    else:
+        data_config, mode = load_config(f"STAN/stan_code/configs/{args.stan_type}.json")
+        with open(configs_path, "r") as file:
+            data = json.load(file)
+        data_config.K_train = data["datagen"]["K_train"]
+        data_config.K_val = data["datagen"]["K_val"]
+        data_config.K_test = data["datagen"]["K_test"]
+        data_config.I = data["datagen"]["I"]
+        data_config.J = data["datagen"]["J"]
+        data_config.C = data["datagen"]["C"]
     print(f"Bundle mode: {mode}")
 
     # Stan type: CLI override > configs.json
@@ -361,8 +373,8 @@ def main():
     # ── Instance filtering ─────────────────────────────────────────────────────
     # Observed: train + val treated as training signal
     # Missing to predict: test only
-    observed = [r for r in bundle.observed_ratings if r["instance"] in ("train", "val")]
-    missing  = [r for r in bundle.missing_ratings  if r["instance"] == "test"]
+    observed = bundle.observed_ratings        # train + val + test observed
+    missing  = bundle.missing_ratings         # train + val + test missing
 
     n_llm   = sum(_is_llm(r) for r in observed)
     n_human = len(observed) - n_llm
