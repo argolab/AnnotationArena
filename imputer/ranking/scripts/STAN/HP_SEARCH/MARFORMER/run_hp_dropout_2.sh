@@ -43,7 +43,7 @@ EPOCHS=250
 LR_SCHEDULE="none"
 LR_MIN=1e-5
 WEIGHT_DECAY=0.01
-MASKING_RATE=0.35
+MASKING_RATE=0.15
 MASK_AUGMENTATIONS=5
 MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
@@ -133,13 +133,13 @@ _run() {
 }
 
 # Run 1: annotator dropout 0.9, no reg
-_run "${SPLIT}_anndrop0.9"          0.0  0.9  0.0
+# _run "${SPLIT}_anndrop0.9_"          0.0  0.9  0.0
 
 # Run 2: no dropout
-_run "${SPLIT}_nodrop"              0.0  0.0  0.0
+# _run "${SPLIT}_nodrop_"              0.0  0.0  0.0
 
 # Run 3: annotator dropout 0.5 + annotator reg 1e-3
-_run "${SPLIT}_anndrop0.5_annreg1e-3"  0.0  0.9  1e-3
+_run "${SPLIT}_anndrop0.5_annreg1e-3_15p"  0.0  0.9  1e-3
 
 TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))
 echo ""
