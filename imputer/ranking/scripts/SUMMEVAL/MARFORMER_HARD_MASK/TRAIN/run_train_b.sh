@@ -10,14 +10,12 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=18GB
 #SBATCH --gpus=1
-#SBATCH --partition=gpu-a100
-#SBATCH --account=a100acct
-#SBATCH --mail-user="psingh54@jhu.edu"
+#SBATCH --partition=a100
 
 source /home/psingh54/.bashrc
-module load cuda/12.1
-conda activate llm_rubric_env
-cd /export/fs06/psingh54/MARFORMER/imputer/ranking
+module load anaconda3/2024.02-1
+conda activate prabhav2
+cd /home/psingh54/scratchjeisner1/psingh54/AnnotationArena/imputer/ranking
 export PYTHONPATH=.
 export PYTHONUNBUFFERED=1
 set -e
@@ -30,7 +28,8 @@ OUTPUT_ROOT="RESULTS/MARFORMER_HARD_MASK/SUMMEVAL"
 
 # ── Splits to run (sequential, part B: large) ─────────────────────────────────
 SPLITS=(
-    "SummEval_1600_8_4_1280"
+    "SummEval_1600_8_4_1000"
+    "SummEval_1600_8_4_750"
 )
 
 # ── Fixed hyperparams ─────────────────────────────────────────────────────────
@@ -47,7 +46,7 @@ LR=2e-4
 LR_SCHEDULE="none"
 LR_MIN=1e-5
 WEIGHT_DECAY=0.01
-MASKING_RATE=0.35
+MASKING_RATE=0.15
 MASK_AUGMENTATIONS=5
 MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
