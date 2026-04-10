@@ -85,6 +85,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         max_item: int | None = None,
         run_dir: Path | None = None,
         transductive: bool = False,
+        transductive_valtest_mask: bool = False,
         mask_augmentations: int = 5,
         masked_loss_weight: float = 15.0,
         observed_loss_weight: float = 1.0,
@@ -102,6 +103,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.max_item = max_item
         self.run_dir = run_dir
         self.transductive = bool(transductive)
+        self.transductive_valtest_mask = bool(transductive_valtest_mask)
         self.mask_augmentations = mask_augmentations
         self.masked_loss_weight = masked_loss_weight
         self.observed_loss_weight = observed_loss_weight
@@ -193,9 +195,17 @@ class EntityMarformerLightningModule(pl.LightningModule):
         Graph topology is identical every step, so caching applies here too.
         """
         if self.transductive:
-            maskable_sources = (list(self.train_observed) + list(self.val_observed)
-                                + list(self.test_observed))
-            fixed_sources    = []
+            if self.transductive_valtest_mask:
+                # Mask only val/test observed; train observed is always visible as context.
+                # MASKING_RATE controls what fraction of val+test observed is masked each step,
+                # directly simulating the test-time task (some val/test observed as context,
+                # the rest predicted). Train observed is never a prediction target.
+                maskable_sources = list(self.val_observed) + list(self.test_observed)
+                fixed_sources    = list(self.train_observed)
+            else:
+                maskable_sources = (list(self.train_observed) + list(self.val_observed)
+                                    + list(self.test_observed))
+                fixed_sources    = []
             missing_sources  = list(self.train_missing)  + list(self.val_missing)
         else:
             maskable_sources = list(self.train_observed)
@@ -638,6 +648,13 @@ def main():
         help="Include test_observed tokens in training (like run_imputer.py).",
     )
     parser.add_argument(
+        "--transductive-valtest-mask",
+        action="store_true",
+        help="In transductive mode, mask only val/test observed (train observed always "
+             "visible as context). MASKING_RATE controls the fraction of val+test "
+             "observed masked each step.",
+    )
+    parser.add_argument(
         "--llm-annotator-id",
         type=int,
         default=None,
@@ -937,6 +954,7 @@ def main():
             "weight_decay": args.weight_decay,
             "masking_rate": args.masking_rate,
             "transductive_learning": bool(args.transductive_learning),
+            "transductive_valtest_mask": bool(args.transductive_valtest_mask),
             "llm_annotator_id": args.llm_annotator_id,
             "human_observed_rate": args.human_observed_rate,
             "always_observed_ids": args.always_observed_ids,
@@ -975,6 +993,7 @@ def main():
         max_item=args.max_item,
         run_dir=run_dir,
         transductive=bool(args.transductive_learning),
+        transductive_valtest_mask=bool(args.transductive_valtest_mask),
         mask_augmentations=args.mask_augmentations,
         masked_loss_weight=args.masked_loss_weight,
         observed_loss_weight=args.observed_loss_weight,

@@ -52,6 +52,7 @@ USE_DEVIATION_NORM=false
 USE_GRAPH_MASK=false
 LLM_INPUT_DIST=true
 OVERWRITE_EXISTING=true
+USE_TRANSDUCTIVE_VALTEST_MASK=true
 
 # ── Build CLI flags ───────────────────────────────────────────────────────────
 PER_HEAD_FLAG="";      [ "$USE_PER_HEAD_REL"  = "false" ] && PER_HEAD_FLAG="--no-per-head-rel"
@@ -63,6 +64,7 @@ DEVNORM_FLAG="";       [ "$USE_DEVIATION_NORM" = "true"  ] && DEVNORM_FLAG="--us
 GRAPHMASK_FLAG="";     [ "$USE_GRAPH_MASK"     = "true"  ] && GRAPHMASK_FLAG="--use-graph-mask"
 LLM_DIST_FLAG="";      [ "$LLM_INPUT_DIST"     = "true"  ] && LLM_DIST_FLAG="--llm-input-dist"
 OVERWRITE_FLAG="";     [ "$OVERWRITE_EXISTING" = "true"  ] && OVERWRITE_FLAG="--overwrite-existing-data"
+VALTEST_MASK_FLAG="";  [ "$USE_TRANSDUCTIVE_VALTEST_MASK" = "true" ] && VALTEST_MASK_FLAG="--transductive-valtest-mask"
 
 echo ""
 echo "============================================================"
@@ -110,7 +112,8 @@ python -u -m imputer.entity_mf.train \
     $DEVNORM_FLAG                                      \
     $GRAPHMASK_FLAG                                    \
     $LLM_DIST_FLAG                                     \
-    $OVERWRITE_FLAG
+    $OVERWRITE_FLAG                                    \
+    $VALTEST_MASK_FLAG
 
 TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))
 echo ""

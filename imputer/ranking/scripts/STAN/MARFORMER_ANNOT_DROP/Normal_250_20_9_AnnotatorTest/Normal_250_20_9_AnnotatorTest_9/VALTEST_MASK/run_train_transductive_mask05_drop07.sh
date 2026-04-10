@@ -4,17 +4,30 @@
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
 
-cd /Users/prabhavsingh/Documents/JHU/JHUResearch/EntityMarformer/imputer/ranking
+#SBATCH --job-name=EMF_STAN_T_05_D07_VTM
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=18GB
+#SBATCH --gpus=1
+#SBATCH --partition=a100
+#SBATCH --exclude=c001
+
+source /home/psingh54/.bashrc
+module load anaconda3/2024.02-1
+conda activate prabhav2
+cd /home/psingh54/scratchjeisner1/psingh54/AnnotationArena/imputer/ranking
 export PYTHONPATH=.
+export CUDA_LAUNCH_BLOCKING=1
 export PYTHONUNBUFFERED=1
 set -e
 
 SCRIPT_START=$SECONDS
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-DATA_ROOT="DATA/STAN/Factor_250_20_9_AnnotatorTest/Factor_250_20_9_AnnotatorTest_3"
+DATA_ROOT="DATA/STAN/Normal_250_20_9_AnnotatorTest/Normal_250_20_9_AnnotatorTest_9"
 OUTPUT_ROOT="RESULTS/MARFORMER_ANNOT_DROP/STAN"
-RUN_NAME="Factor_250_20_9_AnnotatorTest_3_TRANSDUCTIVE_MASK03_DROP07"
+RUN_NAME="Normal_250_20_9_AnnotatorTest_9_TRANSDUCTIVE_MASK05_DROP07_VTM"
 
 # ── Fixed hyperparams ─────────────────────────────────────────────────────────
 SEED=42
@@ -30,11 +43,11 @@ LR=2e-4
 LR_SCHEDULE="none"
 LR_MIN=1e-5
 WEIGHT_DECAY=0.01
-MASKING_RATE=0.3
+MASKING_RATE=0.5
 MASK_AUGMENTATIONS=5
 MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
-DEVICE="cpu"
+DEVICE="cuda"
 MAX_ITEM=10
 ANNOTATOR_REG_WEIGHT=0.0
 
@@ -68,7 +81,7 @@ VALTEST_MASK_FLAG="";  [ "$USE_TRANSDUCTIVE_VALTEST_MASK" = "true" ] && VALTEST_
 
 echo ""
 echo "============================================================"
-echo " STAN | Marformer Transductive | Factor_250_20_9_AnnotatorTest_3"
+echo " STAN | Marformer Transductive VTM | Normal_250_20_9_AnnotatorTest_9"
 echo "  MASKING_RATE     : ${MASKING_RATE}"
 echo "  ANNOTATOR_DROPOUT: ${ANNOTATOR_DROPOUT_RATE}"
 echo "  OUTPUT_ROOT      : ${OUTPUT_ROOT}"
