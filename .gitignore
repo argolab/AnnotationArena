@@ -28,6 +28,7 @@ MANIFEST
 imputer/ranking/SLURM
 imputer/ranking/scripts/LLM_RUBRIC/BASELINE_MLP
 imputer/ranking/imputer/baseline_mlp
+imputer/ranking/scripts/stan/BASELINE_MLP
 
 # PyInstaller
 #  Usually these files are written by a python script from a template

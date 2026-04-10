@@ -180,17 +180,22 @@ class EntityMarformerLightningModule(pl.LightningModule):
         statuses (observed vs masked) are updated in-place each step via
         _refresh_variable_tokens.
 
-        Transductive mode: val_observed and test_observed are added to the graph.
-          - maskable_sources (train + val observed): randomly masked each step;
+        Transductive mode: val_observed AND test_observed are all in the maskable
+        pool alongside train_observed.
+          - maskable_sources (train + val + test observed): randomly masked each step;
             occupy token indices 0..len(maskable)-1, refreshed by _refresh_variable_tokens.
-          - fixed_sources (test observed): always status=2, never masked, baked into
-            the graph at token indices len(maskable)..len(maskable)+len(fixed)-1.
-          - missing_sources (train + val missing): always status=0.
+            Crucially, test_observed is maskable so the model receives direct gradient
+            signal about test annotators — masking a test_obs token and predicting it
+            from partial context directly simulates the test-time prediction task.
+          - fixed_sources: empty in transductive mode (no always-observed annotator).
+          - missing_sources (train + val missing): always status=0, no loss.
+            test_missing is held out entirely — not in the training graph.
         Graph topology is identical every step, so caching applies here too.
         """
         if self.transductive:
-            maskable_sources = list(self.train_observed) + list(self.val_observed)
-            fixed_sources    = list(self.test_observed)
+            maskable_sources = (list(self.train_observed) + list(self.val_observed)
+                                + list(self.test_observed))
+            fixed_sources    = []
             missing_sources  = list(self.train_missing)  + list(self.val_missing)
         else:
             maskable_sources = list(self.train_observed)
