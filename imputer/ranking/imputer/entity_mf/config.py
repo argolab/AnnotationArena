@@ -28,5 +28,6 @@ class EntityMarformerConfig:
     type_embedding_init: str = "normal"  # Init for type centroid embeddings: "normal" (BERT-style std=0.02) | "scaled_normal" (std=1/sqrt(feature_dim)) | "kaiming" (legacy, not recommended)
     use_deviation_norm: bool = False     # Apply LayerNorm to deviation before adding to type centroid (bounds deviation scale)
     scale_shared_rel: bool = False       # In shared-bias mode: scale rel_scores by 1/sqrt(head_dim), matching per-head normalization
-    use_feature_only_norm: bool = False  # Apply LayerNorm to feature stream only (75-dim) before each sublayer; concat raw params after. Avoids normalizing the structured 5-dim param stream.
+    use_learned_embedding: bool = False  # Replace fixed-scale build_param with learned Ax+b embedding; unembeds at top layer
+    use_graph_mask: bool = False         # Hard graph attention mask: allow attention only where edge_mask or K_aug pointer exists (+ self)
 

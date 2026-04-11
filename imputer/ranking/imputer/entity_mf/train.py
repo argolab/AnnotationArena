@@ -11,13 +11,16 @@ import argparse
 from pathlib import Path
 from typing import Dict, List, Any
 
+import random
+import json
+import numpy as np
 import torch
 import pytorch_lightning as pl
 from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.callbacks import ModelCheckpoint
+from pytorch_lightning.plugins.environments import LightningEnvironment
 
 from imputer.data import DataConverter, RankingData
-from stan.pipeline.bundle import GroundTruthBundle
-from stan.pipeline.io import new_run_dir, save_json
 from imputer.utils import sizes_from_configs
 
 from .config import EntityMarformerConfig
@@ -26,6 +29,33 @@ from .data import variable_list_to_entity_graph
 from .model import EntityMarformer
 from .eval import compute_trainable_loss, evaluate_entity_marformer_split, EntityEvalResults
 from .masking import MaskingStrategy, build_default_masking_strategy
+
+
+def _save_json(data: Any, path: Path) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    def _default(o):
+        if isinstance(o, np.floating):
+            return float(o)
+        if isinstance(o, np.integer):
+            return int(o)
+        if isinstance(o, np.ndarray):
+            return o.tolist()
+        raise TypeError(f"Object of type {type(o)} is not JSON serializable")
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2, default=_default)
+
+
+def _new_run_dir(output_root: Path, run_name: str | None = None) -> Path:
+    if run_name:
+        run_dir = output_root / run_name
+        if run_dir.exists():
+            raise FileExistsError(f"Run directory already exists: {run_dir}")
+        run_dir.mkdir(parents=True)
+        return run_dir
+    from datetime import datetime
+    run_dir = output_root / datetime.now().strftime("run_%Y%m%d_%H%M%S")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    return run_dir
 
 
 class EntityMarformerLightningModule(pl.LightningModule):
@@ -43,7 +73,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
     def __init__(
         self,
         model: EntityMarformer,
-        bundle: GroundTruthBundle,
+        bundle: Any,
         converter: DataConverter,
         types: Dict[str, Any],
         masking_rate: float = 0.15,
@@ -51,9 +81,11 @@ class EntityMarformerLightningModule(pl.LightningModule):
         weight_decay: float = 0.0,
         llm_annotator_id: int | None = None,
         human_observed_rate: float = 0.0,
+        always_observed_ids: List[int] | None = None,
         max_item: int | None = None,
         run_dir: Path | None = None,
         transductive: bool = False,
+        transductive_valtest_mask: bool = False,
         mask_augmentations: int = 5,
         masked_loss_weight: float = 15.0,
         observed_loss_weight: float = 1.0,
@@ -71,6 +103,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.max_item = max_item
         self.run_dir = run_dir
         self.transductive = bool(transductive)
+        self.transductive_valtest_mask = bool(transductive_valtest_mask)
         self.mask_augmentations = mask_augmentations
         self.masked_loss_weight = masked_loss_weight
         self.observed_loss_weight = observed_loss_weight
@@ -92,16 +125,28 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.test_missing: List[RankingData] = converter.create_variables_from_bundle(
             bundle, partition="test", status="missing"
         )
+        self.val_observed: List[RankingData] = converter.create_variables_from_bundle(
+            bundle, partition="val", status="observed"
+        )
+        self.val_missing: List[RankingData] = converter.create_variables_from_bundle(
+            bundle, partition="val", status="missing"
+        )
         # Full per-partition variable lists for evaluation (observed + missing).
         self.train_all: List[RankingData] = self.train_observed + self.train_missing
+        self.val_all: List[RankingData] = self.val_observed + self.val_missing
         self.test_all: List[RankingData] = self.test_observed + self.test_missing
         # Masking strategy can be MCAR or structured (LLM vs human) depending on args.
         self.masking_strategy: MaskingStrategy = build_default_masking_strategy(
             masking_rate=masking_rate,
             llm_annotator_id=llm_annotator_id,
             human_observed_rate=human_observed_rate,
+            always_observed_ids=always_observed_ids,
         )
         self.training_history: List[Dict[str, Any]] = []
+        # Pre-build per-chunk EntityGraphs for non-transductive mode.
+        # Graphs are reused every step; only variable token statuses are updated in-place.
+        # edge_mask and K_aug are cached on each graph object after the first forward pass.
+        self._cached_chunks: list | None = self._build_training_chunks()
 
     def _print_var_count(
         self,
@@ -129,6 +174,105 @@ class EntityMarformerLightningModule(pl.LightningModule):
             f"entities={num_entity_tokens} | masked={n_masked}, observed={n_observed}, missing={n_missing}"
         )
 
+    def _build_training_chunks(self) -> list:
+        """
+        Pre-build one EntityGraph per item chunk.
+
+        The graphs are reused across all training steps; only variable token
+        statuses (observed vs masked) are updated in-place each step via
+        _refresh_variable_tokens.
+
+        Transductive mode: val_observed AND test_observed are all in the maskable
+        pool alongside train_observed.
+          - maskable_sources (train + val + test observed): randomly masked each step;
+            occupy token indices 0..len(maskable)-1, refreshed by _refresh_variable_tokens.
+            Crucially, test_observed is maskable so the model receives direct gradient
+            signal about test annotators — masking a test_obs token and predicting it
+            from partial context directly simulates the test-time prediction task.
+          - fixed_sources: empty in transductive mode (no always-observed annotator).
+          - missing_sources (train + val missing): always status=0, no loss.
+            test_missing is held out entirely — not in the training graph.
+        Graph topology is identical every step, so caching applies here too.
+        """
+        if self.transductive:
+            if self.transductive_valtest_mask:
+                # Mask only val/test observed; train observed is always visible as context.
+                # MASKING_RATE controls what fraction of val+test observed is masked each step,
+                # directly simulating the test-time task (some val/test observed as context,
+                # the rest predicted). Train observed is never a prediction target.
+                maskable_sources = list(self.val_observed) + list(self.test_observed)
+                fixed_sources    = list(self.train_observed)
+            else:
+                maskable_sources = (list(self.train_observed) + list(self.val_observed)
+                                    + list(self.test_observed))
+                fixed_sources    = []
+            missing_sources  = list(self.train_missing)  + list(self.val_missing)
+        else:
+            maskable_sources = list(self.train_observed)
+            fixed_sources    = []
+            missing_sources  = list(self.train_missing)
+
+        all_items: set = set()
+        for var in maskable_sources + fixed_sources + missing_sources:
+            all_items.update(var.item_ids)
+        all_items_list = sorted(all_items)
+        num_items = len(all_items_list)
+        if self.max_item is not None and num_items > self.max_item:
+            item_chunks = [
+                set(all_items_list[i : i + self.max_item])
+                for i in range(0, num_items, self.max_item)
+            ]
+        else:
+            item_chunks = [all_items]
+        chunks = []
+        for available_items in item_chunks:
+            chunk_maskable = [v for v in maskable_sources if all(iid in available_items for iid in v.item_ids)]
+            chunk_fixed    = [v for v in fixed_sources    if all(iid in available_items for iid in v.item_ids)]
+            chunk_missing  = [v for v in missing_sources  if all(iid in available_items for iid in v.item_ids)]
+            if not chunk_maskable and not chunk_fixed and not chunk_missing:
+                continue
+            # maskable tokens must be first so _refresh_variable_tokens indexes them correctly.
+            graph = variable_list_to_entity_graph(chunk_maskable + chunk_fixed + chunk_missing, self.types)
+            chunks.append({"chunk_observed": chunk_maskable, "chunk_missing": chunk_missing, "graph": graph})
+        return chunks
+
+    def _compute_fresh_chunks(self) -> list:
+        """Build chunk list on-the-fly for transductive mode (includes test data)."""
+        observed_sources = list(self.train_observed) + list(self.val_observed)
+        missing_sources  = list(self.train_missing)  + list(self.val_missing)
+        all_items: set = set()
+        for var in observed_sources + missing_sources:
+            all_items.update(var.item_ids)
+        all_items_list = sorted(all_items)
+        num_items = len(all_items_list)
+        if self.max_item is not None and num_items > self.max_item:
+            item_chunks = [
+                set(all_items_list[i : i + self.max_item])
+                for i in range(0, num_items, self.max_item)
+            ]
+        else:
+            item_chunks = [all_items]
+        chunks = []
+        for available_items in item_chunks:
+            chunk_observed = [v for v in observed_sources if all(iid in available_items for iid in v.item_ids)]
+            chunk_missing  = [v for v in missing_sources  if all(iid in available_items for iid in v.item_ids)]
+            if chunk_observed or chunk_missing:
+                chunks.append({"chunk_observed": chunk_observed, "chunk_missing": chunk_missing})
+        return chunks
+
+    @staticmethod
+    def _refresh_variable_tokens(graph, masked_or_observed: List[RankingData]) -> None:
+        """
+        Update the first len(masked_or_observed) variable token statuses in-place.
+
+        Only status and is_masked change between steps; all other token fields
+        (entity ids, edges, rating_value, etc.) are identical to the template graph.
+        """
+        for i, var in enumerate(masked_or_observed):
+            tok = graph.tokens[i]
+            tok.status = var.status
+            tok.raw_data["is_masked"] = var.is_masked
+
     def configure_optimizers(self):
         optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
         if self.lr_schedule == "cosine":
@@ -151,36 +295,13 @@ class EntityMarformerLightningModule(pl.LightningModule):
         """
         device = self.device
 
-        # Collect all unique items across the variables that participate in training.
-        # In non-transductive mode this is train-only; in transductive mode we merge
-        # train + test so test items receive gradient signal.
-        all_items: set[int] = set()
-        observed_sources: List[RankingData] = []
-        missing_sources: List[RankingData] = []
-
-        observed_sources.extend(self.train_observed)
-        missing_sources.extend(self.train_missing)
-
-        if self.transductive:
-            observed_sources.extend(self.test_observed)
-            missing_sources.extend(self.test_missing)
-
-        for var in observed_sources:
-            all_items.update(var.item_ids)
-        for var in missing_sources:
-            all_items.update(var.item_ids)
-
-        all_items_list = sorted(all_items)
-        num_items = len(all_items_list)
-
-        # Split into item chunks if max_item is set (mirrors ImputerLightningModule logic).
-        if self.max_item is not None and num_items > self.max_item:
-            item_chunks: List[set[int]] = []
-            for i in range(0, num_items, self.max_item):
-                chunk = set(all_items_list[i : i + self.max_item])
-                item_chunks.append(chunk)
+        # Use pre-built chunk graphs (non-transductive) or build fresh (transductive).
+        if self._cached_chunks is not None:
+            active_chunks = self._cached_chunks
+            use_graph_cache = True
         else:
-            item_chunks = [all_items]
+            active_chunks = self._compute_fresh_chunks()
+            use_graph_cache = False
 
         # Accumulate loss tensors (for a single scalar loss).
         loss_tensors: List[torch.Tensor] = []
@@ -191,29 +312,22 @@ class EntityMarformerLightningModule(pl.LightningModule):
         observed_ce_accum: float = 0.0
         observed_ce_count: int = 0
 
-
-        for available_items in item_chunks:
-            # Filter variables to those whose items all lie in this chunk.
-            chunk_observed: List[RankingData] = []
-            for v in observed_sources:
-                if all(item_id in available_items for item_id in v.item_ids):
-                    chunk_observed.append(v)
-
-            chunk_missing: List[RankingData] = []
-            for v in missing_sources:
-                if all(item_id in available_items for item_id in v.item_ids):
-                    chunk_missing.append(v)
-
-            if not chunk_observed and not chunk_missing:
-                continue
+        for chunk_data in active_chunks:
+            chunk_observed = chunk_data["chunk_observed"]
+            chunk_missing  = chunk_data["chunk_missing"]
 
             # Apply training mask to observed vars in this chunk.
             masked_or_observed = self.masking_strategy.mask(chunk_observed)
-            train_vars = masked_or_observed + chunk_missing
 
-            graph = variable_list_to_entity_graph(train_vars, self.types)
+            if use_graph_cache:
+                graph = chunk_data["graph"]
+                self._refresh_variable_tokens(graph, masked_or_observed)
+            else:
+                train_vars = masked_or_observed + chunk_missing
+                graph = variable_list_to_entity_graph(train_vars, self.types)
 
-            self._print_var_count(graph, masked_or_observed, chunk_missing)
+            if self.current_epoch == 0:
+                self._print_var_count(graph, masked_or_observed, chunk_missing)
 
             ################## Forward pass ########################
             # print(f"\nINPUT: {train_vars[300]}\n")
@@ -301,8 +415,8 @@ class EntityMarformerLightningModule(pl.LightningModule):
 
         if self.transductive:
             # In transductive mode, run a single evaluation on the combined split
-            # (train_all + test_all), plus a test-only evaluation for reporting.
-            combined_vars = self.train_all + self.test_all
+            # (train_all + val_all), plus a val-only evaluation for reporting.
+            combined_vars = self.train_all + self.val_all
             if combined_vars:
                 combined_eval: EntityEvalResults = evaluate_entity_marformer_split(
                     model=self.model,
@@ -311,6 +425,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
+                    max_item=self.max_item,
                 )
                 rating_missing = (
                     combined_eval.metrics.get("missing", {}).get("rating", {})
@@ -329,34 +444,37 @@ class EntityMarformerLightningModule(pl.LightningModule):
             else:
                 print("No combined variables to evaluate on")
 
-            # Test-only metrics (primary reported numbers).
-            if self.test_all:
-                test_eval: EntityEvalResults = evaluate_entity_marformer_split(
+            # Val-only metrics (used for checkpointing).
+            if self.val_all:
+                val_eval: EntityEvalResults = evaluate_entity_marformer_split(
                     model=self.model,
-                    split="test",
-                    variables=self.test_all,
+                    split="val",
+                    variables=self.val_all,
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
+                    max_item=self.max_item,
                 )
                 rating_missing = (
-                    test_eval.metrics.get("missing", {}).get("rating", {})
-                    if test_eval.metrics
+                    val_eval.metrics.get("missing", {}).get("rating", {})
+                    if val_eval.metrics
                     else {}
                 )
                 acc_val = rating_missing.get("acc", None)
                 xent_val = rating_missing.get("xent", None)
                 acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
                 xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
-                print(f"  [test_missing] acc={acc_str}  xent={xent_str}")
-                epoch_metrics["test_eval"] = {
-                    "split": test_eval.split,
-                    "metrics": test_eval.metrics,
+                print(f"  [val_missing] acc={acc_str}  xent={xent_str}")
+                if xent_val is not None:
+                    self.log("val/missing_ce", xent_val, prog_bar=True, on_epoch=True, on_step=False)
+                epoch_metrics["val_eval"] = {
+                    "split": val_eval.split,
+                    "metrics": val_eval.metrics,
                 }
             else:
-                print("No test variables to evaluate on")
+                print("No val variables to evaluate on")
         else:
-            # Non-transductive: evaluate train and test splits separately.
+            # Non-transductive: evaluate train and val splits separately.
             if self.train_all:
                 # For train_eval, apply the same masking strategy used during training
                 # to create an artificial "masked" subset of the observed train vars.
@@ -370,6 +488,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
+                    max_item=self.max_item,
                 )
                 rating_missing = (
                     train_eval.metrics.get("missing", {}).get("rating", {})
@@ -388,31 +507,34 @@ class EntityMarformerLightningModule(pl.LightningModule):
             else:
                 print("No train variables to evaluate on")
 
-            if self.test_all:
-                test_eval: EntityEvalResults = evaluate_entity_marformer_split(
+            if self.val_all:
+                val_eval: EntityEvalResults = evaluate_entity_marformer_split(
                     model=self.model,
-                    split="test",
-                    variables=self.test_all,
+                    split="val",
+                    variables=self.val_all,
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
+                    max_item=self.max_item,
                 )
                 rating_missing = (
-                    test_eval.metrics.get("missing", {}).get("rating", {})
-                    if test_eval.metrics
+                    val_eval.metrics.get("missing", {}).get("rating", {})
+                    if val_eval.metrics
                     else {}
                 )
                 acc_val = rating_missing.get("acc", None)
                 xent_val = rating_missing.get("xent", None)
                 acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
                 xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
-                print(f"  [test_missing] acc={acc_str}  xent={xent_str}")
-                epoch_metrics["test_eval"] = {
-                    "split": test_eval.split,
-                    "metrics": test_eval.metrics,
+                print(f"  [val_missing] acc={acc_str}  xent={xent_str}")
+                if xent_val is not None:
+                    self.log("val/missing_ce", xent_val, prog_bar=True, on_epoch=True, on_step=False)
+                epoch_metrics["val_eval"] = {
+                    "split": val_eval.split,
+                    "metrics": val_eval.metrics,
                 }
             else:
-                print("No test variables to evaluate on")
+                print("No val variables to evaluate on")
 
         self.training_history.append(epoch_metrics)
 
@@ -421,7 +543,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         """Save training history to run_dir/training_history.json for post-hoc plotting."""
         if self.run_dir is not None and self.training_history:
             try:
-                save_json(self.training_history, Path(self.run_dir) / "training_history.json")
+                _save_json(self.training_history, Path(self.run_dir) / "training_history.json")
             except Exception as e:
                 print(f"Warning: failed to save training history to {self.run_dir}: {e}")
 
@@ -430,7 +552,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
 # Helper functions for loading bundle and converter
 ########################################################
 
-def load_bundle_and_converter(data_dir: Path) -> tuple[GroundTruthBundle, DataConverter, Dict[str, int]]:
+def load_bundle_and_converter(data_dir: Path) -> tuple[Any, DataConverter, Dict[str, int]]:
     bundle_path = data_dir / "data_bundle.json"
     configs_path = data_dir / "configs.json"
     if not bundle_path.exists():
@@ -463,13 +585,14 @@ def load_bundle_and_converter(data_dir: Path) -> tuple[GroundTruthBundle, DataCo
 
 
 def build_entity_marformer_from_bundle(
-    bundle: GroundTruthBundle,
+    bundle: Any,
     converter: DataConverter,
     sizes: Dict[str, int],
     config: EntityMarformerConfig,
     annotator_reg_weight: float = 0.0,
     llm_input_dist: bool = False,
     item_dropout_rate: float = 1.0,
+    annotator_dropout_rate: float = 0.0,
 ) -> tuple[EntityMarformer, Any]:
     # Reuse DataConverter to create RankingData variables for train partition.
     train_observed: List[RankingData] = converter.create_variables_from_bundle(
@@ -492,6 +615,7 @@ def build_entity_marformer_from_bundle(
         annotator_reg_weight=annotator_reg_weight,
         llm_input_dist=llm_input_dist,
         item_dropout_rate=item_dropout_rate,
+        annotator_dropout_rate=annotator_dropout_rate,
     )
 
     graph = variable_list_to_entity_graph(train_all, types)
@@ -529,6 +653,13 @@ def main():
         help="Include test_observed tokens in training (like run_imputer.py).",
     )
     parser.add_argument(
+        "--transductive-valtest-mask",
+        action="store_true",
+        help="In transductive mode, mask only val/test observed (train observed always "
+             "visible as context). MASKING_RATE controls the fraction of val+test "
+             "observed masked each step.",
+    )
+    parser.add_argument(
         "--llm-annotator-id",
         type=int,
         default=None,
@@ -539,6 +670,15 @@ def main():
         type=float,
         default=0.0,
         help="Fraction of human annotations to keep observed when LLM annotator is set.",
+    )
+    parser.add_argument(
+        "--always-observed-ids",
+        type=int,
+        nargs="+",
+        default=None,
+        help="One or more annotator IDs that are always kept observed during training "
+             "(e.g. --always-observed-ids 4 5 6 7 8 for SummEval turker slots). "
+             "Takes priority over --llm-annotator-id when set.",
     )
     parser.add_argument(
         "--max-item",
@@ -617,11 +757,10 @@ def main():
              "matching the joint normalization used in per-head mode.",
     )
     parser.add_argument(
-        "--use-feature-only-norm",
+        "--use-graph-mask",
         action="store_true",
-        default=False,
-        help="Apply LayerNorm to feature stream only (feature_dim) before each sublayer; "
-             "concat raw params after. Avoids normalizing the structured param stream.",
+        help="Hard graph attention mask: allow attention only where edge_mask or K_aug pointer "
+             "exists (+ self-attention). All other pairs are masked to -inf.",
     )
     parser.add_argument(
         "--type-embedding-init",
@@ -672,6 +811,12 @@ def main():
         help="Probability of dropping item deviation embedding during training (1.0 = always drop).",
     )
     parser.add_argument(
+        "--annotator-dropout-rate",
+        type=float,
+        default=0.0,
+        help="Probability of dropping annotator deviation embedding during training (0.0 = off; symmetric to item).",
+    )
+    parser.add_argument(
         "--item-reg-weight",
         type=float,
         default=0.0,
@@ -689,6 +834,11 @@ def main():
         help="Apply LayerNorm to each deviation before adding to its type centroid (bounds deviation scale).",
     )
     parser.add_argument(
+        "--use-learned-embedding",
+        action="store_true",
+        help="Replace fixed-scale build_param with learned Ax+b embedding; feature_dim=model_dim; unembed at top layer.",
+    )
+    parser.add_argument(
         "--lr-schedule",
         type=str,
         default="none",
@@ -701,7 +851,16 @@ def main():
         default=1e-5,
         help="Minimum LR for cosine schedule (eta_min). Only used when --lr-schedule cosine.",
     )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Global random seed for reproducibility (controls init, dropout, masking, data ordering).",
+    )
     args = parser.parse_args()
+
+    # Seed everything before any model init or data loading.
+    pl.seed_everything(args.seed, workers=True)
 
     data_dir = Path(args.data_dir)
 
@@ -727,7 +886,8 @@ def main():
     config.type_embedding_init   = args.type_embedding_init
     config.use_deviation_norm    = args.use_deviation_norm
     config.scale_shared_rel      = args.scale_shared_rel
-    config.use_feature_only_norm = args.use_feature_only_norm
+    config.use_learned_embedding = args.use_learned_embedding
+    config.use_graph_mask        = args.use_graph_mask
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -740,6 +900,7 @@ def main():
         attribute_reg_weight=args.attribute_reg_weight,
         llm_input_dist=args.llm_input_dist,
         item_dropout_rate=args.item_dropout_rate,
+        annotator_dropout_rate=args.annotator_dropout_rate,
     )
     # Build one graph (train partition) to get num_relationships and init model.
     # EntityMarformerLightningModule will build its own train/test splits from
@@ -762,7 +923,7 @@ def main():
         run_dir.mkdir(parents=True, exist_ok=True)
     else:
         try:
-            run_dir = new_run_dir(output_root, run_name=args.run_name)
+            run_dir = _new_run_dir(output_root, run_name=args.run_name)
         except FileExistsError as e:
             raise RuntimeError(f"Run directory already exists for Entity Marformer: {e}") from e
 
@@ -786,7 +947,8 @@ def main():
             "type_embedding_init": config.type_embedding_init,
             "use_deviation_norm": config.use_deviation_norm,
             "scale_shared_rel": config.scale_shared_rel,
-            "use_feature_only_norm": config.use_feature_only_norm,
+            "use_learned_embedding": config.use_learned_embedding,
+            "use_graph_mask": config.use_graph_mask,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,
@@ -797,8 +959,10 @@ def main():
             "weight_decay": args.weight_decay,
             "masking_rate": args.masking_rate,
             "transductive_learning": bool(args.transductive_learning),
+            "transductive_valtest_mask": bool(args.transductive_valtest_mask),
             "llm_annotator_id": args.llm_annotator_id,
             "human_observed_rate": args.human_observed_rate,
+            "always_observed_ids": args.always_observed_ids,
             "max_item": args.max_item,
             "annotator_reg_weight": args.annotator_reg_weight,
             "item_reg_weight": args.item_reg_weight,
@@ -810,13 +974,15 @@ def main():
             "observed_loss_weight": args.observed_loss_weight,
             "llm_input_dist": args.llm_input_dist,
             "item_dropout_rate": args.item_dropout_rate,
+            "annotator_dropout_rate": args.annotator_dropout_rate,
             "device": args.device,
         },
         "run": {
             "run_dir": str(run_dir),
+            "seed": args.seed,
         },
     }
-    save_json(train_config, run_dir / "train_config.json")
+    _save_json(train_config, run_dir / "train_config.json")
 
     lightning_module = EntityMarformerLightningModule(
         model=model,
@@ -828,9 +994,11 @@ def main():
         weight_decay=args.weight_decay,
         llm_annotator_id=args.llm_annotator_id,
         human_observed_rate=args.human_observed_rate,
+        always_observed_ids=args.always_observed_ids,
         max_item=args.max_item,
         run_dir=run_dir,
         transductive=bool(args.transductive_learning),
+        transductive_valtest_mask=bool(args.transductive_valtest_mask),
         mask_augmentations=args.mask_augmentations,
         masked_loss_weight=args.masked_loss_weight,
         observed_loss_weight=args.observed_loss_weight,
@@ -840,7 +1008,32 @@ def main():
 
     accelerator = "gpu" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
     logger = TensorBoardLogger(save_dir=str(run_dir), name="lightning_logs")
-    trainer = pl.Trainer(max_epochs=args.epochs, accelerator=accelerator, devices=1, logger=logger)
+
+    checkpoint_best = ModelCheckpoint(
+        dirpath=str(run_dir / "checkpoints"),
+        filename="best-{epoch:04d}",
+        monitor="val/missing_ce",
+        mode="min",
+        save_top_k=1,
+        save_last=True,
+    )
+    checkpoint_periodic = ModelCheckpoint(
+        dirpath=str(run_dir / "checkpoints"),
+        filename="periodic-{epoch:04d}",
+        every_n_epochs=25,
+        save_top_k=-1,
+    )
+
+    # Single-GPU training under sbatch: avoid Lightning's SlurmEnvironment, which validates
+    # SLURM_NTASKS / --ntasks and can raise if the submit script uses --ntasks (not ntasks-per-node).
+    trainer = pl.Trainer(
+        max_epochs=args.epochs,
+        accelerator=accelerator,
+        devices=1,
+        logger=logger,
+        callbacks=[checkpoint_best, checkpoint_periodic],
+        plugins=[LightningEnvironment()],
+    )
     trainer.fit(lightning_module)
 
 

@@ -70,6 +70,22 @@ class EntityGraph:
 
         self._rel_index: Dict[str, int] = {rel.name: i for i, rel in enumerate(self.relationships)}
 
+        # Pre-compute flat index arrays for vectorized build_edge_masks
+        _srcs, _tgts, _rels = [], [], []
+        L = len(tokens)
+        for src, tgt, rel_name in edges:
+            r_idx = self._rel_index.get(rel_name, -1)
+            if r_idx >= 0 and 0 <= src < L and 0 <= tgt < L:
+                _srcs.append(src)
+                _tgts.append(tgt)
+                _rels.append(r_idx)
+        self._edge_srcs: List[int] = _srcs
+        self._edge_tgts: List[int] = _tgts
+        self._edge_rels: List[int] = _rels
+        # Cache built tensors per device (graph topology never changes after construction)
+        self._edge_mask_cache: Dict[str, torch.Tensor] = {}
+        self._k_aug_cache: Dict[str, torch.Tensor] = {}
+
     @property
     def num_tokens(self) -> int:
         return len(self.tokens)
@@ -82,18 +98,21 @@ class EntityGraph:
         """
         Build binary edge mask tensor of shape [L, L, R].
 
-        TODO: think of ways we can tensorize this. It might be faster to compute in parallelbased on some rules.
         mask[q, k, r] = 1 if there is an edge of relationship r from q -> k.
+        Vectorized and cached per device — topology never changes for a given graph.
         """
+        dev_key = str(device)
+        if dev_key in self._edge_mask_cache:
+            return self._edge_mask_cache[dev_key]
         L = self.num_tokens
         R = self.num_relationships
         edge_mask = torch.zeros(L, L, R, device=device)
-        for src, tgt, rel_name in self.edges:
-            r_idx = self._rel_index.get(rel_name, None)
-            if r_idx is None:
-                continue
-            if 0 <= src < L and 0 <= tgt < L:
-                edge_mask[src, tgt, r_idx] = 1.0
+        if self._edge_srcs:
+            srcs = torch.tensor(self._edge_srcs, dtype=torch.long, device=device)
+            tgts = torch.tensor(self._edge_tgts, dtype=torch.long, device=device)
+            rels = torch.tensor(self._edge_rels, dtype=torch.long, device=device)
+            edge_mask[srcs, tgts, rels] = 1.0
+        self._edge_mask_cache[dev_key] = edge_mask
         return edge_mask
 
 
@@ -114,7 +133,6 @@ def variable_list_to_entity_graph(
 
     num_attributes = types["attribute"].variation.num_entities
     num_annotators = types["annotator"].variation.num_entities
-    num_items = types["item"].variation.num_entities
 
     # 1) Variable tokens (ratings + pairwise rankings)
     for var in ranking_vars:
@@ -154,10 +172,18 @@ def variable_list_to_entity_graph(
     for j in range(num_annotators):
         tokens.append(Token(type_name="annotator", entity_id=j, status=2, raw_data=None))
 
-    # 4) Item entity tokens
-    item_token_start = len(tokens)
-    for k in range(num_items):
-        tokens.append(Token(type_name="item", entity_id=k, status=2, raw_data=None))
+    # 4) Item entity tokens — only for items that actually appear in this variable list.
+    # Previously all num_items items were included regardless of the chunk, causing the
+    # graph to grow with the full dataset size even for small item chunks (OOM for large
+    # datasets like SummEval). Now only in-chunk items get entity tokens; their entity_id
+    # is preserved so deviation_tables are indexed correctly.
+    present_item_ids: List[int] = sorted(
+        {item_id for var in ranking_vars for item_id in var.item_ids}
+    )
+    item_id_to_token: Dict[int, int] = {}
+    for item_id in present_item_ids:
+        item_id_to_token[item_id] = len(tokens)
+        tokens.append(Token(type_name="item", entity_id=item_id, status=2, raw_data=None))
 
     # 5) Edges
     #    For each variable token v with (i, j, k):
@@ -184,8 +210,8 @@ def variable_list_to_entity_graph(
 
         # Item edges
         for item_id in item_ids:
-            if 0 <= item_id < num_items:
-                item_token_idx = item_token_start + item_id
+            item_token_idx = item_id_to_token.get(item_id, None)
+            if item_token_idx is not None:
                 edges.append((idx, item_token_idx, "ITEM"))
                 edges.append((item_token_idx, idx, "ITEM_INV"))
 
