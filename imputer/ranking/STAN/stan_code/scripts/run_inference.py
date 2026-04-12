@@ -70,6 +70,7 @@ _DEFAULT_STAN_FILES = {
     "normal-noise-dot-product":  str(_MODELS_DIR / "normal_noise_dot_product_model.stan"),
     "factored-dot-product":      str(_MODELS_DIR / "normal_noise_dot_product_model.stan"),
     "tensor":                    str(_MODELS_DIR / "tensor_model.stan"),
+    "dawid-skene":               str(_MODELS_DIR / "dawid_skene_model.stan"),
 }
 
 
@@ -188,10 +189,13 @@ def build_stan_data(
         "kappa":                     config.kappa if hasattr(config, "kappa")
                                      else config.kappa,
         "sigma_annotator":           config.sigma_annotator,
-        "sigma_measurement":         config.sigma_measurement,
+        "sigma_measurement":         config.sigma_measurement if config.sigma_measurement is not None else 0.0,
         "alpha_dirichlet":           config.kappa,
         "temperature":               config.temperature,
         "alpha_llm":                 alpha_llm,
+        **({
+            "alpha_confusion": config.alpha_confusion,
+        } if getattr(config, "alpha_confusion", None) is not None else {}),
         # Observed ratings
         "N_ratings":                 len(observed),
         "rating_attributes":         [r["attribute"] for r in observed],
