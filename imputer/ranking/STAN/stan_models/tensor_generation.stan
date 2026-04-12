@@ -8,7 +8,7 @@
  *   u_i  in R^D: attribute embedding          ~ N(0, sigma_u)
  *   v_t  in R^D: prototype embedding (T total) ~ N(0, sigma_v)
  *   u_it in R^D: attribute-prototype interaction ~ N(0, sigma_uit)
- *   alpha_jt:    annotator j mixing weights over T prototypes ~ Dirichlet(1,...,1)
+ *   alpha_jt:    annotator j mixing weights over T prototypes ~ Dirichlet(1,...,1) # FLAG
  *   e_k  in R^D: item embedding               ~ N(0, 1)
  *
  * The effective preference vector for (i,j) is:

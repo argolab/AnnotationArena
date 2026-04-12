@@ -154,6 +154,7 @@ def build_stan_data(
     K: int,
     J: int,
     alpha_llm: float,
+    stan_type: str = None,
 ) -> dict:
     """
     Build the Stan data dict for inference.
@@ -167,16 +168,53 @@ def build_stan_data(
                          annotator IDs remapped at subset time to be contiguous
 
     Args:
-        observed: Observed ratings (train + val instances).
-        missing:  Missing ratings (test instance only).
-        config:   DataGenConfig or AnnotatorSplitConfig.
-        mode:     "item_split" or "annotator_split".
-        K:        Total number of items passed to Stan.
-        J:        Total number of annotators passed to Stan.
+        observed:  Observed ratings (train + val instances).
+        missing:   Missing ratings (test instance only).
+        config:    DataGenConfig or AnnotatorSplitConfig.
+        mode:      "item_split" or "annotator_split".
+        K:         Total number of items passed to Stan.
+        J:         Total number of annotators passed to Stan.
         alpha_llm: Dirichlet concentration for LLM observations.
+        stan_type: Stan model type (determines which fields to include).
     """
     C = config.C
 
+    # Shared ratings arrays (all types)
+    ratings_base = {
+        "N_ratings":                 len(observed),
+        "rating_attributes":         [r["attribute"] for r in observed],
+        "rating_annotators":         [r["annotator"]  for r in observed],
+        "rating_items":              [r["item"]        for r in observed],
+        "rating_values":             [r["value"]       for r in observed],
+        "N_missing_ratings":         len(missing),
+        "missing_rating_attributes": [r["attribute"] for r in missing],
+        "missing_rating_annotators": [r["annotator"]  for r in missing],
+        "missing_rating_items":      [r["item"]        for r in missing],
+    }
+
+    if stan_type == "tensor":
+        # Tensor-prototype model: different parameter set, no LLM fields.
+        return {
+            "K":                          K,
+            "I":                          config.I,
+            "J":                          J,
+            "D":                          config.D,
+            "C":                          C,
+            "T":                          config.T,
+            "use_dawid_skene_noise":      int(config.use_dawid_skene_noise),
+            "derive_thresholds_from_annotator":
+                                          int(config.derive_thresholds_from_annotator),
+            "sigma_u":                    config.sigma_u,
+            "sigma_v":                    config.sigma_v,
+            "sigma_uit":                  config.sigma_uit,
+            "sigma_measurement":          config.sigma_measurement if config.sigma_measurement is not None else 0.0,
+            "alpha_dirichlet":            config.kappa,
+            "alpha_dirichlet_jt":         1.0,   # uniform Dirichlet over T prototypes
+            "alpha_confusion":            config.alpha_confusion,
+            **ratings_base,
+        }
+
+    # Default: all other types (normal-noise-dot-product, factored-dot-product, dawid-skene)
     return {
         "K":                         K,
         "I":                         config.I,
@@ -196,19 +234,10 @@ def build_stan_data(
         **({
             "alpha_confusion": config.alpha_confusion,
         } if getattr(config, "alpha_confusion", None) is not None else {}),
-        # Observed ratings
-        "N_ratings":                 len(observed),
-        "rating_attributes":         [r["attribute"] for r in observed],
-        "rating_annotators":         [r["annotator"]  for r in observed],
-        "rating_items":              [r["item"]        for r in observed],
-        "rating_values":             [r["value"]       for r in observed],
+        # Observed ratings (with LLM soft-dist support)
+        **ratings_base,
         "rating_dists":              [_to_dist(r, C)   for r in observed],
         "is_llm_rating":             [_is_llm(r)       for r in observed],
-        # Missing ratings (test only — these are what we predict)
-        "N_missing_ratings":         len(missing),
-        "missing_rating_attributes": [r["attribute"] for r in missing],
-        "missing_rating_annotators": [r["annotator"]  for r in missing],
-        "missing_rating_items":      [r["item"]        for r in missing],
     }
 
 
@@ -433,6 +462,7 @@ def main():
         K=K,
         J=J,
         alpha_llm=args.alpha_llm,
+        stan_type=stan_type,
     )
     stan_data.update(stan_arg)
 

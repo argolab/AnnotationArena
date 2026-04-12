@@ -1,8 +1,8 @@
 #!/bin/bash
 
-DATA_ROOT="DATA/STAN/SPARSE/Tensor_55_25_9_ItemTest_30"
+DATA_ROOT="DATA/STAN/SPARSE/Tensor_125_25_9_ItemTest_125"
 OUTPUT_ROOT="RESULTS/MARFORMER/STAN/SPARSE"
-RUN_NAME="Tensor_55_25_9_ItemTest_30_LOCAL_NOITEMDEV_TRANS"
+RUN_NAME="Tensor_125_25_9_ItemTest_125_LOCAL_NOITEMDEV_TRANS"
 
 # ── Fixed hyperparams ─────────────────────────────────────────────────────────
 SEED=42
@@ -54,7 +54,7 @@ OVERWRITE_FLAG="";     [ "$OVERWRITE_EXISTING" = "true"  ] && OVERWRITE_FLAG="--
 
 echo ""
 echo "============================================================"
-echo " CLUSTER | No Item Dev Transductive | Tensor_55_25_9_ItemTest_30_LOCAL_NOITEMDEV_TRANS"
+echo " CLUSTER | No Item Dev Transductive | Tensor_125_25_9_ItemTest_125_LOCAL_NOITEMDEV_TRANS"
 echo "  MASKING_RATE : ${MASKING_RATE}"
 echo "  ITEM_DROPOUT : ${ITEM_DROPOUT_RATE}  (always drop — no item deviation)"
 echo "  EPOCHS       : ${EPOCHS}"
