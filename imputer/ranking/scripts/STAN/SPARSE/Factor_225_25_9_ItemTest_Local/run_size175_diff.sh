@@ -3,53 +3,30 @@
 # Copyright
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
-# Phase 2 — Version C: test-only fine-tune, item_dropout=0.0, 100 epochs
-# Loads best checkpoint from Phase 1 vBC (item_dropout=0.7)
+# Local debug run — non-transductive, no item deviation (rate=1.0), CPU, 3 epochs
 
-#SBATCH --job-name=EMF_SP_P2_vC
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=18GB
-#SBATCH --gpus=1
-#SBATCH --partition=gpu-a100
-#SBATCH --account=a100acct
-#SBATCH --mail-user="psingh54@jhu.edu"
-
-source /home/psingh54/.bashrc
-module load cuda/12.1
-conda activate llm_rubric_env
-cd /export/fs06/psingh54/MARFORMER/imputer/ranking
+cd /Users/prabhavsingh/Documents/JHU/JHUResearch/EntityMarformer/imputer/ranking
 export PYTHONPATH=.
 export PYTHONUNBUFFERED=1
 set -e
 
 SCRIPT_START=$SECONDS
 
-# ── Phase 1 checkpoint ────────────────────────────────────────────────────────
-PHASE1_RUN_DIR="RESULTS/MARFORMER/STAN/SPARSE/Factor_225_25_9_ItemTest_Size_175_PHASE1_vBC"
-FINETUNE_CKPT=$(ls ${PHASE1_RUN_DIR}/checkpoints/best-*.ckpt 2>/dev/null | sort | tail -1)
-if [ -z "$FINETUNE_CKPT" ]; then
-    echo "ERROR: No Phase 1 checkpoint found in ${PHASE1_RUN_DIR}/checkpoints/"
-    exit 1
-fi
-echo "Using Phase 1 checkpoint: ${FINETUNE_CKPT}"
-
 # ── Paths ─────────────────────────────────────────────────────────────────────
 DATA_ROOT="DATA/STAN/SPARSE/Factor_225_25_9_ItemTest/Factor_225_25_9_ItemTest_Size_175"
 OUTPUT_ROOT="RESULTS/MARFORMER/STAN/SPARSE"
-RUN_NAME="Factor_225_25_9_ItemTest_Size_175_PHASE2_vC"
+RUN_NAME="Factor_225_25_9_ItemTest_Size_175_LOCAL_NOITEMDEV_TRANS_ScaledNormal"
 
 # ── Fixed hyperparams ─────────────────────────────────────────────────────────
 SEED=42
-TYPE_EMBEDDING_INIT="kaiming"
+TYPE_EMBEDDING_INIT="scaled_normal"
 EMBEDDING_DIM=80
 NUM_LAYERS=8
 ATTENTION_HEADS=4
 D_FF=128
 NUM_FFN_LAYERS=1
 DROPOUT=0.1
-EPOCHS=100
+EPOCHS=300
 LR=2e-4
 LR_SCHEDULE="none"
 LR_MIN=1e-5
@@ -58,12 +35,12 @@ MASKING_RATE=0.15
 MASK_AUGMENTATIONS=5
 MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
-DEVICE="cuda"
+DEVICE="cpu"
 MAX_ITEM=10
 ANNOTATOR_REG_WEIGHT=0.0
 
 # ── Experiment-specific flags ─────────────────────────────────────────────────
-ITEM_DROPOUT_RATE=0.0
+ITEM_DROPOUT_RATE=1.0
 ANNOTATOR_DROPOUT_RATE=0.0
 ITEM_REG_WEIGHT=0.0
 ATTRIBUTE_REG_WEIGHT=0.0
@@ -74,7 +51,7 @@ USE_REL_VALUE=false
 USE_ADDONE_ATTN=false
 USE_DEVIATION_NORM=false
 USE_GRAPH_MASK=false
-LLM_INPUT_DIST=true
+LLM_INPUT_DIST=false
 OVERWRITE_EXISTING=true
 
 # ── Build CLI flags ───────────────────────────────────────────────────────────
@@ -90,11 +67,11 @@ OVERWRITE_FLAG="";     [ "$OVERWRITE_EXISTING" = "true"  ] && OVERWRITE_FLAG="--
 
 echo ""
 echo "============================================================"
-echo " PHASE 2 vC | Test-Only Fine-tune | item_dropout=0.0"
-echo "  MASKING_RATE : ${MASKING_RATE}"
-echo "  ITEM_DROPOUT : ${ITEM_DROPOUT_RATE}"
-echo "  EPOCHS       : ${EPOCHS}"
-echo "  RUN_NAME     : ${RUN_NAME}"
+echo " LOCAL | Marformer Non-Transductive No Item Dev | Factor_225_25_9_ItemTest_Size_175"
+echo "  MASKING_RATE     : ${MASKING_RATE}"
+echo "  ITEM_DROPOUT     : ${ITEM_DROPOUT_RATE}  (always drop — no item deviation)"
+echo "  EPOCHS           : ${EPOCHS}"
+echo "  DEVICE           : ${DEVICE}"
 echo "============================================================"
 
 python -u -m imputer.entity_mf.train \
@@ -125,8 +102,7 @@ python -u -m imputer.entity_mf.train \
     --item-reg-weight        "$ITEM_REG_WEIGHT"        \
     --attribute-reg-weight   "$ATTRIBUTE_REG_WEIGHT"   \
     --annotator-reg-weight   "$ANNOTATOR_REG_WEIGHT"   \
-    --finetune-test-only                               \
-    --finetune-from-checkpoint "${FINETUNE_CKPT}"      \
+    --transductive-learning                            \
     $PER_HEAD_FLAG                                     \
     $SCALE_FLAG                                        \
     $POINTER_FLAG                                      \

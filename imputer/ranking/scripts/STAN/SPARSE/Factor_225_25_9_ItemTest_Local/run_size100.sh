@@ -3,22 +3,9 @@
 # Copyright
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
-# Phase 1 — Version A: non-transductive, item_dropout=1.0, 200 epochs
+# Local — transductive, item_dropout=1.0 (no item deviation), 300 epochs
 
-#SBATCH --job-name=EMF_SP_P1_vA
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=18GB
-#SBATCH --gpus=1
-#SBATCH --partition=gpu-a100
-#SBATCH --account=a100acct
-#SBATCH --mail-user="psingh54@jhu.edu"
-
-source /home/psingh54/.bashrc
-module load cuda/12.1
-conda activate llm_rubric_env
-cd /export/fs06/psingh54/MARFORMER/imputer/ranking
+cd /Users/prabhavsingh/Documents/JHU/JHUResearch/EntityMarformer/imputer/ranking
 export PYTHONPATH=.
 export PYTHONUNBUFFERED=1
 set -e
@@ -26,9 +13,9 @@ set -e
 SCRIPT_START=$SECONDS
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-DATA_ROOT="DATA/STAN/SPARSE/Factor_225_25_9_ItemTest/Factor_225_25_9_ItemTest_Size_175"
+DATA_ROOT="DATA/STAN/SPARSE/Factor_225_25_9_ItemTest/Factor_225_25_9_ItemTest_100"
 OUTPUT_ROOT="RESULTS/MARFORMER/STAN/SPARSE"
-RUN_NAME="Factor_225_25_9_ItemTest_Size_175_PHASE1_vA"
+RUN_NAME="Factor_225_25_9_ItemTest_100_LOCAL_NOITEMDEV_TRANS"
 
 # ── Fixed hyperparams ─────────────────────────────────────────────────────────
 SEED=42
@@ -39,7 +26,7 @@ ATTENTION_HEADS=4
 D_FF=128
 NUM_FFN_LAYERS=1
 DROPOUT=0.1
-EPOCHS=200
+EPOCHS=300
 LR=2e-4
 LR_SCHEDULE="none"
 LR_MIN=1e-5
@@ -48,7 +35,7 @@ MASKING_RATE=0.15
 MASK_AUGMENTATIONS=5
 MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
-DEVICE="cuda"
+DEVICE="cpu"
 MAX_ITEM=10
 ANNOTATOR_REG_WEIGHT=0.0
 
@@ -64,7 +51,7 @@ USE_REL_VALUE=false
 USE_ADDONE_ATTN=false
 USE_DEVIATION_NORM=false
 USE_GRAPH_MASK=false
-LLM_INPUT_DIST=true
+LLM_INPUT_DIST=false
 OVERWRITE_EXISTING=true
 
 # ── Build CLI flags ───────────────────────────────────────────────────────────
@@ -80,11 +67,11 @@ OVERWRITE_FLAG="";     [ "$OVERWRITE_EXISTING" = "true"  ] && OVERWRITE_FLAG="--
 
 echo ""
 echo "============================================================"
-echo " PHASE 1 vA | Non-Transductive | item_dropout=1.0"
+echo " LOCAL | No Item Dev Transductive | Factor_225_25_9_ItemTest_100"
 echo "  MASKING_RATE : ${MASKING_RATE}"
-echo "  ITEM_DROPOUT : ${ITEM_DROPOUT_RATE}"
+echo "  ITEM_DROPOUT : ${ITEM_DROPOUT_RATE}  (always drop — no item deviation)"
 echo "  EPOCHS       : ${EPOCHS}"
-echo "  RUN_NAME     : ${RUN_NAME}"
+echo "  DEVICE       : ${DEVICE}"
 echo "============================================================"
 
 python -u -m imputer.entity_mf.train \
@@ -115,6 +102,7 @@ python -u -m imputer.entity_mf.train \
     --item-reg-weight        "$ITEM_REG_WEIGHT"        \
     --attribute-reg-weight   "$ATTRIBUTE_REG_WEIGHT"   \
     --annotator-reg-weight   "$ANNOTATOR_REG_WEIGHT"   \
+    --transductive-learning                            \
     $PER_HEAD_FLAG                                     \
     $SCALE_FLAG                                        \
     $POINTER_FLAG                                      \

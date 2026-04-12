@@ -1,0 +1,1 @@
+{"K_train": 100, "K_test": 25, "K_val": 25, "I": 9, "J": 25, "C": 4, "enable_pairwise_rankings": 0, "pairwise_cap_per_item": 10, "num_annotate_annotator": 4, "D": 8, "d_annotator": 8, "derive_thresholds_from_annotator": 0, "kappa": 10.0, "sigma_annotator": 0.5, "sigma_measurement": 0.1, "temperature": 0.5, "use_factored_annotator": 1}
