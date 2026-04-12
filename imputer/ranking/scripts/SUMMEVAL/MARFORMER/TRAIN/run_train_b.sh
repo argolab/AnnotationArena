@@ -3,19 +3,21 @@
 # Copyright
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
-#
-# Cluster: submit with sbatch_adapt from any cwd; the adapter sets Slurm --chdir to
-# where you invoked it, so we always cd to imputer/ranking (DATA/, RESULTS/, package root).
-#
-# Example (1x H100, more CPUs, 18G RAM per CPU — adjust CONDA_ENV if needed):
-#   cd /path/to/AA_new/imputer/ranking
-#   PARTITION=h100 GPUS=1 TIME=48:00:00 CPUS_PER_TASK=16 MEM_PER_CPU=18G \
-#     /home/xwang397/bin/sbatch_adapt scripts/SUMMEVAL/MARFORMER/TRAIN/run_train_b.sh
 
-_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-# This file: .../scripts/SUMMEVAL/MARFORMER/TRAIN/run_train_b.sh → ranking root is 4 levels up.
-_RANKING_ROOT="$(cd "${_SCRIPT_DIR}/../../../.." && pwd)"
-cd "${_RANKING_ROOT}"
+#SBATCH --job-name=EMF_SumEval_MF_A
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=18GB
+#SBATCH --gpus=1
+#SBATCH --partition=gpu-a100
+#SBATCH --account=a100acct
+#SBATCH --mail-user="psingh54@jhu.edu"
+
+source /home/psingh54/.bashrc
+module load cuda/12.1
+conda activate llm_rubric_env
+cd /export/fs06/psingh54/MARFORMER/imputer/ranking
 
 export PYTHONPATH=.
 export PYTHONUNBUFFERED=1

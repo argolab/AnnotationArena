@@ -30,8 +30,6 @@ OUTPUT_ROOT="RESULTS/MARFORMER_HARD_MASK/SUMMEVAL"
 
 # ── Splits to run (sequential, part B: large) ─────────────────────────────────
 SPLITS=(
-    "SummEval_1600_8_4_750"
-    "SummEval_1600_8_4_1000"
     "SummEval_1600_8_4_1280"
 )
 
@@ -49,7 +47,7 @@ LR=2e-4
 LR_SCHEDULE="none"
 LR_MIN=1e-5
 WEIGHT_DECAY=0.01
-MASKING_RATE=0.15
+MASKING_RATE=0.35
 MASK_AUGMENTATIONS=5
 MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0

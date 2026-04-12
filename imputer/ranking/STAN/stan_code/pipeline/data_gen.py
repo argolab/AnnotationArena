@@ -929,24 +929,21 @@ def extract_bundle_from_annotator_split_stan_output(
 
                 observed = int(rating_observed[ij_idx, k]) == 1
 
+                # In annotator-split mode, only cells selected by num_annotate_annotator
+                # exist as ratings. Unselected cells are not ratings at all — skip them.
+                # MCAR will subsequently mark some of these observed ratings as missing.
+                if not observed:
+                    continue
+
                 if instance == "train":
                     train_ratings.append(rating_dict)
-                    if observed:
-                        train_observed_ratings.append(rating_dict)
-                    else:
-                        train_missing_ratings.append(rating_dict)
+                    train_observed_ratings.append(rating_dict)
                 elif instance == "val":
                     val_ratings.append(rating_dict)
-                    if observed:
-                        val_observed_ratings.append(rating_dict)
-                    else:
-                        val_missing_ratings.append(rating_dict)
+                    val_observed_ratings.append(rating_dict)
                 else:
                     test_ratings.append(rating_dict)
-                    if observed:
-                        test_observed_ratings.append(rating_dict)
-                    else:
-                        test_missing_ratings.append(rating_dict)
+                    test_observed_ratings.append(rating_dict)
 
     all_ratings = train_ratings + val_ratings + test_ratings
     observed_ratings = train_observed_ratings + val_observed_ratings + test_observed_ratings
@@ -967,7 +964,10 @@ def extract_bundle_from_annotator_split_stan_output(
         "J_val": config.J_val,
         "J_test": config.J_test,
         "total_items": config.K,
-        "total_possible_ratings": config.I * J_total * config.K,
+        # total_possible_ratings = I * num_annotate_annotator * K (not I*J*K)
+        # since only num_annotate_annotator annotators rate each item.
+        # Use total_ratings as a proxy since all_ratings contains only selected cells.
+        "total_possible_ratings": len(all_ratings),
         "total_ratings": len(all_ratings),
         "observed_ratings": len(observed_ratings),
         "missing_ratings": len(missing_ratings),

@@ -6,9 +6,9 @@ set -e
 
 # Fixed base parameters (mirrors OFAT center setup where possible)
 BASE_I=9
-BASE_J=20
+BASE_J=25
 BASE_C=4
-BASE_K_TRAIN=600
+BASE_K_TRAIN=175
 BASE_K_TEST=25
 BASE_K_VAL=25
 
@@ -37,7 +37,7 @@ sm_str=$(echo $BASE_SIGMA_MEASUREMENT | sed 's/\.//g')
 kp_str=$(echo $BASE_KAPPA | sed 's/\.//g')
 
 # Construct run name
-run_name="Normal_650_${BASE_J}_${BASE_I}_ItemTest_Size_${BASE_K_TRAIN}"
+run_name="Normal_225_${BASE_J}_${BASE_I}_ItemTest_${BASE_K_TRAIN}"
 
 #run_name="normal_noise_dot_product_llm_rubric"
 
@@ -50,34 +50,34 @@ elif [ "$BASE_PROTOCOL" == "mcar" ]; then
 fi
 
 # Step 1: Generate data (Stan)
-# echo "[Step 1/6] Generating data..."
+echo "[Step 1/6] Generating data..."
 
-# python STAN/stan_code/scripts/generate_data.py \
-#     --K-train $BASE_K_TRAIN \
-#     --K-test $BASE_K_TEST \
-#     --K-val $BASE_K_VAL \
-#     --I $BASE_I \
-#     --J $BASE_J \
-#     --D $BASE_D \
-#     --C $BASE_C \
-#     --observation-protocol $BASE_PROTOCOL \
-#     --sigma-annotator $BASE_SIGMA_ANNOTATOR \
-#     --sigma-measurement $BASE_SIGMA_MEASUREMENT \
-#     --kappa $BASE_KAPPA \
-#     --output-dir "DATA/STAN/Normal_650_25_9_ItemTest" \
-#     --run-name $run_name \
-#     --overwrite-existing-data \
-#     --stan-type "normal-noise-dot-product" \
-#     $ranking_args \
-#     $protocol_args </dev/null
+python STAN/stan_code/scripts/generate_data.py \
+    --K-train $BASE_K_TRAIN \
+    --K-test $BASE_K_TEST \
+    --K-val $BASE_K_VAL \
+    --I $BASE_I \
+    --J $BASE_J \
+    --D $BASE_D \
+    --C $BASE_C \
+    --observation-protocol $BASE_PROTOCOL \
+    --sigma-annotator $BASE_SIGMA_ANNOTATOR \
+    --sigma-measurement $BASE_SIGMA_MEASUREMENT \
+    --kappa $BASE_KAPPA \
+    --output-dir "DATA/STAN/Normal_225_25_9_ItemTest" \
+    --run-name $run_name \
+    --overwrite-existing-data \
+    --stan-type "normal-noise-dot-product" \
+    $ranking_args \
+    $protocol_args </dev/null
 
-# if [ $? -ne 0 ]; then
-#     echo "ERROR: Data generation failed for $run_name"
-#     exit 1
-# fi
+if [ $? -ne 0 ]; then
+    echo "ERROR: Data generation failed for $run_name"
+    exit 1
+fi
 
 # Construct run name
-run_name="Factor_650_${BASE_J}_${BASE_I}_ItemTest_Size_${BASE_K_TRAIN}"
+run_name="Factor_225_${BASE_J}_${BASE_I}_ItemTest_${BASE_K_TRAIN}"
 
 #run_name="normal_noise_dot_product_llm_rubric"
 
@@ -104,7 +104,7 @@ python STAN/stan_code/scripts/generate_data.py \
     --sigma-annotator $BASE_SIGMA_ANNOTATOR \
     --sigma-measurement $BASE_SIGMA_MEASUREMENT \
     --kappa $BASE_KAPPA \
-    --output-dir "DATA/STAN/Factor_650_25_9_ItemTest" \
+    --output-dir "DATA/STAN/Factor_225_25_9_ItemTest" \
     --run-name $run_name \
     --overwrite-existing-data \
     --stan-type "factored-dot-product" \
