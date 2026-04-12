@@ -43,6 +43,8 @@ def generate_data(
             stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "tensor_generation.stan")
         elif stan_type in ("normal-noise-dot-product", "factored-dot-product"):
             stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "normal_noise_dot_product_generation.stan")
+        elif stan_type == "dawid-skene":
+            stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "dawid_skene_generation.stan")
         elif getattr(config, "observation_protocol", None) == "extended_rankings":
             import warnings
             warnings.warn(
@@ -233,16 +235,20 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     
     # Extract extra ground truth (generator-specific fields)
     extra_ground_truth = {}
-    
+
     # Factored annotator model fields (iclr generator with use_factored_annotator=1)
     for key in ["annotator_embeddings", "attr_transforms", "threshold_transform_W", "threshold_attr_bias"]:
         if key in sample:
             extra_ground_truth[key] = sample[key][0]
-    
+
     # Discrete prototype-style fields (discrete_type generator)
     for key in ["z_train", "z_test", "s_of_j", "a_attr", "u_proto", "v_style", "delta_ims", "mu_ims"]:
         if key in sample:
             extra_ground_truth[key] = sample[key][0]
+
+    # Dawid-Skene confusion matrix
+    if "confusion_matrix" in sample:
+        extra_ground_truth["confusion_matrix"] = sample["confusion_matrix"][0]
 
     # Extract pairwise rankings counts
     num_train_pairwise = 0
@@ -329,7 +335,7 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
                     "value": int(test_rating_values[ij_idx, k]),
                     "instance": "test"
                 }
-                if not int(test_rating_values[ij_idx, k]) in [1, 2, 3, 4]:
+                if not (1 <= int(test_rating_values[ij_idx, k]) <= num_classes):
                     continue
                 test_ratings.append(rating_dict)
                 if test_rating_observed[ij_idx, k] == 1:
@@ -929,24 +935,21 @@ def extract_bundle_from_annotator_split_stan_output(
 
                 observed = int(rating_observed[ij_idx, k]) == 1
 
+                # In annotator-split mode, only cells selected by num_annotate_annotator
+                # exist as ratings. Unselected cells are not ratings at all — skip them.
+                # MCAR will subsequently mark some of these observed ratings as missing.
+                if not observed:
+                    continue
+
                 if instance == "train":
                     train_ratings.append(rating_dict)
-                    if observed:
-                        train_observed_ratings.append(rating_dict)
-                    else:
-                        train_missing_ratings.append(rating_dict)
+                    train_observed_ratings.append(rating_dict)
                 elif instance == "val":
                     val_ratings.append(rating_dict)
-                    if observed:
-                        val_observed_ratings.append(rating_dict)
-                    else:
-                        val_missing_ratings.append(rating_dict)
+                    val_observed_ratings.append(rating_dict)
                 else:
                     test_ratings.append(rating_dict)
-                    if observed:
-                        test_observed_ratings.append(rating_dict)
-                    else:
-                        test_missing_ratings.append(rating_dict)
+                    test_observed_ratings.append(rating_dict)
 
     all_ratings = train_ratings + val_ratings + test_ratings
     observed_ratings = train_observed_ratings + val_observed_ratings + test_observed_ratings
@@ -967,7 +970,10 @@ def extract_bundle_from_annotator_split_stan_output(
         "J_val": config.J_val,
         "J_test": config.J_test,
         "total_items": config.K,
-        "total_possible_ratings": config.I * J_total * config.K,
+        # total_possible_ratings = I * num_annotate_annotator * K (not I*J*K)
+        # since only num_annotate_annotator annotators rate each item.
+        # Use total_ratings as a proxy since all_ratings contains only selected cells.
+        "total_possible_ratings": len(all_ratings),
         "total_ratings": len(all_ratings),
         "observed_ratings": len(observed_ratings),
         "missing_ratings": len(missing_ratings),

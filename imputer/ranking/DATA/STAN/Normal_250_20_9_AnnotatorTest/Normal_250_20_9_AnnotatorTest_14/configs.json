@@ -19,7 +19,7 @@
     "enable_pairwise_rankings": false,
     "pairwise_cap_per_item": 10,
     "seed": 42,
-    "stan_type": "normal-noise-dot-product",
+    "stan_type": "factored-dot-product",
     "J": 20
   }
 }

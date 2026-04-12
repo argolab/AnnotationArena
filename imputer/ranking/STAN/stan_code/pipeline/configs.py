@@ -24,6 +24,10 @@ STAN_TYPE_REQUIRED: Dict[str, Set[str]] = {
         "D", "d_annotator", "sigma_annotator", "sigma_measurement", "kappa", "temperature",
         "use_factored_annotator", "derive_thresholds_from_annotator",
     },
+    "dawid-skene": {
+        "D", "d_annotator", "sigma_annotator", "kappa", "temperature",
+        "use_factored_annotator", "derive_thresholds_from_annotator", "alpha_confusion",
+    },
     "tensor": {
         "D",
         "factor_decay",
@@ -44,6 +48,8 @@ STAN_DATA_FIELDS: frozenset = frozenset({
     "use_factored_annotator", "derive_thresholds_from_annotator", "d_annotator", "factor_decay",
     # Tensor-only misspecification flags / loading distribution.
     "use_log_scores", "use_logistic_link", "use_normal_loadings",
+    # Dawid-Skene confusion prior.
+    "alpha_confusion",
 })
 
 
@@ -113,6 +119,7 @@ class DataGenConfig:
     derive_thresholds_from_annotator: Optional[int] = None  # 0 or 1
     d_annotator: Optional[int] = None
     factor_decay: Optional[float] = None
+    alpha_confusion: Optional[float] = None  # Dawid-Skene confusion prior concentration
 
     # Misspecification flags (tensor-only). These are part of Stan data for the tensor
     # data-generation model and are required (0/1) for stan_type="tensor".
@@ -163,7 +170,7 @@ class DataGenConfig:
             "C": self.C,
             "enable_pairwise_rankings": 1 if self.enable_pairwise_rankings else 0,
             "pairwise_cap_per_item": self.pairwise_cap_per_item,
-            "num_annotate_annotator": self.J
+            "num_annotate_annotator": 4
         }
 
         required = STAN_TYPE_REQUIRED[self.stan_type]

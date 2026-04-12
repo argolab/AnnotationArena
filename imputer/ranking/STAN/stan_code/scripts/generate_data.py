@@ -54,8 +54,8 @@ def main():
     parser.add_argument("--run-name", type=str, default=None,
                         help="Custom run name (default: auto-generated)")
     parser.add_argument("--stan-type", type=str, default="factored-dot-product",
-                        choices=["normal-noise-dot-product", "factored-dot-product", "discrete", "tensor"],
-                        help="Stan model: normal-noise-dot-product, factored-dot-product, discrete, tensor.")
+                        choices=["normal-noise-dot-product", "factored-dot-product", "discrete", "tensor", "dawid-skene"],
+                        help="Stan model: normal-noise-dot-product, factored-dot-product, discrete, tensor, dawid-skene.")
     parser.add_argument("--stan-file", type=str, default=None,
                         help="Path to .stan file (overrides --stan-type when set)")
     parser.add_argument("--overwrite-existing-data", action="store_true",
@@ -107,6 +107,9 @@ def main():
     # tensor only:
     parser.add_argument("--factor-decay", type=float, default=None,
                         help="CP factor decay (tensor only).")
+    # dawid-skene only:
+    parser.add_argument("--alpha-confusion", type=float, default=10.0,
+                        help="Dirichlet concentration for confusion matrix diagonal (dawid-skene only; default: 10.0).")
     
     args = parser.parse_args()
 
@@ -130,11 +133,15 @@ def main():
         "use_log_scores": 0,
         "use_logistic_link": 0,
         "use_normal_loadings": 0,
+        "alpha_confusion": args.alpha_confusion,
     }
     if stan_type == "normal-noise-dot-product":
         defaults["use_factored_annotator"] = 0
         defaults["derive_thresholds_from_annotator"] = 0
     elif stan_type == "factored-dot-product":
+        defaults["use_factored_annotator"] = 1
+        defaults["derive_thresholds_from_annotator"] = 1 if args.derive_thresholds_from_annotator else 0
+    elif stan_type == "dawid-skene":
         defaults["use_factored_annotator"] = 1
         defaults["derive_thresholds_from_annotator"] = 1 if args.derive_thresholds_from_annotator else 0
     type_kwargs = {k: stan_arg.get(k, defaults.get(k)) for k in required}

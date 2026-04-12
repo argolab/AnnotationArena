@@ -9,23 +9,23 @@ data {
     int<lower=1> D;          // embedding dimension
     int<lower=1> C;          // number of rating categories
     int<lower=1> d_annotator; // annotator embedding dimension
-
+ 
     // Hyperparameters
     real<lower=0> sigma_annotator;
     real<lower=0> sigma_measurement;
     real<lower=0> kappa;
     real<lower=0> temperature;
-
+ 
     // Annotator model selection (identical semantics to normal_noise_dot_product_generation.stan)
     int<lower=0, upper=1> use_factored_annotator;
     int<lower=0, upper=1> derive_thresholds_from_annotator;
 }
-
+ 
 generated quantities {
-
+ 
     int DEBUG_PRINT;
     DEBUG_PRINT = 1;
-
+ 
     // ===== SHARED GENERATIVE COMPONENTS =====
     matrix[I, D] mean_preferences;               // Global criteria embeddings v_i
     matrix[J, d_annotator] annotator_embeddings;  // Annotator embeddings u_j (all J)
@@ -34,40 +34,42 @@ generated quantities {
     array[I*J] simplex[C] rating_probs;
     array[I*J] vector[C] rating_cumprobs;
     array[I*J] vector[C+1] rating_thresholds_z;
-
+ 
     matrix[C-1, d_annotator] threshold_transform_W;
     matrix[I, C-1] threshold_attr_bias;
-
+ 
     // ===== SHARED ITEM SET =====
     matrix[K, D] embeddings;       // Item embeddings e_k  (shared across all instances)
     matrix[I*J, K] base_scores;    // z_ijk = v_ij . e_k  (for all annotators x items)
-
+ 
     // ===== RATINGS (all annotators x all items) =====
     // Shape [I*J, K]; instance membership is determined by annotator ID in Python.
+    // Only num_annotate_annotator randomly sampled annotators rate each item;
+    // rating_observed[idx, k] = 1 iff annotator j was selected for item k.
     array[I*J, K] int rating_values;
-    array[I*J, K] int rating_observed;  // always 1: every annotator rates every item
-
+    array[I*J, K] int rating_observed;
+ 
     // ===== POSTERIOR RATING PROBABILITIES =====
     // Split by annotator group for downstream convenience.
     array[I*J_train, K] vector[C] train_posterior_rating_probs;
     array[I*J_val,   K] vector[C] val_posterior_rating_probs;
     array[I*J_test,  K] vector[C] test_posterior_rating_probs;
-
+ 
     // ===== COUNTS =====
     int num_train_observed_ratings;
     int num_val_observed_ratings;
     int num_test_observed_ratings;
-
+ 
     // ===== GENERATE SHARED ANNOTATOR COMPONENTS =====
     real sigma_M = sigma_annotator / sqrt(d_annotator);
-
+ 
     {
         for (i in 1:I) {
             for (d in 1:D) {
                 mean_preferences[i, d] = normal_rng(0, 1);
             }
         }
-
+ 
         if (use_factored_annotator == 1) {
             for (j in 1:J) {
                 for (d in 1:d_annotator) {
@@ -110,7 +112,7 @@ generated quantities {
             }
         }
     }
-
+ 
     // ===== GENERATE THRESHOLD TRANSFORM =====
     {
         real sigma_W = 1.0 / sqrt(d_annotator);
@@ -126,7 +128,7 @@ generated quantities {
             }
         }
     }
-
+ 
     if (derive_thresholds_from_annotator == 1 && use_factored_annotator == 1) {
         for (i in 1:I) {
             for (j in 1:J) {
@@ -159,7 +161,7 @@ generated quantities {
             }
         }
     }
-
+ 
     for (ij in 1:(I*J)) {
         rating_thresholds_z[ij][1] = negative_infinity();
         for (c in 2:C) {
@@ -167,7 +169,7 @@ generated quantities {
         }
         rating_thresholds_z[ij][C+1] = positive_infinity();
     }
-
+ 
     // ===== GENERATE SHARED ITEM EMBEDDINGS AND BASE SCORES =====
     for (k in 1:K) {
         for (d in 1:D) {
@@ -182,12 +184,50 @@ generated quantities {
             }
         }
     }
-
-    // ===== GENERATE RATINGS: every annotator rates every item =====
+ 
+    // ===== GENERATE RATINGS: num_annotate_annotator randomly sampled per item =====
+    // Initialise all cells as unobserved (0).
     for (i in 1:I) {
         for (j in 1:J) {
             int idx = (i-1)*J + j;
             for (k in 1:K) {
+                rating_observed[idx, k] = 0;
+                rating_values[idx, k]   = 1;  // placeholder; overwritten when observed
+            }
+        }
+    }
+ 
+    int num_annotate_annotator = 4;  // number of annotators sampled per item
+ 
+    for (k in 1:K) {
+        if (J < num_annotate_annotator) {
+            reject("J is less than num_annotate_annotator");
+        }
+        array[num_annotate_annotator] int selected_annotators;
+        int num_selected = 0;
+ 
+        while (num_selected < num_annotate_annotator) {
+            real u = uniform_rng(0, 1);
+            int candidate = 1 + to_int(floor(u * J));
+            if (candidate > J) candidate = J;
+ 
+            int already_selected = 0;
+            for (s in 1:num_selected) {
+                if (selected_annotators[s] == candidate) {
+                    already_selected = 1;
+                    break;
+                }
+            }
+            if (already_selected == 0) {
+                num_selected += 1;
+                selected_annotators[num_selected] = candidate;
+            }
+        }
+ 
+        for (i in 1:I) {
+            for (s in 1:num_annotate_annotator) {
+                int j   = selected_annotators[s];
+                int idx = (i-1)*J + j;
                 rating_observed[idx, k] = 1;
                 real noisy_score = base_scores[idx, k] + normal_rng(0, sigma_measurement);
                 real pref_norm_sq = dot_self(annotator_preferences[idx]);
@@ -205,9 +245,9 @@ generated quantities {
             }
         }
     }
-
+ 
     // ===== COMPUTE POSTERIOR RATING PROBABILITIES (split by annotator group) =====
-
+ 
     // Training annotators: 1..J_train
     for (i in 1:I) {
         for (j in 1:J_train) {
@@ -241,7 +281,7 @@ generated quantities {
             }
         }
     }
-
+ 
     // Validation annotators: J_train+1..J_train+J_val
     for (i in 1:I) {
         for (jv in 1:J_val) {
@@ -276,7 +316,7 @@ generated quantities {
             }
         }
     }
-
+ 
     // Test annotators: J_train+J_val+1..J
     for (i in 1:I) {
         for (jt in 1:J_test) {
@@ -311,7 +351,7 @@ generated quantities {
             }
         }
     }
-
+ 
     // ===== DEBUG =====
     if (DEBUG_PRINT == 1) {
         print("kappa=", kappa);
@@ -319,7 +359,7 @@ generated quantities {
         print("rating_cumprobs[1]=", rating_cumprobs[1]);
         print("rating_thresholds_z[1]=", rating_thresholds_z[1]);
     }
-
+ 
     // ===== COMPUTE COUNTS =====
     num_train_observed_ratings = 0;
     num_val_observed_ratings = 0;

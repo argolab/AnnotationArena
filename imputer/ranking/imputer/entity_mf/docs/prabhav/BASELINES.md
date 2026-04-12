@@ -67,11 +67,46 @@ so Factor STAN should be a harder target for neural models (and more rewarding w
 
 ---
 
+## Baseline 3: Dawid-Skene Model
+
+**STAN file:** `STAN/stan_models/dawid_skene_model.stan`
+
+**Applies to:** `DawidSkene_225_25_9_ItemTest` (SPARSE)
+
+**Generative assumption:**
+```
+z_ijk = V_ij · e_k                            (dot-product score)
+c_ijk = hard_bin(z_ijk)                       (ordinal probit → discrete class)
+r_ijk ~ Categorical(confusion_matrix[c_ijk])  (single shared C×C confusion matrix)
+```
+
+**Inference:**
+HMC recovers posteriors over item embeddings, annotator preferences, cut-points, and the shared
+confusion matrix. A fixed `bin_smoothing=0.05` constant is used instead of `sigma_measurement`
+for HMC gradient stability. 4 chains, 300 warmup, 500 sampling, adapt_delta=0.85.
+
+**Oracle floor:** H(confusion row) ≈ 0.808 nats for alpha_confusion=15.0, C=5.
+A model stuck at ~1.4 nats (≈ log(4)) is performing at random-over-4-classes level (no signal).
+A model at oracle floor is at the information-theoretic minimum under this generative model.
+
+**Scripts:** `scripts/stan/SPARSE/DawidSkene_225_25_9_ItemTest_Stan/run_size{10,30,50,75,100,150,175,200}.sh`
+
+Each script runs inference then immediately calls `evaluate_predictions.py`.
+Results land in `RESULTS/STAN/SPARSE/DawidSkene_225_25_9_ItemTest_${SIZE}_DS_eval/`.
+
+---
+
 ## Running Inference
 
 ```bash
 # From imputer/ranking
-bash scripts/STAN/run_inference.sh
+
+# Normal/Factor models (original ItemTest / AnnotatorTest families)
+bash scripts/stan/run_inference.sh
+
+# Dawid-Skene (SPARSE ItemTest) — one script per split size
+bash scripts/stan/SPARSE/DawidSkene_225_25_9_ItemTest_Stan/run_size200.sh
+# ... or submit individual sizes as SLURM jobs
 ```
 
 This script runs STAN MCMC on a specified data bundle and writes posterior predictive

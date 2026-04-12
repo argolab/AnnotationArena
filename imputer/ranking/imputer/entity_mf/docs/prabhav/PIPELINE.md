@@ -8,14 +8,14 @@ All paths are relative to `imputer/ranking/` (the working directory for all comm
 
 ```
 scripts/
-├── STAN/                         # Synthetic data experiments
+├── stan/                         # Synthetic data experiments (lowercase)
 │   ├── generate_data_itemtest.sh
 │   ├── generate_data_annotatortest.sh
 │   ├── stan_data_command_marformer.sh       # Normal ItemTest generation
 │   ├── stan_data_command_marformer_hard.sh  # Factor ItemTest generation
 │   ├── stan_data_command_marformer_annotator.sh  # AnnotatorTest generation
 │   ├── data_split.sh
-│   ├── run_inference.sh                     # STAN baseline inference
+│   ├── run_inference.sh                     # STAN baseline inference (Normal/Factor)
 │   ├── MARFORMER/                           # Non-transductive training
 │   │   ├── Factor_250_20_9_AnnotatorTest/
 │   │   │   └── <split>/run_train.sh
@@ -31,7 +31,32 @@ scripts/
 │   │   │   └── <split>/run_train.sh  (+ run_train_transductive_mask*.sh)
 │   │   └── Normal_250_20_9_AnnotatorTest/
 │   │       └── <split>/run_train.sh  (+ VALTEST_MASK/ subfolder)
-│   └── HP_SEARCH/                           # Hyperparameter search scripts
+│   ├── HP_SEARCH/                           # Hyperparameter search scripts
+│   └── SPARSE/                              # SPARSE ItemTest experiments
+│       ├── Factor_225_25_9_ItemTest_Cluster/     # Factor SPARSE Marformer (SLURM)
+│       │   ├── run_small_sizes.sh           # sizes 10,20,30,50; MASKING_RATE=0.50
+│       │   ├── run_size100.sh
+│       │   └── run_size175.sh
+│       ├── Factor_225_25_9_ItemTest_Local/       # Factor SPARSE local variants
+│       ├── Factor_225_25_9_ItemTest_Size_175/    # Factor size-175 specific
+│       ├── Normal_225_25_9_ItemTest_Size_175/    # Normal SPARSE size-175
+│       ├── DawidSkene_225_25_9_ItemTest/         # DS Marformer training (SLURM + local)
+│       │   ├── generate_data.sh             # generates K_train=200 then subsets
+│       │   ├── run_small_sizes.sh           # sizes 10,30,50,75; MASKING_RATE=0.15
+│       │   ├── run_size100.sh
+│       │   ├── run_size175.sh
+│       │   ├── run_size200.sh
+│       │   ├── run_size10_local.sh          # local CPU test
+│       │   └── run_eval_test.sh             # local eval on test split (all sizes)
+│       └── DawidSkene_225_25_9_ItemTest_Stan/    # DS Stan HMC inference (SLURM)
+│           ├── run_size10.sh
+│           ├── run_size30.sh
+│           ├── run_size50.sh
+│           ├── run_size75.sh
+│           ├── run_size100.sh
+│           ├── run_size150.sh
+│           ├── run_size175.sh
+│           └── run_size200.sh
 │
 ├── LLM_RUBRIC/                   # LLMRubric real data
 │   ├── MARFORMER/TRAIN/
@@ -61,13 +86,17 @@ scripts/
 
 ```bash
 # Generate Factor + Normal ItemTest bundles for all K_test splits
-bash scripts/STAN/generate_data_itemtest.sh
+bash scripts/stan/generate_data_itemtest.sh
 
 # Generate Factor + Normal AnnotatorTest bundles for all J_test splits
-bash scripts/STAN/generate_data_annotatortest.sh
+bash scripts/stan/generate_data_annotatortest.sh
+
+# Generate Dawid-Skene SPARSE ItemTest (K_train=200 then subsets to 175/150/100/75/50/30/10)
+bash scripts/stan/SPARSE/DawidSkene_225_25_9_ItemTest/generate_data.sh
 ```
 
-Outputs land in `DATA/STAN/<family>/<split>/data_bundle.json`.
+Outputs land in `DATA/STAN/<family>/<split>/data_bundle.json` or
+`DATA/STAN/SPARSE/<family>/<split>/data_bundle.json` for SPARSE families.
 
 ### Real Data
 
@@ -103,6 +132,7 @@ python -u -m imputer.entity_mf.train \
 | `MARFORMER_HARD` | Transductive + VTM | STAN ItemTest | `--transductive-learning --transductive-valtest-mask --use-graph-mask` |
 | `MARFORMER_ANNOT_DROP` | Transductive + VTM | STAN AnnotatorTest | same + annotator dropout variants |
 | `MARFORMER_HARD_MASK` | Transductive + VTM | LLMRubric, SummEval | same as MARFORMER_HARD |
+| `SPARSE/*_CLUSTER_NOITEMDEV_TRANS` | Transductive (no VTM) | SPARSE ItemTest (Factor, Normal, DawidSkene) | `--transductive-learning` only; Factor/Normal: rate=0.50, DawidSkene: rate=0.15 |
 
 ### SLURM (Cluster)
 
@@ -174,12 +204,22 @@ RESULTS/<family>/STAN/<run_name>/
 ## Step 5: Evaluation and Inference
 
 ```bash
-# Run STAN inference baseline on a bundle
-bash scripts/STAN/run_inference.sh
+# Run STAN inference baseline on a bundle (Normal/Factor)
+bash scripts/stan/run_inference.sh
 
 # Evaluate STAN predictions vs ground truth
 python STAN/stan_code/scripts/evaluate_predictions.py --bundle DATA/STAN/...
+
+# Dawid-Skene STAN HMC inference + eval (one script per size)
+bash scripts/stan/SPARSE/DawidSkene_225_25_9_ItemTest_Stan/run_size200.sh
+
+# Evaluate Marformer test-split predictions (local, all DawidSkene sizes)
+bash scripts/stan/SPARSE/DawidSkene_225_25_9_ItemTest/run_eval_test.sh
 ```
+
+The `run_eval_test.sh` script iterates over all 8 sizes, calls
+`python -m imputer.entity_mf.test --run-dir ... --checkpoint best --device cpu`,
+and saves results to `RESULTS/MARFORMER/STAN/SPARSE/<RUN_NAME>/TEST_RESULTS/best.json`.
 
 ---
 
