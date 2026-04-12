@@ -86,7 +86,6 @@ class EntityMarformerLightningModule(pl.LightningModule):
         run_dir: Path | None = None,
         transductive: bool = False,
         transductive_valtest_mask: bool = False,
-        finetune_test_only: bool = False,
         mask_augmentations: int = 5,
         masked_loss_weight: float = 15.0,
         observed_loss_weight: float = 1.0,
@@ -105,7 +104,6 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.run_dir = run_dir
         self.transductive = bool(transductive)
         self.transductive_valtest_mask = bool(transductive_valtest_mask)
-        self.finetune_test_only = bool(finetune_test_only)
         self.mask_augmentations = mask_augmentations
         self.masked_loss_weight = masked_loss_weight
         self.observed_loss_weight = observed_loss_weight
@@ -196,13 +194,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
             test_missing is held out entirely — not in the training graph.
         Graph topology is identical every step, so caching applies here too.
         """
-        if self.finetune_test_only:
-            # Phase-2 fine-tuning: only test_observed is maskable.
-            # test_missing is included as no-loss context (mirrors inference graph).
-            maskable_sources = list(self.test_observed)
-            fixed_sources    = []
-            missing_sources  = list(self.test_missing)
-        elif self.transductive:
+        if self.transductive:
             if self.transductive_valtest_mask:
                 # Mask only val/test observed; train observed is always visible as context.
                 # MASKING_RATE controls what fraction of val+test observed is masked each step,
@@ -663,19 +655,6 @@ def main():
              "observed masked each step.",
     )
     parser.add_argument(
-        "--finetune-test-only",
-        action="store_true",
-        help="Phase-2 fine-tuning: only test_observed is maskable (no train/val items). "
-             "Use with --finetune-from-checkpoint to continue from a Phase-1 checkpoint.",
-    )
-    parser.add_argument(
-        "--finetune-from-checkpoint",
-        type=str,
-        default=None,
-        help="Path to a .ckpt file. Loads model weights only (not optimizer/epoch state) "
-             "so training restarts from epoch 0 with the new CLI config.",
-    )
-    parser.add_argument(
         "--llm-annotator-id",
         type=int,
         default=None,
@@ -976,8 +955,6 @@ def main():
             "masking_rate": args.masking_rate,
             "transductive_learning": bool(args.transductive_learning),
             "transductive_valtest_mask": bool(args.transductive_valtest_mask),
-            "finetune_test_only": bool(args.finetune_test_only),
-            "finetune_from_checkpoint": args.finetune_from_checkpoint,
             "llm_annotator_id": args.llm_annotator_id,
             "human_observed_rate": args.human_observed_rate,
             "always_observed_ids": args.always_observed_ids,
@@ -1017,18 +994,12 @@ def main():
         run_dir=run_dir,
         transductive=bool(args.transductive_learning),
         transductive_valtest_mask=bool(args.transductive_valtest_mask),
-        finetune_test_only=bool(args.finetune_test_only),
         mask_augmentations=args.mask_augmentations,
         masked_loss_weight=args.masked_loss_weight,
         observed_loss_weight=args.observed_loss_weight,
         lr_schedule=args.lr_schedule,
         lr_min=args.lr_min,
     )
-
-    if args.finetune_from_checkpoint:
-        ckpt = torch.load(args.finetune_from_checkpoint, map_location="cpu", weights_only=False)
-        lightning_module.load_state_dict(ckpt["state_dict"], strict=True)
-        print(f"[Fine-tune] Loaded weights from {args.finetune_from_checkpoint}")
 
     accelerator = "gpu" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
     logger = TensorBoardLogger(save_dir=str(run_dir), name="lightning_logs")
