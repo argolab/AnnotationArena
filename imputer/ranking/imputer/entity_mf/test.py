@@ -137,11 +137,16 @@ def _find_checkpoint(ckpt_dir: Path, which: str) -> Path:
         if not p.exists():
             raise FileNotFoundError(f"last.ckpt not found in {ckpt_dir}")
         return p
-    # best
-    candidates = sorted(ckpt_dir.glob("best-*.ckpt"))
-    if not candidates:
-        raise FileNotFoundError(f"No best-*.ckpt found in {ckpt_dir}")
-    return candidates[0]
+    if which == "best":
+        candidates = sorted(ckpt_dir.glob("best-*.ckpt"))
+        if not candidates:
+            raise FileNotFoundError(f"No best-*.ckpt found in {ckpt_dir}")
+        return candidates[0]
+    # Direct filename (e.g. "periodic-epoch=0024.ckpt")
+    p = ckpt_dir / which
+    if not p.exists():
+        raise FileNotFoundError(f"{which} not found in {ckpt_dir}")
+    return p
 
 
 def _load_checkpoint(model: EntityMarformer, ckpt_path: Path, device: torch.device) -> None:
@@ -241,8 +246,8 @@ def main() -> None:
         help="Path to run directory (contains train_config.json and checkpoints/).",
     )
     parser.add_argument(
-        "--checkpoint", default="both", choices=["best", "last", "both"],
-        help="Checkpoint(s) to evaluate (default: both).",
+        "--checkpoint", default="both", choices=["best", "last", "both", "all"],
+        help="Checkpoint(s) to evaluate (default: both). 'all' runs every ckpt except last.",
     )
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
@@ -260,7 +265,15 @@ def main() -> None:
     model, test_all, train_cfg = _reconstruct(run_dir)
     print(f"Test vars: {len(test_all)}")
 
-    which_list = ["best", "last"] if args.checkpoint == "both" else [args.checkpoint]
+    if args.checkpoint == "all":
+        ckpt_dir = run_dir / "checkpoints"
+        best = sorted(ckpt_dir.glob("best-*.ckpt"))
+        periodic = sorted(ckpt_dir.glob("periodic-*.ckpt"))
+        which_list = [p.name for p in best] + [p.name for p in periodic]
+    elif args.checkpoint == "both":
+        which_list = ["best", "last"]
+    else:
+        which_list = [args.checkpoint]
     for which in which_list:
         print(f"\n--- {which} ---")
         try:
@@ -272,7 +285,8 @@ def main() -> None:
                 train_cfg=train_cfg,
                 device=device,
             )
-            out_path = out_dir / f"{which}.json"
+            stem = Path(which).stem if which.endswith(".ckpt") else which
+            out_path = out_dir / f"{stem}.json"
             with open(out_path, "w") as f:
                 json.dump(result_dict, f, indent=2, default=_json_default)
 
