@@ -12,6 +12,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=18GB
 #SBATCH --partition=cpu
+#SBATCH --time=20:00:00
 
 SCRIPT_START=$SECONDS
 

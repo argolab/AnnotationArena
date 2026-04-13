@@ -12,6 +12,7 @@
 #SBATCH --cpus-per-task=8
 #SBATCH --mem-per-cpu=18GB
 #SBATCH --partition=cpu
+#SBATCH --time=06:00:00
 
 SCRIPT_START=$SECONDS
 
@@ -47,14 +48,14 @@ python STAN/stan_code/scripts/generate_data.py \
     --J                     25                                 \
     --C                     5                                  \
     --D                     8                                  \
-    --kappa                 15.0                               \
-    --sigma-measurement     0.2                                \
+    --kappa                 10.0                               \
+    --sigma-measurement     0.1                                \
     --mcar-missing-rate     0.5                                \
     --observation-protocol  mcar                               \
     --seed                  42                                 \
     --stan-arg              T=3                                \
-    --stan-arg              sigma_u=1.0                        \
-    --stan-arg              sigma_v=1.0                        \
+    --stan-arg              sigma_u=0.5                        \
+    --stan-arg              sigma_v=0.5                        \
     --stan-arg              sigma_uit=0.1                      \
     --stan-arg              use_dawid_skene_noise=0            \
     --stan-arg              derive_thresholds_from_annotator=0 \

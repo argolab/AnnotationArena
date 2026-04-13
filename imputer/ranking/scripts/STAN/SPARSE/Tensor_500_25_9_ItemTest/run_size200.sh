@@ -12,6 +12,7 @@
 #SBATCH --gpus=1
 #SBATCH --partition=a100
 #SBATCH --exclude=c001
+#SBATCH --time=08:00:00
 
 source /home/psingh54/.bashrc
 module load anaconda3/2024.02-1
