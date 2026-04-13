@@ -1,0 +1,895 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+"""
+Toy matrix-completion experiment for EntityMarformer (multi-matrix regime).
+
+Task:
+- Two latent entity sets per graph: rows (N) and cols (M), each with latent dim D.
+- Ground-truth scalar for matrix entry (i, j): y_ij = <U_i, V_j>.
+- A graph contains all N*M entry variables (no permanently missing entries).
+- A fraction (mask_rate) is self-masked via token status for diagnostics.
+- Training objective is MSE over all entries (observed + masked).
+- Dataset is multi-matrix: each sample has freshly drawn latent (U, V).
+
+Run from repo root:
+  cd imputer/ranking
+  PYTHONPATH=. python toy_scripts/toy_matrix_completion.py
+
+EntityMarformer defaults mostly match scripts/STAN/MARFORMER/.../run_train.sh (shared relational
+bias, scale_shared_rel, pointer on, kaiming type init, dropout 0.1, Adam weight decay), except
+use_rel_value defaults True here for the toy (STAN run_train uses false); pass --no-rel-value to
+match STAN. Override other behavior with CLI flags. Real-data-only train flags (e.g. --llm-input-dist)
+are not used here.
+
+Input design: observed mc_entry tokens receive their actual target value as input_value so the
+attention mechanism can propagate real matrix values through row/col entity tokens to predict
+masked entries in-context (proper matrix-completion formulation).  Masked entries receive 0.
+Without this, every entry looks identical to its row/col neighbours and the model collapses to
+a global constant prediction — especially under --resample-train-each-step where deviation tables
+never converge.  entry_input_tag_scale is still applied to masked entries as a tiny positional
+bias to break symmetry between masked cells in the initial param stream.
+
+Replot from saved curves without retraining:
+  PYTHONPATH=. python toy_scripts/toy_matrix_completion.py --replot OUTPUT/toy_matrix_completion_curves/curves.json
+"""
+
+import argparse
+import json
+import random
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Sequence, Tuple
+
+import matplotlib
+
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt  # noqa: E402
+import numpy as np
+import torch
+import torch.nn.functional as F
+from tqdm.auto import tqdm
+
+from imputer.entity_mf.config import EntityMarformerConfig
+from imputer.entity_mf.data import EntityGraph, Relationship, Token
+from imputer.entity_mf.model import EntityMarformer
+from imputer.entity_mf.synthetic.types import RegressionSlices, SyntheticRegressionType
+from imputer.entity_mf.types import EntityType, NullEntityType, VariationConfig
+
+
+# -----------------------------------------------------------------------------
+# Defaults (fast-ish sanity settings)
+# -----------------------------------------------------------------------------
+SEED = 42
+NUM_STEPS = 600
+NUM_TRAIN_GRAPHS = 80
+NUM_TEST_GRAPHS = 20
+
+N_ROWS = 24
+N_COLS = 28
+LATENT_DIM = 6
+MASK_RATE = 0.15  # self-masked fraction (no permanently missing entries)
+
+# Training/model knobs (defaults aligned with scripts/STAN/MARFORMER/.../run_train.sh EntityMarformer)
+EMBEDDING_DIM = 16
+NUM_LAYERS = 2
+ATTN_HEADS = 2
+DROPOUT = 0.1
+D_FF = 64
+NUM_FFN_LAYERS = 1
+LR = 3e-4
+WEIGHT_DECAY = 0.01
+# Drop row/col deviation embeddings during training (analogous to item deviation dropout on real data).
+VARIATION_DROPOUT_RATE = 0.0
+TYPE_EMBEDDING_INIT = "kaiming"
+USE_PER_HEAD_REL = False
+USE_POINTER = True
+USE_REL_VALUE = True
+USE_ADDONE_ATTN = False
+USE_DEVIATION_NORM = False
+SCALE_SHARED_REL = True
+USE_GRAPH_MASK = False
+USE_LEARNED_EMBEDDING = False
+# Unique per (i,j) bias in mc_entry param stream so tokens are not identical at t=0 (see docstring).
+ENTRY_INPUT_TAG_SCALE = 1e-3
+# Extra relational channels: mc_entry↔mc_entry when same row / same column (pointer-like shortcuts).
+MC_ENTRY_GRID_POINTER_RELS = False
+
+OUT_DIR = Path("OUTPUT/toy_matrix_completion_curves")
+_LOG_Y_FLOOR = 1e-12
+
+
+@dataclass
+class MatrixSample:
+    graph: EntityGraph
+    # Entry metadata aligned with mc_entry token order.
+    pairs: List[Tuple[int, int]]
+    targets: List[float]
+    masked_token_indices: List[int]
+    masked_pairs: List[Tuple[int, int]]
+
+
+def _set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+
+
+def _build_types(
+    n_rows: int,
+    n_cols: int,
+    *,
+    variation_dropout_rate: float = 0.0,
+) -> Dict[str, EntityType]:
+    # row/col entities: no direct target, but have learnable deviation embeddings.
+    row_type = NullEntityType(
+        name="row",
+        variation=VariationConfig(
+            enabled=True,
+            num_entities=n_rows,
+            reg_weight=0.0,
+            dropout_rate=variation_dropout_rate,
+        ),
+    )
+    col_type = NullEntityType(
+        name="col",
+        variation=VariationConfig(
+            enabled=True,
+            num_entities=n_cols,
+            reg_weight=0.0,
+            dropout_rate=variation_dropout_rate,
+        ),
+    )
+    # matrix-entry variable: scalar input (default 0), scalar target y_ij.
+    entry_type = SyntheticRegressionType(
+        name="mc_entry",
+        slices=RegressionSlices(input_dim=1, output_dim=1),
+        has_target=True,
+        variation=VariationConfig(enabled=False, num_entities=0, reg_weight=0.0),
+    )
+    return {"row": row_type, "col": col_type, "mc_entry": entry_type}
+
+
+def _build_relationships(*, mc_entry_grid_pointer_rels: bool = False) -> List[Relationship]:
+    rels = [
+        Relationship(name="entry_to_row", source_type="mc_entry", target_type="row", inverse="row_to_entry"),
+        Relationship(name="row_to_entry", source_type="row", target_type="mc_entry", inverse="entry_to_row"),
+        Relationship(name="entry_to_col", source_type="mc_entry", target_type="col", inverse="col_to_entry"),
+        Relationship(name="col_to_entry", source_type="col", target_type="mc_entry", inverse="entry_to_col"),
+    ]
+    if mc_entry_grid_pointer_rels:
+        rels.extend(
+            [
+                Relationship(
+                    name="entry_same_row",
+                    source_type="mc_entry",
+                    target_type="mc_entry",
+                    inverse=None,
+                ),
+                Relationship(
+                    name="entry_same_col",
+                    source_type="mc_entry",
+                    target_type="mc_entry",
+                    inverse=None,
+                ),
+            ]
+        )
+    return rels
+
+
+def _sample_masked_pairs(
+    rng: random.Random,
+    n_rows: int,
+    n_cols: int,
+    mask_rate: float,
+) -> List[Tuple[int, int]]:
+    if not (0.0 < mask_rate < 1.0):
+        raise ValueError(f"mask_rate must be in (0, 1), got {mask_rate}")
+    all_pairs = [(i, j) for i in range(n_rows) for j in range(n_cols)]
+    rng.shuffle(all_pairs)
+    total = len(all_pairs)
+    n_masked = int(round(mask_rate * total))
+    n_masked = max(1, min(total - 1, n_masked))
+    return all_pairs[:n_masked]
+
+
+def _build_graph_for_pairs(
+    *,
+    types: Dict[str, EntityType],
+    relationships: List[Relationship],
+    y: np.ndarray,
+    pairs: Sequence[Tuple[int, int]],
+    masked_pairs_set: set[Tuple[int, int]],
+    entry_input_tag_scale: float = 0.0,
+    mc_entry_grid_pointer_rels: bool = False,
+) -> Tuple[EntityGraph, List[Tuple[int, int]], List[float], List[int], List[Tuple[int, int]]]:
+    n_rows, n_cols = y.shape
+    tokens: List[Token] = []
+    edges: List[Tuple[int, int, str]] = []
+
+    # Entity tokens first.
+    row_start = 0
+    for r in range(n_rows):
+        tokens.append(Token(type_name="row", entity_id=r, status=2, raw_data=None))
+    col_start = len(tokens)
+    for c in range(n_cols):
+        tokens.append(Token(type_name="col", entity_id=c, status=2, raw_data=None))
+    entry_start = len(tokens)
+
+    # Entry variable tokens + edges to exactly one row and one col.
+    pair_list: List[Tuple[int, int]] = []
+    target_list: List[float] = []
+    masked_token_indices: List[int] = []
+    masked_pairs: List[Tuple[int, int]] = []
+    for (i, j) in pairs:
+        tgt = float(y[i, j])
+        is_masked = (i, j) in masked_pairs_set
+        # Observed entries carry their actual value in the input param slot so the attention
+        # mechanism can propagate it to row/col tokens and from there to masked entries.
+        # Masked entries receive 0 — the model must predict their value from context.
+        # Without this, every entry looks identical to its neighbors, row/col tokens cannot
+        # build a factored representation, and all predictions collapse to a global constant.
+        if is_masked:
+            input_val = entry_input_tag_scale * float(i * n_cols + j) if entry_input_tag_scale > 0.0 else 0.0
+        else:
+            input_val = tgt
+        raw = {
+            "input_value": [input_val],
+            "target_value": [tgt],
+        }
+        entry_idx = len(tokens)
+        status = 1 if is_masked else 2
+        tokens.append(Token(type_name="mc_entry", entity_id=-1, status=status, raw_data=raw))
+        pair_list.append((i, j))
+        target_list.append(tgt)
+        if is_masked:
+            masked_token_indices.append(entry_idx)
+            masked_pairs.append((i, j))
+
+        row_token_idx = row_start + i
+        col_token_idx = col_start + j
+        edges.append((entry_idx, row_token_idx, "entry_to_row"))
+        edges.append((row_token_idx, entry_idx, "row_to_entry"))
+        edges.append((entry_idx, col_token_idx, "entry_to_col"))
+        edges.append((col_token_idx, entry_idx, "col_to_entry"))
+
+    if mc_entry_grid_pointer_rels:
+        rel_names = {r.name for r in relationships}
+        if "entry_same_row" not in rel_names or "entry_same_col" not in rel_names:
+            raise ValueError(
+                "mc_entry_grid_pointer_rels=True requires relationships from "
+                "_build_relationships(mc_entry_grid_pointer_rels=True)."
+            )
+        # Bidirectional edges: all distinct mc_entry pairs sharing a row (resp. column).
+        entry_slots: List[Tuple[int, int, int]] = []
+        pair_ord = 0
+        for (i, j) in pairs:
+            entry_slots.append((entry_start + pair_ord, i, j))
+            pair_ord += 1
+        for a in range(len(entry_slots)):
+            idx_a, ia, ja = entry_slots[a]
+            for b in range(a + 1, len(entry_slots)):
+                idx_b, ib, jb = entry_slots[b]
+                if ia == ib and ja != jb:
+                    edges.append((idx_a, idx_b, "entry_same_row"))
+                    edges.append((idx_b, idx_a, "entry_same_row"))
+                if ja == jb and ia != ib:
+                    edges.append((idx_a, idx_b, "entry_same_col"))
+                    edges.append((idx_b, idx_a, "entry_same_col"))
+
+    graph = EntityGraph(types=types, relationships=relationships, tokens=tokens, edges=edges)
+
+    # Sanity: each entry token has exactly one row edge and one col edge.
+    row_deg = {}
+    col_deg = {}
+    for src, _tgt, rel in edges:
+        if src >= entry_start:
+            if rel == "entry_to_row":
+                row_deg[src] = row_deg.get(src, 0) + 1
+            if rel == "entry_to_col":
+                col_deg[src] = col_deg.get(src, 0) + 1
+    num_entries = len(tokens) - entry_start
+    assert num_entries == len(pairs)
+    for k in range(entry_start, entry_start + num_entries):
+        assert row_deg.get(k, 0) == 1, "Each mc_entry must connect to exactly one row."
+        assert col_deg.get(k, 0) == 1, "Each mc_entry must connect to exactly one col."
+
+    return graph, pair_list, target_list, masked_token_indices, masked_pairs
+
+
+def build_matrix_sample(
+    *,
+    device: torch.device,
+    rng: random.Random,
+    n_rows: int,
+    n_cols: int,
+    latent_dim: int,
+    mask_rate: float,
+    types: Dict[str, EntityType],
+    relationships: List[Relationship],
+    entry_input_tag_scale: float = ENTRY_INPUT_TAG_SCALE,
+    mc_entry_grid_pointer_rels: bool = MC_ENTRY_GRID_POINTER_RELS,
+) -> MatrixSample:
+    _ = device  # keep signature aligned with other toy builders
+    U = np.random.normal(loc=0.0, scale=1.0, size=(n_rows, latent_dim))
+    V = np.random.normal(loc=0.0, scale=1.0, size=(n_cols, latent_dim))
+    y = U @ V.T  # [N, M]
+
+    all_pairs = [(i, j) for i in range(n_rows) for j in range(n_cols)]
+    masked_pairs = _sample_masked_pairs(
+        rng=rng,
+        n_rows=n_rows,
+        n_cols=n_cols,
+        mask_rate=mask_rate,
+    )
+    masked_pairs_set = set(masked_pairs)
+    graph, pairs, targets, masked_token_indices, masked_pairs_out = _build_graph_for_pairs(
+        types=types,
+        relationships=relationships,
+        y=y,
+        pairs=all_pairs,
+        masked_pairs_set=masked_pairs_set,
+        entry_input_tag_scale=entry_input_tag_scale,
+        mc_entry_grid_pointer_rels=mc_entry_grid_pointer_rels,
+    )
+
+    return MatrixSample(
+        graph=graph,
+        pairs=pairs,
+        targets=targets,
+        masked_token_indices=masked_token_indices,
+        masked_pairs=masked_pairs_out,
+    )
+
+
+def _compute_entry_mse(
+    model: EntityMarformer,
+    graph: EntityGraph,
+    device: torch.device,
+    selected_token_indices: set[int] | None = None,
+) -> torch.Tensor:
+    params = model(graph, device=device)  # [1, L, P]
+    entry_type = graph.types["mc_entry"]
+    assert isinstance(entry_type, SyntheticRegressionType)
+    out_slice = entry_type.slices.output_slice()
+
+    preds: List[torch.Tensor] = []
+    tgts: List[torch.Tensor] = []
+    for idx, tok in enumerate(graph.tokens):
+        if tok.type_name != "mc_entry":
+            continue
+        if selected_token_indices is not None and idx not in selected_token_indices:
+            continue
+        raw = tok.raw_data or {}
+        t = raw.get("target_value", None)
+        if t is None:
+            continue
+        p = params[0, idx, out_slice]
+        preds.append(p)
+        tgts.append(torch.tensor(t, dtype=p.dtype, device=device))
+
+    if not preds:
+        return torch.zeros((), device=device)
+    pred = torch.stack(preds, dim=0)
+    tgt = torch.stack(tgts, dim=0)
+    return F.mse_loss(pred, tgt, reduction="mean")
+
+
+def _debug_Y_Yhat_arrays(
+    *,
+    dbg: MatrixSample,
+    params: torch.Tensor,
+    out_slice: slice,
+    n_rows: int,
+    n_cols: int,
+    masked_lookup: set[int],
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+    tgt = np.zeros((n_rows, n_cols), dtype=np.float64)
+    prd = np.zeros((n_rows, n_cols), dtype=np.float64)
+    mask_ij = np.zeros((n_rows, n_cols), dtype=bool)
+    pair_ord = 0
+    for idx, tok in enumerate(dbg.graph.tokens):
+        if tok.type_name != "mc_entry":
+            continue
+        i, j = dbg.pairs[pair_ord]
+        pair_ord += 1
+        prd[i, j] = float(params[0, idx, out_slice].item())
+        tgt[i, j] = float((tok.raw_data or {}).get("target_value", [0.0])[0])
+        if idx in masked_lookup:
+            mask_ij[i, j] = True
+    return tgt, prd, mask_ij
+
+
+def _debug_print_Y_vs_Yhat_block(
+    *,
+    label: str,
+    tgt: np.ndarray,
+    prd: np.ndarray,
+    mask_ij: np.ndarray,
+    n_rows: int,
+    n_cols: int,
+) -> None:
+    """Two decimals, tab-separated columns; target cells are 7.2f + '*' or space (8 chars)."""
+    print(f"  debug: {label} — Y (left) vs Ŷ (right), 2dp; * = masked status")
+    hdr_left = "\t".join(f"j={j}".rjust(8) for j in range(n_cols))
+    hdr_right = "\t".join(f"j={j}".rjust(8) for j in range(n_cols))
+    print(f"  \t{hdr_left}\t||\t{hdr_right}")
+    for i in range(n_rows):
+        left_cells = []
+        for j in range(n_cols):
+            s = f"{tgt[i, j]:>7.2f}"
+            s = s + ("*" if mask_ij[i, j] else " ")
+            left_cells.append(s)
+        right_cells = [f"{prd[i, j]:>8.2f}" for j in range(n_cols)]
+        print(f"  i={i}\t" + "\t".join(left_cells) + "\t||\t" + "\t".join(right_cells))
+
+
+def _compute_deviation_reg_loss(
+    model: EntityMarformer,
+    types: Dict[str, EntityType],
+    device: torch.device,
+) -> torch.Tensor:
+    reg_loss = torch.zeros((), device=device)
+    for type_name, t in types.items():
+        if not t.variation.enabled or t.variation.reg_weight <= 0.0:
+            continue
+        table = model.deviation_tables.get(type_name, None)
+        if table is None:
+            continue
+        reg_loss = reg_loss + t.variation.reg_weight * table.pow(2).sum()
+    return reg_loss
+
+
+def render_plots_from_results(results: Dict[str, Any], out_dir: Path, *, log_y: bool = True) -> None:
+    out_dir.mkdir(parents=True, exist_ok=True)
+    steps = int(results["num_steps"])
+    x = np.arange(1, steps + 1)
+
+    tr = np.asarray(results["train_mse"], dtype=np.float64)
+    te = np.asarray(results["test_mse"], dtype=np.float64)
+    if log_y:
+        tr = np.maximum(tr, _LOG_Y_FLOOR)
+        te = np.maximum(te, _LOG_Y_FLOOR)
+
+    fig_tr, ax_tr = plt.subplots(figsize=(8.6, 5.2))
+    fig_te, ax_te = plt.subplots(figsize=(8.6, 5.2))
+
+    ax_tr.plot(x, tr, color="#1f77b4", linewidth=2.0)
+    ax_te.plot(x, te, color="#d62728", linewidth=2.0)
+
+    for ax, title, ylabel, fname in (
+        (ax_tr, "Train MSE (matrix completion)", "train MSE", "matrix_completion_train_mse.png"),
+        (ax_te, "Test MSE (matrix completion)", "test MSE", "matrix_completion_test_mse.png"),
+    ):
+        if log_y:
+            ax.set_yscale("log")
+            ylabel = f"{ylabel} (log scale)"
+        ax.set_xlabel("step")
+        ax.set_ylabel(ylabel)
+        ax.set_title(title + (" - log y" if log_y else ""))
+        ax.grid(True, which="both", alpha=0.3)
+        fig = ax.figure
+        fig.tight_layout()
+        fig.savefig(out_dir / fname, dpi=160)
+        plt.close(fig)
+
+
+def run_matrix_completion_experiment(
+    *,
+    out_dir: Path = OUT_DIR,
+    seed: int = SEED,
+    num_steps: int = NUM_STEPS,
+    num_train_graphs: int = NUM_TRAIN_GRAPHS,
+    num_test_graphs: int = NUM_TEST_GRAPHS,
+    n_rows: int = N_ROWS,
+    n_cols: int = N_COLS,
+    latent_dim: int = LATENT_DIM,
+    mask_rate: float = MASK_RATE,
+    embedding_dim: int = EMBEDDING_DIM,
+    num_layers: int = NUM_LAYERS,
+    attn_heads: int = ATTN_HEADS,
+    d_ff: int = D_FF,
+    num_ffn_layers: int = NUM_FFN_LAYERS,
+    dropout: float = DROPOUT,
+    lr: float = LR,
+    weight_decay: float = WEIGHT_DECAY,
+    variation_dropout_rate: float = VARIATION_DROPOUT_RATE,
+    type_embedding_init: str = TYPE_EMBEDDING_INIT,
+    use_per_head_rel: bool = USE_PER_HEAD_REL,
+    use_pointer: bool = USE_POINTER,
+    use_rel_value: bool = USE_REL_VALUE,
+    use_addone_attn: bool = USE_ADDONE_ATTN,
+    use_deviation_norm: bool = USE_DEVIATION_NORM,
+    scale_shared_rel: bool = SCALE_SHARED_REL,
+    use_graph_mask: bool = USE_GRAPH_MASK,
+    use_learned_embedding: bool = USE_LEARNED_EMBEDDING,
+    entry_input_tag_scale: float = ENTRY_INPUT_TAG_SCALE,
+    mc_entry_grid_pointer_rels: bool = MC_ENTRY_GRID_POINTER_RELS,
+    resample_train_each_step: bool = False,
+    device: torch.device | None = None,
+) -> Dict[str, Any]:
+    if device is None:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    _set_seed(seed)
+    rng = random.Random(seed)
+
+    types = _build_types(
+        n_rows=n_rows,
+        n_cols=n_cols,
+        variation_dropout_rate=variation_dropout_rate,
+    )
+    relationships = _build_relationships(mc_entry_grid_pointer_rels=mc_entry_grid_pointer_rels)
+    num_rels = len(relationships)
+    head_dim = embedding_dim // attn_heads
+    if use_per_head_rel and head_dim <= num_rels:
+        raise ValueError(
+            f"With use_per_head_rel, head_dim ({head_dim}) must be > num_relationships ({num_rels}). "
+            "Increase embedding_dim, reduce attn_heads, disable --per-head-rel, or turn off "
+            "mc_entry grid pointer relationships."
+        )
+
+    def _make_train_samples() -> List[MatrixSample]:
+        samples: List[MatrixSample] = []
+        for _ in range(num_train_graphs):
+            samples.append(
+                build_matrix_sample(
+                    device=device,
+                    rng=rng,
+                    n_rows=n_rows,
+                    n_cols=n_cols,
+                    latent_dim=latent_dim,
+                    mask_rate=mask_rate,
+                    types=types,
+                    relationships=relationships,
+                    entry_input_tag_scale=entry_input_tag_scale,
+                    mc_entry_grid_pointer_rels=mc_entry_grid_pointer_rels,
+                )
+            )
+        return samples
+
+    train_samples: List[MatrixSample] = _make_train_samples()
+    test_samples: List[MatrixSample] = []
+    for _ in range(num_test_graphs):
+        test_samples.append(
+            build_matrix_sample(
+                device=device,
+                rng=rng,
+                n_rows=n_rows,
+                n_cols=n_cols,
+                latent_dim=latent_dim,
+                mask_rate=mask_rate,
+                types=types,
+                relationships=relationships,
+                entry_input_tag_scale=entry_input_tag_scale,
+                mc_entry_grid_pointer_rels=mc_entry_grid_pointer_rels,
+            )
+        )
+
+    # Build model from shared type/relationship schema.
+    ref_graph = train_samples[0].graph
+    cfg = EntityMarformerConfig(
+        embedding_dim=embedding_dim,
+        num_layers=num_layers,
+        attention_heads=attn_heads,
+        dropout=dropout,
+        d_ff=d_ff,
+        num_ffn_layers=num_ffn_layers,
+        use_per_head_rel=use_per_head_rel,
+        use_pointer=use_pointer,
+        use_rel_value=use_rel_value,
+        use_addone_attn=use_addone_attn,
+        type_embedding_init=type_embedding_init,
+        use_deviation_norm=use_deviation_norm,
+        scale_shared_rel=scale_shared_rel,
+        use_learned_embedding=use_learned_embedding,
+        use_graph_mask=use_graph_mask,
+    )
+    model = EntityMarformer(
+        config=cfg,
+        types=types,
+        num_relationships=ref_graph.num_relationships,
+    ).to(device)
+    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+
+    print(
+        "Starting EntityMarformer matrix-completion toy\n"
+        f"  N={n_rows}, M={n_cols}, D={latent_dim}, mask_rate={mask_rate}, no_missing=True\n"
+        f"  num_train_graphs={num_train_graphs}, num_test_graphs={num_test_graphs}, steps={num_steps}\n"
+        f"  model: emb={embedding_dim}, layers={num_layers}, heads={attn_heads}, d_ff={d_ff}, "
+        f"ffn_layers={num_ffn_layers}, dropout={dropout}, lr={lr}, weight_decay={weight_decay}\n"
+        f"  marformer: per_head_rel={use_per_head_rel}, pointer={use_pointer}, rel_value={use_rel_value}, "
+        f"addone={use_addone_attn}, deviation_norm={use_deviation_norm}, scale_shared_rel={scale_shared_rel}, "
+        f"graph_mask={use_graph_mask}, learned_emb={use_learned_embedding}, type_init={type_embedding_init!r}\n"
+        f"  row/col variation_dropout_rate={variation_dropout_rate}\n"
+        f"  entry_input_tag_scale (per-cell param-stream tag)={entry_input_tag_scale}\n"
+        f"  mc_entry_grid_pointer_rels={mc_entry_grid_pointer_rels} (R={num_rels})\n"
+        f"  resample_train_each_step={resample_train_each_step}\n"
+        f"  device={device}"
+    )
+
+    train_curve: List[float] = []
+    test_curve: List[float] = []
+
+    steps = tqdm(range(num_steps), total=num_steps, desc="train", leave=False)
+    for step in steps:
+        if resample_train_each_step:
+            train_samples = _make_train_samples()
+        model.train()
+        opt.zero_grad(set_to_none=True)
+
+        train_sum = torch.zeros((), device=device)
+        for sample in train_samples:
+            # Requested objective: train on all targets (observed + masked).
+            train_sum = train_sum + _compute_entry_mse(model, sample.graph, device=device)
+        train_mse = train_sum / float(len(train_samples))
+
+        reg_loss = _compute_deviation_reg_loss(model, types, device=device)
+        loss = train_mse + reg_loss
+        loss.backward()
+        opt.step()
+
+        model.eval()
+        with torch.no_grad():
+            test_sum = torch.zeros((), device=device)
+            test_all_sum = torch.zeros((), device=device)
+            for sample in test_samples:
+                masked_idx = set(sample.masked_token_indices)
+                test_sum = test_sum + _compute_entry_mse(
+                    model, sample.graph, device=device, selected_token_indices=masked_idx
+                )
+                test_all_sum = test_all_sum + _compute_entry_mse(model, sample.graph, device=device)
+            test_mse = test_sum / float(len(test_samples))
+            test_all_mse = test_all_sum / float(len(test_samples))
+
+        train_curve.append(float(train_mse.detach().cpu().item()))
+        test_curve.append(float(test_mse.detach().cpu().item()))
+
+        if (step + 1) % 20 == 0 or step == 0:
+            print(
+                f"step {step+1:4d} | "
+                f"train_mse={train_curve[-1]:.6f} "
+                f"test_masked_mse={test_curve[-1]:.6f} "
+                f"test_all_mse={float(test_all_mse.detach().cpu().item()):.6f} "
+                f"reg={float(reg_loss.detach().cpu().item()):.6f} "
+                f"total={float(loss.detach().cpu().item()):.6f}"
+            )
+
+        if (step + 1) % 100 == 0 or step == num_steps - 1:
+            dbg_te = test_samples[0]
+            entry_type = dbg_te.graph.types["mc_entry"]
+            assert isinstance(entry_type, SyntheticRegressionType)
+            out_slice = entry_type.slices.output_slice()
+            # Small enough to read: full grids (e.g. 4×4, 5×5), train + test, 2dp + tabs.
+            if n_rows * n_cols <= 25:
+                with torch.no_grad():
+                    p_tr = model(train_samples[0].graph, device=device)
+                    p_te = model(dbg_te.graph, device=device)
+                tr_tgt, tr_prd, tr_m = _debug_Y_Yhat_arrays(
+                    dbg=train_samples[0],
+                    params=p_tr,
+                    out_slice=out_slice,
+                    n_rows=n_rows,
+                    n_cols=n_cols,
+                    masked_lookup=set(train_samples[0].masked_token_indices),
+                )
+                te_tgt, te_prd, te_m = _debug_Y_Yhat_arrays(
+                    dbg=dbg_te,
+                    params=p_te,
+                    out_slice=out_slice,
+                    n_rows=n_rows,
+                    n_cols=n_cols,
+                    masked_lookup=set(dbg_te.masked_token_indices),
+                )
+                _debug_print_Y_vs_Yhat_block(
+                    label="first train graph (this step)",
+                    tgt=tr_tgt,
+                    prd=tr_prd,
+                    mask_ij=tr_m,
+                    n_rows=n_rows,
+                    n_cols=n_cols,
+                )
+                _debug_print_Y_vs_Yhat_block(
+                    label="first test graph",
+                    tgt=te_tgt,
+                    prd=te_prd,
+                    mask_ij=te_m,
+                    n_rows=n_rows,
+                    n_cols=n_cols,
+                )
+                print("  (* = masked token status in graph)")
+            else:
+                dbg = dbg_te
+                with torch.no_grad():
+                    params = model(dbg.graph, device=device)
+                masked_lookup = set(dbg.masked_token_indices)
+                masked_shown = 0
+                obs_shown = 0
+                pair_ord = 0
+                print("  debug sample preds vs tgts (masked subset):")
+                for idx, tok in enumerate(dbg.graph.tokens):
+                    if tok.type_name != "mc_entry":
+                        continue
+                    pair = dbg.pairs[pair_ord]
+                    pair_ord += 1
+                    pred = float(params[0, idx, out_slice].item())
+                    tgt = float((tok.raw_data or {}).get("target_value", [0.0])[0])
+                    if idx in masked_lookup:
+                        if masked_shown < 5:
+                            print(f"    pair={pair} pred={pred:.4f} tgt={tgt:.4f}")
+                            masked_shown += 1
+                    else:
+                        if obs_shown < 5:
+                            if obs_shown == 0:
+                                print("  debug sample preds vs tgts (observed subset):")
+                            print(f"    pair={pair} pred={pred:.4f} tgt={tgt:.4f}")
+                            obs_shown += 1
+                    if masked_shown >= 5 and obs_shown >= 5:
+                        break
+
+    results: Dict[str, Any] = {
+        "seed": seed,
+        "num_steps": num_steps,
+        "num_train_graphs": num_train_graphs,
+        "num_test_graphs": num_test_graphs,
+        "N": n_rows,
+        "M": n_cols,
+        "D": latent_dim,
+        "mask_rate": mask_rate,
+        "embedding_dim": embedding_dim,
+        "num_layers": num_layers,
+        "attn_heads": attn_heads,
+        "d_ff": d_ff,
+        "num_ffn_layers": num_ffn_layers,
+        "dropout": dropout,
+        "lr": lr,
+        "weight_decay": weight_decay,
+        "variation_dropout_rate": variation_dropout_rate,
+        "type_embedding_init": type_embedding_init,
+        "use_per_head_rel": use_per_head_rel,
+        "use_pointer": use_pointer,
+        "use_rel_value": use_rel_value,
+        "use_addone_attn": use_addone_attn,
+        "use_deviation_norm": use_deviation_norm,
+        "scale_shared_rel": scale_shared_rel,
+        "use_graph_mask": use_graph_mask,
+        "use_learned_embedding": use_learned_embedding,
+        "entry_input_tag_scale": entry_input_tag_scale,
+        "mc_entry_grid_pointer_rels": mc_entry_grid_pointer_rels,
+        "num_relationships": num_rels,
+        "resample_train_each_step": resample_train_each_step,
+        "train_mse": train_curve,
+        "test_mse": test_curve,
+    }
+    out_dir.mkdir(parents=True, exist_ok=True)
+    (out_dir / "curves.json").write_text(json.dumps(results, indent=2))
+    render_plots_from_results(results, out_dir, log_y=True)
+    print(f"Wrote curves and log-scale plots to {out_dir}")
+    return results
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Matrix-completion toy curves for EntityMarformer.")
+    parser.add_argument("--seed", type=int, default=SEED)
+    parser.add_argument("--steps", type=int, default=NUM_STEPS)
+    parser.add_argument("--num-train-graphs", type=int, default=NUM_TRAIN_GRAPHS)
+    parser.add_argument("--num-test-graphs", type=int, default=NUM_TEST_GRAPHS)
+    parser.add_argument("--N", type=int, default=N_ROWS)
+    parser.add_argument("--M", type=int, default=N_COLS)
+    parser.add_argument("--D", type=int, default=LATENT_DIM)
+    parser.add_argument("--mask-rate", type=float, default=MASK_RATE)
+    parser.add_argument("--embedding-dim", type=int, default=EMBEDDING_DIM)
+    parser.add_argument("--num-layers", type=int, default=NUM_LAYERS)
+    parser.add_argument("--attn-heads", type=int, default=ATTN_HEADS)
+    parser.add_argument("--d-ff", type=int, default=D_FF)
+    parser.add_argument("--num-ffn-layers", type=int, default=NUM_FFN_LAYERS)
+    parser.add_argument("--dropout", type=float, default=DROPOUT)
+    parser.add_argument("--lr", type=float, default=LR)
+    parser.add_argument("--weight-decay", type=float, default=WEIGHT_DECAY)
+    parser.add_argument(
+        "--variation-dropout-rate",
+        type=float,
+        default=VARIATION_DROPOUT_RATE,
+        help="Training-time dropout on row/col deviation embeddings (0 = off; STAN item dropout is separate).",
+    )
+    parser.add_argument(
+        "--type-embedding-init",
+        type=str,
+        default=TYPE_EMBEDDING_INIT,
+        choices=("normal", "scaled_normal", "kaiming"),
+    )
+    # MARFORMER flags (defaults match scripts/STAN/MARFORMER/.../run_train.sh)
+    parser.add_argument(
+        "--per-head-rel",
+        action="store_true",
+        help="Use per-head relational bias (default: shared-bias / --no-per-head-rel in run_train).",
+    )
+    parser.add_argument(
+        "--no-pointer",
+        action="store_true",
+        help="Disable pointer mechanism (default: pointer on, like run_train USE_POINTER=true).",
+    )
+    parser.add_argument(
+        "--no-rel-value",
+        dest="use_rel_value",
+        action="store_false",
+        help="Disable relation-specific value augmentation (default: enabled for this toy).",
+    )
+    parser.set_defaults(use_rel_value=True)
+    parser.add_argument("--use-addone-attn", action="store_true")
+    parser.add_argument("--use-deviation-norm", action="store_true")
+    parser.add_argument(
+        "--no-scale-shared-rel",
+        action="store_true",
+        help="Disable sqrt(head_dim) scaling of shared relational scores.",
+    )
+    parser.add_argument("--use-graph-mask", action="store_true")
+    parser.add_argument("--use-learned-embedding", action="store_true")
+    parser.add_argument(
+        "--entry-input-tag-scale",
+        type=float,
+        default=ENTRY_INPUT_TAG_SCALE,
+        help="mc_entry input_value = scale * (i*M+j); 0 disables (can restore degenerate identical preds in eval).",
+    )
+    parser.add_argument(
+        "--resample-train-each-step",
+        action="store_true",
+        help="If set, resample num-train-graphs fresh matrix samples at every training step.",
+    )
+    parser.add_argument(
+        "--mc-entry-grid-pointer-rels",
+        action="store_true",
+        help=(
+            "Add bidirectional entry_same_row / entry_same_col edges between all mc_entry pairs "
+            "sharing a row or column (R grows by 2). With --per-head-rel, need head_dim > R."
+        ),
+    )
+    parser.add_argument("--out-dir", type=str, default=None)
+    parser.add_argument("--replot", type=str, default=None)
+    args = parser.parse_args()
+
+    if args.replot:
+        p = Path(args.replot)
+        results = json.loads(p.read_text())
+        out = Path(args.out_dir) if args.out_dir else p.parent
+        render_plots_from_results(results, out, log_y=True)
+        print(f"Wrote log-scale plots to {out}")
+        return
+
+    out = Path(args.out_dir) if args.out_dir else OUT_DIR
+    run_matrix_completion_experiment(
+        out_dir=out,
+        seed=args.seed,
+        num_steps=args.steps,
+        num_train_graphs=args.num_train_graphs,
+        num_test_graphs=args.num_test_graphs,
+        n_rows=args.N,
+        n_cols=args.M,
+        latent_dim=args.D,
+        mask_rate=args.mask_rate,
+        embedding_dim=args.embedding_dim,
+        num_layers=args.num_layers,
+        attn_heads=args.attn_heads,
+        d_ff=args.d_ff,
+        num_ffn_layers=args.num_ffn_layers,
+        dropout=args.dropout,
+        lr=args.lr,
+        weight_decay=args.weight_decay,
+        variation_dropout_rate=args.variation_dropout_rate,
+        type_embedding_init=args.type_embedding_init,
+        use_per_head_rel=args.per_head_rel,
+        use_pointer=not args.no_pointer,
+        use_rel_value=args.use_rel_value,
+        use_addone_attn=args.use_addone_attn,
+        use_deviation_norm=args.use_deviation_norm,
+        scale_shared_rel=not args.no_scale_shared_rel,
+        use_graph_mask=args.use_graph_mask,
+        use_learned_embedding=args.use_learned_embedding,
+        entry_input_tag_scale=args.entry_input_tag_scale,
+        mc_entry_grid_pointer_rels=args.mc_entry_grid_pointer_rels,
+        resample_train_each_step=args.resample_train_each_step,
+    )
+
+
+if __name__ == "__main__":
+    main()
