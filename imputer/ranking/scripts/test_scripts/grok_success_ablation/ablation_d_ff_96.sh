@@ -5,4 +5,4 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=./grok_success_common.sh
 source "${SCRIPT_DIR}/grok_success_common.sh"
 export GROK_D_FF=96
-grok_run "${OUT_DIR:-OUTPUT/grok_success_ablation/d_ff_96}" --show-correct-vector --multiplication-head
+grok_run "${OUT_DIR:-${GROK_OUT_ROOT}/d_ff_96}" --show-correct-vector --multiplication-head

@@ -6,4 +6,4 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/grok_success_common.sh"
 export GROK_HEADS=3
 export GROK_EMB=33
-grok_run "${OUT_DIR:-OUTPUT/grok_success_ablation/heads_minus1}" --show-correct-vector --multiplication-head
+grok_run "${OUT_DIR:-${GROK_OUT_ROOT}/heads_minus1}" --show-correct-vector --multiplication-head

@@ -23,17 +23,20 @@ export TIME="${TIME:-8:00:00}"
 
 GROK_DIR="scripts/test_scripts/grok_success_ablation"
 EXTRA_SBATCH=(--export=ALL)
+# Optional Slurm name prefix when running multiple puzzle batches (e.g. g4x4r1_).
+GROK_JOB_PREFIX="${GROK_JOB_PREFIX:-}"
 
 submit() {
   local job_name=$1
   local script_rel=$2
+  local full_name="${GROK_JOB_PREFIX}${job_name}"
   if [[ "${PREVIEW:-0}" == 1 ]]; then
-    echo JOB_NAME="${job_name}" PARTITION="${PARTITION}" GPUS="${GPUS}" \
+    echo JOB_NAME="${full_name}" PARTITION="${PARTITION}" GPUS="${GPUS}" \
       CPUS_PER_TASK="${CPUS_PER_TASK}" TIME="${TIME}" \
       "${SBATCH_ADAPT}" "${script_rel}" "${EXTRA_SBATCH[@]}"
     return 0
   fi
-  JOB_NAME="${job_name}" PARTITION="${PARTITION}" GPUS="${GPUS}" \
+  JOB_NAME="${full_name}" PARTITION="${PARTITION}" GPUS="${GPUS}" \
     CPUS_PER_TASK="${CPUS_PER_TASK}" TIME="${TIME}" \
     "${SBATCH_ADAPT}" "${script_rel}" "${EXTRA_SBATCH[@]}"
 }
@@ -41,6 +44,7 @@ submit() {
 submit grok_baseline                  "${GROK_DIR}/run_grok_baseline.sh"
 submit grok_no_show_correct           "${GROK_DIR}/ablation_no_show_correct_vector.sh"
 submit grok_no_mult_head              "${GROK_DIR}/ablation_no_multiplication_head.sh"
+submit grok_no_mult_no_oracle         "${GROK_DIR}/ablation_no_mult_no_show_correct_vector.sh"
 submit grok_layers_m1                 "${GROK_DIR}/ablation_layers_minus1.sh"
 submit grok_layers_m2                 "${GROK_DIR}/ablation_layers_minus2.sh"
 submit grok_heads_m1                  "${GROK_DIR}/ablation_heads_minus1.sh"
@@ -53,4 +57,5 @@ submit grok_lr_1e4                    "${GROK_DIR}/ablation_lr_1e-4.sh"
 submit grok_lr_1e3                    "${GROK_DIR}/ablation_lr_1e-3.sh"
 submit grok_dropout_toy               "${GROK_DIR}/ablation_dropout_toy_default.sh"
 
-echo "Submitted (or printed) grok ablation jobs under OUTPUT/grok_success_ablation/ (per script OUT_DIR)."
+_out_root="${GROK_OUT_ROOT:-OUTPUT/grok_success_ablation}"
+echo "Submitted (or printed) grok ablation jobs under ${_out_root}/ (per script OUT_DIR)."

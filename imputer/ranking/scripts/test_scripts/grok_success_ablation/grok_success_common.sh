@@ -17,6 +17,8 @@
 #     --entry-input-tag-scale 1e-3
 #
 # Override any knob by exporting before calling grok_run, e.g. GROK_LAYERS=3 GROK_EMB=24
+# Large sweeps: export GROK_OUT_ROOT=OUTPUT/grok_ablation_6x6_r1_s10000 (and N,M,D,STEPS) before
+# the worker script; per-run outputs go under that directory.
 #
 # shellcheck shell=bash
 set -euo pipefail
@@ -24,6 +26,9 @@ set -euo pipefail
 # grok_success_ablation/ -> test_scripts/ -> scripts/ -> imputer/ranking (where toy_scripts/ lives)
 _GROK_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 cd "${_GROK_ROOT}"
+
+: "${GROK_OUT_ROOT:=OUTPUT/grok_success_ablation}"
+: "${GROK_LIVE_CURVES_EVERY:=100}"
 
 : "${GROK_STEPS:=2000}"
 : "${GROK_SEED:=0}"
@@ -69,6 +74,7 @@ grok_run() {
     --type-embedding-init "${GROK_TYPE_INIT}" \
     --resample-train-each-step \
     --entry-input-tag-scale "${GROK_ENTRY_TAG}" \
+    --live-curves-every "${GROK_LIVE_CURVES_EVERY}" \
     "$@" \
     --out-dir "${out_dir}"
 }

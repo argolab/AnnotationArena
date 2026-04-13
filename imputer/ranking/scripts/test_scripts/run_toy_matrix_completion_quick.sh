@@ -6,12 +6,12 @@ set -e
 
 PYTHONPATH=. python toy_scripts/toy_matrix_completion.py \
   --steps 4000 \
-  --num-train-graphs 48 \
-  --num-test-graphs 8 \
-  --N 5 \
-  --M 5 \
-  --D 2 \
-  --mask-rate 0.3 \
+  --num-train-graphs 1 \
+  --num-test-graphs 1 \
+  --N 4 \
+  --M 4 \
+  --D 1 \
+  --mask-rate 0.2 \
   --embedding-dim 32 \
   --num-layers 2 \
   --attn-heads 4 \
@@ -20,4 +20,7 @@ PYTHONPATH=. python toy_scripts/toy_matrix_completion.py \
   --dropout 0.1 \
   --type-embedding-init kaiming \
   --weight-decay 0.01 \
-  --out-dir OUTPUT/toy_matrix_completion_curves_quick
+  --out-dir OUTPUT/toy_matrix_completion_curves_quick_newfeat \
+  --show-correct-vector \
+  --use-multiplication-head \
+  --lr 1e-4

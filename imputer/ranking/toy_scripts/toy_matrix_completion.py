@@ -116,6 +116,16 @@ USE_MULTIPLICATION_HEAD = False
 OUT_DIR = Path("OUTPUT/toy_matrix_completion_curves")
 _LOG_Y_FLOOR = 1e-12
 
+# Write partial curves to out_dir/curves_live.json every N steps (0 = only write at end).
+LIVE_CURVES_EVERY = 0
+
+
+def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2))
+    tmp.replace(path)
+
 
 ################################################################################
 # MatrixSample — one random matrix instance as an EntityGraph + bookkeeping
@@ -504,11 +514,12 @@ def _compute_deviation_reg_loss(
 
 def render_plots_from_results(results: Dict[str, Any], out_dir: Path, *, log_y: bool = True) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    steps = int(results["num_steps"])
-    x = np.arange(1, steps + 1)
-
     tr = np.asarray(results["train_mse"], dtype=np.float64)
     te = np.asarray(results["test_mse"], dtype=np.float64)
+    n_plot = int(tr.shape[0])
+    if te.shape[0] != n_plot:
+        raise ValueError("train_mse and test_mse must have the same length")
+    x = np.arange(1, n_plot + 1)
     if log_y:
         tr = np.maximum(tr, _LOG_Y_FLOOR)
         te = np.maximum(te, _LOG_Y_FLOOR)
@@ -575,6 +586,7 @@ def run_matrix_completion_experiment(
     resample_train_each_step: bool = False,
     show_correct_vector: bool = SHOW_CORRECT_VECTOR,
     use_multiplication_head: bool = USE_MULTIPLICATION_HEAD,
+    live_curves_every: int = LIVE_CURVES_EVERY,
     device: torch.device | None = None,
 ) -> Dict[str, Any]:
     if device is None:
@@ -687,6 +699,62 @@ def run_matrix_completion_experiment(
 
     train_curve: List[float] = []
     test_curve: List[float] = []
+    test_all_curve: List[float] = []
+
+    def _results_payload(
+        *,
+        train_mse: List[float],
+        test_mse: List[float],
+        test_all_mse: List[float],
+        completed_steps: int,
+        live: bool,
+    ) -> Dict[str, Any]:
+        return {
+            "seed": seed,
+            "num_steps": num_steps,
+            "completed_steps": completed_steps,
+            "live": live,
+            "num_train_graphs": num_train_graphs,
+            "num_test_graphs": num_test_graphs,
+            "N": n_rows,
+            "M": n_cols,
+            "D": latent_dim,
+            "latent_sample_std": latent_sample_std,
+            "mask_rate": mask_rate,
+            "embedding_dim": embedding_dim,
+            "num_layers": num_layers,
+            "attn_heads": attn_heads,
+            "d_ff": d_ff,
+            "num_ffn_layers": num_ffn_layers,
+            "dropout": dropout,
+            "lr": lr,
+            "weight_decay": weight_decay,
+            "row_col_deviation": False,
+            "type_embedding_init": type_embedding_init,
+            "use_per_head_rel": use_per_head_rel,
+            "use_pointer": use_pointer,
+            "use_rel_value": use_rel_value,
+            "use_addone_attn": use_addone_attn,
+            "use_deviation_norm": use_deviation_norm,
+            "scale_shared_rel": scale_shared_rel,
+            "use_graph_mask": use_graph_mask,
+            "use_learned_embedding": use_learned_embedding,
+            "entry_input_tag_scale": entry_input_tag_scale,
+            "mc_entry_grid_pointer_rels": mc_entry_grid_pointer_rels,
+            "num_relationships": num_rels,
+            "resample_train_each_step": resample_train_each_step,
+            "show_correct_vector": show_correct_vector,
+            "use_multiplication_head": use_multiplication_head,
+            "train_mse": train_mse,
+            "test_mse": test_mse,
+            "test_all_mse": test_all_mse,
+        }
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    if live_curves_every > 0:
+        # Same OUT_DIR as a prior job would leave curves_live.json until the next multiple of
+        # live_curves_every; monitors then show stale completed_steps vs live tqdm.
+        (out_dir / "curves_live.json").unlink(missing_ok=True)
 
     steps = tqdm(range(num_steps), total=num_steps, desc="train", leave=False)
     for step in steps:
@@ -727,6 +795,24 @@ def run_matrix_completion_experiment(
 
         train_curve.append(float(train_mse.detach().cpu().item()))
         test_curve.append(float(test_mse.detach().cpu().item()))
+        test_all_curve.append(float(test_all_mse.detach().cpu().item()))
+
+        completed = step + 1
+        if live_curves_every > 0 and (
+            completed == 1
+            or completed % live_curves_every == 0
+            or completed == num_steps
+        ):
+            _atomic_write_json(
+                out_dir / "curves_live.json",
+                _results_payload(
+                    train_mse=list(train_curve),
+                    test_mse=list(test_curve),
+                    test_all_mse=list(test_all_curve),
+                    completed_steps=completed,
+                    live=True,
+                ),
+            )
 
         if (step + 1) % 20 == 0 or step == 0:
             print(
@@ -810,45 +896,16 @@ def run_matrix_completion_experiment(
                     if masked_shown >= 5 and obs_shown >= 5:
                         break
 
-    results: Dict[str, Any] = {
-        "seed": seed,
-        "num_steps": num_steps,
-        "num_train_graphs": num_train_graphs,
-        "num_test_graphs": num_test_graphs,
-        "N": n_rows,
-        "M": n_cols,
-        "D": latent_dim,
-        "latent_sample_std": latent_sample_std,
-        "mask_rate": mask_rate,
-        "embedding_dim": embedding_dim,
-        "num_layers": num_layers,
-        "attn_heads": attn_heads,
-        "d_ff": d_ff,
-        "num_ffn_layers": num_ffn_layers,
-        "dropout": dropout,
-        "lr": lr,
-        "weight_decay": weight_decay,
-        "row_col_deviation": False,
-        "type_embedding_init": type_embedding_init,
-        "use_per_head_rel": use_per_head_rel,
-        "use_pointer": use_pointer,
-        "use_rel_value": use_rel_value,
-        "use_addone_attn": use_addone_attn,
-        "use_deviation_norm": use_deviation_norm,
-        "scale_shared_rel": scale_shared_rel,
-        "use_graph_mask": use_graph_mask,
-        "use_learned_embedding": use_learned_embedding,
-        "entry_input_tag_scale": entry_input_tag_scale,
-        "mc_entry_grid_pointer_rels": mc_entry_grid_pointer_rels,
-        "num_relationships": num_rels,
-        "resample_train_each_step": resample_train_each_step,
-        "show_correct_vector": show_correct_vector,
-        "use_multiplication_head": use_multiplication_head,
-        "train_mse": train_curve,
-        "test_mse": test_curve,
-    }
-    out_dir.mkdir(parents=True, exist_ok=True)
+    results = _results_payload(
+        train_mse=train_curve,
+        test_mse=test_curve,
+        test_all_mse=test_all_curve,
+        completed_steps=num_steps,
+        live=False,
+    )
     (out_dir / "curves.json").write_text(json.dumps(results, indent=2))
+    if live_curves_every > 0:
+        _atomic_write_json(out_dir / "curves_live.json", results)
     render_plots_from_results(results, out_dir, log_y=True)
     print(f"Wrote curves and log-scale plots to {out_dir}")
     return results
@@ -946,6 +1003,12 @@ def main() -> None:
         help="Each block: concat H^2 pairwise head dot-products from attn output before FFN (incompatible with --use-learned-embedding).",
     )
     parser.add_argument("--out-dir", type=str, default=None)
+    parser.add_argument(
+        "--live-curves-every",
+        type=int,
+        default=LIVE_CURVES_EVERY,
+        help="Write curves_live.json every N steps (0 = only at end). Enables monitoring tail metrics while training.",
+    )
     parser.add_argument("--replot", type=str, default=None)
     args = parser.parse_args()
 
@@ -991,6 +1054,7 @@ def main() -> None:
         resample_train_each_step=args.resample_train_each_step,
         show_correct_vector=args.show_correct_vector,
         use_multiplication_head=args.multiplication_head,
+        live_curves_every=args.live_curves_every,
     )
 
 
