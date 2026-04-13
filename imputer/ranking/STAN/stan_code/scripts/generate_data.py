@@ -54,8 +54,8 @@ def main():
     parser.add_argument("--run-name", type=str, default=None,
                         help="Custom run name (default: auto-generated)")
     parser.add_argument("--stan-type", type=str, default="factored-dot-product",
-                        choices=["normal-noise-dot-product", "factored-dot-product", "discrete", "tensor"],
-                        help="Stan model: normal-noise-dot-product, factored-dot-product, discrete, tensor.")
+                        choices=["normal-noise-dot-product", "factored-dot-product", "discrete", "tensor", "dawid-skene"],
+                        help="Stan model: normal-noise-dot-product, factored-dot-product, discrete, tensor, dawid-skene.")
     parser.add_argument("--stan-file", type=str, default=None,
                         help="Path to .stan file (overrides --stan-type when set)")
     parser.add_argument("--overwrite-existing-data", action="store_true",
@@ -104,9 +104,23 @@ def main():
                         help="Annotator embedding dimension (default: D). Normal-noise and factored-dot-product only.")
     parser.add_argument("--derive-thresholds-from-annotator", action="store_true", default=False,
                         help="Derive rating thresholds from annotator embedding (factored-dot-product only).")
-    # tensor only:
+    # tensor-prototype only:
+    parser.add_argument("--T", type=int, default=3,
+                        help="Number of annotator prototypes (tensor model; default: 3).")
+    parser.add_argument("--sigma-u", type=float, default=1.0,
+                        help="Prior std for attribute embeddings u_i (tensor model; default: 1.0).")
+    parser.add_argument("--sigma-v", type=float, default=1.0,
+                        help="Prior std for prototype embeddings v_t (tensor model; default: 1.0).")
+    parser.add_argument("--sigma-uit", type=float, default=0.5,
+                        help="Prior std for attribute-prototype interactions u_it (tensor model; default: 0.5).")
+    parser.add_argument("--use-dawid-skene-noise", type=int, default=0, choices=[0, 1],
+                        help="Noise model for tensor: 0=continuous Gaussian, 1=discrete confusion matrix (default: 0).")
+    # old CP tensor (kept for compat, unused by new tensor model):
     parser.add_argument("--factor-decay", type=float, default=None,
-                        help="CP factor decay (tensor only).")
+                        help="CP factor decay (old tensor only; unused by tensor-prototype).")
+    # dawid-skene / tensor-prototype:
+    parser.add_argument("--alpha-confusion", type=float, default=10.0,
+                        help="Dirichlet concentration for confusion matrix diagonal (dawid-skene / tensor; default: 10.0).")
     
     args = parser.parse_args()
 
@@ -130,12 +144,25 @@ def main():
         "use_log_scores": 0,
         "use_logistic_link": 0,
         "use_normal_loadings": 0,
+        "alpha_confusion": args.alpha_confusion,
+        # Tensor-prototype fields.
+        "T": args.T,
+        "sigma_u": args.sigma_u,
+        "sigma_v": args.sigma_v,
+        "sigma_uit": args.sigma_uit,
+        "use_dawid_skene_noise": args.use_dawid_skene_noise,
     }
     if stan_type == "normal-noise-dot-product":
         defaults["use_factored_annotator"] = 0
         defaults["derive_thresholds_from_annotator"] = 0
     elif stan_type == "factored-dot-product":
         defaults["use_factored_annotator"] = 1
+        defaults["derive_thresholds_from_annotator"] = 1 if args.derive_thresholds_from_annotator else 0
+    elif stan_type == "dawid-skene":
+        defaults["use_factored_annotator"] = 1
+        defaults["derive_thresholds_from_annotator"] = 1 if args.derive_thresholds_from_annotator else 0
+    elif stan_type == "tensor":
+        defaults["use_dawid_skene_noise"] = args.use_dawid_skene_noise
         defaults["derive_thresholds_from_annotator"] = 1 if args.derive_thresholds_from_annotator else 0
     type_kwargs = {k: stan_arg.get(k, defaults.get(k)) for k in required}
     if "d_annotator" in required and type_kwargs.get("d_annotator") is None:

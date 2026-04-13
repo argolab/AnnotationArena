@@ -4,20 +4,18 @@
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
 
-#SBATCH --job-name=EMF_SumEval_HM_A
+#SBATCH --job-name=EMF_SumEval_HM_B
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=18GB
 #SBATCH --gpus=1
-#SBATCH --partition=gpu-a100
-#SBATCH --account=a100acct
-#SBATCH --mail-user="psingh54@jhu.edu"
+#SBATCH --partition=a100
 
 source /home/psingh54/.bashrc
-module load cuda/12.1
-conda activate llm_rubric_env
-cd /export/fs06/psingh54/MARFORMER/imputer/ranking
+module load anaconda3/2024.02-1
+conda activate prabhav2
+cd /home/psingh54/scratchjeisner1/psingh54/AnnotationArena/imputer/ranking
 export PYTHONPATH=.
 export PYTHONUNBUFFERED=1
 set -e

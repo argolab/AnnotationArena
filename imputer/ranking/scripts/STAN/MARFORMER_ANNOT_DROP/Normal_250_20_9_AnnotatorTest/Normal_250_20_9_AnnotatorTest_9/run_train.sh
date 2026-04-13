@@ -3,23 +3,19 @@
 # Copyright
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
-#
-# STAN synthetic bundle — annotator-test splits: item deviation dropout off, annotator
-# deviation dropout on (0.7), masking rate 0.7. Output: RESULTS/MARFORMER_ANNOT_DROP/STAN.
-# Cluster: submit with sbatch_adapt from any cwd; cd to imputer/ranking first.
-#
-# Example:
-#   cd /path/to/AA_new/imputer/ranking
-#   PARTITION=a100 GPUS=1 TIME=24:00:00 CPUS_PER_TASK=16 MEM_PER_CPU=18G \
-#     /home/xwang397/bin/sbatch_adapt scripts/STAN/MARFORMER_ANNOT_DROP/<family>/<split>/run_train.sh
 
-_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_LEAF="$(basename "${_SCRIPT_DIR}")"
-_PARENT="$(basename "$(dirname "${_SCRIPT_DIR}")")"
-# .../scripts/STAN/MARFORMER_ANNOT_DROP/<parent>/<leaf>/run_train.sh → ranking root is 5 levels up.
-_RANKING_ROOT="$(cd "${_SCRIPT_DIR}/../../../../.." && pwd)"
-cd "${_RANKING_ROOT}"
+#SBATCH --job-name=EMF_SumEval_HM_B
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=18GB
+#SBATCH --gpus=1
+#SBATCH --partition=a100
 
+source /home/psingh54/.bashrc
+module load anaconda3/2024.02-1
+conda activate prabhav2
+cd /home/psingh54/scratchjeisner1/psingh54/AnnotationArena/imputer/ranking
 export PYTHONPATH=.
 export PYTHONUNBUFFERED=1
 set -e
@@ -27,7 +23,7 @@ set -e
 SCRIPT_START=$SECONDS
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-DATA_ROOT="DATA/STAN/${_PARENT}/${_LEAF}"
+DATA_ROOT="DATA/STAN/Normal_250_20_9_AnnotatorTest/Normal_250_20_9_AnnotatorTest_9"
 OUTPUT_ROOT="RESULTS/MARFORMER_ANNOT_DROP/STAN"
 RUN_NAME="${_LEAF}"
 
@@ -40,12 +36,12 @@ ATTENTION_HEADS=4
 D_FF=128
 NUM_FFN_LAYERS=1
 DROPOUT=0.1
-EPOCHS=200
+EPOCHS=300
 LR=2e-4
 LR_SCHEDULE="none"
 LR_MIN=1e-5
 WEIGHT_DECAY=0.01
-MASKING_RATE=0.7
+MASKING_RATE=0.5
 MASK_AUGMENTATIONS=5
 MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
