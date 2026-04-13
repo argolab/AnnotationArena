@@ -55,6 +55,10 @@ data {
 
     int<lower=0, upper=1> use_dawid_skene_noise;           // 0=continuous, 1=discrete
     int<lower=0, upper=1> derive_thresholds_from_annotator; // 0=Dirichlet, 1=linear from alpha_j
+
+    // Pass 1 when pairwise is disabled (avoids combinatorial array allocation).
+    // Pass I*J*C*(K*(K-1)/2) when pairwise is enabled.
+    int<lower=1> N_pairwise_max;
 }
 
 generated quantities {
@@ -102,26 +106,26 @@ generated quantities {
     array[I*J, K_test] int test_rating_observed;
 
     // ===== PAIRWISE RANKINGS =====
-    array[I*J*C*(K_train*(K_train-1)%/%2), 2] int train_pairwise_items;
-    array[I*J*C*(K_train*(K_train-1)%/%2)] int train_pairwise_orders;
-    array[I*J*C*(K_train*(K_train-1)%/%2)] int train_pairwise_annotator;
-    array[I*J*C*(K_train*(K_train-1)%/%2)] int train_pairwise_attribute;
-    array[I*J*C*(K_train*(K_train-1)%/%2)] int train_pairwise_tied_rating;
-    array[I*J*C*(K_train*(K_train-1)%/%2)] int train_pairwise_observed;
+    array[N_pairwise_max, 2] int train_pairwise_items;
+    array[N_pairwise_max] int train_pairwise_orders;
+    array[N_pairwise_max] int train_pairwise_annotator;
+    array[N_pairwise_max] int train_pairwise_attribute;
+    array[N_pairwise_max] int train_pairwise_tied_rating;
+    array[N_pairwise_max] int train_pairwise_observed;
 
-    array[I*J*C*(K_val*(K_val-1)%/%2), 2] int val_pairwise_items;
-    array[I*J*C*(K_val*(K_val-1)%/%2)] int val_pairwise_orders;
-    array[I*J*C*(K_val*(K_val-1)%/%2)] int val_pairwise_annotator;
-    array[I*J*C*(K_val*(K_val-1)%/%2)] int val_pairwise_attribute;
-    array[I*J*C*(K_val*(K_val-1)%/%2)] int val_pairwise_tied_rating;
-    array[I*J*C*(K_val*(K_val-1)%/%2)] int val_pairwise_observed;
+    array[N_pairwise_max, 2] int val_pairwise_items;
+    array[N_pairwise_max] int val_pairwise_orders;
+    array[N_pairwise_max] int val_pairwise_annotator;
+    array[N_pairwise_max] int val_pairwise_attribute;
+    array[N_pairwise_max] int val_pairwise_tied_rating;
+    array[N_pairwise_max] int val_pairwise_observed;
 
-    array[I*J*C*(K_test*(K_test-1)%/%2), 2] int test_pairwise_items;
-    array[I*J*C*(K_test*(K_test-1)%/%2)] int test_pairwise_orders;
-    array[I*J*C*(K_test*(K_test-1)%/%2)] int test_pairwise_annotator;
-    array[I*J*C*(K_test*(K_test-1)%/%2)] int test_pairwise_attribute;
-    array[I*J*C*(K_test*(K_test-1)%/%2)] int test_pairwise_tied_rating;
-    array[I*J*C*(K_test*(K_test-1)%/%2)] int test_pairwise_observed;
+    array[N_pairwise_max, 2] int test_pairwise_items;
+    array[N_pairwise_max] int test_pairwise_orders;
+    array[N_pairwise_max] int test_pairwise_annotator;
+    array[N_pairwise_max] int test_pairwise_attribute;
+    array[N_pairwise_max] int test_pairwise_tied_rating;
+    array[N_pairwise_max] int test_pairwise_observed;
 
     int num_train_pairwise_rankings;
     int num_val_pairwise_rankings;

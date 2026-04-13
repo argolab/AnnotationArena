@@ -1,14 +1,40 @@
 #!/bin/bash
 
-DATA_ROOT="DATA/STAN/SPARSE/Tensor_55_25_9_ItemTest_30"
+# Copyright
+# 2024, Johns Hopkins University (Author: Prabhav Singh)
+# Apache 2.0.
+
+#SBATCH --job-name=TEN_200
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=18GB
+#SBATCH --gpus=1
+#SBATCH --partition=a100
+#SBATCH --exclude=c001
+#SBATCH --time=08:00:00
+
+source /home/psingh54/.bashrc
+module load anaconda3/2024.02-1
+conda activate prabhav2
+cd /home/psingh54/scratchjeisner1/psingh54/AnnotationArena/imputer/ranking
+export PYTHONPATH=.
+export CUDA_LAUNCH_BLOCKING=1
+export PYTHONUNBUFFERED=1
+set -e
+
+SCRIPT_START=$SECONDS
+
+# ── Paths ─────────────────────────────────────────────────────────────────────
+DATA_ROOT="DATA/STAN/SPARSE/Tensor_500_25_9_ItemTest/Tensor_500_25_9_ItemTest_200"
 OUTPUT_ROOT="RESULTS/MARFORMER/STAN/SPARSE"
-RUN_NAME="Tensor_55_25_9_ItemTest_30_LOCAL_NOITEMDEV_TRANS"
+RUN_NAME="Tensor_500_25_9_ItemTest_200_CLUSTER_NOITEMDEV_TRANS"
 
 # ── Fixed hyperparams ─────────────────────────────────────────────────────────
 SEED=42
 TYPE_EMBEDDING_INIT="kaiming"
 EMBEDDING_DIM=80
-NUM_LAYERS=4
+NUM_LAYERS=8
 ATTENTION_HEADS=4
 D_FF=128
 NUM_FFN_LAYERS=1
@@ -22,7 +48,7 @@ MASKING_RATE=0.15
 MASK_AUGMENTATIONS=5
 MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
-DEVICE="cpu"
+DEVICE="cuda"
 MAX_ITEM=10
 ANNOTATOR_REG_WEIGHT=0.0
 
@@ -54,7 +80,7 @@ OVERWRITE_FLAG="";     [ "$OVERWRITE_EXISTING" = "true"  ] && OVERWRITE_FLAG="--
 
 echo ""
 echo "============================================================"
-echo " CLUSTER | No Item Dev Transductive"
+echo " CLUSTER | No Item Dev Transductive | Tensor_500_25_9_ItemTest_200"
 echo "  MASKING_RATE : ${MASKING_RATE}"
 echo "  ITEM_DROPOUT : ${ITEM_DROPOUT_RATE}  (always drop — no item deviation)"
 echo "  EPOCHS       : ${EPOCHS}"

@@ -165,7 +165,8 @@ class DataGenConfig:
             "C": self.C,
             "enable_pairwise_rankings": 1 if self.enable_pairwise_rankings else 0,
             "pairwise_cap_per_item": self.pairwise_cap_per_item,
-            "num_annotate_annotator": 4
+            "num_annotate_annotator": 4,
+            "N_pairwise_max": 1,
         }
 
         required = STAN_TYPE_REQUIRED[self.stan_type]
