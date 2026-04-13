@@ -14,6 +14,17 @@ from .data import EntityGraph
 from .types import EntityType
 
 
+def pairwise_head_dot_products(x: torch.Tensor, num_heads: int) -> torch.Tensor:
+    """
+    x: [B, L, model_dim] with model_dim divisible by num_heads.
+    Returns [B, L, num_heads * num_heads] with dot(h_i, h_j) for all ordered pairs (i, j).
+    """
+    b, l, d = x.shape
+    hd = d // num_heads
+    h = x.view(b, l, num_heads, hd)
+    return torch.einsum("blid,bljd->blij", h, h).reshape(b, l, num_heads * num_heads)
+
+
 class RelationalAttentionBlock(nn.Module):
     """
     Relational self-attention with two selectable designs:
@@ -268,6 +279,13 @@ class EntityMarformer(nn.Module):
         for p in self.type_embeddings.values():
             _init_type_embedding(p, config.type_embedding_init, self.feature_dim)
 
+        self.use_multiplication_head = bool(config.use_multiplication_head)
+        if self.use_multiplication_head and config.use_learned_embedding:
+            raise ValueError("use_multiplication_head is not supported with use_learned_embedding")
+        self.mult_dim = (
+            config.attention_heads * config.attention_heads if self.use_multiplication_head else 0
+        )
+
         # Per-entity deviations/variations (where enabled)
         self.deviation_tables = nn.ParameterDict()
         for name, t in types.items():
@@ -304,10 +322,12 @@ class EntityMarformer(nn.Module):
                 scale_shared_rel=config.scale_shared_rel,
                 use_graph_mask=config.use_graph_mask,
             )
+            ff_in_dim = self.model_dim + (self.mult_dim if self.use_multiplication_head else 0)
             ff = FeedForward(
-                self.model_dim,
+                ff_in_dim,
                 d_ff=config.d_ff,
                 dropout=config.dropout,
+                output_dim=self.model_dim,
                 num_layers=config.num_ffn_layers,
             )
             if config.use_learned_embedding:
@@ -316,7 +336,7 @@ class EntityMarformer(nn.Module):
                 block_dict = {
                     "norm_1": NormLayer(self.model_dim),
                     "attn": attn,
-                    "norm_2": NormLayer(self.model_dim),
+                    "norm_2": NormLayer(ff_in_dim),
                     "ff": ff,
                     "proj_out": nn.Linear(self.model_dim, self.model_dim),
                     "dropout_2": nn.Dropout(config.dropout),
@@ -325,7 +345,7 @@ class EntityMarformer(nn.Module):
                 block_dict = {
                     "norm_1": NormLayer(self.model_dim),
                     "attn": attn,
-                    "norm_2": NormLayer(self.model_dim),
+                    "norm_2": NormLayer(ff_in_dim),
                     "ff": ff,
                     "proj_out": nn.Linear(self.model_dim, self.feature_dim),
                     "W_param": nn.Linear(self.model_dim, self.param_dim),
@@ -440,17 +460,23 @@ class EntityMarformer(nn.Module):
                 attn_mask=attn_mask,
                 K_aug=K_aug,
             )  # [1, L, model_dim]
-            combined = combined + attn_out
+            x = combined + attn_out
 
-            normed_ff = block["norm_2"](combined)
+            if self.use_multiplication_head:
+                dots = pairwise_head_dot_products(attn_out, self.config.attention_heads)
+                wide = torch.cat([x, dots], dim=-1)
+            else:
+                wide = x
+
+            normed_ff = block["norm_2"](wide)
             z_ff = block["ff"](normed_ff)
-            combined = combined + z_ff
+            x = x + block["dropout_2"](z_ff)
 
-            back_feat = block["proj_out"](combined)   # [1, L, feature_dim or model_dim]
+            back_feat = block["proj_out"](x)   # [1, L, feature_dim or model_dim]
             features = features + block["dropout_2"](back_feat)
 
             if not self.use_learned_embedding:
-                back_param = block["W_param"](combined)   # [1, L, param_dim]
+                back_param = block["W_param"](x)   # [1, L, param_dim]
                 params = params + block["dropout_2"](back_param)
 
         if self.use_learned_embedding:

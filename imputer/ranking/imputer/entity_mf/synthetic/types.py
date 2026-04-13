@@ -9,25 +9,61 @@ import torch.nn.functional as F
 from imputer.entity_mf.types import EntityType, LossBreakdown, VariationConfig
 
 
+################################################################################
+# Synthetic regression helpers for EntityMarformer toy / tree datagen.
+#
+# RegressionSlices describes how one token type maps raw_data → param vector
+# layout and which indices are supervised. SyntheticRegressionType implements
+# EntityType.build_param and loss for MSE on that slice.
+################################################################################
+
+
+################################################################################
+# RegressionSlices — dimensions and slices into the global param vector
+################################################################################
+
+
 @dataclass
 class RegressionSlices:
     """
-    How we interpret a token's param stream for synthetic regression tasks.
+    Param layout for synthetic regression: a single prefix of the param vector.
 
-    Layout within each token's param vector:
-      - input:  [0 : input_dim)
-      - output: [input_dim : input_dim + output_dim)  (supervised)
+    - ``build_param`` writes ``input_value`` into ``p[0:input_dim]`` (if ``input_dim > 0``).
+    - Loss compares predictions to ``target_value`` on ``p[0:output_dim]``.
+    - When ``input_dim == output_dim``, input and supervision share the same indices.
+    - When ``input_dim == 0``, the prefix is zero-initialized and only ``[0:output_dim)``
+      is supervised (e.g. count tasks with no input feature in the param stream).
+
+    Requires ``input_dim <= output_dim`` so the conditioned prefix lies inside the
+    supervised block. ``param_dim`` is ``max(input_dim, output_dim)``.
     """
 
     input_dim: int
     output_dim: int
 
+    ################################################################################
+    # Validation + derived layout (param_dim, slice for supervision)
+    ################################################################################
+
+    def __post_init__(self) -> None:
+        if self.input_dim < 0 or self.output_dim < 0:
+            raise ValueError("RegressionSlices: input_dim and output_dim must be non-negative")
+        if self.input_dim > self.output_dim:
+            raise ValueError(
+                "RegressionSlices: input_dim cannot exceed output_dim (input must fit in supervised prefix)"
+            )
+
     @property
     def param_dim(self) -> int:
-        return self.input_dim + self.output_dim
+        return max(self.input_dim, self.output_dim)
 
     def output_slice(self) -> slice:
-        return slice(self.input_dim, self.input_dim + self.output_dim)
+        return slice(0, self.output_dim)
+
+
+################################################################################
+# SyntheticRegressionType — EntityType with MSE on output_slice vs target_value
+################################################################################
 
 
 class SyntheticRegressionType(EntityType):
@@ -58,6 +94,10 @@ class SyntheticRegressionType(EntityType):
         self.slices = slices
         self.has_target = bool(has_target)
 
+    ################################################################################
+    # Initial param stream from token raw_data (zeros unless input_value provided)
+    ################################################################################
+
     def build_param(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
         p = torch.zeros(global_param_dim, device=device)
         if self.slices.input_dim <= 0:
@@ -70,6 +110,10 @@ class SyntheticRegressionType(EntityType):
             raise ValueError(f"{self.name}: input_value length {len(vals)} != input_dim {self.slices.input_dim}")
         p[: self.slices.input_dim] = torch.tensor(vals, device=device, dtype=p.dtype)
         return p
+
+    ################################################################################
+    # MSE over tokens in type_mask; preds taken from predicted_params[..., output_slice]
+    ################################################################################
 
     def compute_loss(
         self,
@@ -108,6 +152,10 @@ class SyntheticRegressionType(EntityType):
         pred = torch.stack(preds, dim=0)
         tgt = torch.stack(tgts, dim=0)
         return F.mse_loss(pred, tgt, reduction="mean")
+
+    ################################################################################
+    # LossBreakdown adapter (synthetic tasks: single bucket, all “observed” for API)
+    ################################################################################
 
     def compute_loss_breakdown(
         self,

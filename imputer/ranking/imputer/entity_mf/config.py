@@ -30,4 +30,6 @@ class EntityMarformerConfig:
     scale_shared_rel: bool = False       # In shared-bias mode: scale rel_scores by 1/sqrt(head_dim), matching per-head normalization
     use_learned_embedding: bool = False  # Replace fixed-scale build_param with learned Ax+b embedding; unembeds at top layer
     use_graph_mask: bool = False         # Hard graph attention mask: allow attention only where edge_mask or K_aug pointer exists (+ self)
+    # If True, after each attention block concatenate all H^2 pairwise head dot-products (from attn output) before the FFN.
+    use_multiplication_head: bool = False
 
