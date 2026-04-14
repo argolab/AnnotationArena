@@ -92,6 +92,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         lr_schedule: str = "none",
         lr_min: float = 1e-5,
         lr_step_epoch: int = 40,
+        random_item_chunks: bool = False,
     ):
         super().__init__()
         self.model = model
@@ -111,6 +112,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.lr_schedule = lr_schedule
         self.lr_min = lr_min
         self.lr_step_epoch = lr_step_epoch
+        self.random_item_chunks = bool(random_item_chunks)
         self._last_logged_lr = float(learning_rate)
 
         # Build persistent splits from the bundle. Training-time graphs may merge
@@ -149,7 +151,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         # Pre-build per-chunk EntityGraphs for non-transductive mode.
         # Graphs are reused every step; only variable token statuses are updated in-place.
         # edge_mask and K_aug are cached on each graph object after the first forward pass.
-        self._cached_chunks: list | None = self._build_training_chunks()
+        self._cached_chunks: list | None = None if self.random_item_chunks else self._build_training_chunks()
 
     def _print_var_count(
         self,
@@ -180,7 +182,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
             f"fixed={n_fixed}, missing={n_missing}"
         )
 
-    def _build_training_chunks(self) -> list:
+    def _build_training_chunks(self, randomize: bool = False) -> list:
         """
         Pre-build one EntityGraph per item chunk.
 
@@ -230,6 +232,9 @@ class EntityMarformerLightningModule(pl.LightningModule):
         ):
             maskable_items = sorted({iid for v in maskable_sources for iid in v.item_ids})
             train_items = sorted({iid for v in fixed_sources for iid in v.item_ids})
+            if randomize:
+                random.shuffle(maskable_items)
+                random.shuffle(train_items)
             item_chunks = [
                 set(maskable_items[i : i + self.max_item])
                 for i in range(0, len(maskable_items), self.max_item)
@@ -250,6 +255,8 @@ class EntityMarformerLightningModule(pl.LightningModule):
             for var in maskable_sources + fixed_sources + missing_sources:
                 all_items.update(var.item_ids)
             all_items_list = sorted(all_items)
+            if randomize:
+                random.shuffle(all_items_list)
             num_items = len(all_items_list)
             if self.max_item is not None and num_items > self.max_item:
                 item_chunks = [
@@ -283,28 +290,8 @@ class EntityMarformerLightningModule(pl.LightningModule):
         return chunks
 
     def _compute_fresh_chunks(self) -> list:
-        """Build chunk list on-the-fly for transductive mode (includes test data)."""
-        observed_sources = list(self.train_observed) + list(self.val_observed)
-        missing_sources  = list(self.train_missing)  + list(self.val_missing)
-        all_items: set = set()
-        for var in observed_sources + missing_sources:
-            all_items.update(var.item_ids)
-        all_items_list = sorted(all_items)
-        num_items = len(all_items_list)
-        if self.max_item is not None and num_items > self.max_item:
-            item_chunks = [
-                set(all_items_list[i : i + self.max_item])
-                for i in range(0, num_items, self.max_item)
-            ]
-        else:
-            item_chunks = [all_items]
-        chunks = []
-        for available_items in item_chunks:
-            chunk_observed = [v for v in observed_sources if all(iid in available_items for iid in v.item_ids)]
-            chunk_missing  = [v for v in missing_sources  if all(iid in available_items for iid in v.item_ids)]
-            if chunk_observed or chunk_missing:
-                chunks.append({"chunk_observed": chunk_observed, "chunk_missing": chunk_missing})
-        return chunks
+        """Build chunk list on-the-fly using the same logic as cached chunks, but with randomized item grouping."""
+        return self._build_training_chunks(randomize=True)
 
     @staticmethod
     def _refresh_variable_tokens(graph, masked_or_observed: List[RankingData]) -> None:
@@ -932,6 +919,11 @@ def main():
         default=42,
         help="Global random seed for reproducibility (controls init, dropout, masking, data ordering).",
     )
+    parser.add_argument(
+        "--random-item-chunks",
+        action="store_true",
+        help="Re-sample item chunk groupings every training step instead of using fixed item chunks.",
+    )
     args = parser.parse_args()
 
     # Seed everything before any model init or data loading.
@@ -1045,6 +1037,7 @@ def main():
             "lr_schedule": args.lr_schedule,
             "lr_min": args.lr_min,
             "lr_step_epoch": args.lr_step_epoch,
+            "random_item_chunks": bool(args.random_item_chunks),
             "mask_augmentations": args.mask_augmentations,
             "masked_loss_weight": args.masked_loss_weight,
             "observed_loss_weight": args.observed_loss_weight,
@@ -1081,6 +1074,7 @@ def main():
         lr_schedule=args.lr_schedule,
         lr_min=args.lr_min,
         lr_step_epoch=args.lr_step_epoch,
+        random_item_chunks=bool(args.random_item_chunks),
     )
 
     accelerator = "gpu" if args.device == "cuda" and torch.cuda.is_available() else "cpu"

@@ -1,11 +1,34 @@
 #!/bin/bash
 
+# Copyright
+# 2024, Johns Hopkins University (Author: Prabhav Singh)
+# Apache 2.0.
+
+#SBATCH --job-name=TEN_200
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=18GB
+#SBATCH --gpus=1
+#SBATCH --partition=a100
+#SBATCH --exclude=c001
+#SBATCH --time=08:00:00
+
+source /home/psingh54/.bashrc
+module load anaconda3/2024.02-1
+conda activate prabhav2
+cd /home/psingh54/scratchjeisner1/psingh54/AnnotationArena/imputer/ranking
+export PYTHONPATH=.
+export CUDA_LAUNCH_BLOCKING=1
+export PYTHONUNBUFFERED=1
+set -e
+
 SCRIPT_START=$SECONDS
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
-DATA_ROOT="DATA/STAN/SPARSE/Tensor_500_25_9_ItemTest/Tensor_500_25_9_ItemTest_50"
+DATA_ROOT="DATA/STAN/SPARSE/Tensor_400_25_9_ItemTest/Tensor_400_25_9_ItemTest_200"
 OUTPUT_ROOT="RESULTS/MARFORMER/STAN/SPARSE"
-RUN_NAME="Tensor_500_25_9_ItemTest_50_LOCAL_NOITEMDEV_TRANS_RANDOMIZE_NODROP"
+RUN_NAME="Tensor_400_25_9_ItemTest_200_NOITEMDEV_TRANS_MARFORMER-HM"
 
 # ── Fixed hyperparams ─────────────────────────────────────────────────────────
 SEED=42
@@ -30,7 +53,7 @@ MAX_ITEM=10
 ANNOTATOR_REG_WEIGHT=0.0
 
 # ── Experiment-specific flags ─────────────────────────────────────────────────
-ITEM_DROPOUT_RATE=0.0
+ITEM_DROPOUT_RATE=1.0
 ANNOTATOR_DROPOUT_RATE=0.0
 ITEM_REG_WEIGHT=0.0
 ATTRIBUTE_REG_WEIGHT=0.0
@@ -40,7 +63,7 @@ USE_POINTER=true
 USE_REL_VALUE=false
 USE_ADDONE_ATTN=false
 USE_DEVIATION_NORM=false
-USE_GRAPH_MASK=false
+USE_GRAPH_MASK=true
 LLM_INPUT_DIST=false
 OVERWRITE_EXISTING=true
 
@@ -57,7 +80,7 @@ OVERWRITE_FLAG="";     [ "$OVERWRITE_EXISTING" = "true"  ] && OVERWRITE_FLAG="--
 
 echo ""
 echo "============================================================"
-echo " CLUSTER | No Item Dev Transductive | Tensor_500_25_9_ItemTest_50"
+echo " CLUSTER | No Item Dev Transductive | Tensor_500_25_9_ItemTest_200"
 echo "  MASKING_RATE : ${MASKING_RATE}"
 echo "  ITEM_DROPOUT : ${ITEM_DROPOUT_RATE}  (always drop — no item deviation)"
 echo "  EPOCHS       : ${EPOCHS}"
@@ -93,7 +116,6 @@ python -u -m imputer.entity_mf.train \
     --attribute-reg-weight   "$ATTRIBUTE_REG_WEIGHT"   \
     --annotator-reg-weight   "$ANNOTATOR_REG_WEIGHT"   \
     --transductive-learning                            \
-    --random-item-chunks                               \
     $PER_HEAD_FLAG                                     \
     $SCALE_FLAG                                        \
     $POINTER_FLAG                                      \
@@ -103,8 +125,6 @@ python -u -m imputer.entity_mf.train \
     $GRAPHMASK_FLAG                                    \
     $LLM_DIST_FLAG                                     \
     $OVERWRITE_FLAG
-
-# --use-param-output-head                            \
 
 TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))
 echo ""
