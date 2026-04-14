@@ -793,11 +793,18 @@ def generate_data_annotator_split(
         GroundTruthBundle with train/val/test ratings labelled by annotator group.
     """
     if stan_file is None:
-        stan_file = str(
-            Path(__file__).parent.parent.parent
-            / "stan_models"
-            / "normal_noise_dot_product_annotator_gen.stan"
-        )
+        if getattr(config, "stan_type", None) == "tensor":
+            stan_file = str(
+                Path(__file__).parent.parent.parent
+                / "stan_models"
+                / "tensor_generation_annotator.stan"
+            )
+        else:
+            stan_file = str(
+                Path(__file__).parent.parent.parent
+                / "stan_models"
+                / "normal_noise_dot_product_annotator_gen.stan"
+            )
 
     model = compile_data_generation_model(stan_file)
     stan_data = config.to_stan_data()

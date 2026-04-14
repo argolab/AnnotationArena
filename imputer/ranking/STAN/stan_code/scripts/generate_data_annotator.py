@@ -34,8 +34,11 @@ def main():
                         help="Output directory for generated data")
     parser.add_argument("--run-name", type=str, default=None,
                         help="Custom run name (default: auto-generated)")
+    parser.add_argument("--stan-type", type=str, default="factored-dot-product",
+                        choices=["normal-noise-dot-product", "factored-dot-product", "tensor"],
+                        help="Stan model type (default: factored-dot-product)")
     parser.add_argument("--stan-file", type=str, default=None,
-                        help="Path to .stan file (overrides default annotator_split_generation.stan)")
+                        help="Path to .stan file (overrides --stan-type default)")
     parser.add_argument("--overwrite-existing-data", action="store_true",
                         help="Overwrite existing output directory if it exists")
 
@@ -85,30 +88,71 @@ def main():
     parser.add_argument("--enable-pairwise-rankings", action="store_true",
                         help="(ignored for annotator-split; pairwise always disabled)")
 
+    # ---------- Tensor-prototype fields (used when --stan-type tensor) ----------
+    parser.add_argument("--T", type=int, default=3,
+                        help="Number of annotator prototypes (tensor model; default: 3)")
+    parser.add_argument("--sigma-u", type=float, default=1.0,
+                        help="Prior std for attribute embeddings u_i (tensor; default: 1.0)")
+    parser.add_argument("--sigma-v", type=float, default=1.0,
+                        help="Prior std for prototype embeddings v_t (tensor; default: 1.0)")
+    parser.add_argument("--sigma-uit", type=float, default=0.5,
+                        help="Prior std for attribute-prototype interactions u_it (tensor; default: 0.5)")
+    parser.add_argument("--use-dawid-skene-noise", type=int, default=0, choices=[0, 1],
+                        help="Noise model: 0=continuous Gaussian, 1=discrete confusion matrix (tensor; default: 0)")
+    parser.add_argument("--alpha-confusion", type=float, default=15.0,
+                        help="Dirichlet concentration for confusion matrix diagonal (tensor; default: 15.0)")
+
     args = parser.parse_args()
 
     # ========== 2. Build AnnotatorSplitConfig ==========
-    d_annotator = args.d_annotator if args.d_annotator is not None else args.D
+    stan_type = args.stan_type
 
-    config = AnnotatorSplitConfig(
-        K=args.K,
-        J_train=args.J_train,
-        J_val=args.J_val,
-        J_test=args.J_test,
-        I=args.I,
-        C=args.C,
-        D=args.D,
-        d_annotator=d_annotator,
-        sigma_annotator=args.sigma_annotator,
-        sigma_measurement=args.sigma_measurement,
-        kappa=args.kappa,
-        temperature=args.temperature,
-        use_factored_annotator=1 if args.use_factored_annotator else 0,
-        derive_thresholds_from_annotator=1 if args.derive_thresholds_from_annotator else 0,
-        observation_protocol=args.observation_protocol,
-        mcar_missing_rate=args.mcar_missing_rate,
-        seed=args.seed,
-    )
+    if stan_type == "tensor":
+        config = AnnotatorSplitConfig(
+            K=args.K,
+            J_train=args.J_train,
+            J_val=args.J_val,
+            J_test=args.J_test,
+            I=args.I,
+            C=args.C,
+            D=args.D,
+            T=args.T,
+            sigma_u=args.sigma_u,
+            sigma_v=args.sigma_v,
+            sigma_uit=args.sigma_uit,
+            sigma_measurement=args.sigma_measurement,
+            kappa=args.kappa,
+            alpha_confusion=args.alpha_confusion,
+            temperature=args.temperature,
+            use_dawid_skene_noise=args.use_dawid_skene_noise,
+            derive_thresholds_from_annotator=1 if args.derive_thresholds_from_annotator else 0,
+            observation_protocol=args.observation_protocol,
+            mcar_missing_rate=args.mcar_missing_rate,
+            seed=args.seed,
+            stan_type="tensor",
+        )
+    else:
+        d_annotator = args.d_annotator if args.d_annotator is not None else args.D
+        config = AnnotatorSplitConfig(
+            K=args.K,
+            J_train=args.J_train,
+            J_val=args.J_val,
+            J_test=args.J_test,
+            I=args.I,
+            C=args.C,
+            D=args.D,
+            d_annotator=d_annotator,
+            sigma_annotator=args.sigma_annotator,
+            sigma_measurement=args.sigma_measurement,
+            kappa=args.kappa,
+            temperature=args.temperature,
+            use_factored_annotator=1 if args.use_factored_annotator else 0,
+            derive_thresholds_from_annotator=1 if args.derive_thresholds_from_annotator else 0,
+            observation_protocol=args.observation_protocol,
+            mcar_missing_rate=args.mcar_missing_rate,
+            seed=args.seed,
+            stan_type=stan_type,
+        )
 
     # ========== 3. Output directory ==========
     output_path = Path(args.output_dir)
