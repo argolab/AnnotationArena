@@ -28,7 +28,7 @@ SCRIPT_START=$SECONDS
 # ── Paths ─────────────────────────────────────────────────────────────────────
 DATA_ROOT="DATA/STAN/SPARSE/Tensor_300_30_9_AnnTest/Tensor_300_30_9_AnnTest_20"
 OUTPUT_ROOT="RESULTS/MARFORMER/STAN/SPARSE"
-RUN_NAME="Tensor_300_30_9_AnnTest_20_NOITEMDEV_TRANS_MARFORMER"
+RUN_NAME="Tensor_300_30_9_AnnTest_20_NOITEMDEV_TRANS_MARFORMER_Ann"
 
 # ── Fixed hyperparams ─────────────────────────────────────────────────────────
 SEED=42
@@ -54,9 +54,9 @@ ANNOTATOR_REG_WEIGHT=0.0
 
 # ── Experiment-specific flags ─────────────────────────────────────────────────
 ITEM_DROPOUT_RATE=0.0
-ANNOTATOR_DROPOUT_RATE=0.7
+ANNOTATOR_DROPOUT_RATE=0.1
 ITEM_REG_WEIGHT=0.0
-ATTRIBUTE_REG_WEIGHT=0.0
+ATTRIBUTE_REG_WEIGHT=1e-2
 USE_PER_HEAD_REL=false
 SCALE_SHARED_REL=true
 USE_POINTER=true

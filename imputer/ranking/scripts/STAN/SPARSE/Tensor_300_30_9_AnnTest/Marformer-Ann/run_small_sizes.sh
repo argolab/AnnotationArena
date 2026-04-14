@@ -4,7 +4,7 @@
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
 
-#SBATCH --job-name=ANN_20
+#SBATCH --job-name=ANN_SMALL
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -12,7 +12,8 @@
 #SBATCH --gpus=1
 #SBATCH --partition=a100
 #SBATCH --exclude=c001
-#SBATCH --time=06:00:00
+#SBATCH --time=6:00:00
+
 
 source /home/psingh54/.bashrc
 module load anaconda3/2024.02-1
@@ -24,11 +25,6 @@ export PYTHONUNBUFFERED=1
 set -e
 
 SCRIPT_START=$SECONDS
-
-# ── Paths ─────────────────────────────────────────────────────────────────────
-DATA_ROOT="DATA/STAN/SPARSE/Tensor_300_30_9_AnnTest/Tensor_300_30_9_AnnTest_20"
-OUTPUT_ROOT="RESULTS/MARFORMER/STAN/SPARSE"
-RUN_NAME="Tensor_300_30_9_AnnTest_20_NOITEMDEV_TRANS_MARFORMER"
 
 # ── Fixed hyperparams ─────────────────────────────────────────────────────────
 SEED=42
@@ -54,9 +50,9 @@ ANNOTATOR_REG_WEIGHT=0.0
 
 # ── Experiment-specific flags ─────────────────────────────────────────────────
 ITEM_DROPOUT_RATE=0.0
-ANNOTATOR_DROPOUT_RATE=0.7
+ANNOTATOR_DROPOUT_RATE=0.1
 ITEM_REG_WEIGHT=0.0
-ATTRIBUTE_REG_WEIGHT=0.0
+ATTRIBUTE_REG_WEIGHT=1e-2
 USE_PER_HEAD_REL=false
 SCALE_SHARED_REL=true
 USE_POINTER=true
@@ -78,57 +74,70 @@ GRAPHMASK_FLAG="";     [ "$USE_GRAPH_MASK"     = "true"  ] && GRAPHMASK_FLAG="--
 LLM_DIST_FLAG="";      [ "$LLM_INPUT_DIST"     = "true"  ] && LLM_DIST_FLAG="--llm-input-dist"
 OVERWRITE_FLAG="";     [ "$OVERWRITE_EXISTING" = "true"  ] && OVERWRITE_FLAG="--overwrite-existing-data"
 
+OUTPUT_ROOT="RESULTS/MARFORMER/STAN/SPARSE"
+
 echo ""
 echo "============================================================"
-echo " CLUSTER | No Item Dev Transductive | Tensor_300_30_9_AnnTest_20"
+echo " CLUSTER | No Item Dev Transductive | Sizes 5, 10, 15"
 echo "  MASKING_RATE : ${MASKING_RATE}"
 echo "  ITEM_DROPOUT : ${ITEM_DROPOUT_RATE}  (always drop — no item deviation)"
 echo "  EPOCHS       : ${EPOCHS}"
 echo "  DEVICE       : ${DEVICE}"
 echo "============================================================"
 
-python -u -m imputer.entity_mf.train \
-    --data-dir               "${DATA_ROOT}"            \
-    --run-name               "${RUN_NAME}"             \
-    --output-root            "${OUTPUT_ROOT}"          \
-    --seed                   "$SEED"                   \
-    --embedding-dim          "$EMBEDDING_DIM"          \
-    --num-layers             "$NUM_LAYERS"             \
-    --attention-heads        "$ATTENTION_HEADS"        \
-    --d-ff                   "$D_FF"                   \
-    --num-ffn-layers         "$NUM_FFN_LAYERS"         \
-    --dropout                "$DROPOUT"                \
-    --item-dropout-rate      "$ITEM_DROPOUT_RATE"      \
-    --annotator-dropout-rate "$ANNOTATOR_DROPOUT_RATE" \
-    --epochs                 "$EPOCHS"                 \
-    --lr                     "$LR"                     \
-    --lr-schedule            "$LR_SCHEDULE"            \
-    --lr-min                 "$LR_MIN"                 \
-    --weight-decay           "$WEIGHT_DECAY"           \
-    --masking-rate           "$MASKING_RATE"           \
-    --mask-augmentations     "$MASK_AUGMENTATIONS"     \
-    --masked-loss-weight     "$MASKED_LOSS_WEIGHT"     \
-    --observed-loss-weight   "$OBSERVED_LOSS_WEIGHT"   \
-    --device                 "$DEVICE"                 \
-    --max-item               "$MAX_ITEM"               \
-    --type-embedding-init    "$TYPE_EMBEDDING_INIT"    \
-    --item-reg-weight        "$ITEM_REG_WEIGHT"        \
-    --attribute-reg-weight   "$ATTRIBUTE_REG_WEIGHT"   \
-    --annotator-reg-weight   "$ANNOTATOR_REG_WEIGHT"   \
-    --transductive-learning                            \
-    $PER_HEAD_FLAG                                     \
-    $SCALE_FLAG                                        \
-    $POINTER_FLAG                                      \
-    $REL_VALUE_FLAG                                    \
-    $ADDONE_FLAG                                       \
-    $DEVNORM_FLAG                                      \
-    $GRAPHMASK_FLAG                                    \
-    $LLM_DIST_FLAG                                     \
-    $OVERWRITE_FLAG
+for SIZE in 5 10 15; do
+    DATA_ROOT="DATA/STAN/SPARSE/Tensor_300_30_9_AnnTest/Tensor_300_30_9_AnnTest_${SIZE}"
+    RUN_NAME="Tensor_300_30_9_AnnTest_${SIZE}_NOITEMDEV_TRANS_MARFORMER_Ann"
+    RUN_START=$SECONDS
+
+    echo ""; echo "--- Size ${SIZE} | ${RUN_NAME} ---"; echo ""
+
+    python -u -m imputer.entity_mf.train \
+        --data-dir               "${DATA_ROOT}"            \
+        --run-name               "${RUN_NAME}"             \
+        --output-root            "${OUTPUT_ROOT}"          \
+        --seed                   "$SEED"                   \
+        --embedding-dim          "$EMBEDDING_DIM"          \
+        --num-layers             "$NUM_LAYERS"             \
+        --attention-heads        "$ATTENTION_HEADS"        \
+        --d-ff                   "$D_FF"                   \
+        --num-ffn-layers         "$NUM_FFN_LAYERS"         \
+        --dropout                "$DROPOUT"                \
+        --item-dropout-rate      "$ITEM_DROPOUT_RATE"      \
+        --annotator-dropout-rate "$ANNOTATOR_DROPOUT_RATE" \
+        --epochs                 "$EPOCHS"                 \
+        --lr                     "$LR"                     \
+        --lr-schedule            "$LR_SCHEDULE"            \
+        --lr-min                 "$LR_MIN"                 \
+        --weight-decay           "$WEIGHT_DECAY"           \
+        --masking-rate           "$MASKING_RATE"           \
+        --mask-augmentations     "$MASK_AUGMENTATIONS"     \
+        --masked-loss-weight     "$MASKED_LOSS_WEIGHT"     \
+        --observed-loss-weight   "$OBSERVED_LOSS_WEIGHT"   \
+        --device                 "$DEVICE"                 \
+        --max-item               "$MAX_ITEM"               \
+        --type-embedding-init    "$TYPE_EMBEDDING_INIT"    \
+        --item-reg-weight        "$ITEM_REG_WEIGHT"        \
+        --attribute-reg-weight   "$ATTRIBUTE_REG_WEIGHT"   \
+        --annotator-reg-weight   "$ANNOTATOR_REG_WEIGHT"   \
+        --transductive-learning                            \
+        $PER_HEAD_FLAG                                     \
+        $SCALE_FLAG                                        \
+        $POINTER_FLAG                                      \
+        $REL_VALUE_FLAG                                    \
+        $ADDONE_FLAG                                       \
+        $DEVNORM_FLAG                                      \
+        $GRAPHMASK_FLAG                                    \
+        $LLM_DIST_FLAG                                     \
+        $OVERWRITE_FLAG
+
+    RUN_ELAPSED=$(( SECONDS - RUN_START ))
+    echo "  ↳ Size ${SIZE} done in $(( RUN_ELAPSED / 60 ))m $(( RUN_ELAPSED % 60 ))s"
+done
 
 TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))
 echo ""
 echo "============================================================"
-echo " Done in $(( TOTAL_ELAPSED / 60 ))m $(( TOTAL_ELAPSED % 60 ))s"
-echo " Output: ${OUTPUT_ROOT}/${RUN_NAME}"
+echo " All done. Total time: $(( TOTAL_ELAPSED / 60 ))m $(( TOTAL_ELAPSED % 60 ))s"
+echo " Output: ${OUTPUT_ROOT}"
 echo "============================================================"

@@ -61,13 +61,13 @@ python STAN/stan_code/scripts/run_inference.py \
     --adapt-delta                "$ADAPT_DELTA"   \
     --max-treedepth              "$MAX_TREEDEPTH" \
     --seed                       "$SEED"          \
-    --override-alpha-dirichlet   2.0              \
-    --override-sigma-measurement 0.5              \
-    --override-sigma-annotator   0.6              \
+    --override-alpha-dirichlet   1.0              \
+    --override-sigma-measurement 1.0              \
+    --override-sigma-annotator   1.0              \
     --override-temperature       1.0              \
     --stan-arg                   M=6              \
     --stan-arg                   S=6              \
-    --stan-arg                   d_annotator=32   \
+    --stan-arg                   d_annotator=2   \
     --stan-arg                   use_factored_annotator=0 \
     --stan-arg                   N_pairwise_rankings=0 \
     --stan-arg                   N_missing_pairwise_rankings=0 \
