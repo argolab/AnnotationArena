@@ -91,6 +91,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         observed_loss_weight: float = 1.0,
         lr_schedule: str = "none",
         lr_min: float = 1e-5,
+        lr_step_epoch: int = 40,
     ):
         super().__init__()
         self.model = model
@@ -109,6 +110,8 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.observed_loss_weight = observed_loss_weight
         self.lr_schedule = lr_schedule
         self.lr_min = lr_min
+        self.lr_step_epoch = lr_step_epoch
+        self._last_logged_lr = float(learning_rate)
 
         # Build persistent splits from the bundle. Training-time graphs may merge
         # train/test variables when transductive is enabled, but these remain as
@@ -153,6 +156,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         graph,
         masked_or_observed: List[RankingData],
         chunk_missing: List[RankingData],
+        chunk_fixed: List[RankingData] | None = None,
     ) -> None:
         """
         Sanity-check that the graph contains the expected number of variable tokens
@@ -168,10 +172,12 @@ class EntityMarformerLightningModule(pl.LightningModule):
         n_masked = sum(1 for v in masked_or_observed if v.is_masked)
         n_observed = sum(1 for v in masked_or_observed if v.is_observed)
         n_missing = sum(1 for v in chunk_missing if v.is_missing)
+        n_fixed = sum(1 for v in (chunk_fixed or []) if v.is_observed)
 
         print(
             f"[EntityMarformer] graph tokens: variables={num_var_tokens}, "
-            f"entities={num_entity_tokens} | masked={n_masked}, observed={n_observed}, missing={n_missing}"
+            f"entities={num_entity_tokens} | masked={n_masked}, observed={n_observed}, "
+            f"fixed={n_fixed}, missing={n_missing}"
         )
 
     def _build_training_chunks(self) -> list:
@@ -212,28 +218,68 @@ class EntityMarformerLightningModule(pl.LightningModule):
             fixed_sources    = []
             missing_sources  = list(self.train_missing)
 
-        all_items: set = set()
-        for var in maskable_sources + fixed_sources + missing_sources:
-            all_items.update(var.item_ids)
-        all_items_list = sorted(all_items)
-        num_items = len(all_items_list)
-        if self.max_item is not None and num_items > self.max_item:
+        # Special handling for transductive + val/test masking with item chunking:
+        # ensure every chunk contains maskable (val/test observed) tokens and
+        # includes train-observed context items. This avoids many zero-signal
+        # chunks when item ids are contiguous by split.
+        if (
+            self.transductive
+            and self.transductive_valtest_mask
+            and self.max_item is not None
+            and self.max_item > 0
+        ):
+            maskable_items = sorted({iid for v in maskable_sources for iid in v.item_ids})
+            train_items = sorted({iid for v in fixed_sources for iid in v.item_ids})
             item_chunks = [
-                set(all_items_list[i : i + self.max_item])
-                for i in range(0, num_items, self.max_item)
+                set(maskable_items[i : i + self.max_item])
+                for i in range(0, len(maskable_items), self.max_item)
             ]
+            # Add a deterministic train-context slice to each maskable chunk.
+            context_cap = min(self.max_item, len(train_items))
+            mixed_chunks: List[set] = []
+            for ci, item_set in enumerate(item_chunks):
+                mixed = set(item_set)
+                if context_cap > 0:
+                    start = (ci * context_cap) % len(train_items)
+                    for j in range(context_cap):
+                        mixed.add(train_items[(start + j) % len(train_items)])
+                mixed_chunks.append(mixed)
+            item_chunks = mixed_chunks if mixed_chunks else [set(maskable_items)]
         else:
-            item_chunks = [all_items]
+            all_items: set = set()
+            for var in maskable_sources + fixed_sources + missing_sources:
+                all_items.update(var.item_ids)
+            all_items_list = sorted(all_items)
+            num_items = len(all_items_list)
+            if self.max_item is not None and num_items > self.max_item:
+                item_chunks = [
+                    set(all_items_list[i : i + self.max_item])
+                    for i in range(0, num_items, self.max_item)
+                ]
+            else:
+                item_chunks = [all_items]
+
         chunks = []
         for available_items in item_chunks:
             chunk_maskable = [v for v in maskable_sources if all(iid in available_items for iid in v.item_ids)]
             chunk_fixed    = [v for v in fixed_sources    if all(iid in available_items for iid in v.item_ids)]
             chunk_missing  = [v for v in missing_sources  if all(iid in available_items for iid in v.item_ids)]
+            # In transductive + val/test mask mode, skip chunks without any
+            # maskable tokens to guarantee a learning signal every step.
+            if self.transductive and self.transductive_valtest_mask and not chunk_maskable:
+                continue
             if not chunk_maskable and not chunk_fixed and not chunk_missing:
                 continue
             # maskable tokens must be first so _refresh_variable_tokens indexes them correctly.
             graph = variable_list_to_entity_graph(chunk_maskable + chunk_fixed + chunk_missing, self.types)
-            chunks.append({"chunk_observed": chunk_maskable, "chunk_missing": chunk_missing, "graph": graph})
+            chunks.append(
+                {
+                    "chunk_observed": chunk_maskable,
+                    "chunk_fixed": chunk_fixed,
+                    "chunk_missing": chunk_missing,
+                    "graph": graph,
+                }
+            )
         return chunks
 
     def _compute_fresh_chunks(self) -> list:
@@ -280,6 +326,14 @@ class EntityMarformerLightningModule(pl.LightningModule):
                 optimizer, T_max=self.trainer.max_epochs, eta_min=self.lr_min
             )
             return [optimizer], [{"scheduler": scheduler, "interval": "epoch"}]
+        if self.lr_schedule == "step":
+            gamma = self.lr_min / self.learning_rate if self.learning_rate > 0 else 1.0
+            scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=[max(1, int(self.lr_step_epoch))],
+                gamma=gamma,
+            )
+            return [optimizer], [{"scheduler": scheduler, "interval": "epoch"}]
         return optimizer
 
     def train_dataloader(self):
@@ -287,6 +341,24 @@ class EntityMarformerLightningModule(pl.LightningModule):
         Each entry triggers a training_step with fresh random masking."""
         ds = torch.utils.data.TensorDataset(torch.zeros(self.mask_augmentations))
         return torch.utils.data.DataLoader(ds, batch_size=1)
+
+    def on_train_epoch_start(self) -> None:
+        """
+        Print when step LR schedule changes the optimizer LR.
+        Lightning applies epoch schedulers between epochs; this hook reports
+        the new LR at the start of the epoch where it becomes active.
+        """
+        if self.lr_schedule != "step":
+            return
+        if not hasattr(self, "trainer") or not self.trainer.optimizers:
+            return
+        current_lr = float(self.trainer.optimizers[0].param_groups[0]["lr"])
+        if abs(current_lr - self._last_logged_lr) > 1e-15:
+            print(
+                f"[EntityMarformer] LR changed at epoch {self.current_epoch}: "
+                f"{self._last_logged_lr:.6g} -> {current_lr:.6g}"
+            )
+            self._last_logged_lr = current_lr
 
     def training_step(self, batch, batch_idx):
         """
@@ -314,6 +386,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
 
         for chunk_data in active_chunks:
             chunk_observed = chunk_data["chunk_observed"]
+            chunk_fixed    = chunk_data.get("chunk_fixed", [])
             chunk_missing  = chunk_data["chunk_missing"]
 
             # Apply training mask to observed vars in this chunk.
@@ -327,7 +400,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                 graph = variable_list_to_entity_graph(train_vars, self.types)
 
             if self.current_epoch == 0:
-                self._print_var_count(graph, masked_or_observed, chunk_missing)
+                self._print_var_count(graph, masked_or_observed, chunk_missing, chunk_fixed=chunk_fixed)
 
             ################## Forward pass ########################
             # print(f"\nINPUT: {train_vars[300]}\n")
@@ -829,22 +902,29 @@ def main():
         help="Apply LayerNorm to each deviation before adding to its type centroid (bounds deviation scale).",
     )
     parser.add_argument(
-        "--use-learned-embedding",
+        "--use-param-output-head",
         action="store_true",
-        help="Replace fixed-scale build_param with learned Ax+b embedding; feature_dim=model_dim; unembed at top layer.",
+        help="Predict final params from the last combined hidden state instead of reading them directly from the residual param stream.",
     )
     parser.add_argument(
         "--lr-schedule",
         type=str,
         default="none",
-        choices=["none", "cosine"],
-        help="LR schedule: 'none' = constant LR, 'cosine' = CosineAnnealingLR from --lr down to --lr-min.",
+        choices=["none", "cosine", "step"],
+        help="LR schedule: 'none' = constant LR, 'cosine' = CosineAnnealingLR from --lr down to --lr-min, "
+             "'step' = single drop to --lr-min at --lr-step-epoch.",
     )
     parser.add_argument(
         "--lr-min",
         type=float,
         default=1e-5,
-        help="Minimum LR for cosine schedule (eta_min). Only used when --lr-schedule cosine.",
+        help="Target minimum LR used by cosine schedule and as post-drop LR for step schedule.",
+    )
+    parser.add_argument(
+        "--lr-step-epoch",
+        type=int,
+        default=40,
+        help="Epoch at which to apply one LR drop when --lr-schedule step.",
     )
     parser.add_argument(
         "--seed",
@@ -881,8 +961,8 @@ def main():
     config.type_embedding_init   = args.type_embedding_init
     config.use_deviation_norm    = args.use_deviation_norm
     config.scale_shared_rel      = args.scale_shared_rel
-    config.use_learned_embedding = args.use_learned_embedding
     config.use_graph_mask        = args.use_graph_mask
+    config.use_param_output_head = args.use_param_output_head
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -942,8 +1022,8 @@ def main():
             "type_embedding_init": config.type_embedding_init,
             "use_deviation_norm": config.use_deviation_norm,
             "scale_shared_rel": config.scale_shared_rel,
-            "use_learned_embedding": config.use_learned_embedding,
             "use_graph_mask": config.use_graph_mask,
+            "use_param_output_head": config.use_param_output_head,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,
@@ -964,6 +1044,7 @@ def main():
             "attribute_reg_weight": args.attribute_reg_weight,
             "lr_schedule": args.lr_schedule,
             "lr_min": args.lr_min,
+            "lr_step_epoch": args.lr_step_epoch,
             "mask_augmentations": args.mask_augmentations,
             "masked_loss_weight": args.masked_loss_weight,
             "observed_loss_weight": args.observed_loss_weight,
@@ -999,6 +1080,7 @@ def main():
         observed_loss_weight=args.observed_loss_weight,
         lr_schedule=args.lr_schedule,
         lr_min=args.lr_min,
+        lr_step_epoch=args.lr_step_epoch,
     )
 
     accelerator = "gpu" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
@@ -1034,4 +1116,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

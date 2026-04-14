@@ -14,6 +14,7 @@ Output: PLOTS/TALK/Tensor_500_25_9_test_loss_by_size.png
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 
 import matplotlib as mpl
@@ -41,9 +42,11 @@ mpl.rcParams.update({
     "savefig.bbox":      "tight",
 })
 
-MARFORMER_ROOT = Path("RESULTS/MARFORMER/STAN/SPARSE/Tensor")
-STAN_ROOT      = Path("RESULTS/STAN/SPARSE/Tensor500")
-SIZES          = [10, 50, 100, 200, 400]
+MARFORMER_ROOT      = Path("RESULTS/MARFORMER/STAN/SPARSE/Tensor")
+STAN_ROOT           = Path("RESULTS/STAN/SPARSE/Tensor500")
+STAN_DISCRETE_ROOT  = Path("RESULTS/STAN/SPARSE")
+DATA_ROOT           = Path("DATA/STAN/SPARSE/Tensor_500_25_9_ItemTest")
+SIZES               = [10, 50, 100, 200, 400]
 
 
 def load_marformer_log_loss(size: int) -> float | None:
@@ -64,9 +67,51 @@ def load_stan_log_loss(size: int) -> float | None:
     return -data["rating_missing_log_likelihood"]
 
 
+def load_stan_discrete_log_loss(size: int) -> float | None:
+    metrics_path = STAN_DISCRETE_ROOT / f"Tensor_500_25_9_ItemTest_{size}_DISCRETE_MISP_eval" / "predictive_metrics.json"
+    if not metrics_path.exists():
+        print(f"  [SKIP Stan Discrete] size={size} — {metrics_path} not found")
+        return None
+    data = json.loads(metrics_path.read_text())
+    return -data["rating_missing_log_likelihood"]
+
+
+def load_unigram_log_loss(size: int) -> float | None:
+    bundle_path = DATA_ROOT / f"Tensor_500_25_9_ItemTest_{size}" / "data_bundle.json"
+    if not bundle_path.exists():
+        print(f"  [SKIP Unigram] size={size} — {bundle_path} not found")
+        return None
+
+    bundle = json.loads(bundle_path.read_text())
+    observed = bundle["observed_ratings"]
+    missing = bundle["missing_ratings"]
+
+    obs_pool = [
+        r for r in observed
+        if r["instance"] in {"train", "val", "test"}
+    ]
+    test_missing = [r for r in missing if r["instance"] == "test"]
+    if not obs_pool or not test_missing:
+        return None
+
+    num_classes = max(r["value"] for r in obs_pool + test_missing)
+    counts = [0] * num_classes
+    for r in obs_pool:
+        counts[r["value"] - 1] += 1
+    total = sum(counts)
+    probs = [c / total for c in counts]
+
+    xent = 0.0
+    for r in test_missing:
+        xent -= math.log(probs[r["value"] - 1] + 1e-12)
+    return xent / len(test_missing)
+
+
 def main() -> None:
     mf_sizes, mf_losses = [], []
     stan_sizes, stan_losses = [], []
+    discrete_sizes, discrete_losses = [], []
+    unigram_sizes, unigram_losses = [], []
 
     for size in SIZES:
         ll = load_marformer_log_loss(size)
@@ -79,9 +124,23 @@ def main() -> None:
             stan_sizes.append(size)
             stan_losses.append(ll)
 
-    fig, ax = plt.subplots(figsize=(7, 4.5))
+        ll = load_stan_discrete_log_loss(size)
+        if ll is not None:
+            discrete_sizes.append(size)
+            discrete_losses.append(ll)
+
+        ll = load_unigram_log_loss(size)
+        if ll is not None:
+            unigram_sizes.append(size)
+            unigram_losses.append(ll)
+
+    fig, ax = plt.subplots(figsize=(10, 6))
     ax.plot(mf_sizes,   mf_losses,   color="#1f6fba", marker="o", label="Marformer")
     ax.plot(stan_sizes, stan_losses, color="#e67e22", marker="s", label="Stan Tensor")
+    if discrete_losses:
+        ax.plot(discrete_sizes, discrete_losses, color="#8e44ad", marker="^", label="Stan Discrete")
+    if unigram_losses:
+        ax.plot(unigram_sizes, unigram_losses, color="#2e8b57", marker="D", linestyle="--", label="Unigram")
 
     ax.set_xlabel("Training Size (K_train)")
     ax.set_ylabel("Test Missing Log-Loss")

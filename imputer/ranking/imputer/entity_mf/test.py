@@ -83,8 +83,8 @@ def _reconstruct(run_dir: Path) -> tuple:
     config.type_embedding_init  = mcfg["type_embedding_init"]
     config.use_deviation_norm   = mcfg["use_deviation_norm"]
     config.scale_shared_rel     = mcfg["scale_shared_rel"]
-    config.use_learned_embedding = mcfg.get("use_learned_embedding", False)
     config.use_graph_mask       = mcfg["use_graph_mask"]
+    config.use_param_output_head = mcfg.get("use_param_output_head", False)
 
     # ── DataConverter + bundle ────────────────────────────────────────────────
     converter = DataConverter(
