@@ -263,7 +263,7 @@ def _run_sample(
         max_treedepth=args.max_treedepth,
         inits=1.0,
         show_progress=not args.no_progress,
-        show_console=False,
+        show_console=args.show_stan_console,
     )
     divergences = fit.divergences.sum()
     if divergences > 0:
@@ -315,6 +315,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-treedepth", type=int, default=12)
     parser.add_argument("--no-progress", action="store_true",
                         help="Disable progress bar")
+    parser.add_argument("--show-stan-console", action="store_true",
+                        help="Print CmdStan stdout/stderr (use when chains fail with retcode!=0)")
 
     # ── Model parameter overrides ─────────────────────────────────────────────
     parser.add_argument("--override-D", type=int, default=None,

@@ -5,6 +5,7 @@ Interfaces with iclr_data_generation.stan to generate synthetic datasets
 and convert Stan output into GroundTruthBundle format.
 """
 
+import gc
 import json
 import numpy as np
 from pathlib import Path
@@ -71,6 +72,9 @@ def generate_data(
 
     # Extract generated quantities
     bundle = extract_bundle_from_stan_output(fit, config)
+    # Release CmdStan fit object early (CSV + chain buffers can be large; helps avoid OOM during JSON save).
+    del fit
+    gc.collect()
 
     # Apply MCAR protocol if specified
     if config.observation_protocol == "mcar":
@@ -245,6 +249,10 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     for key in ["z_train", "z_test", "s_of_j", "a_attr", "u_proto", "v_style", "delta_ims", "mu_ims"]:
         if key in sample:
             extra_ground_truth[key] = sample[key][0]
+
+    # Tensor oracle fields used for concat+freeze diagnostics.
+    if "eff_pref" in sample:
+        extra_ground_truth["eff_pref"] = sample["eff_pref"][0]
 
     # Dawid-Skene confusion matrix
     if "confusion_matrix" in sample:

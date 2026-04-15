@@ -13,6 +13,7 @@ Usage:
 import argparse
 import json
 import shutil
+import time
 from pathlib import Path
 
 import numpy as np
@@ -60,6 +61,14 @@ def main():
                         help="Path to .stan file (overrides --stan-type when set)")
     parser.add_argument("--overwrite-existing-data", action="store_true",
                         help="Overwrite existing output directory if it exists")
+    parser.add_argument(
+        "--run-name-suffix",
+        type=str,
+        default="",
+        help="Append to the run directory name (e.g. __cheating_oracle). If --run-name is omitted, "
+             "a timestamped run_* name is used and the suffix is appended. Use this to mark bundles "
+             "that include oracle latents (eff_pref, embeddings) for diagnostic / 'cheating' training.",
+    )
 
     # ---------- Core dimensions ----------
     parser.add_argument("--K-train", type=int, default=10, help="Number of items in training instance")
@@ -121,7 +130,13 @@ def main():
     # dawid-skene / tensor-prototype:
     parser.add_argument("--alpha-confusion", type=float, default=10.0,
                         help="Dirichlet concentration for confusion matrix diagonal (dawid-skene / tensor; default: 10.0).")
-    
+    parser.add_argument(
+        "--omit-tensor-posterior-probs",
+        action="store_true",
+        help="For stan_type=tensor: do not keep or save train/val/test_posterior_rating_probs (large). "
+             "Reduces RAM and data_bundle.json size; MARFORMER training does not need them.",
+    )
+
     args = parser.parse_args()
 
     # ========== 2. Build DataGenConfig (core + type-specific fields from args and --stan-arg) ==========
@@ -190,17 +205,26 @@ def main():
         **type_kwargs,
     )
 
+    # Effective folder name: optional suffix marks diagnostic / oracle-ground-truth bundles.
+    run_name = args.run_name
+    suffix = (args.run_name_suffix or "").strip()
+    if suffix:
+        if run_name is None:
+            run_name = f"run_{time.strftime('%Y%m%d_%H%M%S')}{suffix}"
+        else:
+            run_name = run_name + suffix
+
     # ========== 3. Output directory ==========
     output_path = Path(args.output_dir)
     output_path.mkdir(parents=True, exist_ok=True)
     
-    if args.run_name:
-        potential_run_dir = output_path / args.run_name
+    if run_name:
+        potential_run_dir = output_path / run_name
         if potential_run_dir.exists() and args.overwrite_existing_data:
             print("\033[91mWARNING: Overwriting existing data directory: {}\033[0m".format(potential_run_dir))
             shutil.rmtree(potential_run_dir)
     
-    run_dir = new_run_dir(output_path, run_name=args.run_name)
+    run_dir = new_run_dir(output_path, run_name=run_name)
 
     print(f"Generating data with config: {config}")
     print(f"Stan type: {config.stan_type}")
@@ -209,10 +233,21 @@ def main():
     # ========== 4. Run data generation ==========
     bundle = generate_data(config, stan_file=args.stan_file)
 
+    # Drop large optional arrays before building JSON (avoids OOM on login nodes / low-memory jobs).
+    if args.omit_tensor_posterior_probs and config.stan_type == "tensor":
+        bundle.train_posterior_rating_probs = None
+        bundle.val_posterior_rating_probs = None
+        bundle.test_posterior_rating_probs = None
+
     # ========== 5. Save outputs (configs, Stan data JSON for inference, bundle) ==========
     from dataclasses import asdict
     datagen_dict = asdict(config) if hasattr(config, "__dataclass_fields__") else config.__dict__.copy()
-    save_configs(run_dir, datagen=datagen_dict)
+    generation_meta = {
+        "run_name_suffix": suffix or None,
+        "cheating_oracle_bundle": bool(suffix),
+        "effective_run_name": run_dir.name,
+    }
+    save_configs(run_dir, datagen=datagen_dict, generation_meta=generation_meta)
 
     stan_data = config.to_stan_data()
     save_json(stan_data, run_dir / "stan_data.json")
