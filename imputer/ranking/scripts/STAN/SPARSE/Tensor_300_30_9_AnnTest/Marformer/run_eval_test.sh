@@ -12,7 +12,7 @@ export PYTHONUNBUFFERED=1
 
 SCRIPT_START=$SECONDS
 
-RESULTS_ROOT="RESULTS/MARFORMER/STAN/SPARSE"
+RESULTS_ROOT="RESULTS/MARFORMER/STAN/SPARSE/TensorAnn"
 
 echo ""
 echo "============================================================"

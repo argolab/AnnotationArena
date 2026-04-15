@@ -12,7 +12,7 @@ export PYTHONUNBUFFERED=1
 
 SCRIPT_START=$SECONDS
 
-RESULTS_ROOT="RESULTS/MARFORMER/STAN/SPARSE"
+RESULTS_ROOT="RESULTS/MARFORMER/STAN/SPARSE/TensorAnn"
 
 echo ""
 echo "============================================================"
@@ -20,7 +20,7 @@ echo " Tensor_300_30_9_AnnTest — Test Evaluation (all checkpoints)"
 echo "============================================================"
 
 for SIZE in 5 10 15 20; do
-    RUN_NAME="Tensor_300_30_9_AnnTest_${SIZE}_NOITEMDEV_TRANS_MARFORMER"
+    RUN_NAME="Tensor_300_30_9_AnnTest_${SIZE}_NOITEMDEV_TRANS_MARFORMER_Ann"
     RUN_DIR="${RESULTS_ROOT}/${RUN_NAME}"
 
     if [ ! -d "$RUN_DIR" ]; then
