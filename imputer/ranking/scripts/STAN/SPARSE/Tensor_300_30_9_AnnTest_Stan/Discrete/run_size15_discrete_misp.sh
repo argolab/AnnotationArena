@@ -10,7 +10,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=18GB
 #SBATCH --partition=cpu
-#SBATCH --time=04:00:00
+#SBATCH --time=18:00:00
 
 SCRIPT_START=$SECONDS
 
@@ -63,7 +63,7 @@ python STAN/stan_code/scripts/run_inference.py \
     --seed                       "$SEED"          \
     --override-alpha-dirichlet   2.0              \
     --override-sigma-measurement 1.0              \
-    --override-sigma-annotator   0.6              \
+    --override-sigma-annotator   1.0              \
     --override-temperature       1.0              \
     --stan-arg                   M=6              \
     --stan-arg                   S=6              \

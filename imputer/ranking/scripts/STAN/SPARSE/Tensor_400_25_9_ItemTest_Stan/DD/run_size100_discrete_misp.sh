@@ -8,9 +8,9 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=12GB
+#SBATCH --mem-per-cpu=18GB
 #SBATCH --partition=cpu
-#SBATCH --time=12:00:00
+#SBATCH --time=06:00:00
 
 SCRIPT_START=$SECONDS
 
@@ -25,11 +25,11 @@ set -e
 
 SCRIPT_START=$SECONDS
 
-SIZE=5
-DATA_DIR="DATA/STAN/SPARSE/Tensor_300_30_9_AnnTest/Tensor_300_30_9_AnnTest_${SIZE}"
+SIZE=100
+DATA_DIR="DATA/STAN/SPARSE/Tensor_400_25_9_ItemTest/Tensor_400_25_9_ItemTest_${SIZE}"
 DATA_BUNDLE="${DATA_DIR}/data_bundle.json"
 OUTPUT_DIR="RESULTS/STAN/SPARSE"
-RUN_NAME="Tensor_300_30_9_AnnTest_${SIZE}_DISCRETE_MISP"
+RUN_NAME="Tensor_400_25_9_ItemTest_${SIZE}_DISCRETE_MISP_DD"
 
 CHAINS=1
 ITER_WARMUP=300
@@ -40,7 +40,7 @@ SEED=42
 
 echo ""
 echo "============================================================"
-echo " Stan Discrete Misspecified | Tensor_300_30_9_AnnTest_${SIZE}"
+echo " Stan Discrete Misspecified | Tensor_500_25_9_ItemTest_${SIZE}"
 echo "  CHAINS       : ${CHAINS}"
 echo "  ITER_WARMUP  : ${ITER_WARMUP}"
 echo "  ITER_SAMPLING: ${ITER_SAMPLING}"
@@ -62,12 +62,12 @@ python STAN/stan_code/scripts/run_inference.py \
     --max-treedepth              "$MAX_TREEDEPTH" \
     --seed                       "$SEED"          \
     --override-alpha-dirichlet   2.0              \
-    --override-sigma-measurement 1.0              \
-    --override-sigma-annotator   1.0              \
+    --override-sigma-measurement 0.5             \
+    --override-sigma-annotator   0.6              \
     --override-temperature       1.0              \
-    --stan-arg                   M=6              \
-    --stan-arg                   S=6              \
-    --stan-arg                   d_annotator=6    \
+    --stan-arg                   M=32              \
+    --stan-arg                   S=32              \
+    --stan-arg                   d_annotator=4    \
     --stan-arg                   use_factored_annotator=0 \
     --stan-arg                   N_pairwise_rankings=0 \
     --stan-arg                   N_missing_pairwise_rankings=0 \
