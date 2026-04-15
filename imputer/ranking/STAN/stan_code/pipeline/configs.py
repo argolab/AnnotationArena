@@ -253,6 +253,14 @@ class AnnotatorSplitConfig:
     use_factored_annotator: Optional[int] = None
     derive_thresholds_from_annotator: Optional[int] = None
 
+    # Tensor-prototype fields (used when stan_type="tensor")
+    T: Optional[int] = None
+    sigma_u: Optional[float] = None
+    sigma_v: Optional[float] = None
+    sigma_uit: Optional[float] = None
+    use_dawid_skene_noise: Optional[int] = None
+    alpha_confusion: Optional[float] = None
+
     # Observation protocol
     observation_protocol: str = "mcar"     # "mcar" is the only supported protocol
     mcar_missing_rate: float = 0.5
@@ -269,13 +277,7 @@ class AnnotatorSplitConfig:
 
     def to_stan_data(self) -> Dict[str, Any]:
         """Build Stan data dict for the annotator-split model."""
-        for field in ("D", "d_annotator", "sigma_annotator", "sigma_measurement",
-                      "kappa", "temperature", "use_factored_annotator",
-                      "derive_thresholds_from_annotator"):
-            if getattr(self, field) is None:
-                raise ValueError(f"AnnotatorSplitConfig: {field!r} must be set")
-
-        return {
+        base = {
             "K": self.K,
             "J_train": self.J_train,
             "J_val": self.J_val,
@@ -283,12 +285,42 @@ class AnnotatorSplitConfig:
             "J": self.J,
             "I": self.I,
             "C": self.C,
-            "D": self.D,
-            "d_annotator": self.d_annotator,
-            "sigma_annotator": self.sigma_annotator,
-            "sigma_measurement": self.sigma_measurement,
-            "kappa": self.kappa,
-            "temperature": self.temperature,
-            "use_factored_annotator": int(self.use_factored_annotator),
-            "derive_thresholds_from_annotator": int(self.derive_thresholds_from_annotator),
         }
+        if self.stan_type == "tensor":
+            for field in ("D", "T", "sigma_u", "sigma_v", "sigma_uit",
+                          "sigma_measurement", "kappa", "alpha_confusion",
+                          "temperature", "use_dawid_skene_noise",
+                          "derive_thresholds_from_annotator"):
+                if getattr(self, field) is None:
+                    raise ValueError(f"AnnotatorSplitConfig (tensor): {field!r} must be set")
+            base.update({
+                "D": self.D,
+                "T": self.T,
+                "sigma_u": self.sigma_u,
+                "sigma_v": self.sigma_v,
+                "sigma_uit": self.sigma_uit,
+                "sigma_measurement": self.sigma_measurement,
+                "kappa": self.kappa,
+                "alpha_confusion": self.alpha_confusion,
+                "temperature": self.temperature,
+                "use_dawid_skene_noise": int(self.use_dawid_skene_noise),
+                "derive_thresholds_from_annotator": int(self.derive_thresholds_from_annotator),
+                "num_annotate_annotator": 4,
+            })
+        else:
+            for field in ("D", "d_annotator", "sigma_annotator", "sigma_measurement",
+                          "kappa", "temperature", "use_factored_annotator",
+                          "derive_thresholds_from_annotator"):
+                if getattr(self, field) is None:
+                    raise ValueError(f"AnnotatorSplitConfig: {field!r} must be set")
+            base.update({
+                "D": self.D,
+                "d_annotator": self.d_annotator,
+                "sigma_annotator": self.sigma_annotator,
+                "sigma_measurement": self.sigma_measurement,
+                "kappa": self.kappa,
+                "temperature": self.temperature,
+                "use_factored_annotator": int(self.use_factored_annotator),
+                "derive_thresholds_from_annotator": int(self.derive_thresholds_from_annotator),
+            })
+        return base

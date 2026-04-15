@@ -1,0 +1,1 @@
+{"K": 300, "J_train": 10, "J_val": 5, "J_test": 5, "J": 20, "I": 9, "C": 5, "D": 32, "T": 3, "sigma_u": 1.0, "sigma_v": 1.0, "sigma_uit": 0.1, "sigma_measurement": 0.1, "kappa": 10.0, "alpha_confusion": 15.0, "temperature": 0.5, "use_dawid_skene_noise": 0, "derive_thresholds_from_annotator": 0, "num_annotate_annotator": 4}
