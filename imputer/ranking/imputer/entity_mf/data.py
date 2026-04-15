@@ -150,6 +150,10 @@ def variable_list_to_entity_graph(
         else:
             raw_data["rating_value"] = var.rating_value
             raw_data["rating_dist"] = var.rating_dist
+            if var.oracle_eff_pref is not None:
+                raw_data["oracle_eff_pref"] = list(var.oracle_eff_pref)
+            if var.oracle_item_embedding is not None:
+                raw_data["oracle_item_embedding"] = list(var.oracle_item_embedding)
 
         tokens.append(
             Token(
@@ -181,9 +185,18 @@ def variable_list_to_entity_graph(
         {item_id for var in ranking_vars for item_id in var.item_ids}
     )
     item_id_to_token: Dict[int, int] = {}
+    item_id_to_oracle: Dict[int, List[float]] = {}
+    for var in ranking_vars:
+        if var.oracle_item_embedding is None:
+            continue
+        for item_id in var.item_ids:
+            item_id_to_oracle.setdefault(item_id, list(var.oracle_item_embedding))
     for item_id in present_item_ids:
         item_id_to_token[item_id] = len(tokens)
-        tokens.append(Token(type_name="item", entity_id=item_id, status=2, raw_data=None))
+        item_raw_data: Dict[str, Any] | None = None
+        if item_id in item_id_to_oracle:
+            item_raw_data = {"oracle_item_embedding": item_id_to_oracle[item_id]}
+        tokens.append(Token(type_name="item", entity_id=item_id, status=2, raw_data=item_raw_data))
 
     # 5) Edges
     #    For each variable token v with (i, j, k):

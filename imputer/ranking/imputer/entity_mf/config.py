@@ -30,4 +30,6 @@ class EntityMarformerConfig:
     scale_shared_rel: bool = False       # In shared-bias mode: scale rel_scores by 1/sqrt(head_dim), matching per-head normalization
     use_learned_embedding: bool = False  # Replace fixed-scale build_param with learned Ax+b embedding; unembeds at top layer
     use_graph_mask: bool = False         # Hard graph attention mask: allow attention only where edge_mask or K_aug pointer exists (+ self)
+    oracle_concat_freeze: bool = False   # Append frozen oracle vectors to selected tokens.
+    oracle_dim: int = 0                  # Oracle width D resolved from generated data bundle/config.
 

@@ -236,13 +236,16 @@ class EntityMarformer(nn.Module):
         self.use_rel_value = config.use_rel_value
         self.use_addone_attn = config.use_addone_attn
         self.use_learned_embedding = config.use_learned_embedding
+        self.oracle_concat_freeze = bool(config.oracle_concat_freeze)
+        self.oracle_dim = int(config.oracle_dim) if self.oracle_concat_freeze else 0
 
         # Global param dim = max over types (no longer passed in).
         self.global_param_dim = max(t.param_dim for t in types.values())
         self.param_dim = self.global_param_dim
 
-        # Config embedding_dim = total model dim (feature + param). Must be divisible by heads.
-        self.model_dim = config.embedding_dim
+        # Config embedding_dim is the learnable/base total model width.
+        self.base_model_dim = config.embedding_dim
+        self.model_dim = self.base_model_dim + self.oracle_dim
         assert self.model_dim % config.attention_heads == 0, (
             f"embedding_dim {self.model_dim} must be divisible by attention_heads {config.attention_heads}"
         )
@@ -250,39 +253,41 @@ class EntityMarformer(nn.Module):
             f"embedding_dim {self.model_dim} must be > global_param_dim {self.param_dim}"
         )
 
-        # With learned embedding the full model_dim is used for the feature stream;
-        # without it the feature stream is model_dim - param_dim.
+        # Learnable feature width stays unchanged; oracle block is appended after this.
         if config.use_learned_embedding:
-            self.feature_dim = self.model_dim
+            self.learnable_feature_dim = self.base_model_dim
         else:
-            self.feature_dim = self.model_dim - self.param_dim
+            self.learnable_feature_dim = self.base_model_dim - self.param_dim
+        if self.learnable_feature_dim <= 0:
+            raise ValueError("Learnable feature dimension must be positive.")
+        self.feature_dim = self.learnable_feature_dim + self.oracle_dim
 
         # Per-type base embeddings (centroids) — used for entity tokens in both modes,
         # and for variable tokens only when use_learned_embedding=False.
         self.type_embeddings = nn.ParameterDict(
             {
-                name: nn.Parameter(torch.empty(1, self.feature_dim))
+                name: nn.Parameter(torch.empty(1, self.learnable_feature_dim))
                 for name in types.keys()
             }
         )
         for p in self.type_embeddings.values():
-            _init_type_embedding(p, config.type_embedding_init, self.feature_dim)
+            _init_type_embedding(p, config.type_embedding_init, self.learnable_feature_dim)
 
         # Per-entity deviations/variations (where enabled)
         self.deviation_tables = nn.ParameterDict()
         for name, t in types.items():
             if t.variation.enabled and t.variation.num_entities > 0:
-                table = nn.Parameter(torch.zeros(t.variation.num_entities, self.feature_dim))
+                table = nn.Parameter(torch.zeros(t.variation.num_entities, self.learnable_feature_dim))
                 self.deviation_tables[name] = table
 
-        self.deviation_norm = NormLayer(self.feature_dim)
+        self.deviation_norm = NormLayer(self.learnable_feature_dim)
 
         # Learned value embedders: one per variable type (use_learned_embedding=True only).
         # Maps binary simple-value representation (param_dim-dim) → model_dim.
         # The bias of this Linear acts as the type embedding for variable tokens (bias b in Ax+b).
         if config.use_learned_embedding:
             self.value_embedders = nn.ModuleDict({
-                name: nn.Linear(self.param_dim, self.model_dim)
+                name: nn.Linear(self.param_dim, self.learnable_feature_dim)
                 for name, t in types.items()
                 if t.is_variable
             })
@@ -354,12 +359,13 @@ class EntityMarformer(nn.Module):
 
         for idx, token in enumerate(graph.tokens):
             t = self.types[token.type_name]
+            oracle_block = torch.zeros(self.oracle_dim, device=device)
 
             if self.use_learned_embedding and t.is_variable:
                 # Learned embedding path: h0 = value_embedder(x) where x is binary simple value.
                 # The Linear bias acts as the type embedding b; no separate type_centroid used.
                 x = t.build_simple_value(token.raw_data or {}, device=device, global_param_dim=self.param_dim)
-                features[0, idx] = self.value_embedders[token.type_name](x)
+                learnable_feat = self.value_embedders[token.type_name](x)
             else:
                 # Standard path: h0 = type_centroid + deviation (entity tokens always use this).
                 base = self.type_embeddings[token.type_name]  # [1, feature_dim]
@@ -374,11 +380,35 @@ class EntityMarformer(nn.Module):
                         if self.config.use_deviation_norm:
                             dev = self.deviation_norm(dev)
                         feat_vec = feat_vec + dev
-                features[0, idx] = feat_vec
+                learnable_feat = feat_vec.squeeze(0)
 
                 p = t.build_param(token.raw_data or {}, device=device, global_param_dim=self.param_dim)
                 params[0, idx] = p
 
+            if self.oracle_concat_freeze and token.raw_data:
+                if token.type_name == "rating":
+                    oracle_eff_pref = token.raw_data.get("oracle_eff_pref")
+                    if oracle_eff_pref is not None:
+                        oracle_tensor = torch.as_tensor(oracle_eff_pref, device=device, dtype=features.dtype)
+                        if oracle_tensor.shape[0] != self.oracle_dim:
+                            raise ValueError(
+                                f"oracle_eff_pref width {oracle_tensor.shape[0]} does not match oracle_dim {self.oracle_dim}"
+                            )
+                        oracle_block = oracle_tensor
+                elif token.type_name == "item":
+                    oracle_item = token.raw_data.get("oracle_item_embedding")
+                    if oracle_item is not None:
+                        oracle_tensor = torch.as_tensor(oracle_item, device=device, dtype=features.dtype)
+                        if oracle_tensor.shape[0] != self.oracle_dim:
+                            raise ValueError(
+                                f"oracle_item_embedding width {oracle_tensor.shape[0]} does not match oracle_dim {self.oracle_dim}"
+                            )
+                        oracle_block = oracle_tensor
+
+            if self.oracle_dim > 0:
+                features[0, idx] = torch.cat([learnable_feat, oracle_block], dim=0)
+            else:
+                features[0, idx, : self.learnable_feature_dim] = learnable_feat
             attn_mask[0, idx] = True
 
         return features, params, attn_mask

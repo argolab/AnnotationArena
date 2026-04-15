@@ -37,6 +37,9 @@ class RankingData:
     # List  → use as soft CE target (real data: LLM gives full distribution,
     #          human gives one-hot stored explicitly for uniform handling).
     rating_dist: Optional[List[float]] = None
+    # Oracle diagnostics payloads (optional).
+    oracle_eff_pref: Optional[List[float]] = None
+    oracle_item_embedding: Optional[List[float]] = None
 
     @property
     def is_missing(self) -> bool:
@@ -101,24 +104,49 @@ class DataConverter:
         else:
             raise ValueError(f"Invalid partition: {partition}. Must be 'train', 'val', 'test'")
 
+        embeddings = getattr(bundle, "embeddings", None)
+        extra_ground_truth = getattr(bundle, "extra_ground_truth", None) or {}
+        if not isinstance(extra_ground_truth, dict):
+            extra_ground_truth = {}
+        # generate_data.py flattens extra_ground_truth keys to top-level JSON; support both.
+        eff_pref = getattr(bundle, "eff_pref", None) or extra_ground_truth.get("eff_pref")
+
         # Process ratings
         for rating in ratings:
             if rating['item'] <= self.num_items:
+                item_id = rating['item'] - 1
+                attr_id = rating['attribute'] - 1
+                annot_id = rating['annotator'] - 1
+                oracle_eff_pref = None
+                oracle_item_embedding = None
+
+                if eff_pref is not None:
+                    ij_idx = attr_id * self.num_annotators + annot_id
+                    oracle_eff_pref = eff_pref[ij_idx]
+                if embeddings is not None:
+                    oracle_item_embedding = embeddings[item_id]
+
                 variables.append(RankingData(
-                    annotator_id=rating['annotator'] - 1,
-                    attribute_id=rating['attribute'] - 1,
+                    annotator_id=annot_id,
+                    attribute_id=attr_id,
                     is_listwise=False,
-                    item_ids=[rating['item'] - 1],
+                    item_ids=[item_id],
                     status=status_code,
                     instance=rating['instance'],
                     rating_value=rating['value'] - 1,
                     rating_dist=rating.get('rating_dist'),  # None for synthetic; list for real
+                    oracle_eff_pref=oracle_eff_pref,
+                    oracle_item_embedding=oracle_item_embedding,
                 ))
 
         # Process pairwise rankings
         for ranking in pairwise:
             items_to_check = ranking['items'][:self.max_rank_size]
             if all(item <= self.num_items for item in items_to_check):
+                oracle_item_embedding = None
+                if embeddings is not None and ranking['items']:
+                    # Ranking tokens use first item as canonical item identity (same as pointer logic).
+                    oracle_item_embedding = embeddings[ranking['items'][0] - 1]
                 variables.append(RankingData(
                     annotator_id=ranking['annotator'] - 1,
                     attribute_id=ranking['attribute'] - 1,
@@ -126,7 +154,8 @@ class DataConverter:
                     item_ids=[i - 1 for i in items_to_check],
                     status=status_code,
                     instance=ranking['instance'],
-                    ranking_order=ranking['order'][:self.max_rank_size]
+                    ranking_order=ranking['order'][:self.max_rank_size],
+                    oracle_item_embedding=oracle_item_embedding,
                 ))
 
         return variables

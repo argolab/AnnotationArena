@@ -547,7 +547,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
 # Helper functions for loading bundle and converter
 ########################################################
 
-def load_bundle_and_converter(data_dir: Path) -> tuple[Any, DataConverter, Dict[str, int]]:
+def load_bundle_and_converter(data_dir: Path) -> tuple[Any, DataConverter, Dict[str, int], Dict[str, Any]]:
     bundle_path = data_dir / "data_bundle.json"
     configs_path = data_dir / "configs.json"
     if not bundle_path.exists():
@@ -576,7 +576,59 @@ def load_bundle_and_converter(data_dir: Path) -> tuple[Any, DataConverter, Dict[
     bundle = converter.load_bundle_data(bundle_path)
 
     sizes["max_rank_size"] = max_rank_size
-    return bundle, converter, sizes
+    return bundle, converter, sizes, configs
+
+
+def resolve_oracle_dim_and_validate(
+    *,
+    bundle: Any,
+    sizes: Dict[str, int],
+    configs: Dict[str, Any],
+    oracle_concat_freeze: bool,
+    oracle_use_eff_pref: bool,
+) -> int:
+    """Resolve oracle width D from generated data/config and validate oracle tensors."""
+    if not oracle_concat_freeze:
+        return 0
+
+    datagen = configs.get("datagen", {})
+    oracle_dim = datagen.get("D")
+    if oracle_dim is None:
+        raise ValueError("oracle_concat_freeze requires datagen.D in configs.json.")
+    oracle_dim = int(oracle_dim)
+    if oracle_dim <= 0:
+        raise ValueError(f"Invalid oracle dimension D={oracle_dim}.")
+
+    embeddings = getattr(bundle, "embeddings", None)
+    if embeddings is None:
+        raise ValueError("oracle_concat_freeze requires `embeddings` in data_bundle.json.")
+    if len(embeddings) != sizes["num_items"]:
+        raise ValueError(
+            f"embeddings item count {len(embeddings)} != expected num_items {sizes['num_items']}."
+        )
+    emb_width = len(embeddings[0]) if embeddings else 0
+    if emb_width != oracle_dim:
+        raise ValueError(f"embeddings width {emb_width} != oracle D={oracle_dim}.")
+
+    if oracle_use_eff_pref:
+        extra_gt = getattr(bundle, "extra_ground_truth", None) or {}
+        if not isinstance(extra_gt, dict):
+            extra_gt = {}
+        eff_pref = getattr(bundle, "eff_pref", None) or extra_gt.get("eff_pref")
+        if eff_pref is None:
+            raise ValueError(
+                "oracle_use_eff_pref requires eff_pref in data_bundle.json "
+                "(top-level from generate_data, or under extra_ground_truth). "
+                "Regenerate tensor data with the current generate_data.py after Stan compiles."
+            )
+        expected_rows = sizes["num_attributes"] * sizes["num_annotators"]
+        if len(eff_pref) != expected_rows:
+            raise ValueError(f"eff_pref rows {len(eff_pref)} != expected I*J {expected_rows}.")
+        eff_width = len(eff_pref[0]) if eff_pref else 0
+        if eff_width != oracle_dim:
+            raise ValueError(f"eff_pref width {eff_width} != oracle D={oracle_dim}.")
+
+    return oracle_dim
 
 
 def build_entity_marformer_from_bundle(
@@ -852,6 +904,16 @@ def main():
         default=42,
         help="Global random seed for reproducibility (controls init, dropout, masking, data ordering).",
     )
+    parser.add_argument(
+        "--oracle-concat-freeze",
+        action="store_true",
+        help="Append frozen oracle vectors to rating/item token features (diagnostic mode).",
+    )
+    parser.add_argument(
+        "--oracle-use-eff-pref",
+        action="store_true",
+        help="Use extra_ground_truth.eff_pref as oracle v_ij for rating tokens (requires --oracle-concat-freeze).",
+    )
     args = parser.parse_args()
 
     # Seed everything before any model init or data loading.
@@ -859,7 +921,16 @@ def main():
 
     data_dir = Path(args.data_dir)
 
-    bundle, converter, sizes = load_bundle_and_converter(data_dir)
+    bundle, converter, sizes, configs = load_bundle_and_converter(data_dir)
+    if args.oracle_use_eff_pref and not args.oracle_concat_freeze:
+        raise ValueError("--oracle-use-eff-pref requires --oracle-concat-freeze.")
+    oracle_dim = resolve_oracle_dim_and_validate(
+        bundle=bundle,
+        sizes=sizes,
+        configs=configs,
+        oracle_concat_freeze=bool(args.oracle_concat_freeze),
+        oracle_use_eff_pref=bool(args.oracle_use_eff_pref),
+    )
 
     config = EntityMarformerConfig()
     if args.embedding_dim is not None:
@@ -883,6 +954,8 @@ def main():
     config.scale_shared_rel      = args.scale_shared_rel
     config.use_learned_embedding = args.use_learned_embedding
     config.use_graph_mask        = args.use_graph_mask
+    config.oracle_concat_freeze  = bool(args.oracle_concat_freeze)
+    config.oracle_dim            = oracle_dim
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -947,6 +1020,9 @@ def main():
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,
+            "oracle_concat_freeze": config.oracle_concat_freeze,
+            "oracle_use_eff_pref": bool(args.oracle_use_eff_pref),
+            "oracle_dim": config.oracle_dim,
         },
         "training": {
             "epochs": args.epochs,

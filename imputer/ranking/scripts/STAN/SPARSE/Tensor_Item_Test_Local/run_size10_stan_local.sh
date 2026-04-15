@@ -1,6 +1,31 @@
 #!/bin/bash
+set -euo pipefail
 
 SCRIPT_START=$SECONDS
+
+# CmdStan compiles models with g++ (C++17). Compute nodes often omit /usr/bin/g++;
+# load a GCC module in your job or shell first, e.g.:
+#   module avail gcc
+#   module load gcc/12.2.0
+# If ~/.cmdstan/.../make/local hard-codes CXX=/usr/bin/g++, change it to CXX=g++
+# or the full path from $(which g++).
+#
+# Link errors: undefined reference to __libc_single_threaded, or libtbb.so.2 wants
+# GLIBC_2.32/2.34 — your $CMDSTAN tree was built on a newer OS than this node.
+# Rebuild CmdStan *on this same node* (after module load gcc):
+#   cd "${CMDSTAN:?set CMDSTAN to your cmdstan dir}"
+#   make clean-all && make build -j8
+# If __libc_single_threaded persists on EL8, rebuild CmdStan with an older GCC
+# module (e.g. 9 or 10) that matches the cluster libc, not only gcc/12.
+if ! command -v g++ >/dev/null 2>&1; then
+    echo "ERROR: g++ not found in PATH. Load a compiler module, then re-run."
+    echo "  Example: module load gcc"
+    exit 1
+fi
+export CXX="$(command -v g++)"
+if command -v gcc >/dev/null 2>&1; then
+    export CC="$(command -v gcc)"
+fi
 
 SIZE=125
 DATA_DIR="DATA/STAN/SPARSE/Tensor_125_25_9_ItemTest_125"
@@ -36,7 +61,8 @@ python STAN/stan_code/scripts/run_inference.py \
       --adapt-delta        "$ADAPT_DELTA"   \
       --max-treedepth      "$MAX_TREEDEPTH" \
       --seed               "$SEED"          \
-      --overwrite-existing-data
+      --overwrite-existing-data      \
+      --show-stan-console
 
 echo "[2/2] Evaluating predictions..."
 python STAN/stan_code/scripts/evaluate_predictions.py \
