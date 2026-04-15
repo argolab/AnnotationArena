@@ -306,3 +306,11 @@ imputer/ranking/DATA/OLD_DATA/
 imputer/ranking/ARCHITECTURE
 imputer/ranking/RESULTS/
 imputer/ranking/scripts/TESTING_SCRIPTS/
+imputer/ranking/imputer/entity_mf/ranked_eval_lineplot_v2.py
+imputer/ranking/imputer/entity_mf/ranked_eval_lineplot.py
+imputer/ranking/imputer/entity_mf/ranked_eval_report_v2.py
+imputer/ranking/imputer/entity_mf/ranked_eval_report.py
+imputer/ranking/imputer/entity_mf/ranked_eval.py
+
+imputer/ranking/imputer/STAN/stan_code/stan_models/tensor_generation
+imputer/ranking/imputer/STAN/stan_code/stan_models/tensor_model
