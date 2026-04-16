@@ -39,9 +39,6 @@ case "${PUZZLE}" in
     ;;
 esac
 
-export GROK_STEPS="${GROK_STEPS:-10000}"
-export GROK_MASK_RATE="${GROK_MASK_RATE:-0.2}"
-export GROK_LIVE_CURVES_EVERY="${GROK_LIVE_CURVES_EVERY:-100}"
 export TIME="${TIME:-36:00:00}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
