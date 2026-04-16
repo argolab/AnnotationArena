@@ -55,6 +55,7 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
 from tqdm.auto import tqdm
 
 from imputer.entity_mf.config import EntityMarformerConfig
@@ -112,12 +113,15 @@ MC_ENTRY_GRID_POINTER_RELS = False
 # Oracle / architecture experiments (see EntityMarformerConfig + model.forward).
 SHOW_CORRECT_VECTOR = False
 USE_MULTIPLICATION_HEAD = False
+READOUT_MLP_LAYER = 0
+READOUT_MLP_DIM = 0
 
 OUT_DIR = Path("OUTPUT/toy_matrix_completion_curves")
 _LOG_Y_FLOOR = 1e-12
 
 # Write partial curves to out_dir/curves_live.json every N steps (0 = only write at end).
 LIVE_CURVES_EVERY = 0
+EVAL_EVERY = 1
 
 
 def _atomic_write_json(path: Path, payload: Dict[str, Any]) -> None:
@@ -413,9 +417,14 @@ def _compute_entry_mse(
     device: torch.device,
     selected_token_indices: set[int] | None = None,
     params: torch.Tensor | None = None,
+    readout_mlp: nn.Module | None = None,
 ) -> torch.Tensor:
     if params is None:
-        params = model(graph, device=device)  # [1, L, P]
+        if readout_mlp is None:
+            params = model(graph, device=device)  # [1, L, P]
+        else:
+            _, combined = model(graph, device=device, return_combined=True)  # [1, L, model_dim]
+            params = readout_mlp(combined)  # [1, L, P]
     entry_type = graph.types["mc_entry"]
     assert isinstance(entry_type, SyntheticRegressionType)
     out_slice = entry_type.slices.output_slice()
@@ -440,6 +449,31 @@ def _compute_entry_mse(
     pred = torch.stack(preds, dim=0)
     tgt = torch.stack(tgts, dim=0)
     return F.mse_loss(pred, tgt, reduction="mean")
+
+
+def _build_readout_mlp(
+    *,
+    input_dim: int,
+    output_dim: int,
+    num_layers: int,
+    hidden_dim: int,
+) -> nn.Module:
+    if num_layers < 1:
+        raise ValueError(f"readout_mlp_layer must be >= 1, got {num_layers}")
+    if hidden_dim < 1:
+        raise ValueError(f"readout_mlp_dim must be >= 1, got {hidden_dim}")
+
+    layers: List[nn.Module] = []
+    if num_layers == 1:
+        layers.append(nn.Linear(input_dim, output_dim))
+    else:
+        layers.append(nn.Linear(input_dim, hidden_dim))
+        layers.append(nn.ReLU())
+        for _ in range(num_layers - 2):
+            layers.append(nn.Linear(hidden_dim, hidden_dim))
+            layers.append(nn.ReLU())
+        layers.append(nn.Linear(hidden_dim, output_dim))
+    return nn.Sequential(*layers)
 
 
 def _debug_Y_Yhat_arrays(
@@ -586,7 +620,10 @@ def run_matrix_completion_experiment(
     resample_train_each_step: bool = False,
     show_correct_vector: bool = SHOW_CORRECT_VECTOR,
     use_multiplication_head: bool = USE_MULTIPLICATION_HEAD,
+    readout_mlp_layer: int = READOUT_MLP_LAYER,
+    readout_mlp_dim: int = READOUT_MLP_DIM,
     live_curves_every: int = LIVE_CURVES_EVERY,
+    eval_every: int = EVAL_EVERY,
     device: torch.device | None = None,
 ) -> Dict[str, Any]:
     if device is None:
@@ -598,6 +635,12 @@ def run_matrix_completion_experiment(
         raise ValueError("show_correct_vector requires --D >= 1")
     if use_learned_embedding and use_multiplication_head:
         raise ValueError("use_multiplication_head is not supported with use_learned_embedding")
+    use_readout_mlp = readout_mlp_layer > 0 and readout_mlp_dim > 0
+    if (readout_mlp_layer == 0) != (readout_mlp_dim == 0):
+        raise ValueError(
+            "readout_mlp_layer and readout_mlp_dim must both be zero (disabled) "
+            "or both be positive (enabled)."
+        )
 
     types = _build_types(n_rows=n_rows, n_cols=n_cols, latent_dim=latent_dim)
     relationships = _build_relationships(mc_entry_grid_pointer_rels=mc_entry_grid_pointer_rels)
@@ -676,7 +719,18 @@ def run_matrix_completion_experiment(
         types=types,
         num_relationships=ref_graph.num_relationships,
     ).to(device)
-    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    readout_mlp: nn.Module | None = None
+    if use_readout_mlp:
+        readout_mlp = _build_readout_mlp(
+            input_dim=embedding_dim,
+            output_dim=model.global_param_dim,
+            num_layers=readout_mlp_layer,
+            hidden_dim=readout_mlp_dim,
+        ).to(device)
+    trainable_params = list(model.parameters())
+    if readout_mlp is not None:
+        trainable_params += list(readout_mlp.parameters())
+    opt = torch.optim.Adam(trainable_params, lr=lr, weight_decay=weight_decay)
 
     print(
         "Starting EntityMarformer matrix-completion toy\n"
@@ -694,6 +748,9 @@ def run_matrix_completion_experiment(
         f"  resample_train_each_step={resample_train_each_step}\n"
         f"  show_correct_vector={show_correct_vector}\n"
         f"  use_multiplication_head={use_multiplication_head}\n"
+        f"  readout_mlp_layer={readout_mlp_layer}, readout_mlp_dim={readout_mlp_dim}, "
+        f"enabled={use_readout_mlp}\n"
+        f"  eval_every={eval_every}\n"
         f"  device={device}"
     )
 
@@ -745,6 +802,10 @@ def run_matrix_completion_experiment(
             "resample_train_each_step": resample_train_each_step,
             "show_correct_vector": show_correct_vector,
             "use_multiplication_head": use_multiplication_head,
+            "readout_mlp_layer": readout_mlp_layer,
+            "readout_mlp_dim": readout_mlp_dim,
+            "use_readout_mlp": use_readout_mlp,
+            "eval_every": eval_every,
             "train_mse": train_mse,
             "test_mse": test_mse,
             "test_all_mse": test_all_mse,
@@ -757,6 +818,8 @@ def run_matrix_completion_experiment(
         (out_dir / "curves_live.json").unlink(missing_ok=True)
 
     steps = tqdm(range(num_steps), total=num_steps, desc="train", leave=False)
+    last_test_mse: float | None = None
+    last_test_all_mse: float | None = None
     for step in steps:
         if resample_train_each_step:
             train_samples = _make_train_samples()
@@ -765,7 +828,12 @@ def run_matrix_completion_experiment(
 
         train_sum = torch.zeros((), device=device)
         for sample in train_samples:
-            train_sum = train_sum + _compute_entry_mse(model, sample.graph, device=device)
+            train_sum = train_sum + _compute_entry_mse(
+                model,
+                sample.graph,
+                device=device,
+                readout_mlp=readout_mlp,
+            )
         train_mse = train_sum / float(len(train_samples))
 
         reg_loss = _compute_deviation_reg_loss(model, types, device=device)
@@ -773,25 +841,41 @@ def run_matrix_completion_experiment(
         loss.backward()
         opt.step()
 
-        model.eval()
-        with torch.no_grad():
-            test_sum = torch.zeros((), device=device)
-            test_all_sum = torch.zeros((), device=device)
-            for sample in test_samples:
-                masked_idx = set(sample.masked_token_indices)
-                p_te = model(sample.graph, device=device)
-                test_sum = test_sum + _compute_entry_mse(
-                    model,
-                    sample.graph,
-                    device=device,
-                    selected_token_indices=masked_idx,
-                    params=p_te,
-                )
-                test_all_sum = test_all_sum + _compute_entry_mse(
-                    model, sample.graph, device=device, params=p_te
-                )
-            test_mse = test_sum / float(len(test_samples))
-            test_all_mse = test_all_sum / float(len(test_samples))
+        do_eval = (
+            step == 0
+            or (step + 1) % max(1, eval_every) == 0
+            or step == num_steps - 1
+        )
+        if do_eval:
+            model.eval()
+            with torch.no_grad():
+                test_sum = torch.zeros((), device=device)
+                test_all_sum = torch.zeros((), device=device)
+                for sample in test_samples:
+                    masked_idx = set(sample.masked_token_indices)
+                    if readout_mlp is None:
+                        p_te = model(sample.graph, device=device)
+                    else:
+                        _, c_te = model(sample.graph, device=device, return_combined=True)
+                        p_te = readout_mlp(c_te)
+                    test_sum = test_sum + _compute_entry_mse(
+                        model,
+                        sample.graph,
+                        device=device,
+                        selected_token_indices=masked_idx,
+                        params=p_te,
+                    )
+                    test_all_sum = test_all_sum + _compute_entry_mse(
+                        model, sample.graph, device=device, params=p_te
+                    )
+                test_mse = test_sum / float(len(test_samples))
+                test_all_mse = test_all_sum / float(len(test_samples))
+                last_test_mse = float(test_mse.detach().cpu().item())
+                last_test_all_mse = float(test_all_mse.detach().cpu().item())
+        else:
+            assert last_test_mse is not None and last_test_all_mse is not None
+            test_mse = torch.tensor(last_test_mse, device=device)
+            test_all_mse = torch.tensor(last_test_all_mse, device=device)
 
         train_curve.append(float(train_mse.detach().cpu().item()))
         test_curve.append(float(test_mse.detach().cpu().item()))
@@ -832,8 +916,14 @@ def run_matrix_completion_experiment(
             # Small enough to read: full grids (e.g. 4×4, 5×5), train + test, 2dp + tabs.
             if n_rows * n_cols <= 25:
                 with torch.no_grad():
-                    p_tr = model(train_samples[0].graph, device=device)
-                    p_te = model(dbg_te.graph, device=device)
+                    if readout_mlp is None:
+                        p_tr = model(train_samples[0].graph, device=device)
+                        p_te = model(dbg_te.graph, device=device)
+                    else:
+                        _, c_tr = model(train_samples[0].graph, device=device, return_combined=True)
+                        _, c_te = model(dbg_te.graph, device=device, return_combined=True)
+                        p_tr = readout_mlp(c_tr)
+                        p_te = readout_mlp(c_te)
                 tr_tgt, tr_prd, tr_m = _debug_Y_Yhat_arrays(
                     dbg=train_samples[0],
                     params=p_tr,
@@ -870,7 +960,11 @@ def run_matrix_completion_experiment(
             else:
                 dbg = dbg_te
                 with torch.no_grad():
-                    params = model(dbg.graph, device=device)
+                    if readout_mlp is None:
+                        params = model(dbg.graph, device=device)
+                    else:
+                        _, c_dbg = model(dbg.graph, device=device, return_combined=True)
+                        params = readout_mlp(c_dbg)
                 masked_lookup = set(dbg.masked_token_indices)
                 masked_shown = 0
                 obs_shown = 0
@@ -1002,12 +1096,36 @@ def main() -> None:
         action="store_true",
         help="Each block: concat H^2 pairwise head dot-products from attn output before FFN (incompatible with --use-learned-embedding).",
     )
+    parser.add_argument(
+        "--readout-mlp-layer",
+        type=int,
+        default=READOUT_MLP_LAYER,
+        help=(
+            "Number of layers in top readout MLP over final combined representation. "
+            "Set 0 to keep current direct param readout."
+        ),
+    )
+    parser.add_argument(
+        "--readout-mlp-dim",
+        type=int,
+        default=READOUT_MLP_DIM,
+        help=(
+            "Hidden width of top readout MLP over final combined representation. "
+            "Set 0 to keep current direct param readout."
+        ),
+    )
     parser.add_argument("--out-dir", type=str, default=None)
     parser.add_argument(
         "--live-curves-every",
         type=int,
         default=LIVE_CURVES_EVERY,
         help="Write curves_live.json every N steps (0 = only at end). Enables monitoring tail metrics while training.",
+    )
+    parser.add_argument(
+        "--eval-every",
+        type=int,
+        default=EVAL_EVERY,
+        help="Run test-set evaluation every N steps (always evaluates at step 1 and final step).",
     )
     parser.add_argument("--replot", type=str, default=None)
     args = parser.parse_args()
@@ -1054,7 +1172,10 @@ def main() -> None:
         resample_train_each_step=args.resample_train_each_step,
         show_correct_vector=args.show_correct_vector,
         use_multiplication_head=args.multiplication_head,
+        readout_mlp_layer=args.readout_mlp_layer,
+        readout_mlp_dim=args.readout_mlp_dim,
         live_curves_every=args.live_curves_every,
+        eval_every=args.eval_every,
     )
 
 
