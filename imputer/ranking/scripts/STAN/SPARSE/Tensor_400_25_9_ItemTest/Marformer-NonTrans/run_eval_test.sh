@@ -3,7 +3,7 @@
 # Copyright
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
-# Local -- evaluate all saved checkpoints (best + periodic) for each
+# Local — evaluate all saved checkpoints (best + periodic) for each
 # Saves results to RESULTS/MARFORMER/STAN/SPARSE/<RUN_NAME>/TEST_RESULTS/<ckpt_stem>.json
 
 cd /Users/prabhavsingh/Documents/JHU/JHUResearch/EntityMarformer/imputer/ranking
@@ -12,25 +12,24 @@ export PYTHONUNBUFFERED=1
 
 SCRIPT_START=$SECONDS
 
-RESULTS_ROOT="RESULTS/MARFORMER/STAN/SPARSE/TensorItemAnnot400"
+RESULTS_ROOT="RESULTS/MARFORMER/STAN/SPARSE"
 
 echo ""
 echo "============================================================"
-echo " Tensor_400_25_9_ItemAnnotTest -- Test Evaluation (all checkpoints)"
+echo " Tensor_400_25_9_ItemTest — Test Evaluation (all checkpoints)"
 echo "============================================================"
 
-for SPEC in "10 5" "50 5" "100 10" "200 15" "300 15"; do
-    read -r ITEMS ANNS <<< "$SPEC"
-    RUN_NAME="Tensor_400_25_9_ItemAnnotTest_${ITEMS}_${ANNS}_NOITEMDEV_TRANS_MARFORMER"
+for SIZE in 10 50 100 200 300; do
+    RUN_NAME="Tensor_400_25_9_ItemTest_${SIZE}_NOITEMDEV_NONTRANS_MARFORMER"
     RUN_DIR="${RESULTS_ROOT}/${RUN_NAME}"
 
     if [ ! -d "$RUN_DIR" ]; then
-        echo "  [SKIP] ${RUN_NAME} -- run dir not found"
+        echo "  [SKIP] ${RUN_NAME} — run dir not found"
         continue
     fi
 
     echo ""
-    echo "--- ${RUN_NAME} ---"
+    echo "--- Size ${SIZE} | ${RUN_NAME} ---"
     python -u -m imputer.entity_mf.test \
         --run-dir    "$RUN_DIR" \
         --checkpoint all        \

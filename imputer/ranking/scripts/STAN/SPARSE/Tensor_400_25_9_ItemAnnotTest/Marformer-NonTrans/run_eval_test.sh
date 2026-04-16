@@ -21,7 +21,7 @@ echo "============================================================"
 
 for SPEC in "10 5" "50 5" "100 10" "200 15" "300 15"; do
     read -r ITEMS ANNS <<< "$SPEC"
-    RUN_NAME="Tensor_400_25_9_ItemAnnotTest_${ITEMS}_${ANNS}_NOITEMDEV_TRANS_MARFORMER"
+    RUN_NAME="Tensor_400_25_9_ItemAnnotTest_${ITEMS}_${ANNS}_NOITEMDEV_NONTRANS_MARFORMER"
     RUN_DIR="${RESULTS_ROOT}/${RUN_NAME}"
 
     if [ ! -d "$RUN_DIR" ]; then

@@ -328,6 +328,12 @@ def parse_args() -> argparse.Namespace:
     # ── Dirichlet-specific ────────────────────────────────────────────────────
     parser.add_argument("--alpha-llm", type=float, default=5.0,
                         help="Dirichlet concentration for LLM observations (default: 5.0)")
+    parser.add_argument("--transductive-use-test-observed", dest="transductive_use_test_observed",
+                        action="store_true", default=True,
+                        help="Include observed test rows during Stan inference (default: on)")
+    parser.add_argument("--no-transductive-use-test-observed", dest="transductive_use_test_observed",
+                        action="store_false",
+                        help="Exclude observed test rows during Stan inference")
 
     return parser.parse_args()
 
@@ -404,15 +410,24 @@ def main():
         stan_arg.setdefault("DEBUG_INIT", 0)
 
     # ── Instance filtering ─────────────────────────────────────────────────────
-    # Observed: train + val treated as training signal
-    # Missing to predict: test only
-    observed = bundle.observed_ratings        # train + val + test observed
-    missing  = bundle.missing_ratings         # train + val + test missing
+    if args.transductive_use_test_observed:
+        observed = bundle.observed_ratings
+    else:
+        observed = [r for r in bundle.observed_ratings if r["instance"] != "test"]
+    missing = bundle.missing_ratings
+
+    observed_train = sum(1 for r in observed if r["instance"] == "train")
+    observed_val = sum(1 for r in observed if r["instance"] == "val")
+    observed_test = sum(1 for r in observed if r["instance"] == "test")
+    missing_test = sum(1 for r in missing if r["instance"] == "test")
 
     n_llm   = sum(_is_llm(r) for r in observed)
     n_human = len(observed) - n_llm
-    print(f"\nObserved (train+val): {len(observed)} ({n_human} human, {n_llm} LLM)")
-    print(f"Missing  (test only): {len(missing)}")
+    print(f"\nObserved used: {len(observed)} ({n_human} human, {n_llm} LLM)")
+    print(f"  train={observed_train}, val={observed_val}, test={observed_test}")
+    print(f"Missing total: {len(missing)}")
+    print(f"Missing test:  {missing_test}")
+    print(f"transductive_use_test_observed={args.transductive_use_test_observed}")
     print(f"alpha_llm={args.alpha_llm}")
 
     # ── Resolve Stan file ──────────────────────────────────────────────────────
@@ -450,6 +465,11 @@ def main():
         "n_missing":     len(missing),
         "n_llm":         n_llm,
         "n_human":       n_human,
+        "transductive_use_test_observed": args.transductive_use_test_observed,
+        "observed_train": observed_train,
+        "observed_val": observed_val,
+        "observed_test": observed_test,
+        "missing_test": missing_test,
     }
     save_configs(output_dir, inference=inference_cfg_dict)
 
