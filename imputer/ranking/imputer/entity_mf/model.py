@@ -407,12 +407,15 @@ class EntityMarformer(nn.Module):
         self,
         graph: EntityGraph,
         device: torch.device | None = None,
-    ) -> torch.Tensor:
+        return_combined: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
         """
         Forward pass over a single EntityGraph.
 
         Returns:
             params: [1, L, D_param] final parameter stream.
+            If return_combined=True, also returns final combined representation
+            [1, L, model_dim] used by the last block readout path.
         """
         if device is None:
             device = next(self.parameters()).device
@@ -446,6 +449,7 @@ class EntityMarformer(nn.Module):
                 )  # [L, L, 3]
             K_aug = graph._k_aug_cache[dev_key]
 
+        final_combined: torch.Tensor | None = None
         for block in self.blocks:
             if self.use_learned_embedding:
                 # Unified stream: features is already model_dim, no cat needed.
@@ -478,9 +482,15 @@ class EntityMarformer(nn.Module):
             if not self.use_learned_embedding:
                 back_param = block["W_param"](x)   # [1, L, param_dim]
                 params = params + block["dropout_2"](back_param)
+            final_combined = combined
 
         if self.use_learned_embedding:
             # Unembed once at the top: learned linear from final h_L → param_dim output.
-            return self.unembedder(features)
-        return params
+            out_params = self.unembedder(features)
+        else:
+            out_params = params
+        if return_combined:
+            assert final_combined is not None
+            return out_params, final_combined
+        return out_params
 

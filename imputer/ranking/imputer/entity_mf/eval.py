@@ -37,12 +37,22 @@ def _aggregate_loss_from_breakdowns(
         "missing": {},
     }
     
+    dev_key = str(device)
+    if not hasattr(graph, "_type_mask_cache"):
+        graph._type_mask_cache = {}
+    if dev_key not in graph._type_mask_cache:
+        graph._type_mask_cache[dev_key] = {}
+    type_mask_cache = graph._type_mask_cache[dev_key]
+
     for type_name, t in types.items():
-        type_mask = torch.tensor(
-            [tok.type_name == type_name for tok in graph.tokens],
-            device=device,
-            dtype=torch.bool,
-        ).unsqueeze(0)  # [1, L]
+        type_mask = type_mask_cache.get(type_name, None)
+        if type_mask is None:
+            type_mask = torch.tensor(
+                [tok.type_name == type_name for tok in graph.tokens],
+                device=device,
+                dtype=torch.bool,
+            ).unsqueeze(0)  # [1, L]
+            type_mask_cache[type_name] = type_mask
         
         b: LossBreakdown = t.compute_loss_breakdown(
             predicted_params=params,
@@ -237,7 +247,8 @@ def evaluate_entity_marformer_split(
 
     # Build graph and run model to get parameter stream.
     graph = variable_list_to_entity_graph(variables, types)
-    params = model(graph, device=device)  # [1, L, P]
+    with torch.inference_mode():
+        params = model(graph, device=device)  # [1, L, P]
 
     # Aggregate loss breakdown over observed/masked/missing (with per-type details).
     loss_info = _aggregate_loss_from_breakdowns(params, graph, types, global_param_dim, device)

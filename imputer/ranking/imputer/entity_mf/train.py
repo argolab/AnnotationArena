@@ -413,128 +413,133 @@ class EntityMarformerLightningModule(pl.LightningModule):
             "total_loss": total_f,
         }
 
-        if self.transductive:
-            # In transductive mode, run a single evaluation on the combined split
-            # (train_all + val_all), plus a val-only evaluation for reporting.
-            combined_vars = self.train_all + self.val_all
-            if combined_vars:
-                combined_eval: EntityEvalResults = evaluate_entity_marformer_split(
-                    model=self.model,
-                    split="combined",
-                    variables=combined_vars,
-                    types=self.model.types,
-                    global_param_dim=self.model.global_param_dim,
-                    device=self.device,
-                    max_item=self.max_item,
-                )
-                rating_missing = (
-                    combined_eval.metrics.get("missing", {}).get("rating", {})
-                    if combined_eval.metrics
-                    else {}
-                )
-                acc_val = rating_missing.get("acc", None)
-                xent_val = rating_missing.get("xent", None)
-                acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
-                xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
-                print(f"  [combined_missing] acc={acc_str}  xent={xent_str}")
-                epoch_metrics["combined_eval"] = {
-                    "split": combined_eval.split,
-                    "metrics": combined_eval.metrics,
-                }
-            else:
-                print("No combined variables to evaluate on")
+        prev_mode = self.model.training
+        self.model.eval()
+        with torch.inference_mode():
+            if self.transductive:
+                # In transductive mode, run a single evaluation on the combined split
+                # (train_all + val_all), plus a val-only evaluation for reporting.
+                combined_vars = self.train_all + self.val_all
+                if combined_vars:
+                    combined_eval: EntityEvalResults = evaluate_entity_marformer_split(
+                        model=self.model,
+                        split="combined",
+                        variables=combined_vars,
+                        types=self.model.types,
+                        global_param_dim=self.model.global_param_dim,
+                        device=self.device,
+                        max_item=self.max_item,
+                    )
+                    rating_missing = (
+                        combined_eval.metrics.get("missing", {}).get("rating", {})
+                        if combined_eval.metrics
+                        else {}
+                    )
+                    acc_val = rating_missing.get("acc", None)
+                    xent_val = rating_missing.get("xent", None)
+                    acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
+                    xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
+                    print(f"  [combined_missing] acc={acc_str}  xent={xent_str}")
+                    epoch_metrics["combined_eval"] = {
+                        "split": combined_eval.split,
+                        "metrics": combined_eval.metrics,
+                    }
+                else:
+                    print("No combined variables to evaluate on")
 
-            # Val-only metrics (used for checkpointing).
-            if self.val_all:
-                val_eval: EntityEvalResults = evaluate_entity_marformer_split(
-                    model=self.model,
-                    split="val",
-                    variables=self.val_all,
-                    types=self.model.types,
-                    global_param_dim=self.model.global_param_dim,
-                    device=self.device,
-                    max_item=self.max_item,
-                )
-                rating_missing = (
-                    val_eval.metrics.get("missing", {}).get("rating", {})
-                    if val_eval.metrics
-                    else {}
-                )
-                acc_val = rating_missing.get("acc", None)
-                xent_val = rating_missing.get("xent", None)
-                acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
-                xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
-                print(f"  [val_missing] acc={acc_str}  xent={xent_str}")
-                if xent_val is not None:
-                    self.log("val/missing_ce", xent_val, prog_bar=True, on_epoch=True, on_step=False)
-                epoch_metrics["val_eval"] = {
-                    "split": val_eval.split,
-                    "metrics": val_eval.metrics,
-                }
+                # Val-only metrics (used for checkpointing).
+                if self.val_all:
+                    val_eval: EntityEvalResults = evaluate_entity_marformer_split(
+                        model=self.model,
+                        split="val",
+                        variables=self.val_all,
+                        types=self.model.types,
+                        global_param_dim=self.model.global_param_dim,
+                        device=self.device,
+                        max_item=self.max_item,
+                    )
+                    rating_missing = (
+                        val_eval.metrics.get("missing", {}).get("rating", {})
+                        if val_eval.metrics
+                        else {}
+                    )
+                    acc_val = rating_missing.get("acc", None)
+                    xent_val = rating_missing.get("xent", None)
+                    acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
+                    xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
+                    print(f"  [val_missing] acc={acc_str}  xent={xent_str}")
+                    if xent_val is not None:
+                        self.log("val/missing_ce", xent_val, prog_bar=True, on_epoch=True, on_step=False)
+                    epoch_metrics["val_eval"] = {
+                        "split": val_eval.split,
+                        "metrics": val_eval.metrics,
+                    }
+                else:
+                    print("No val variables to evaluate on")
             else:
-                print("No val variables to evaluate on")
-        else:
-            # Non-transductive: evaluate train and val splits separately.
-            if self.train_all:
-                # For train_eval, apply the same masking strategy used during training
-                # to create an artificial "masked" subset of the observed train vars.
-                masked_train_observed = self.masking_strategy.mask(self.train_observed)
-                train_eval_vars = masked_train_observed + self.train_missing
+                # Non-transductive: evaluate train and val splits separately.
+                if self.train_all:
+                    # For train_eval, apply the same masking strategy used during training
+                    # to create an artificial "masked" subset of the observed train vars.
+                    masked_train_observed = self.masking_strategy.mask(self.train_observed)
+                    train_eval_vars = masked_train_observed + self.train_missing
 
-                train_eval: EntityEvalResults = evaluate_entity_marformer_split(
-                    model=self.model,
-                    split="train",
-                    variables=train_eval_vars,
-                    types=self.model.types,
-                    global_param_dim=self.model.global_param_dim,
-                    device=self.device,
-                    max_item=self.max_item,
-                )
-                rating_missing = (
-                    train_eval.metrics.get("missing", {}).get("rating", {})
-                    if train_eval.metrics
-                    else {}
-                )
-                acc_val = rating_missing.get("acc", None)
-                xent_val = rating_missing.get("xent", None)
-                acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
-                xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
-                print(f"  [train_missing] acc={acc_str}  xent={xent_str}")
-                epoch_metrics["train_eval"] = {
-                    "split": train_eval.split,
-                    "metrics": train_eval.metrics,
-                }
-            else:
-                print("No train variables to evaluate on")
+                    train_eval: EntityEvalResults = evaluate_entity_marformer_split(
+                        model=self.model,
+                        split="train",
+                        variables=train_eval_vars,
+                        types=self.model.types,
+                        global_param_dim=self.model.global_param_dim,
+                        device=self.device,
+                        max_item=self.max_item,
+                    )
+                    rating_missing = (
+                        train_eval.metrics.get("missing", {}).get("rating", {})
+                        if train_eval.metrics
+                        else {}
+                    )
+                    acc_val = rating_missing.get("acc", None)
+                    xent_val = rating_missing.get("xent", None)
+                    acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
+                    xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
+                    print(f"  [train_missing] acc={acc_str}  xent={xent_str}")
+                    epoch_metrics["train_eval"] = {
+                        "split": train_eval.split,
+                        "metrics": train_eval.metrics,
+                    }
+                else:
+                    print("No train variables to evaluate on")
 
-            if self.val_all:
-                val_eval: EntityEvalResults = evaluate_entity_marformer_split(
-                    model=self.model,
-                    split="val",
-                    variables=self.val_all,
-                    types=self.model.types,
-                    global_param_dim=self.model.global_param_dim,
-                    device=self.device,
-                    max_item=self.max_item,
-                )
-                rating_missing = (
-                    val_eval.metrics.get("missing", {}).get("rating", {})
-                    if val_eval.metrics
-                    else {}
-                )
-                acc_val = rating_missing.get("acc", None)
-                xent_val = rating_missing.get("xent", None)
-                acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
-                xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
-                print(f"  [val_missing] acc={acc_str}  xent={xent_str}")
-                if xent_val is not None:
-                    self.log("val/missing_ce", xent_val, prog_bar=True, on_epoch=True, on_step=False)
-                epoch_metrics["val_eval"] = {
-                    "split": val_eval.split,
-                    "metrics": val_eval.metrics,
-                }
-            else:
-                print("No val variables to evaluate on")
+                if self.val_all:
+                    val_eval: EntityEvalResults = evaluate_entity_marformer_split(
+                        model=self.model,
+                        split="val",
+                        variables=self.val_all,
+                        types=self.model.types,
+                        global_param_dim=self.model.global_param_dim,
+                        device=self.device,
+                        max_item=self.max_item,
+                    )
+                    rating_missing = (
+                        val_eval.metrics.get("missing", {}).get("rating", {})
+                        if val_eval.metrics
+                        else {}
+                    )
+                    acc_val = rating_missing.get("acc", None)
+                    xent_val = rating_missing.get("xent", None)
+                    acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
+                    xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
+                    print(f"  [val_missing] acc={acc_str}  xent={xent_str}")
+                    if xent_val is not None:
+                        self.log("val/missing_ce", xent_val, prog_bar=True, on_epoch=True, on_step=False)
+                    epoch_metrics["val_eval"] = {
+                        "split": val_eval.split,
+                        "metrics": val_eval.metrics,
+                    }
+                else:
+                    print("No val variables to evaluate on")
+        if prev_mode:
+            self.model.train()
 
         self.training_history.append(epoch_metrics)
 
