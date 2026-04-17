@@ -5,6 +5,7 @@ Plot sparse Tensor_400_25_9 item-test results by training size.
 Outputs:
   - PLOTS/TALK/Item/sparse_tensor_test_loss_by_size.png
   - PLOTS/TALK/Item/sparse_tensor_correlation_by_method.png
+  - PLOTS/TALK/Item/sparse_tensor_mbr_l2_size300.png
 """
 
 from __future__ import annotations
@@ -25,7 +26,7 @@ DATA_ROOT = ROOT / "DATA/STAN/SPARSE/Tensor_400_25_9_ItemTest"
 MARFORMER_ROOT = ROOT / "RESULTS/MARFORMER/STAN/SPARSE/Tensor400"
 MARFORMER_NT_ROOT = ROOT / "RESULTS/MARFORMER/STAN/SPARSE/Tensor400NT"
 STAN_ROOT = ROOT / "RESULTS/STAN/SPARSE/Tensor400"
-STAN_NT_ROOT = ROOT / "RESULTS/STAN/SPARSE/Tensor400/NT"
+STAN_NT_ROOT = ROOT / "RESULTS/STAN/SPARSE/Tensor400NT"
 OUT_DIR = ROOT / "PLOTS/TALK/Item"
 
 SIZES = [10, 50, 100, 200, 300]
@@ -404,6 +405,50 @@ def _plot_correlations(output_path: Path) -> None:
     print(f"Saved -> {output_path}")
 
 
+def _plot_mbr_l2(output_path: Path) -> None:
+    method_rows: list[tuple[str, float]] = []
+
+    marformer = _load_marformer_metric(300, "rmse", nontrans=False)
+    if marformer is not None:
+        method_rows.append(("Marformer", float(marformer) ** 2))
+
+    stan_tensor = _load_stan_probs_and_labels(300, discrete=False, nontrans=False)
+    if stan_tensor is not None:
+        method_rows.append(("Oracle Tensor Stan", _mbr_l2_from_probs_labels(*stan_tensor)))
+
+    stan_discrete = _load_stan_probs_and_labels(300, discrete=True, nontrans=False)
+    if stan_discrete is not None:
+        method_rows.append(("Stan Discrete", _mbr_l2_from_probs_labels(*stan_discrete)))
+
+    marformer_nt = _load_marformer_metric(300, "rmse", nontrans=True)
+    if marformer_nt is not None:
+        method_rows.append(("Marformer NT", float(marformer_nt) ** 2))
+
+    stan_tensor_nt = _load_stan_probs_and_labels(300, discrete=False, nontrans=True)
+    if stan_tensor_nt is not None:
+        method_rows.append(("Oracle Tensor Stan NT", _mbr_l2_from_probs_labels(*stan_tensor_nt)))
+
+    unigram = _load_unigram_probs_and_labels(300)
+    if unigram is not None:
+        method_rows.append(("Unigram", _mbr_l2_from_probs_labels(*unigram)))
+
+    fig, ax = plt.subplots(figsize=(13.5, 7.0))
+    x = np.arange(len(method_rows), dtype=float)
+    colors = ["#1f6fba", "#d55e00", "#009e73", "#5d8fd0", "#f08a43", "#7a7a7a"][: len(method_rows)]
+    vals = [row[1] for row in method_rows]
+    ax.bar(x, vals, color=colors, alpha=0.9)
+    ax.set_ylabel("MBR-L2 (MSE)")
+    ax.set_title("Compositional Projection Model: Item Generalization MBR-L2 at Size 300", loc="center", pad=18)
+    ax.set_xticks(x)
+    ax.set_xticklabels([row[0] for row in method_rows], rotation=12, ha="right")
+    fig.subplots_adjust(top=0.87)
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output_path)
+    plt.close(fig)
+    print(f"Saved -> {output_path}")
+
+
 def main() -> None:
     marformer_loss = _series_from_loader(lambda size: _load_marformer_metric(size, "log_loss", nontrans=False))
     marformer_nt_loss = _series_from_loader(lambda size: _load_marformer_metric(size, "log_loss", nontrans=True))
@@ -438,6 +483,7 @@ def main() -> None:
     )
 
     _plot_correlations(OUT_DIR / "sparse_tensor_correlation_by_method.png")
+    _plot_mbr_l2(OUT_DIR / "sparse_tensor_mbr_l2_size300.png")
 
 
 if __name__ == "__main__":
