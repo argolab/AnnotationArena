@@ -3,20 +3,22 @@
 # Copyright
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
-#
-# Part B, single split: SummEval_1600_8_4_1280 only (see run_train_b.sh for all three).
-#
-# Cluster: submit with sbatch_adapt from any cwd; the adapter sets Slurm --chdir to
-# where you invoked it, so we always cd to imputer/ranking (DATA/, RESULTS/, package root).
-#
-# Example (1x H100, more CPUs, 18G RAM per CPU — adjust CONDA_ENV if needed):
-#   cd /path/to/AA_new/imputer/ranking
-#   PARTITION=h100 GPUS=1 TIME=48:00:00 CPUS_PER_TASK=16 MEM_PER_CPU=18G \
-#     /home/xwang397/bin/sbatch_adapt scripts/SUMMEVAL/MARFORMER/TRAIN/run_train_b_1280.sh
 
-_SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-_RANKING_ROOT="$(cd "${_SCRIPT_DIR}/../../../.." && pwd)"
-cd "${_RANKING_ROOT}"
+#SBATCH --job-name=EMF_SumEval_MF_B1280
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=18GB
+#SBATCH --gpus=1
+#SBATCH --partition=gpu-a100
+#SBATCH --account=a100acct
+#SBATCH --mail-user="psingh54@jhu.edu"
+
+source /home/psingh54/.bashrc
+module load cuda/12.1
+conda activate llm_rubric_env
+
+cd /export/fs06/psingh54/MARFORMER/imputer/ranking
 
 export PYTHONPATH=.
 export PYTHONUNBUFFERED=1
@@ -24,14 +26,10 @@ set -e
 
 SCRIPT_START=$SECONDS
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
 DATA_ROOT="DATA/SUMMEVAL"
 OUTPUT_ROOT="RESULTS/MARFORMER/SUMMEVAL"
-
-# ── Single split (part B: large) ──────────────────────────────────────────────
 SPLIT="SummEval_1600_8_4_1280"
 
-# ── Fixed hyperparams ─────────────────────────────────────────────────────────
 SEED=42
 TYPE_EMBEDDING_INIT="kaiming"
 EMBEDDING_DIM=80
@@ -52,11 +50,8 @@ OBSERVED_LOSS_WEIGHT=1.0
 DEVICE="cuda"
 MAX_ITEM=10
 ANNOTATOR_REG_WEIGHT=0.0
-# Turker annotator IDs — 0-indexed (bundle IDs 4-8 → RankingData IDs 3-7).
-# Experts have bundle IDs 1-3 → RankingData IDs 0-2 → get masked.
 ALWAYS_OBSERVED_IDS="3 4 5 6 7"
 
-# ── Experiment-specific flags ─────────────────────────────────────────────────
 ITEM_DROPOUT_RATE=0.7
 ITEM_REG_WEIGHT=0.0
 ATTRIBUTE_REG_WEIGHT=0.0
@@ -70,7 +65,6 @@ USE_GRAPH_MASK=false
 LLM_INPUT_DIST=true
 OVERWRITE_EXISTING=true
 
-# ── Build CLI flags ───────────────────────────────────────────────────────────
 PER_HEAD_FLAG="";      [ "$USE_PER_HEAD_REL"  = "false" ] && PER_HEAD_FLAG="--no-per-head-rel"
 SCALE_FLAG="";         [ "$SCALE_SHARED_REL"  = "true"  ] && SCALE_FLAG="--scale-shared-rel"
 POINTER_FLAG="";       [ "$USE_POINTER"        = "true"  ] && POINTER_FLAG="--use-pointer"
@@ -83,41 +77,39 @@ OVERWRITE_FLAG="";     [ "$OVERWRITE_EXISTING" = "true"  ] && OVERWRITE_FLAG="--
 
 echo ""
 echo "============================================================"
-echo " SummEval | Marformer | Training — part B | split ${SPLIT}"
+echo " SummEval | Marformer | Training | split ${SPLIT}"
 echo "  OUTPUT_ROOT        : ${OUTPUT_ROOT}"
-echo "  always-observed    : turker slots ${ALWAYS_OBSERVED_IDS}  (experts 1-3 masked)"
-echo "  flags              : $PER_HEAD_FLAG $SCALE_FLAG $POINTER_FLAG $REL_VALUE_FLAG $ADDONE_FLAG $DEVNORM_FLAG $GRAPHMASK_FLAG"
+echo "  always-observed    : turker slots ${ALWAYS_OBSERVED_IDS}"
 echo "============================================================"
 
 echo ""; echo "--- Split: ${SPLIT} ---"; echo ""
-
 python -u -m imputer.entity_mf.train \
     --data-dir             "${DATA_ROOT}/${SPLIT}"   \
     --run-name             "${SPLIT}"                \
     --output-root          "${OUTPUT_ROOT}"          \
-    --seed                 "$SEED"                   \
-    --embedding-dim        "$EMBEDDING_DIM"          \
-    --num-layers           "$NUM_LAYERS"             \
-    --attention-heads      "$ATTENTION_HEADS"        \
-    --d-ff                 "$D_FF"                   \
-    --num-ffn-layers       "$NUM_FFN_LAYERS"         \
-    --dropout              "$DROPOUT"                \
-    --item-dropout-rate    "$ITEM_DROPOUT_RATE"      \
-    --epochs               "$EPOCHS"                 \
-    --lr                   "$LR"                     \
-    --lr-schedule          "$LR_SCHEDULE"            \
-    --lr-min               "$LR_MIN"                 \
-    --weight-decay         "$WEIGHT_DECAY"           \
-    --masking-rate         "$MASKING_RATE"           \
-    --mask-augmentations   "$MASK_AUGMENTATIONS"     \
-    --masked-loss-weight   "$MASKED_LOSS_WEIGHT"     \
-    --observed-loss-weight "$OBSERVED_LOSS_WEIGHT"   \
-    --device               "$DEVICE"                 \
-    --max-item             "$MAX_ITEM"               \
-    --type-embedding-init  "$TYPE_EMBEDDING_INIT"    \
-    --item-reg-weight      "$ITEM_REG_WEIGHT"        \
-    --attribute-reg-weight "$ATTRIBUTE_REG_WEIGHT"   \
-    --annotator-reg-weight "$ANNOTATOR_REG_WEIGHT"   \
+    --seed                 "${SEED}"                 \
+    --embedding-dim        "${EMBEDDING_DIM}"        \
+    --num-layers           "${NUM_LAYERS}"           \
+    --attention-heads      "${ATTENTION_HEADS}"      \
+    --d-ff                 "${D_FF}"                 \
+    --num-ffn-layers       "${NUM_FFN_LAYERS}"       \
+    --dropout              "${DROPOUT}"              \
+    --item-dropout-rate    "${ITEM_DROPOUT_RATE}"    \
+    --epochs               "${EPOCHS}"               \
+    --lr                   "${LR}"                   \
+    --lr-schedule          "${LR_SCHEDULE}"          \
+    --lr-min               "${LR_MIN}"               \
+    --weight-decay         "${WEIGHT_DECAY}"         \
+    --masking-rate         "${MASKING_RATE}"         \
+    --mask-augmentations   "${MASK_AUGMENTATIONS}"   \
+    --masked-loss-weight   "${MASKED_LOSS_WEIGHT}"   \
+    --observed-loss-weight "${OBSERVED_LOSS_WEIGHT}" \
+    --device               "${DEVICE}"               \
+    --max-item             "${MAX_ITEM}"             \
+    --type-embedding-init  "${TYPE_EMBEDDING_INIT}"  \
+    --item-reg-weight      "${ITEM_REG_WEIGHT}"      \
+    --attribute-reg-weight "${ATTRIBUTE_REG_WEIGHT}" \
+    --annotator-reg-weight "${ANNOTATOR_REG_WEIGHT}" \
     $PER_HEAD_FLAG                                   \
     $SCALE_FLAG                                      \
     $POINTER_FLAG                                    \
@@ -129,12 +121,9 @@ python -u -m imputer.entity_mf.train \
     --always-observed-ids  $ALWAYS_OBSERVED_IDS      \
     $OVERWRITE_FLAG
 
-SPLIT_ELAPSED=$(( SECONDS - SCRIPT_START ))
-echo ""
-echo "  ↳ ${SPLIT} done in $(( SPLIT_ELAPSED / 60 ))m $(( SPLIT_ELAPSED % 60 ))s"
-
+TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))
 echo ""
 echo "============================================================"
-echo " Done (part B, ${SPLIT})."
+echo " Done in $(( TOTAL_ELAPSED / 60 ))m $(( TOTAL_ELAPSED % 60 ))s"
 echo " Output     : ${OUTPUT_ROOT}"
 echo "============================================================"
