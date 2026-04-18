@@ -246,9 +246,6 @@ def evaluate_entity_marformer_split(
     rating_type = types["rating"]
     num_classes = rating_type.num_classes
 
-    ce_loss = torch.nn.CrossEntropyLoss(reduction="mean")
-    logits_list: List[torch.Tensor] = []
-    targets_list: List[int] = []
     correct = 0
     total = 0
 
@@ -269,15 +266,12 @@ def evaluate_entity_marformer_split(
         if rating_value is None:
             continue
 
-        # Slice out logits for classes 0..C-1 (skip the first mask bit dimension).
-        logits = params[0, idx, 1 : 1 + num_classes]
-        probs = torch.softmax(logits, dim=-1)
+        # Convert (mu_raw, var_raw) -> class probabilities via truncated-normal binning.
+        probs = rating_type.probs_from_params(params[0, idx : idx + 1, :]).squeeze(0)  # [C]
         expected = float((probs * arange).sum().item())
 
         if tok.status == 0:  # missing
-            logits_list.append(logits)
-            targets_list.append(int(rating_value))
-            pred_class = int(torch.argmax(logits).item())
+            pred_class = int(torch.argmax(probs).item())
             if pred_class == int(rating_value):
                 correct += 1
             total += 1
@@ -288,7 +282,7 @@ def evaluate_entity_marformer_split(
             observed_true.append(int(rating_value))
 
     # If there are no missing rating tokens, return without accuracy fields.
-    if total == 0 or not logits_list:
+    if total == 0:
         return EntityEvalResults(
             split=split,
             metrics=loss_info["per_type"],
@@ -297,9 +291,6 @@ def evaluate_entity_marformer_split(
             observed_preds=observed_preds,
             observed_true=observed_true,
         )
-
-    logits_tensor = torch.stack(logits_list, dim=0)   # [N, C]
-    targets_tensor = torch.tensor(targets_list, device=device, dtype=torch.long)
     acc = float(correct) / float(total)
 
     per_type_metrics = loss_info["per_type"]

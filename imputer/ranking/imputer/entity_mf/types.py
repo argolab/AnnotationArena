@@ -197,7 +197,7 @@ class ItemEntityType(NullEntityType):
 
 class RatingVariableType(EntityType):
     """
-    Rating variable: Likert rating with mask bit + class logits.
+    Rating variable: Likert rating with mask bit + (mu_raw, var_raw).
 
     Expects raw_data with keys:
       - is_missing: bool
@@ -210,25 +210,26 @@ class RatingVariableType(EntityType):
         super().__init__(
             name="rating",
             is_variable=True,
-            param_dim=1 + num_classes,
+            # [mask_bit, mu_raw, var_raw]
+            param_dim=1 + 2,
             variation=VariationConfig(enabled=False, num_entities=0, reg_weight=0.0),
         )
         self.num_classes = num_classes
         self.logit_high = float(logit_high)
         self.llm_input_dist = llm_input_dist
-        self.ce_loss = nn.CrossEntropyLoss(reduction="none")
+        self.ce_loss = nn.CrossEntropyLoss(reduction="none")  # used for hard targets only
 
     def build_simple_value(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
-        """Binary encoding: mask_bit=1 or one-hot class with 1.0 (no logit_high scaling)."""
+        """Binary-ish encoding: mask_bit=1 or mu_raw/var_raw logits derived from rating."""
         p = torch.zeros(global_param_dim, device=device)
         is_missing = bool(raw_data.get("is_missing", False))
         is_masked = bool(raw_data.get("is_masked", False))
         if is_missing or is_masked:
             p[0] = 1.0
             return p
-        rating_value = raw_data.get("rating_value", None)
-        if rating_value is not None and 0 <= rating_value < self.num_classes:
-            p[1 + rating_value] = 1.0
+        mu01, var01 = self._target_moments_from_raw(raw_data, device=device)
+        p[1] = self._safe_logit(mu01)
+        p[2] = self._safe_logit(var01)
         return p
 
     def build_param(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
@@ -242,31 +243,99 @@ class RatingVariableType(EntityType):
 
         p[0] = 0.0
 
-        # Soft distribution input: encode log-probabilities when llm_input_dist is enabled
-        # and a non-one-hot rating_dist is available.
-        if self.llm_input_dist:
-            rating_dist = raw_data.get("rating_dist", None)
-            if rating_dist is not None:
-                dist_t = torch.tensor(rating_dist, dtype=torch.float32, device=device)
-                if dist_t.shape[0] == self.num_classes and not self._is_one_hot(dist_t):
-                    # log(max(p, exp(-logit_high))) — clamp prevents -inf
-                    log_dist = torch.log(torch.clamp(dist_t, min=math.exp(-self.logit_high)))
-                    p[1 : 1 + self.num_classes] = log_dist
-                    return p
-
-        # Hard label encoding: one-hot logit
-        rating_value = raw_data.get("rating_value", None)
-        if rating_value is None:
-            raise ValueError("rating_value must be provided for observed ratings")
-        if not (0 <= rating_value < self.num_classes):
-            raise ValueError(f"rating_value {rating_value} out of range [0, {self.num_classes})")
-        p[1 + rating_value] = self.logit_high
+        # Input is a scalar rating in [0,1]. If a distribution is provided, use its mean.
+        # We store mu_raw/var_raw as logits so that sigmoid(mu_raw)=mu in (0,1) and
+        # sigmoid(var_raw)=var in (0,1) during both conditioning and prediction.
+        mu01, var01 = self._target_moments_from_raw(raw_data, device=device)
+        p[1] = self._safe_logit(mu01)
+        p[2] = self._safe_logit(var01)
         return p
 
     @staticmethod
     def _is_one_hot(dist: torch.Tensor, tol: float = 1e-6) -> bool:
         """Check if a distribution is effectively one-hot."""
         return bool((dist.max() > 1.0 - tol) and (dist.sum() < 1.0 + tol))
+
+    @staticmethod
+    def _safe_logit(x: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
+        """Inverse-sigmoid with clipping to avoid infs."""
+        x = torch.clamp(x, min=eps, max=1.0 - eps)
+        return torch.log(x) - torch.log1p(-x)
+
+    def _bin_centers_01(self, device: torch.device, dtype: torch.dtype = torch.float32) -> torch.Tensor:
+        # centers: (k+0.5)/C in [0,1]
+        k = torch.arange(self.num_classes, device=device, dtype=dtype)
+        return (k + 0.5) / float(self.num_classes)
+
+    def _target_moments_from_raw(self, raw_data: Dict[str, Any], device: torch.device) -> tuple[torch.Tensor, torch.Tensor]:
+        """
+        Return (mu01, var01) targets in [0,1] (variance in (0,1)).
+        - If rating_dist exists (length C): use mean/var over bin centers in [0,1].
+        - Else: use rating_value as a hard class label (0-indexed) mapped to its bin center.
+        """
+        dtype = torch.float32
+        rating_dist = raw_data.get("rating_dist", None)
+        if rating_dist is not None and isinstance(rating_dist, list) and len(rating_dist) == self.num_classes:
+            dist = torch.tensor(rating_dist, dtype=dtype, device=device)
+            s = dist.sum()
+            if float(s.item()) <= 0.0:
+                raise ValueError("rating_dist must have positive sum")
+            dist = dist / s
+            centers = self._bin_centers_01(device=device, dtype=dtype)
+            mu = (dist * centers).sum()
+            var = (dist * (centers - mu).pow(2)).sum()
+            return mu, torch.clamp(var, min=1e-6, max=1.0 - 1e-6)
+
+        rating_value = raw_data.get("rating_value", None)
+        if rating_value is None:
+            raise ValueError("rating_value must be provided for observed ratings")
+        rv = int(rating_value)
+        if not (0 <= rv < self.num_classes):
+            raise ValueError(f"rating_value {rv} out of range [0, {self.num_classes})")
+        mu = torch.tensor((rv + 0.5) / float(self.num_classes), dtype=dtype, device=device)
+        # Default variance for hard labels: small but nonzero (keeps gradients healthy).
+        var = torch.tensor(1e-2, dtype=dtype, device=device)
+        return mu, var
+
+    @staticmethod
+    def _normal_cdf(x: torch.Tensor) -> torch.Tensor:
+        # Standard normal CDF via erf. Differentiable.
+        return 0.5 * (1.0 + torch.erf(x / math.sqrt(2.0)))
+
+    def probs_from_params(self, params_sel: torch.Tensor, *, eps: float = 1e-8) -> torch.Tensor:
+        """
+        Convert predicted params [N, P] into class probabilities [N, C] using a truncated normal on [0,1].
+        Expects params_sel to have mu_raw at dim=1 and var_raw at dim=2.
+        """
+        mu_raw = params_sel[:, 1]
+        var_raw = params_sel[:, 2]
+        mu = torch.sigmoid(mu_raw)  # (0,1)
+        var = torch.sigmoid(var_raw)  # (0,1)
+        var = torch.clamp(var, min=1e-6, max=1.0 - 1e-6)
+        sigma = torch.sqrt(var)
+
+        device = params_sel.device
+        dtype = params_sel.dtype
+        edges = torch.linspace(0.0, 1.0, self.num_classes + 1, device=device, dtype=dtype)  # [C+1]
+
+        # z = (edge - mu) / sigma   -> [N, C+1]
+        z = (edges.unsqueeze(0) - mu.unsqueeze(1)) / sigma.unsqueeze(1)
+        Phi = self._normal_cdf(z)
+        unnorm = Phi[:, 1:] - Phi[:, :-1]  # [N, C]
+
+        # Truncation normalization constant on [0,1]
+        a = (0.0 - mu) / sigma
+        b = (1.0 - mu) / sigma
+        Z = self._normal_cdf(b) - self._normal_cdf(a)  # [N]
+        Z = torch.clamp(Z, min=eps)
+        probs = unnorm / Z.unsqueeze(1)
+
+        # Safety renorm (handles rare numeric drift / extreme tails)
+        row_sum = probs.sum(dim=-1, keepdim=True)
+        probs = probs / torch.clamp(row_sum, min=eps)
+        probs = torch.clamp(probs, min=eps, max=1.0)
+        probs = probs / probs.sum(dim=-1, keepdim=True)
+        return probs
 
     def compute_loss(
         self,
@@ -314,11 +383,11 @@ class RatingVariableType(EntityType):
 
         params_valid = params_sel[valid_mask_tensor]  # [M_valid, P]
         targets_valid = torch.tensor([t for t, m in zip(targets, valid_mask) if m], device=device, dtype=torch.long)
-
-        logits = params_valid[:, 1 : 1 + self.num_classes]
+        probs = self.probs_from_params(params_valid)  # [M_valid, C]
+        log_probs = torch.log(torch.clamp(probs, min=1e-8))
 
         #########################################################
-        losses = self.ce_loss(logits, targets_valid)
+        losses = -log_probs[torch.arange(log_probs.shape[0], device=device), targets_valid]
         #########################################################
         return losses.mean()
 
@@ -348,7 +417,8 @@ class RatingVariableType(EntityType):
             )
         idx = mask_flat.nonzero(as_tuple=False).squeeze(-1)  # [M]
         params_sel = params[idx]  # [M, P]
-        logits = params_sel[:, 1 : 1 + self.num_classes]  # [M, C]
+        probs = self.probs_from_params(params_sel)  # [M, C]
+        log_probs = torch.log(torch.clamp(probs, min=1e-8))  # [M, C]
 
         # Build targets and status per token.
         # Use soft targets (float [M, C]) when rating_dist is available; else hard int targets.
@@ -375,12 +445,10 @@ class RatingVariableType(EntityType):
 
         # Compute per-token losses
         if has_soft:
-            # CrossEntropyLoss with float targets [M, C]: -sum(p * log_softmax(logits))
-            log_probs = F.log_softmax(logits, dim=-1)  # [M, C]
             losses = -(soft_targets * log_probs).sum(dim=-1)  # [M]
         else:
             hard_targets = torch.tensor(hard_targets_list, device=device, dtype=torch.long)
-            losses = self.ce_loss(logits, hard_targets)  # [M]
+            losses = -log_probs[torch.arange(log_probs.shape[0], device=device), hard_targets]
 
         n_observed = sum(1 for s in status_list if s == 2)
         n_masked = sum(1 for s in status_list if s == 1)
