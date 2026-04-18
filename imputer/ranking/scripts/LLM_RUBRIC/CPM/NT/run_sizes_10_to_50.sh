@@ -4,7 +4,7 @@
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
 
-#SBATCH --job-name=CPM_LLM_RUBRIC_LLMRubric_225_25_9_175
+#SBATCH --job-name=CPM_LLMRubric_NT_10_50
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -23,12 +23,7 @@ export PYTHONUNBUFFERED=1
 set -e
 
 SCRIPT_START=$SECONDS
-
-SPLIT="LLMRubric_225_25_9_175"
-DATA_DIR="DATA/LLM_RUBRIC/${SPLIT}"
-DATA_BUNDLE="${DATA_DIR}/data_bundle.json"
 OUTPUT_DIR="RESULTS/STAN/LLM_RUBRIC/CPM"
-RUN_NAME="LLMRubric_225_25_9_175"
 
 CHAINS=1
 ITER_WARMUP=300
@@ -69,48 +64,52 @@ with open(dst, "w") as f:
 PY
 }
 
-TMP_CONFIG=$(mktemp /tmp/cpm_tensor_config.XXXXXX.json)
-trap 'rm -f "$TMP_CONFIG"' EXIT
-write_temp_tensor_config "${DATA_DIR}/configs.json" "$TMP_CONFIG"
-
 echo ""
 echo "============================================================"
-echo " LLM RUBRIC | CPM Tensor | ${SPLIT}"
-echo "  RUN_NAME      : ${RUN_NAME}"
-echo "  CHAINS        : ${CHAINS}"
-echo "  ITER_WARMUP   : ${ITER_WARMUP}"
-echo "  ITER_SAMPLING : ${ITER_SAMPLING}"
+echo " LLM Rubric | CPM Tensor | Non-Transductive | sizes 10..50"
 echo "============================================================"
 
-echo "[1/2] Running MCMC (tensor)..."
-python STAN/stan_code/scripts/run_inference.py \
-    --data-bundle        "${DATA_BUNDLE}" \
-    --configs            "$TMP_CONFIG" \
-    --output-dir         "${OUTPUT_DIR}" \
-    --run-name           "${RUN_NAME}" \
-    --stan-type          "tensor" \
-    --chains             "${CHAINS}" \
-    --iter-warmup        "${ITER_WARMUP}" \
-    --iter-sampling      "${ITER_SAMPLING}" \
-    --adapt-delta        "${ADAPT_DELTA}" \
-    --max-treedepth      "${MAX_TREEDEPTH}" \
-    --seed               "${SEED}" \
-    --transductive-use-test-observed \
-    --overwrite-existing-data
+for SIZE in 10 20 30 40 50; do
+    SPLIT="LLMRubric_225_25_9_${SIZE}"
+    DATA_DIR="DATA/LLM_RUBRIC/${SPLIT}"
+    DATA_BUNDLE="${DATA_DIR}/data_bundle.json"
+    RUN_NAME="${SPLIT}_NONTRANS"
 
-echo "[2/2] Evaluating predictions..."
-python STAN/stan_code/scripts/evaluate_predictions.py \
-    --data-bundle        "${DATA_BUNDLE}" \
-    --mcmc-dir           "${OUTPUT_DIR}/${RUN_NAME}" \
-    --output-dir         "${OUTPUT_DIR}" \
-    --run-name           "${RUN_NAME}_eval" \
-    --csv-pattern        "tensor_model-*.csv" \
-    --overwrite-existing-data \
-    --verbose
+    TMP_CONFIG=$(mktemp /tmp/cpm_tensor_config.XXXXXX.json)
+    write_temp_tensor_config "${DATA_DIR}/configs.json" "$TMP_CONFIG"
+
+    echo ""
+    echo "--- ${SPLIT} ---"
+
+    python STAN/stan_code/scripts/run_inference.py \
+        --data-bundle        "${DATA_BUNDLE}" \
+        --configs            "$TMP_CONFIG" \
+        --output-dir         "${OUTPUT_DIR}" \
+        --run-name           "${RUN_NAME}" \
+        --stan-type          "tensor" \
+        --chains             "${CHAINS}" \
+        --iter-warmup        "${ITER_WARMUP}" \
+        --iter-sampling      "${ITER_SAMPLING}" \
+        --adapt-delta        "${ADAPT_DELTA}" \
+        --max-treedepth      "${MAX_TREEDEPTH}" \
+        --seed               "${SEED}" \
+        --no-transductive-use-test-observed \
+        --overwrite-existing-data
+
+    python STAN/stan_code/scripts/evaluate_predictions.py \
+        --data-bundle        "${DATA_BUNDLE}" \
+        --mcmc-dir           "${OUTPUT_DIR}/${RUN_NAME}" \
+        --output-dir         "${OUTPUT_DIR}" \
+        --run-name           "${RUN_NAME}_eval" \
+        --csv-pattern        "tensor_model-*.csv" \
+        --overwrite-existing-data \
+        --verbose
+
+    rm -f "$TMP_CONFIG"
+done
 
 TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))
 echo ""
 echo "============================================================"
 echo " Done in $(( TOTAL_ELAPSED / 60 ))m $(( TOTAL_ELAPSED % 60 ))s"
-echo " Results: ${OUTPUT_DIR}/${RUN_NAME}_eval"
 echo "============================================================"
