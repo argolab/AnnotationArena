@@ -2,7 +2,7 @@
  * Tensor model data generator.
  *
  * Generative model:
- *   z_ijk = sum_t alpha_jt * exp(u_i .* v_t .* u_it) . e_k
+ *   z_ijk = sum_t alpha_jt * exp(u_i + v_t + u_it) . e_k
  *
  * where:
  *   u_i  in R^D: attribute embedding          ~ N(0, sigma_u)
@@ -12,7 +12,7 @@
  *   e_k  in R^D: item embedding               ~ N(0, 1)
  *
  * The effective preference vector for (i,j) is:
- *   eff_pref[ij] = sum_t alpha_jt[t] * exp(u_i .* v_t .* u_it)  (element-wise)
+ *   eff_pref[ij] = sum_t alpha_jt[t] * exp(u_i + v_t + u_it)  (element-wise)
  * then z_ijk = dot(eff_pref[ij], e_k).
  *
  * Noise model (use_dawid_skene_noise):
@@ -164,14 +164,14 @@ generated quantities {
         for (j in 1:J)
             alpha_jt[j] = dirichlet_rng(rep_vector(1.0, T));
 
-        // eff_pref[ij] = sum_t alpha_jt[j][t] * exp(u_i .* v_t .* u_it)
+        // eff_pref[ij] = sum_t alpha_jt[j][t] * exp(u_i + v_t + u_it)
         for (i in 1:I) {
             for (j in 1:J) {
                 int idx = (i-1)*J + j;
                 row_vector[D] pref = rep_row_vector(0.0, D);
                 for (t in 1:T) {
-                    // log_gate[d] = u_attr[i,d] * v_proto[t,d] * u_inter[i][t,d]
-                    row_vector[D] log_gate = u_attr[i] .* v_proto[t] .* u_inter[i][t];
+                    // log_gate[d] = u_attr[i,d] + v_proto[t,d] + u_inter[i][t,d]
+                    row_vector[D] log_gate = u_attr[i] + v_proto[t] + u_inter[i][t];
                     pref = pref + alpha_jt[j][t] * exp(log_gate);
                 }
                 eff_pref[idx] = pref;

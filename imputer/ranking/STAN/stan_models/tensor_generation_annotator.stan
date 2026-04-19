@@ -2,7 +2,7 @@
  * Tensor model data generator — annotator split.
  *
  * Same generative model as tensor_generation.stan:
- *   z_ijk = sum_t alpha_jt * exp(u_i .* v_t .* u_it) . e_k
+ *   z_ijk = sum_t alpha_jt * exp(u_i + v_t + u_it) . e_k
  *
  * Key difference from tensor_generation.stan:
  *   - Items are shared: single set of K items rated by all J annotators.
@@ -105,7 +105,7 @@ generated quantities {
                 int idx = (i-1)*J + j;
                 row_vector[D] pref = rep_row_vector(0.0, D);
                 for (t in 1:T) {
-                    row_vector[D] log_gate = u_attr[i] .* v_proto[t] .* u_inter[i][t];
+                    row_vector[D] log_gate = u_attr[i] + v_proto[t] + u_inter[i][t];
                     pref = pref + alpha_jt[j][t] * exp(log_gate);
                 }
                 eff_pref[idx] = pref;

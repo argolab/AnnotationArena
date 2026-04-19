@@ -2,7 +2,7 @@
  * Tensor model HMC inference.
  *
  * Generative model (matched exactly to tensor_generation.stan):
- *   z_ijk = sum_t alpha_jt * exp(u_i .* v_t .* u_it) . e_k
+ *   z_ijk = sum_t alpha_jt * exp(u_i + v_t + u_it) . e_k
  *
  * Noise model (use_dawid_skene_noise):
  *   0 = continuous: ordinal probit with fixed sigma_measurement
@@ -118,14 +118,14 @@ parameters {
 
 transformed parameters {
 
-    // ── Effective preference vectors eff_pref[ij] = sum_t alpha_jt[t]*exp(u_i.*v_t.*u_it) ──
+    // ── Effective preference vectors eff_pref[ij] = sum_t alpha_jt[t]*exp(u_i+v_t+u_it) ──
     matrix[I*J, D] eff_pref;
     for (i in 1:I) {
         for (j in 1:J) {
             int idx = (i-1)*J + j;
             row_vector[D] pref = rep_row_vector(0.0, D);
             for (t in 1:T) {
-                row_vector[D] log_gate = u_attr[i] .* v_proto[t] .* u_inter[i][t];
+                row_vector[D] log_gate = u_attr[i] + v_proto[t] + u_inter[i][t];
                 pref = pref + alpha_jt[j][t] * exp(log_gate);
             }
             eff_pref[idx] = pref;
