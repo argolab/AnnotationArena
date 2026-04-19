@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Sequence
 
 import torch
 import torch.nn as nn
@@ -399,7 +399,80 @@ class EntityMarformer(nn.Module):
                 p = t.build_param(token.raw_data or {}, device=device, global_param_dim=self.param_dim)
                 params[0, idx] = p
 
+                raw = token.raw_data or {}
+                fixed_feature = raw.get("fixed_feature", None)
+                if fixed_feature is not None:
+                    ff = torch.tensor(fixed_feature, device=device, dtype=features.dtype)
+                    if ff.numel() > self.feature_dim:
+                        raise ValueError(
+                            f"fixed_feature length {ff.numel()} exceeds feature_dim {self.feature_dim}"
+                        )
+                    # Append fixed features into the tail of the feature stream.
+                    features[0, idx, self.feature_dim - ff.numel() : self.feature_dim] = ff
+
             attn_mask[0, idx] = True
+
+        return features, params, attn_mask
+
+    def _build_initial_streams_batch(
+        self,
+        graphs: Sequence[EntityGraph],
+        device: torch.device,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """
+        Batched variant of _build_initial_streams for graphs with identical token layouts.
+
+        Returns:
+            features: [B, L, D_feat]
+            params: [B, L, D_param]
+            attn_mask: [B, L]
+        """
+        if not graphs:
+            raise ValueError("graphs must be non-empty")
+        ref = graphs[0]
+        L = ref.num_tokens
+        B = len(graphs)
+        for g in graphs[1:]:
+            if g.num_tokens != L:
+                raise ValueError("All graphs in a batch must have identical num_tokens")
+
+        features = torch.zeros(B, L, self.feature_dim, device=device)
+        params = torch.zeros(B, L, self.param_dim, device=device)
+        attn_mask = torch.ones(B, L, dtype=torch.bool, device=device)
+
+        for b, graph in enumerate(graphs):
+            for idx, token in enumerate(graph.tokens):
+                t = self.types[token.type_name]
+                if self.use_learned_embedding and t.is_variable:
+                    x = t.build_simple_value(token.raw_data or {}, device=device, global_param_dim=self.param_dim)
+                    features[b, idx] = self.value_embedders[token.type_name](x)
+                else:
+                    base = self.type_embeddings[token.type_name]
+                    feat_vec = base.expand(1, -1)
+                    if token.type_name in self.deviation_tables and token.entity_id >= 0:
+                        dev_table = self.deviation_tables[token.type_name]
+                        if 0 <= token.entity_id < dev_table.shape[0]:
+                            dev = dev_table[token.entity_id].unsqueeze(0)
+                            if self.training and t.variation.dropout_rate > 0:
+                                if torch.rand(1).item() < t.variation.dropout_rate:
+                                    dev = torch.zeros_like(dev)
+                            if self.config.use_deviation_norm:
+                                dev = self.deviation_norm(dev)
+                            feat_vec = feat_vec + dev
+                    features[b, idx] = feat_vec
+                    p = t.build_param(token.raw_data or {}, device=device, global_param_dim=self.param_dim)
+                    params[b, idx] = p
+
+                    raw = token.raw_data or {}
+                    fixed_feature = raw.get("fixed_feature", None)
+                    if fixed_feature is not None:
+                        ff = torch.tensor(fixed_feature, device=device, dtype=features.dtype)
+                        if ff.numel() > self.feature_dim:
+                            raise ValueError(
+                                f"fixed_feature length {ff.numel()} exceeds feature_dim {self.feature_dim}"
+                            )
+                        features[b, idx, self.feature_dim - ff.numel() : self.feature_dim] = ff
+                attn_mask[b, idx] = True
 
         return features, params, attn_mask
 
@@ -486,6 +559,97 @@ class EntityMarformer(nn.Module):
 
         if self.use_learned_embedding:
             # Unembed once at the top: learned linear from final h_L → param_dim output.
+            out_params = self.unembedder(features)
+        else:
+            out_params = params
+        if return_combined:
+            assert final_combined is not None
+            return out_params, final_combined
+        return out_params
+
+    def forward_batch(
+        self,
+        graphs: Sequence[EntityGraph],
+        device: torch.device | None = None,
+        return_combined: bool = False,
+    ) -> torch.Tensor | tuple[torch.Tensor, torch.Tensor]:
+        """
+        Batched forward pass over multiple EntityGraphs with identical topology/token layout.
+        """
+        if not graphs:
+            raise ValueError("graphs must be non-empty")
+        if device is None:
+            device = next(self.parameters()).device
+        ref_graph = graphs[0]
+        for g in graphs[1:]:
+            if g.num_tokens != ref_graph.num_tokens:
+                raise ValueError("All graphs must share the same token layout for forward_batch")
+            if g.num_relationships != ref_graph.num_relationships:
+                raise ValueError("All graphs must share the same relationship schema for forward_batch")
+
+        features, params, attn_mask = self._build_initial_streams_batch(graphs, device=device)
+        edge_mask = ref_graph.build_edge_masks(device=device)  # [L, L, R]
+
+        K_aug: torch.Tensor | None = None
+        if self.use_pointer:
+            dev_key = str(device)
+            if dev_key not in ref_graph._k_aug_cache:
+                L = ref_graph.num_tokens
+                attr_ids = torch.full((L,), -1, dtype=torch.long, device=device)
+                annot_ids = torch.full((L,), -1, dtype=torch.long, device=device)
+                item_ids = torch.full((L,), -1, dtype=torch.long, device=device)
+                for idx, token in enumerate(ref_graph.tokens):
+                    if token.type_name in ("rating", "ranking_pairwise") and token.raw_data:
+                        attr_ids[idx] = token.raw_data.get("attribute_id", -1)
+                        annot_ids[idx] = token.raw_data.get("annotator_id", -1)
+                        iids = token.raw_data.get("item_ids", [])
+                        item_ids[idx] = iids[0] if iids else -1
+
+                def _same(ids: torch.Tensor) -> torch.Tensor:
+                    eq = (ids.unsqueeze(0) == ids.unsqueeze(1)).float()
+                    valid = (ids >= 0).float()
+                    return eq * valid.unsqueeze(0) * valid.unsqueeze(1)
+
+                ref_graph._k_aug_cache[dev_key] = torch.stack(
+                    [_same(attr_ids), _same(annot_ids), _same(item_ids)], dim=-1
+                )
+            K_aug = ref_graph._k_aug_cache[dev_key]
+
+        final_combined: torch.Tensor | None = None
+        for block in self.blocks:
+            if self.use_learned_embedding:
+                combined = features
+            else:
+                combined = torch.cat([features, params], dim=-1)  # [B, L, model_dim]
+
+            normed_attn = block["norm_1"](combined)
+            attn_out = block["attn"](
+                normed_attn,
+                edge_mask=edge_mask,
+                attn_mask=attn_mask,
+                K_aug=K_aug,
+            )
+            x = combined + attn_out
+
+            if self.use_multiplication_head:
+                dots = pairwise_head_dot_products(attn_out, self.config.attention_heads)
+                wide = torch.cat([x, dots], dim=-1)
+            else:
+                wide = x
+
+            normed_ff = block["norm_2"](wide)
+            z_ff = block["ff"](normed_ff)
+            x = x + block["dropout_2"](z_ff)
+
+            back_feat = block["proj_out"](x)
+            features = features + block["dropout_2"](back_feat)
+
+            if not self.use_learned_embedding:
+                back_param = block["W_param"](x)
+                params = params + block["dropout_2"](back_param)
+            final_combined = combined
+
+        if self.use_learned_embedding:
             out_params = self.unembedder(features)
         else:
             out_params = params

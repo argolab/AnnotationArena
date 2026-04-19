@@ -48,10 +48,8 @@ class RegressionSlices:
     def __post_init__(self) -> None:
         if self.input_dim < 0 or self.output_dim < 0:
             raise ValueError("RegressionSlices: input_dim and output_dim must be non-negative")
-        if self.input_dim > self.output_dim:
-            raise ValueError(
-                "RegressionSlices: input_dim cannot exceed output_dim (input must fit in supervised prefix)"
-            )
+        # We allow input_dim > output_dim: the extra input coordinates can exist in the param
+        # stream but be unsupervised (useful for mask bits / auxiliary features).
 
     @property
     def param_dim(self) -> int:

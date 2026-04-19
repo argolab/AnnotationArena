@@ -7,7 +7,7 @@ Toy matrix-completion experiment for EntityMarformer (multi-matrix regime).
 Task:
 - Two latent entity sets per graph: rows (N) and cols (M), each with latent dim D.
 - Ground-truth scalar for matrix entry (i, j): y_ij = <U_i, V_j>.
-  Latent rows/cols are drawn i.i.d. N(0, σ²) per entry (default σ=10; --latent-sample-std).
+  Latent rows/cols are drawn i.i.d. Uniform[-1, 1] per entry.
 - A graph contains all N*M entry variables (no permanently missing entries).
 - A fraction (mask_rate) is self-masked via token status for diagnostics.
 - Training objective is MSE over all entries (observed + masked).
@@ -29,8 +29,8 @@ supervised on the same index after the forward pass. That propagates real matrix
 row/col tokens for masked completion. Without distinct values per cell, the model tends toward a
 global constant — especially under --resample-train-each-step.
 
-Row/col entity tokens use type embeddings only (per-entity deviation tables are disabled) so
-resampled matrices do not fight fixed entity indices. Default model depth/heads are raised
+Row/col entity tokens use per-entity deviations (mc_entry still has no deviations).
+Default model depth/heads are raised
 (see EMBEDDING_DIM / NUM_LAYERS / ATTN_HEADS / D_FF); override with CLI flags.
 
 Optional experiments: --show-correct-vector (oracle U_i,V_j into row/col param stream via
@@ -81,25 +81,26 @@ NUM_STEPS = 600
 NUM_TRAIN_GRAPHS = 80
 NUM_TEST_GRAPHS = 20
 
-N_ROWS = 24
-N_COLS = 28
-LATENT_DIM = 6
-# Std dev for sampling U, V entries (y scales ~ σ² for rank-1 outer product).
-LATENT_SAMPLE_STD = 3.0
+N_ROWS = 4
+N_COLS = 4
+LATENT_DIM = 1
+# Uniform range for sampling U, V entries.
+LATENT_SAMPLE_MIN = -1.0
+LATENT_SAMPLE_MAX = 1.0
 MASK_RATE = 0.15  # self-masked fraction (no permanently missing entries)
 
 # Training/model knobs (deeper / multi-head defaults for the toy; override via CLI)
-EMBEDDING_DIM = 32
-NUM_LAYERS = 4
+EMBEDDING_DIM = 512
+NUM_LAYERS = 6
 ATTN_HEADS = 4
 DROPOUT = 0.1
-D_FF = 128
+D_FF = 2048
 NUM_FFN_LAYERS = 1
-LR = 3e-4
+LR = 2e-4
 WEIGHT_DECAY = 0.01
 TYPE_EMBEDDING_INIT = "kaiming"
 USE_PER_HEAD_REL = False
-USE_POINTER = True
+USE_POINTER = False
 USE_REL_VALUE = True
 USE_ADDONE_ATTN = False
 USE_DEVIATION_NORM = False
@@ -107,7 +108,7 @@ SCALE_SHARED_REL = True
 USE_GRAPH_MASK = False
 USE_LEARNED_EMBEDDING = False
 # Unique per (i,j) bias in mc_entry param stream so tokens are not identical at t=0 (see docstring).
-ENTRY_INPUT_TAG_SCALE = 1e-3
+ENTRY_INPUT_TAG_SCALE = 0
 # Extra relational channels: mc_entry↔mc_entry when same row / same column (pointer-like shortcuts).
 MC_ENTRY_GRID_POINTER_RELS = False
 # Oracle / architecture experiments (see EntityMarformerConfig + model.forward).
@@ -115,6 +116,8 @@ SHOW_CORRECT_VECTOR = False
 USE_MULTIPLICATION_HEAD = False
 READOUT_MLP_LAYER = 0
 READOUT_MLP_DIM = 0
+BATCH_GRAPHS = True
+USE_MC_FIXED_POSITIONAL_FEATURE = False
 
 OUT_DIR = Path("OUTPUT/toy_matrix_completion_curves")
 _LOG_Y_FLOOR = 1e-12
@@ -158,7 +161,13 @@ def _set_seed(seed: int) -> None:
     torch.cuda.manual_seed_all(seed)
 
 
-def _build_types(n_rows: int, n_cols: int, *, latent_dim: int) -> Dict[str, EntityType]:
+def _build_types(
+    n_rows: int,
+    n_cols: int,
+    *,
+    latent_dim: int,
+    use_mc_mask_bit: bool = False,
+) -> Dict[str, EntityType]:
     # row/col: D-wide param stream (oracle via input_value when --show-correct-vector); has_target=False → no type loss.
     if n_rows < 1 or n_cols < 1:
         raise ValueError(f"n_rows and n_cols must be >= 1, got {n_rows}, {n_cols}")
@@ -168,13 +177,13 @@ def _build_types(n_rows: int, n_cols: int, *, latent_dim: int) -> Dict[str, Enti
             name="row",
             slices=latent_slices,
             has_target=False,
-            variation=VariationConfig(enabled=False, num_entities=0, reg_weight=0.0),
+            variation=VariationConfig(enabled=True, num_entities=n_rows, reg_weight=0.0),
         )
         col_type = SyntheticRegressionType(
             name="col",
             slices=latent_slices,
             has_target=False,
-            variation=VariationConfig(enabled=False, num_entities=0, reg_weight=0.0),
+            variation=VariationConfig(enabled=True, num_entities=n_cols, reg_weight=0.0),
         )
     else:
         row_type = NullEntityType(
@@ -185,10 +194,11 @@ def _build_types(n_rows: int, n_cols: int, *, latent_dim: int) -> Dict[str, Enti
             name="col",
             variation=VariationConfig(enabled=False, num_entities=0, reg_weight=0.0),
         )
-    # matrix-entry variable: scalar input (default 0), scalar target y_ij.
+    # matrix-entry variable: scalar target y_ij.
+    # Optionally add an explicit "is_masked" input feature to mc_entry tokens.
     entry_type = SyntheticRegressionType(
         name="mc_entry",
-        slices=RegressionSlices(input_dim=1, output_dim=1),
+        slices=RegressionSlices(input_dim=2 if use_mc_mask_bit else 1, output_dim=1),
         has_target=True,
         variation=VariationConfig(enabled=False, num_entities=0, reg_weight=0.0),
     )
@@ -250,6 +260,8 @@ def _build_graph_for_pairs(
     entry_input_tag_scale: float = 0.0,
     mc_entry_grid_pointer_rels: bool = False,
     attach_ground_truth_latent: bool = False,
+    use_mc_mask_bit: bool = False,
+    use_mc_fixed_positional_feature: bool = False,
 ) -> Tuple[EntityGraph, List[Tuple[int, int]], List[float], List[int], List[Tuple[int, int]]]:
     n_rows, n_cols = y.shape
     if U.shape[0] != n_rows or V.shape[0] != n_cols or U.shape[1] != V.shape[1]:
@@ -290,10 +302,20 @@ def _build_graph_for_pairs(
             input_val = entry_input_tag_scale * float(i * n_cols + j) if entry_input_tag_scale > 0.0 else 0.0
         else:
             input_val = tgt
-        raw = {
-            "input_value": [input_val],
-            "target_value": [tgt],
-        }
+        if use_mc_mask_bit:
+            raw = {
+                "input_value": [input_val, 1.0 if is_masked else 0.0],
+                "target_value": [tgt],
+            }
+        else:
+            raw = {
+                "input_value": [input_val],
+                "target_value": [tgt],
+            }
+        if use_mc_fixed_positional_feature:
+            row_onehot = [1.0 if rr == i else 0.0 for rr in range(n_rows)]
+            col_onehot = [1.0 if cc == j else 0.0 for cc in range(n_cols)]
+            raw["fixed_feature"] = row_onehot + col_onehot
         entry_idx = len(tokens)
         status = 1 if is_masked else 2
         tokens.append(Token(type_name="mc_entry", entity_id=-1, status=status, raw_data=raw))
@@ -366,14 +388,19 @@ def build_matrix_sample(
     relationships: List[Relationship],
     entry_input_tag_scale: float = ENTRY_INPUT_TAG_SCALE,
     mc_entry_grid_pointer_rels: bool = MC_ENTRY_GRID_POINTER_RELS,
-    latent_sample_std: float = LATENT_SAMPLE_STD,
+    latent_sample_min: float = LATENT_SAMPLE_MIN,
+    latent_sample_max: float = LATENT_SAMPLE_MAX,
     show_correct_vector: bool = SHOW_CORRECT_VECTOR,
+    use_mc_mask_bit: bool = False,
+    use_mc_fixed_positional_feature: bool = USE_MC_FIXED_POSITIONAL_FEATURE,
 ) -> MatrixSample:
     _ = device  # keep signature aligned with other toy builders
-    if latent_sample_std <= 0.0:
-        raise ValueError(f"latent_sample_std must be > 0, got {latent_sample_std}")
-    U = np.random.normal(loc=0.0, scale=latent_sample_std, size=(n_rows, latent_dim))
-    V = np.random.normal(loc=0.0, scale=latent_sample_std, size=(n_cols, latent_dim))
+    if latent_sample_max <= latent_sample_min:
+        raise ValueError(
+            f"latent_sample_max must be > latent_sample_min, got min={latent_sample_min}, max={latent_sample_max}"
+        )
+    U = np.random.uniform(low=latent_sample_min, high=latent_sample_max, size=(n_rows, latent_dim))
+    V = np.random.uniform(low=latent_sample_min, high=latent_sample_max, size=(n_cols, latent_dim))
     y = U @ V.T  # [N, M]
 
     all_pairs = [(i, j) for i in range(n_rows) for j in range(n_cols)]
@@ -395,6 +422,8 @@ def build_matrix_sample(
         entry_input_tag_scale=entry_input_tag_scale,
         mc_entry_grid_pointer_rels=mc_entry_grid_pointer_rels,
         attach_ground_truth_latent=show_correct_vector,
+        use_mc_mask_bit=use_mc_mask_bit,
+        use_mc_fixed_positional_feature=use_mc_fixed_positional_feature,
     )
 
     return MatrixSample(
@@ -449,6 +478,45 @@ def _compute_entry_mse(
     pred = torch.stack(preds, dim=0)
     tgt = torch.stack(tgts, dim=0)
     return F.mse_loss(pred, tgt, reduction="mean")
+
+
+def _compute_entry_mse_batch(
+    *,
+    params: torch.Tensor,  # [B, L, P]
+    samples: Sequence[MatrixSample],
+    graph: EntityGraph,
+    device: torch.device,
+    selected_token_indices_per_sample: Sequence[set[int] | None] | None = None,
+) -> torch.Tensor:
+    if not samples:
+        return torch.zeros((), device=device)
+    bsz = params.shape[0]
+    if bsz != len(samples):
+        raise ValueError(f"params batch size {bsz} does not match samples {len(samples)}")
+    entry_type = graph.types["mc_entry"]
+    assert isinstance(entry_type, SyntheticRegressionType)
+    out_slice = entry_type.slices.output_slice()
+    entry_indices = [idx for idx, tok in enumerate(graph.tokens) if tok.type_name == "mc_entry"]
+    if not entry_indices:
+        return torch.zeros((), device=device)
+    pred = params[:, entry_indices, out_slice].squeeze(-1)  # [B, E]
+    tgt = torch.tensor([s.targets for s in samples], dtype=pred.dtype, device=device)  # [B, E]
+
+    if selected_token_indices_per_sample is None:
+        return F.mse_loss(pred, tgt, reduction="mean")
+
+    keep_mask = torch.zeros_like(pred, dtype=torch.bool, device=device)
+    for b, keep_set in enumerate(selected_token_indices_per_sample):
+        if keep_set is None:
+            keep_mask[b, :] = True
+            continue
+        for e_pos, tok_idx in enumerate(entry_indices):
+            if tok_idx in keep_set:
+                keep_mask[b, e_pos] = True
+
+    if keep_mask.any():
+        return F.mse_loss(pred[keep_mask], tgt[keep_mask], reduction="mean")
+    return torch.zeros((), device=device)
 
 
 def _build_readout_mlp(
@@ -596,7 +664,8 @@ def run_matrix_completion_experiment(
     n_rows: int = N_ROWS,
     n_cols: int = N_COLS,
     latent_dim: int = LATENT_DIM,
-    latent_sample_std: float = LATENT_SAMPLE_STD,
+    latent_sample_min: float = LATENT_SAMPLE_MIN,
+    latent_sample_max: float = LATENT_SAMPLE_MAX,
     mask_rate: float = MASK_RATE,
     embedding_dim: int = EMBEDDING_DIM,
     num_layers: int = NUM_LAYERS,
@@ -624,6 +693,9 @@ def run_matrix_completion_experiment(
     readout_mlp_dim: int = READOUT_MLP_DIM,
     live_curves_every: int = LIVE_CURVES_EVERY,
     eval_every: int = EVAL_EVERY,
+    batch_graphs: bool = BATCH_GRAPHS,
+    use_mc_mask_bit: bool = False,
+    use_mc_fixed_positional_feature: bool = USE_MC_FIXED_POSITIONAL_FEATURE,
     device: torch.device | None = None,
 ) -> Dict[str, Any]:
     if device is None:
@@ -642,7 +714,21 @@ def run_matrix_completion_experiment(
             "or both be positive (enabled)."
         )
 
-    types = _build_types(n_rows=n_rows, n_cols=n_cols, latent_dim=latent_dim)
+    types = _build_types(
+        n_rows=n_rows,
+        n_cols=n_cols,
+        latent_dim=latent_dim,
+        use_mc_mask_bit=use_mc_mask_bit,
+    )
+    if use_mc_fixed_positional_feature:
+        global_param_dim = max(t.param_dim for t in types.values())
+        feature_dim = embedding_dim if use_learned_embedding else (embedding_dim - global_param_dim)
+        required_pos_dim = n_rows + n_cols
+        if feature_dim < required_pos_dim:
+            raise ValueError(
+                f"use_mc_fixed_positional_feature requires feature_dim >= N+M ({required_pos_dim}), "
+                f"got feature_dim={feature_dim}. Increase embedding_dim or disable the flag."
+            )
     relationships = _build_relationships(mc_entry_grid_pointer_rels=mc_entry_grid_pointer_rels)
     num_rels = len(relationships)
     head_dim = embedding_dim // attn_heads
@@ -668,8 +754,11 @@ def run_matrix_completion_experiment(
                     relationships=relationships,
                     entry_input_tag_scale=entry_input_tag_scale,
                     mc_entry_grid_pointer_rels=mc_entry_grid_pointer_rels,
-                    latent_sample_std=latent_sample_std,
+                    latent_sample_min=latent_sample_min,
+                    latent_sample_max=latent_sample_max,
                     show_correct_vector=show_correct_vector,
+                    use_mc_mask_bit=use_mc_mask_bit,
+                    use_mc_fixed_positional_feature=use_mc_fixed_positional_feature,
                 )
             )
         return samples
@@ -689,8 +778,11 @@ def run_matrix_completion_experiment(
                 relationships=relationships,
                 entry_input_tag_scale=entry_input_tag_scale,
                 mc_entry_grid_pointer_rels=mc_entry_grid_pointer_rels,
-                latent_sample_std=latent_sample_std,
+                latent_sample_min=latent_sample_min,
+                latent_sample_max=latent_sample_max,
                 show_correct_vector=show_correct_vector,
+                use_mc_mask_bit=use_mc_mask_bit,
+                use_mc_fixed_positional_feature=use_mc_fixed_positional_feature,
             )
         )
 
@@ -734,7 +826,7 @@ def run_matrix_completion_experiment(
 
     print(
         "Starting EntityMarformer matrix-completion toy\n"
-        f"  N={n_rows}, M={n_cols}, D={latent_dim}, latent_sample_std={latent_sample_std}, "
+        f"  N={n_rows}, M={n_cols}, D={latent_dim}, latent_sample_range=[{latent_sample_min}, {latent_sample_max}], "
         f"mask_rate={mask_rate}, no_missing=True\n"
         f"  num_train_graphs={num_train_graphs}, num_test_graphs={num_test_graphs}, steps={num_steps}\n"
         f"  model: emb={embedding_dim}, layers={num_layers}, heads={attn_heads}, d_ff={d_ff}, "
@@ -742,7 +834,9 @@ def run_matrix_completion_experiment(
         f"  marformer: per_head_rel={use_per_head_rel}, pointer={use_pointer}, rel_value={use_rel_value}, "
         f"addone={use_addone_attn}, deviation_norm={use_deviation_norm}, scale_shared_rel={scale_shared_rel}, "
         f"graph_mask={use_graph_mask}, learned_emb={use_learned_embedding}, type_init={type_embedding_init!r}\n"
-        f"  row/col deviation: off (type embeddings only)\n"
+        f"  row/col deviation: on (per-entity tables enabled)\n"
+        f"  mc_entry explicit mask-bit: {use_mc_mask_bit}\n"
+        f"  mc_entry fixed positional feature: {use_mc_fixed_positional_feature}\n"
         f"  entry_input_tag_scale (per-cell param-stream tag)={entry_input_tag_scale}\n"
         f"  mc_entry_grid_pointer_rels={mc_entry_grid_pointer_rels} (R={num_rels})\n"
         f"  resample_train_each_step={resample_train_each_step}\n"
@@ -751,6 +845,7 @@ def run_matrix_completion_experiment(
         f"  readout_mlp_layer={readout_mlp_layer}, readout_mlp_dim={readout_mlp_dim}, "
         f"enabled={use_readout_mlp}\n"
         f"  eval_every={eval_every}\n"
+        f"  batch_graphs={batch_graphs}\n"
         f"  device={device}"
     )
 
@@ -776,7 +871,8 @@ def run_matrix_completion_experiment(
             "N": n_rows,
             "M": n_cols,
             "D": latent_dim,
-            "latent_sample_std": latent_sample_std,
+            "latent_sample_min": latent_sample_min,
+            "latent_sample_max": latent_sample_max,
             "mask_rate": mask_rate,
             "embedding_dim": embedding_dim,
             "num_layers": num_layers,
@@ -786,7 +882,7 @@ def run_matrix_completion_experiment(
             "dropout": dropout,
             "lr": lr,
             "weight_decay": weight_decay,
-            "row_col_deviation": False,
+            "row_col_deviation": True,
             "type_embedding_init": type_embedding_init,
             "use_per_head_rel": use_per_head_rel,
             "use_pointer": use_pointer,
@@ -806,6 +902,9 @@ def run_matrix_completion_experiment(
             "readout_mlp_dim": readout_mlp_dim,
             "use_readout_mlp": use_readout_mlp,
             "eval_every": eval_every,
+            "batch_graphs": batch_graphs,
+            "use_mc_mask_bit": use_mc_mask_bit,
+            "use_mc_fixed_positional_feature": use_mc_fixed_positional_feature,
             "train_mse": train_mse,
             "test_mse": test_mse,
             "test_all_mse": test_all_mse,
@@ -826,15 +925,30 @@ def run_matrix_completion_experiment(
         model.train()
         opt.zero_grad(set_to_none=True)
 
-        train_sum = torch.zeros((), device=device)
-        for sample in train_samples:
-            train_sum = train_sum + _compute_entry_mse(
-                model,
-                sample.graph,
+        if batch_graphs:
+            if readout_mlp is None:
+                p_tr = model.forward_batch([s.graph for s in train_samples], device=device)
+            else:
+                _, c_tr = model.forward_batch(
+                    [s.graph for s in train_samples], device=device, return_combined=True
+                )
+                p_tr = readout_mlp(c_tr)
+            train_mse = _compute_entry_mse_batch(
+                params=p_tr,
+                samples=train_samples,
+                graph=train_samples[0].graph,
                 device=device,
-                readout_mlp=readout_mlp,
             )
-        train_mse = train_sum / float(len(train_samples))
+        else:
+            train_sum = torch.zeros((), device=device)
+            for sample in train_samples:
+                train_sum = train_sum + _compute_entry_mse(
+                    model,
+                    sample.graph,
+                    device=device,
+                    readout_mlp=readout_mlp,
+                )
+            train_mse = train_sum / float(len(train_samples))
 
         reg_loss = _compute_deviation_reg_loss(model, types, device=device)
         loss = train_mse + reg_loss
@@ -849,27 +963,49 @@ def run_matrix_completion_experiment(
         if do_eval:
             model.eval()
             with torch.no_grad():
-                test_sum = torch.zeros((), device=device)
-                test_all_sum = torch.zeros((), device=device)
-                for sample in test_samples:
-                    masked_idx = set(sample.masked_token_indices)
+                if batch_graphs:
                     if readout_mlp is None:
-                        p_te = model(sample.graph, device=device)
+                        p_te = model.forward_batch([s.graph for s in test_samples], device=device)
                     else:
-                        _, c_te = model(sample.graph, device=device, return_combined=True)
+                        _, c_te = model.forward_batch(
+                            [s.graph for s in test_samples], device=device, return_combined=True
+                        )
                         p_te = readout_mlp(c_te)
-                    test_sum = test_sum + _compute_entry_mse(
-                        model,
-                        sample.graph,
-                        device=device,
-                        selected_token_indices=masked_idx,
+                    test_mse = _compute_entry_mse_batch(
                         params=p_te,
+                        samples=test_samples,
+                        graph=test_samples[0].graph,
+                        device=device,
+                        selected_token_indices_per_sample=[set(s.masked_token_indices) for s in test_samples],
                     )
-                    test_all_sum = test_all_sum + _compute_entry_mse(
-                        model, sample.graph, device=device, params=p_te
+                    test_all_mse = _compute_entry_mse_batch(
+                        params=p_te,
+                        samples=test_samples,
+                        graph=test_samples[0].graph,
+                        device=device,
                     )
-                test_mse = test_sum / float(len(test_samples))
-                test_all_mse = test_all_sum / float(len(test_samples))
+                else:
+                    test_sum = torch.zeros((), device=device)
+                    test_all_sum = torch.zeros((), device=device)
+                    for sample in test_samples:
+                        masked_idx = set(sample.masked_token_indices)
+                        if readout_mlp is None:
+                            p_te = model(sample.graph, device=device)
+                        else:
+                            _, c_te = model(sample.graph, device=device, return_combined=True)
+                            p_te = readout_mlp(c_te)
+                        test_sum = test_sum + _compute_entry_mse(
+                            model,
+                            sample.graph,
+                            device=device,
+                            selected_token_indices=masked_idx,
+                            params=p_te,
+                        )
+                        test_all_sum = test_all_sum + _compute_entry_mse(
+                            model, sample.graph, device=device, params=p_te
+                        )
+                    test_mse = test_sum / float(len(test_samples))
+                    test_all_mse = test_all_sum / float(len(test_samples))
                 last_test_mse = float(test_mse.detach().cpu().item())
                 last_test_all_mse = float(test_all_mse.detach().cpu().item())
         else:
@@ -1020,10 +1156,16 @@ def main() -> None:
     parser.add_argument("--M", type=int, default=N_COLS)
     parser.add_argument("--D", type=int, default=LATENT_DIM)
     parser.add_argument(
-        "--latent-sample-std",
+        "--latent-sample-min",
         type=float,
-        default=LATENT_SAMPLE_STD,
-        help="Std dev for each entry of U and V when sampling latents (targets scale ~ σ² for rank-1).",
+        default=LATENT_SAMPLE_MIN,
+        help="Lower bound for Uniform sampling of each latent entry.",
+    )
+    parser.add_argument(
+        "--latent-sample-max",
+        type=float,
+        default=LATENT_SAMPLE_MAX,
+        help="Upper bound for Uniform sampling of each latent entry.",
     )
     parser.add_argument("--mask-rate", type=float, default=MASK_RATE)
     parser.add_argument("--embedding-dim", type=int, default=EMBEDDING_DIM)
@@ -1072,6 +1214,19 @@ def main() -> None:
         type=float,
         default=ENTRY_INPUT_TAG_SCALE,
         help="mc_entry input_value = scale * (i*M+j); 0 disables (can restore degenerate identical preds in eval).",
+    )
+    parser.add_argument(
+        "--use-mc-mask-bit",
+        action="store_true",
+        help="Add an explicit maskedness bit to mc_entry input_value: input_value becomes [value, is_masked].",
+    )
+    parser.add_argument(
+        "--use-mc-fixed-positional-feature",
+        action="store_true",
+        help=(
+            "Append fixed absolute row/column one-hot positional feature to mc_entry feature stream "
+            "(concat one-hot(row_i), one-hot(col_j) in the tail of the feature vector)."
+        ),
     )
     parser.add_argument(
         "--resample-train-each-step",
@@ -1127,6 +1282,11 @@ def main() -> None:
         default=EVAL_EVERY,
         help="Run test-set evaluation every N steps (always evaluates at step 1 and final step).",
     )
+    parser.add_argument(
+        "--no-batch-graphs",
+        action="store_true",
+        help="Disable batched graph forward (fallback to one graph forward per sample).",
+    )
     parser.add_argument("--replot", type=str, default=None)
     args = parser.parse_args()
 
@@ -1148,7 +1308,8 @@ def main() -> None:
         n_rows=args.N,
         n_cols=args.M,
         latent_dim=args.D,
-        latent_sample_std=args.latent_sample_std,
+        latent_sample_min=args.latent_sample_min,
+        latent_sample_max=args.latent_sample_max,
         mask_rate=args.mask_rate,
         embedding_dim=args.embedding_dim,
         num_layers=args.num_layers,
@@ -1168,6 +1329,8 @@ def main() -> None:
         use_graph_mask=args.use_graph_mask,
         use_learned_embedding=args.use_learned_embedding,
         entry_input_tag_scale=args.entry_input_tag_scale,
+        use_mc_mask_bit=args.use_mc_mask_bit,
+        use_mc_fixed_positional_feature=args.use_mc_fixed_positional_feature,
         mc_entry_grid_pointer_rels=args.mc_entry_grid_pointer_rels,
         resample_train_each_step=args.resample_train_each_step,
         show_correct_vector=args.show_correct_vector,
@@ -1176,6 +1339,7 @@ def main() -> None:
         readout_mlp_dim=args.readout_mlp_dim,
         live_curves_every=args.live_curves_every,
         eval_every=args.eval_every,
+        batch_graphs=not args.no_batch_graphs,
     )
 
 
