@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 
@@ -54,6 +54,9 @@ class EntityGraph:
 
     This is intentionally simple for the MVP: we assume a single instance
     (batch size 1) and store a flat list of tokens with integer indices.
+
+    Optional layout fields (set by variable_list_to_entity_graph) support
+    rating-specific inductive biases, e.g. triplet feature products at entity tokens.
     """
 
     def __init__(
@@ -62,11 +65,17 @@ class EntityGraph:
         relationships: List[Relationship],
         tokens: List[Token],
         edges: List[Tuple[int, int, str]],  # specify relationships externally
+        attr_token_start: Optional[int] = None,
+        annot_token_start: Optional[int] = None,
+        item_id_to_token_index: Optional[Dict[int, int]] = None,
     ):
         self.types = types
         self.relationships = relationships
         self.tokens = tokens
         self.edges = edges
+        self.attr_token_start = attr_token_start
+        self.annot_token_start = annot_token_start
+        self.item_id_to_token_index = item_id_to_token_index
 
         self._rel_index: Dict[str, int] = {rel.name: i for i, rel in enumerate(self.relationships)}
 
@@ -224,5 +233,13 @@ def variable_list_to_entity_graph(
         Relationship(name="ITEM_INV", source_type="item", target_type="rating_or_ranking", inverse="ITEM"),
     ]
 
-    return EntityGraph(types=types, relationships=relationships, tokens=tokens, edges=edges)
+    return EntityGraph(
+        types=types,
+        relationships=relationships,
+        tokens=tokens,
+        edges=edges,
+        attr_token_start=attr_token_start,
+        annot_token_start=annot_token_start,
+        item_id_to_token_index=dict(item_id_to_token),
+    )
 

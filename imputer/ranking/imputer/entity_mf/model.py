@@ -13,6 +13,8 @@ from .config import EntityMarformerConfig
 from .data import EntityGraph
 from .types import EntityType
 
+_TRIPLET_EPS = 1e-8
+
 
 class RelationalAttentionBlock(nn.Module):
     """
@@ -236,6 +238,16 @@ class EntityMarformer(nn.Module):
         self.use_rel_value = config.use_rel_value
         self.use_addone_attn = config.use_addone_attn
         self.use_param_output_head = config.use_param_output_head
+        self.use_triplet_rating_base = bool(config.use_triplet_rating_base)
+        self.triplet_rating_tanh = bool(config.triplet_rating_tanh)
+        if self.use_triplet_rating_base:
+            self.triplet_rating_logit_scale = nn.Parameter(torch.ones(1))
+            # Periodic triplet stats (set by Lightning each epoch); print at most once per epoch.
+            self._triplet_diag_epoch: int = -1
+            self._triplet_diag_interval: int = 10
+            self._triplet_diag_logged_this_epoch: bool = False
+        else:
+            self.triplet_rating_logit_scale = None  # type: ignore[assignment]
 
         # Global param dim = max over types (no longer passed in).
         self.global_param_dim = max(t.param_dim for t in types.values())
@@ -309,6 +321,120 @@ class EntityMarformer(nn.Module):
             }
             blocks.append(nn.ModuleDict(block_dict))
         self.blocks = nn.ModuleList(blocks)
+
+    @staticmethod
+    def _triplet_scalars(ha: torch.Tensor, hb: torch.Tensor, hc: torch.Tensor, d_feat: int) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Unnormalized cubic sum and a scale-fair version for logits.
+
+        tri_unnorm = sum_d ha[d] hb[d] hc[d]  (can be huge)
+
+        tri_norm: L2-normalize each of ha, hb, hc, then sum_d / d_feat.
+        For unit-norm vectors with |coord|<=1, |tri_norm|<=1 (typical O(1)).
+        """
+        tri_unnorm = (ha * hb * hc).sum()
+        ha_n = ha / (torch.norm(ha, p=2) + _TRIPLET_EPS)
+        hb_n = hb / (torch.norm(hb, p=2) + _TRIPLET_EPS)
+        hc_n = hc / (torch.norm(hc, p=2) + _TRIPLET_EPS)
+        d = float(d_feat)
+        tri_norm = (ha_n * hb_n * hc_n).sum() / (d + _TRIPLET_EPS)
+        return tri_unnorm, tri_norm
+
+    def _apply_triplet_rating_base(
+        self,
+        graph: EntityGraph,
+        features: torch.Tensor,
+        out_params: torch.Tensor,
+    ) -> None:
+        """
+        For each rating variable token, add (learnable_scale * tri_norm) to param index 1
+        (mu_raw), using the final feature rows of the linked attribute, annotator, and first
+        item entity tokens.
+
+        tri_norm uses L2-normalized entity features and divides by feature_dim so magnitude
+        is O(1); optional tanh applies only to this normalized scalar (not the raw cubic sum).
+        """
+        if not self.use_triplet_rating_base or self.triplet_rating_logit_scale is None:
+            return
+        if graph.attr_token_start is None or graph.annot_token_start is None or graph.item_id_to_token_index is None:
+            return
+        na = self.types["attribute"].variation.num_entities
+        nj = self.types["annotator"].variation.num_entities
+        ast = graph.attr_token_start
+        jst = graph.annot_token_start
+        inv = graph.item_id_to_token_index
+        scale = self.triplet_rating_logit_scale.reshape(())
+        epoch = int(getattr(self, "_triplet_diag_epoch", -1))
+        interval = int(getattr(self, "_triplet_diag_interval", 10))
+        want_diag = (
+            self.training
+            and epoch >= 0
+            and interval > 0
+            and (epoch % interval == 0)
+            and not getattr(self, "_triplet_diag_logged_this_epoch", True)
+        )
+        tri_unnorm_list: List[torch.Tensor] = []
+        tri_norm_list: List[torch.Tensor] = []
+        tri_final_list: List[torch.Tensor] = []
+        for idx, tok in enumerate(graph.tokens):
+            if tok.type_name != "rating":
+                continue
+            raw = tok.raw_data or {}
+            aid = int(raw.get("attribute_id", -1))
+            jid = int(raw.get("annotator_id", -1))
+            iids = raw.get("item_ids") or []
+            if not iids:
+                continue
+            kid = int(iids[0])
+            if not (0 <= aid < na and 0 <= jid < nj):
+                continue
+            itok = inv.get(kid)
+            if itok is None:
+                continue
+            ia = ast + aid
+            ib = jst + jid
+            ha = features[0, ia, :]
+            hb = features[0, ib, :]
+            hc = features[0, itok, :]
+            tri_unnorm, tri_norm = self._triplet_scalars(ha, hb, hc, self.feature_dim)
+            tri_final = torch.tanh(tri_norm) if self.triplet_rating_tanh else tri_norm
+            if want_diag:
+                tri_unnorm_list.append(tri_unnorm.detach())
+                tri_norm_list.append(tri_norm.detach())
+                tri_final_list.append(tri_final.detach())
+            out_params[0, idx, 1] = out_params[0, idx, 1] + scale * tri_final
+
+        if want_diag:
+            self._triplet_diag_logged_this_epoch = True
+            sc = float(scale.detach().float().item())
+            if not tri_unnorm_list:
+                print(
+                    f"[EntityMarformer] triplet_rating diag (epoch {epoch}, first train chunk): "
+                    "no valid rating triplets in this graph — triplet base not applied here."
+                )
+            else:
+                u0 = torch.stack(tri_unnorm_list).float()
+                u1 = torch.stack(tri_norm_list).float()
+                u2 = torch.stack(tri_final_list).float()
+                contrib = (scale.detach().float() * u2).abs()
+                std0 = float(torch.std(u0, unbiased=False).item())
+                std1 = float(torch.std(u1, unbiased=False).item())
+                std2 = float(torch.std(u2, unbiased=False).item())
+                print(
+                    f"[EntityMarformer] triplet_rating diag (epoch {epoch}, first train chunk): "
+                    f"n_ratings={u0.numel()}  logit_scale={sc:.6g}  D_feat={self.feature_dim}  every_{interval}_epochs\n"
+                    f"  tri_unnorm (raw cubic sum) min/mean/max/std = "
+                    f"{float(u0.min().item()):.6g} / {float(u0.mean().item()):.6g} / "
+                    f"{float(u0.max().item()):.6g} / {std0:.6g}\n"
+                    f"  tri_norm   (L2-entity / D_feat) min/mean/max/std = "
+                    f"{float(u1.min().item()):.6g} / {float(u1.mean().item()):.6g} / "
+                    f"{float(u1.max().item()):.6g} / {std1:.6g}\n"
+                    f"  tri_final  (after optional tanh) min/mean/max/std = "
+                    f"{float(u2.min().item()):.6g} / {float(u2.mean().item()):.6g} / "
+                    f"{float(u2.max().item()):.6g} / {std2:.6g}  tanh={self.triplet_rating_tanh}\n"
+                    f"  |scale*tri_final| mean/max = "
+                    f"{float(contrib.mean().item()):.6g} / {float(contrib.max().item()):.6g}"
+                )
 
     def _build_initial_streams(
         self,
@@ -416,5 +542,9 @@ class EntityMarformer(nn.Module):
             combined = torch.cat([features, params], dim=-1)
 
         if self.use_param_output_head:
-            return self.param_output_head(combined)
-        return params
+            out_params = self.param_output_head(combined)
+        else:
+            out_params = params
+        if self.use_triplet_rating_base:
+            self._apply_triplet_rating_base(graph, features, out_params)
+        return out_params

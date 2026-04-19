@@ -85,6 +85,8 @@ def _reconstruct(run_dir: Path) -> tuple:
     config.scale_shared_rel     = mcfg["scale_shared_rel"]
     config.use_graph_mask       = mcfg["use_graph_mask"]
     config.use_param_output_head = mcfg.get("use_param_output_head", False)
+    config.use_triplet_rating_base = mcfg.get("use_triplet_rating_base", False)
+    config.triplet_rating_tanh = mcfg.get("triplet_rating_tanh", False)
 
     # ── DataConverter + bundle ────────────────────────────────────────────────
     converter = DataConverter(
@@ -158,7 +160,11 @@ def _load_checkpoint(model: EntityMarformer, ckpt_path: Path, device: torch.devi
         for k, v in ckpt["state_dict"].items()
         if k.startswith("model.")
     }
-    model.load_state_dict(state)
+    missing, unexpected = model.load_state_dict(state, strict=False)
+    if missing:
+        print(f"  (checkpoint load: missing keys ignored: {len(missing)})")
+    if unexpected:
+        print(f"  (checkpoint load: unexpected keys ignored: {len(unexpected)})")
 
 
 # ── Metrics computation ───────────────────────────────────────────────────────

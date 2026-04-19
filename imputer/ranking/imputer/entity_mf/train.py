@@ -11,6 +11,7 @@ import argparse
 from pathlib import Path
 from typing import Dict, List, Any
 
+import math
 import random
 import json
 import numpy as np
@@ -29,6 +30,17 @@ from .data import variable_list_to_entity_graph
 from .model import EntityMarformer
 from .eval import compute_trainable_loss, evaluate_entity_marformer_split, EntityEvalResults
 from .masking import MaskingStrategy, build_default_masking_strategy
+
+
+def _total_grad_l2_norm(module: torch.nn.Module) -> float:
+    """L2 norm of all gradients flattened (sqrt of sum of per-parameter grad norms squared)."""
+    sq = 0.0
+    for p in module.parameters():
+        if p.grad is None:
+            continue
+        g = p.grad.detach().float()
+        sq += float(torch.sum(g * g).item())
+    return math.sqrt(sq) if sq > 0.0 else 0.0
 
 
 def _save_json(data: Any, path: Path) -> None:
@@ -93,6 +105,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         lr_min: float = 1e-5,
         lr_step_epoch: int = 40,
         random_item_chunks: bool = False,
+        grad_norm_print_interval: int = 100,
     ):
         super().__init__()
         self.model = model
@@ -114,6 +127,8 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.lr_step_epoch = lr_step_epoch
         self.random_item_chunks = bool(random_item_chunks)
         self._last_logged_lr = float(learning_rate)
+        # Gradient-norm print cadence in on_after_backward (0 = no prints; TB log always).
+        self.grad_norm_print_interval = int(grad_norm_print_interval)
 
         # Build persistent splits from the bundle. Training-time graphs may merge
         # train/test variables when transductive is enabled, but these remain as
@@ -334,7 +349,15 @@ class EntityMarformerLightningModule(pl.LightningModule):
         Print when step LR schedule changes the optimizer LR.
         Lightning applies epoch schedulers between epochs; this hook reports
         the new LR at the start of the epoch where it becomes active.
+
+        Also resets triplet-rating diagnostic state so EntityMarformer can print
+        stats on epochs 0, 10, 20, ... (first training chunk of that epoch).
         """
+        model = self.model
+        if getattr(model, "use_triplet_rating_base", False):
+            model._triplet_diag_epoch = int(self.current_epoch)
+            model._triplet_diag_logged_this_epoch = False
+
         if self.lr_schedule != "step":
             return
         if not hasattr(self, "trainer") or not self.trainer.optimizers:
@@ -452,6 +475,14 @@ class EntityMarformerLightningModule(pl.LightningModule):
             self.log("train/observed_ce", observed_ce_accum / observed_ce_count, prog_bar=False, on_step=True, on_epoch=True)
 
         return loss
+
+    def on_after_backward(self) -> None:
+        """Log total L2 grad norm on `self.model` (helps spot vanishing / dead grads)."""
+        gn = _total_grad_l2_norm(self.model)
+        self.log("train/grad_norm_l2", gn, prog_bar=False, on_step=True, on_epoch=False)
+        interval = getattr(self, "grad_norm_print_interval", 0) or 0
+        if interval > 0 and self.global_step % interval == 0:
+            print(f"[EntityMarformer] grad_norm_l2(model)={gn:.6g}  global_step={self.global_step}")
 
     def on_train_epoch_end(self) -> None:
         """
@@ -894,6 +925,23 @@ def main():
         help="Predict final params from the last combined hidden state instead of reading them directly from the residual param stream.",
     )
     parser.add_argument(
+        "--use-triplet-rating-base",
+        action="store_true",
+        help="For rating tokens, add learnable_scale * tri_norm to mu_raw: L2-normalize attr/annot/item entity features, "
+             "tri_norm = sum_d (ha*hb*hc) / feature_dim (first item id).",
+    )
+    parser.add_argument(
+        "--triplet-rating-tanh",
+        action="store_true",
+        help="With --use-triplet-rating-base, apply tanh after L2-per-entity + /D_feat normalization (optional extra squashing).",
+    )
+    parser.add_argument(
+        "--grad-norm-print-interval",
+        type=int,
+        default=100,
+        help="Print model L2 grad norm every N global_steps after backward (0 = never print; still logs train/grad_norm_l2 to TensorBoard).",
+    )
+    parser.add_argument(
         "--lr-schedule",
         type=str,
         default="none",
@@ -955,6 +1003,8 @@ def main():
     config.scale_shared_rel      = args.scale_shared_rel
     config.use_graph_mask        = args.use_graph_mask
     config.use_param_output_head = args.use_param_output_head
+    config.use_triplet_rating_base = bool(args.use_triplet_rating_base)
+    config.triplet_rating_tanh = bool(args.triplet_rating_tanh)
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -1016,6 +1066,8 @@ def main():
             "scale_shared_rel": config.scale_shared_rel,
             "use_graph_mask": config.use_graph_mask,
             "use_param_output_head": config.use_param_output_head,
+            "use_triplet_rating_base": config.use_triplet_rating_base,
+            "triplet_rating_tanh": config.triplet_rating_tanh,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,
@@ -1045,6 +1097,7 @@ def main():
             "item_dropout_rate": args.item_dropout_rate,
             "annotator_dropout_rate": args.annotator_dropout_rate,
             "device": args.device,
+            "grad_norm_print_interval": int(args.grad_norm_print_interval),
         },
         "run": {
             "run_dir": str(run_dir),
@@ -1075,6 +1128,7 @@ def main():
         lr_min=args.lr_min,
         lr_step_epoch=args.lr_step_epoch,
         random_item_chunks=bool(args.random_item_chunks),
+        grad_norm_print_interval=int(args.grad_norm_print_interval),
     )
 
     accelerator = "gpu" if args.device == "cuda" and torch.cuda.is_available() else "cpu"

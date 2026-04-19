@@ -30,3 +30,9 @@ class EntityMarformerConfig:
     scale_shared_rel: bool = False       # In shared-bias mode: scale rel_scores by 1/sqrt(head_dim), matching per-head normalization
     use_graph_mask: bool = False         # Hard graph attention mask: allow attention only where edge_mask or K_aug pointer exists (+ self)
     use_param_output_head: bool = False  # Predict final params from the last combined hidden state instead of using the residual param stream directly
+    # Rating head: add triplet entity-feature base to mu_raw (logit) before loss.
+    # Base scalar = sum_d h_attr[d] * h_annot[d] * h_item[d] on final feature stream
+    # for the attribute, annotator, and first item entity tied to that rating.
+    use_triplet_rating_base: bool = False
+    # If True, apply tanh after L2-per-entity + /D_feat normalization (safe; not on raw cubic sum).
+    triplet_rating_tanh: bool = False
