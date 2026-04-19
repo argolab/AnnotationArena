@@ -5,13 +5,12 @@
 # Apache 2.0.
 #
 # WARNING — do not run training on the login node. Submit with:
-#   sbatch run_size100_triplet.sh
+#   sbatch run_size100.sh
 #
 # Cluster run: STAN SPARSE Tensor_400_25_9_ItemTest with 100 train items
-# Model: Marformer Non-Transductive + triplet entity-feature base on rating mu_raw
-#   (--use-triplet-rating-base; see EntityMarformer._apply_triplet_rating_base)
+# Model: Marformer Non-Transductive (no transductive-learning flag)
 
-#SBATCH --job-name=TEN_100_TRIPLET
+#SBATCH --job-name=TEN_100
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
@@ -38,11 +37,7 @@ SCRIPT_START=$SECONDS
 # ── Paths ─────────────────────────────────────────────────────────────────────
 DATA_ROOT="DATA/STAN/SPARSE/Tensor_400_25_9_ItemTest/Tensor_400_25_9_ItemTest_100"
 OUTPUT_ROOT="RESULTS/MARFORMER_CONT/STAN/SPARSE"
-RUN_NAME="Tensor_400_25_9_ItemTest_100_NOITEMDEV_NONTRANS_TRIPLET_MARFORMER"
-
-# Triplet base: set USE_TRIPLET_TANH=true to pass --triplet-rating-tanh (stability)
-USE_TRIPLET_TANH=false
-TRIPLET_INITIAL_SCALE=10
+RUN_NAME="Tensor_400_25_9_ItemTest_100_NOITEMDEV_NONTRANS_MARFORMER"
 
 # ── Fixed hyperparams ─────────────────────────────────────────────────────────
 SEED=42
@@ -53,7 +48,7 @@ ATTENTION_HEADS=4
 D_FF=128
 NUM_FFN_LAYERS=1
 DROPOUT=0.1
-EPOCHS=500
+EPOCHS=300
 LR=2e-4
 LR_SCHEDULE="none"
 LR_MIN=1e-5
@@ -91,15 +86,12 @@ DEVNORM_FLAG="";       [ "$USE_DEVIATION_NORM" = "true"  ] && DEVNORM_FLAG="--us
 GRAPHMASK_FLAG="";     [ "$USE_GRAPH_MASK"     = "true"  ] && GRAPHMASK_FLAG="--use-graph-mask"
 LLM_DIST_FLAG="";      [ "$LLM_INPUT_DIST"     = "true"  ] && LLM_DIST_FLAG="--llm-input-dist"
 OVERWRITE_FLAG="";     [ "$OVERWRITE_EXISTING" = "true"  ] && OVERWRITE_FLAG="--overwrite-existing-data"
-TRIPLET_TANH_FLAG="";  [ "$USE_TRIPLET_TANH"   = "true"  ] && TRIPLET_TANH_FLAG="--triplet-rating-tanh"
 
 echo ""
 echo "============================================================"
-echo " CLUSTER | Non-Trans + triplet rating base | Tensor_400_25_9_ItemTest_100"
+echo " CLUSTER | No Item Dev | Non-Transductive | Tensor_400_25_9_ItemTest_100"
 echo "  DATA_ROOT    : ${DATA_ROOT}"
 echo "  RUN_NAME     : ${RUN_NAME}"
-echo "  TRIPLET_BASE : --use-triplet-rating-base ${TRIPLET_TANH_FLAG}"
-echo "  TRIPLET_SCALE: ${TRIPLET_INITIAL_SCALE}"
 echo "  MASKING_RATE : ${MASKING_RATE}"
 echo "  ITEM_DROPOUT : ${ITEM_DROPOUT_RATE}  (always drop — no item deviation)"
 echo "  EPOCHS       : ${EPOCHS}"
@@ -134,17 +126,14 @@ python -u -m imputer.entity_mf.train \
     --item-reg-weight        "$ITEM_REG_WEIGHT"        \
     --attribute-reg-weight   "$ATTRIBUTE_REG_WEIGHT"   \
     --annotator-reg-weight   "$ANNOTATOR_REG_WEIGHT"   \
-    --use-triplet-rating-base                            \
-    --triplet-initial-scale  "$TRIPLET_INITIAL_SCALE"   \
-    $TRIPLET_TANH_FLAG                                   \
-    $PER_HEAD_FLAG                                       \
-    $SCALE_FLAG                                          \
-    $POINTER_FLAG                                        \
-    $REL_VALUE_FLAG                                      \
-    $ADDONE_FLAG                                         \
-    $DEVNORM_FLAG                                        \
-    $GRAPHMASK_FLAG                                      \
-    $LLM_DIST_FLAG                                       \
+    $PER_HEAD_FLAG                                     \
+    $SCALE_FLAG                                        \
+    $POINTER_FLAG                                      \
+    $REL_VALUE_FLAG                                    \
+    $ADDONE_FLAG                                       \
+    $DEVNORM_FLAG                                      \
+    $GRAPHMASK_FLAG                                    \
+    $LLM_DIST_FLAG                                     \
     $OVERWRITE_FLAG
 
 TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))
@@ -153,3 +142,4 @@ echo "============================================================"
 echo " Done in $(( TOTAL_ELAPSED / 60 ))m $(( TOTAL_ELAPSED % 60 ))s"
 echo " Output: ${OUTPUT_ROOT}/${RUN_NAME}"
 echo "============================================================"
+

@@ -240,8 +240,16 @@ class EntityMarformer(nn.Module):
         self.use_param_output_head = config.use_param_output_head
         self.use_triplet_rating_base = bool(config.use_triplet_rating_base)
         self.triplet_rating_tanh = bool(config.triplet_rating_tanh)
+        self.triplet_mix_mode = str(getattr(config, "triplet_mix_mode", "add"))
+        self.triplet_anneal_start_epoch = int(getattr(config, "triplet_anneal_start_epoch", 0))
+        self.triplet_anneal_end_epoch = int(getattr(config, "triplet_anneal_end_epoch", 200))
+        self.triplet_transformer_final_weight = float(getattr(config, "triplet_transformer_final_weight", 0.5))
+        self.triplet_prior_final_weight = float(getattr(config, "triplet_prior_final_weight", 0.5))
+        self.triplet_initial_scale = float(getattr(config, "triplet_initial_scale", 1.0))
         if self.use_triplet_rating_base:
-            self.triplet_rating_logit_scale = nn.Parameter(torch.ones(1))
+            self.triplet_rating_logit_scale = nn.Parameter(
+                torch.tensor([self.triplet_initial_scale], dtype=torch.float32)
+            )
             # Periodic triplet stats (set by Lightning each epoch); print at most once per epoch.
             self._triplet_diag_epoch: int = -1
             self._triplet_diag_interval: int = 10
@@ -339,6 +347,36 @@ class EntityMarformer(nn.Module):
         tri_norm = (ha_n * hb_n * hc_n).sum()
         return tri_unnorm, tri_norm
 
+    def _triplet_mix_weights(self, epoch: int) -> Tuple[float, float]:
+        """
+        Return (w_transformer, w_prior) for mixing transformer mu_raw and triplet prior.
+        If epoch is unknown (<0), use final annealed weights.
+        """
+        mode = self.triplet_mix_mode
+        if mode == "prior_only":
+            return 0.0, 1.0
+        if mode == "add":
+            # Legacy behavior: transformer + prior.
+            return 1.0, 1.0
+        if mode == "anneal_to_average":
+            s = self.triplet_anneal_start_epoch
+            e = self.triplet_anneal_end_epoch
+            # Unknown epoch (e.g., standalone test.py): use final mixture.
+            if epoch < 0:
+                t = 1.0
+            elif e <= s:
+                t = 1.0 if epoch >= s else 0.0
+            elif epoch <= s:
+                t = 0.0
+            elif epoch >= e:
+                t = 1.0
+            else:
+                t = float(epoch - s) / float(e - s)
+            w_t = t * self.triplet_transformer_final_weight
+            w_p = 1.0 + t * (self.triplet_prior_final_weight - 1.0)
+            return w_t, w_p
+        raise ValueError(f"Unknown triplet_mix_mode: {mode}")
+
     def _apply_triplet_rating_base(
         self,
         graph: EntityGraph,
@@ -366,6 +404,7 @@ class EntityMarformer(nn.Module):
         scale = self.triplet_rating_logit_scale.reshape(())
         epoch = int(getattr(self, "_triplet_diag_epoch", -1))
         interval = int(getattr(self, "_triplet_diag_interval", 10))
+        w_t, w_p = self._triplet_mix_weights(epoch)
         want_diag = (
             self.training
             and epoch >= 0
@@ -402,7 +441,9 @@ class EntityMarformer(nn.Module):
                 tri_unnorm_list.append(tri_unnorm.detach())
                 tri_norm_list.append(tri_norm.detach())
                 tri_final_list.append(tri_final.detach())
-            out_params[0, idx, 1] = out_params[0, idx, 1] + scale * tri_final
+            transformer_mu = out_params[0, idx, 1]
+            prior_mu = scale * tri_final
+            out_params[0, idx, 1] = w_t * transformer_mu + w_p * prior_mu
 
         if want_diag:
             self._triplet_diag_logged_this_epoch = True
@@ -423,6 +464,7 @@ class EntityMarformer(nn.Module):
                 print(
                     f"[EntityMarformer] triplet_rating diag (epoch {epoch}, first train chunk): "
                     f"n_ratings={u0.numel()}  logit_scale={sc:.6g}  D_feat={self.feature_dim}  every_{interval}_epochs\n"
+                    f"  mix_mode={self.triplet_mix_mode}  w_transformer={w_t:.4g}  w_prior={w_p:.4g}\n"
                     f"  tri_unnorm (raw cubic sum) min/mean/max/std = "
                     f"{float(u0.min().item()):.6g} / {float(u0.mean().item()):.6g} / "
                     f"{float(u0.max().item()):.6g} / {std0:.6g}\n"

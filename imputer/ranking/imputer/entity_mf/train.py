@@ -928,12 +928,49 @@ def main():
         "--use-triplet-rating-base",
         action="store_true",
         help="For rating tokens, add learnable_scale * tri_norm to mu_raw: L2-normalize attr/annot/item entity features, "
-             "tri_norm = sum_d (ha*hb*hc) / feature_dim (first item id).",
+             "tri_norm = sum_d (ha*hb*hc) with no extra /D scaling (first item id).",
     )
     parser.add_argument(
         "--triplet-rating-tanh",
         action="store_true",
-        help="With --use-triplet-rating-base, apply tanh after L2-per-entity + /D_feat normalization (optional extra squashing).",
+        help="With --use-triplet-rating-base, apply tanh after L2-per-entity normalization (optional extra squashing).",
+    )
+    parser.add_argument(
+        "--triplet-initial-scale",
+        type=float,
+        default=10.0,
+        help="Initial value of learnable triplet prior scale (triplet_rating_logit_scale).",
+    )
+    parser.add_argument(
+        "--triplet-mix-mode",
+        type=str,
+        default="add",
+        choices=["add", "prior_only", "anneal_to_average"],
+        help="How to combine transformer mu_raw and triplet prior at rating head.",
+    )
+    parser.add_argument(
+        "--triplet-anneal-start-epoch",
+        type=int,
+        default=0,
+        help="For --triplet-mix-mode anneal_to_average: epoch where annealing starts (prior-only before this).",
+    )
+    parser.add_argument(
+        "--triplet-anneal-end-epoch",
+        type=int,
+        default=200,
+        help="For --triplet-mix-mode anneal_to_average: epoch where final mix weights are reached.",
+    )
+    parser.add_argument(
+        "--triplet-transformer-final-weight",
+        type=float,
+        default=0.5,
+        help="Final transformer weight at/after triplet-anneal-end-epoch (anneal_to_average mode).",
+    )
+    parser.add_argument(
+        "--triplet-prior-final-weight",
+        type=float,
+        default=0.5,
+        help="Final prior weight at/after triplet-anneal-end-epoch (anneal_to_average mode).",
     )
     parser.add_argument(
         "--grad-norm-print-interval",
@@ -1005,6 +1042,12 @@ def main():
     config.use_param_output_head = args.use_param_output_head
     config.use_triplet_rating_base = bool(args.use_triplet_rating_base)
     config.triplet_rating_tanh = bool(args.triplet_rating_tanh)
+    config.triplet_initial_scale = float(args.triplet_initial_scale)
+    config.triplet_mix_mode = str(args.triplet_mix_mode)
+    config.triplet_anneal_start_epoch = int(args.triplet_anneal_start_epoch)
+    config.triplet_anneal_end_epoch = int(args.triplet_anneal_end_epoch)
+    config.triplet_transformer_final_weight = float(args.triplet_transformer_final_weight)
+    config.triplet_prior_final_weight = float(args.triplet_prior_final_weight)
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -1068,6 +1111,12 @@ def main():
             "use_param_output_head": config.use_param_output_head,
             "use_triplet_rating_base": config.use_triplet_rating_base,
             "triplet_rating_tanh": config.triplet_rating_tanh,
+            "triplet_initial_scale": config.triplet_initial_scale,
+            "triplet_mix_mode": config.triplet_mix_mode,
+            "triplet_anneal_start_epoch": config.triplet_anneal_start_epoch,
+            "triplet_anneal_end_epoch": config.triplet_anneal_end_epoch,
+            "triplet_transformer_final_weight": config.triplet_transformer_final_weight,
+            "triplet_prior_final_weight": config.triplet_prior_final_weight,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,

@@ -87,6 +87,12 @@ def _reconstruct(run_dir: Path) -> tuple:
     config.use_param_output_head = mcfg.get("use_param_output_head", False)
     config.use_triplet_rating_base = mcfg.get("use_triplet_rating_base", False)
     config.triplet_rating_tanh = mcfg.get("triplet_rating_tanh", False)
+    config.triplet_initial_scale = float(mcfg.get("triplet_initial_scale", 1.0))
+    config.triplet_mix_mode = mcfg.get("triplet_mix_mode", "add")
+    config.triplet_anneal_start_epoch = int(mcfg.get("triplet_anneal_start_epoch", 0))
+    config.triplet_anneal_end_epoch = int(mcfg.get("triplet_anneal_end_epoch", 200))
+    config.triplet_transformer_final_weight = float(mcfg.get("triplet_transformer_final_weight", 0.5))
+    config.triplet_prior_final_weight = float(mcfg.get("triplet_prior_final_weight", 0.5))
 
     # ── DataConverter + bundle ────────────────────────────────────────────────
     converter = DataConverter(

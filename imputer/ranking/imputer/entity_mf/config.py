@@ -36,3 +36,13 @@ class EntityMarformerConfig:
     use_triplet_rating_base: bool = False
     # If True, apply tanh after L2-per-entity normalization (safe; not on raw cubic sum).
     triplet_rating_tanh: bool = False
+    triplet_initial_scale: float = 10.0
+    # How triplet prior and transformer mu_raw are combined:
+    # - "add": mu = transformer_mu + prior_mu (legacy behavior)
+    # - "prior_only": mu = prior_mu
+    # - "anneal_to_average": start with prior-only, then anneal to weighted mix.
+    triplet_mix_mode: str = "add"
+    triplet_anneal_start_epoch: int = 0
+    triplet_anneal_end_epoch: int = 200
+    triplet_transformer_final_weight: float = 0.5
+    triplet_prior_final_weight: float = 0.5
