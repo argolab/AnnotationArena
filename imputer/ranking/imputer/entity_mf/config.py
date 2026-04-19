@@ -34,5 +34,5 @@ class EntityMarformerConfig:
     # Base scalar = sum_d h_attr[d] * h_annot[d] * h_item[d] on final feature stream
     # for the attribute, annotator, and first item entity tied to that rating.
     use_triplet_rating_base: bool = False
-    # If True, apply tanh after L2-per-entity + /D_feat normalization (safe; not on raw cubic sum).
+    # If True, apply tanh after L2-per-entity normalization (safe; not on raw cubic sum).
     triplet_rating_tanh: bool = False

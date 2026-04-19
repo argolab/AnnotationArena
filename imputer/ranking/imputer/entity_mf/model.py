@@ -329,15 +329,14 @@ class EntityMarformer(nn.Module):
 
         tri_unnorm = sum_d ha[d] hb[d] hc[d]  (can be huge)
 
-        tri_norm: L2-normalize each of ha, hb, hc, then sum_d / d_feat.
-        For unit-norm vectors with |coord|<=1, |tri_norm|<=1 (typical O(1)).
+        tri_norm: L2-normalize each of ha, hb, hc, then sum_d (no extra divide).
+        This keeps magnitude in a usable range while avoiding width over-shrinkage.
         """
         tri_unnorm = (ha * hb * hc).sum()
         ha_n = ha / (torch.norm(ha, p=2) + _TRIPLET_EPS)
         hb_n = hb / (torch.norm(hb, p=2) + _TRIPLET_EPS)
         hc_n = hc / (torch.norm(hc, p=2) + _TRIPLET_EPS)
-        d = float(d_feat)
-        tri_norm = (ha_n * hb_n * hc_n).sum() / (d + _TRIPLET_EPS)
+        tri_norm = (ha_n * hb_n * hc_n).sum()
         return tri_unnorm, tri_norm
 
     def _apply_triplet_rating_base(
@@ -351,8 +350,9 @@ class EntityMarformer(nn.Module):
         (mu_raw), using the final feature rows of the linked attribute, annotator, and first
         item entity tokens.
 
-        tri_norm uses L2-normalized entity features and divides by feature_dim so magnitude
-        is O(1); optional tanh applies only to this normalized scalar (not the raw cubic sum).
+        tri_norm uses L2-normalized entity features with no additional /D scaling,
+        so magnitude stays informative; optional tanh applies only to this normalized
+        scalar (not the raw cubic sum).
         """
         if not self.use_triplet_rating_base or self.triplet_rating_logit_scale is None:
             return
@@ -426,7 +426,7 @@ class EntityMarformer(nn.Module):
                     f"  tri_unnorm (raw cubic sum) min/mean/max/std = "
                     f"{float(u0.min().item()):.6g} / {float(u0.mean().item()):.6g} / "
                     f"{float(u0.max().item()):.6g} / {std0:.6g}\n"
-                    f"  tri_norm   (L2-entity / D_feat) min/mean/max/std = "
+                    f"  tri_norm   (L2-entity, no /D) min/mean/max/std = "
                     f"{float(u1.min().item()):.6g} / {float(u1.mean().item()):.6g} / "
                     f"{float(u1.max().item()):.6g} / {std1:.6g}\n"
                     f"  tri_final  (after optional tanh) min/mean/max/std = "
