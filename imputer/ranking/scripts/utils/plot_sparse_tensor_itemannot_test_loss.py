@@ -4,6 +4,7 @@ Plot sparse Tensor_400_25_9 item+annotator-test results by training size.
 
 Outputs:
   - PLOTS/TALK/ItemAnnot/sparse_tensor_itemannot_test_loss_by_size.png
+  - PLOTS/TALK/ItemAnnot/sparse_tensor_itemannot_test_loss_by_size_nt.png
   - PLOTS/TALK/ItemAnnot/sparse_tensor_itemannot_runtime_by_size.png
   - PLOTS/TALK/ItemAnnot/sparse_tensor_itemannot_correlation_by_method.png
   - PLOTS/TALK/ItemAnnot/sparse_tensor_itemannot_mbr_l2_size300_15.png
@@ -37,12 +38,23 @@ PROB_COLS = ["prob_cat_1", "prob_cat_2", "prob_cat_3", "prob_cat_4", "prob_cat_5
 DISCRETE_FALLBACK = {(300, 15): (200, 15)}
 STAN_TENSOR_NT_FALLBACK: dict[tuple[int, int], tuple[int, int]] = {}
 
-MARFORMER_RUNTIMES_MIN = {
+MARFORMER_FULL_300_EPOCH_RUNTIMES_MIN = {
     (10, 5): 27 + 2 / 60,
     (50, 5): 34 + 23 / 60,
     (100, 10): 67 + 8 / 60,
     (200, 15): 122 + 27 / 60,
     (300, 15): 163 + 50 / 60,
+}
+MARFORMER_EPOCHS_RUN = {
+    (10, 5): 83,
+    (50, 5): 159,
+    (100, 10): 191,
+    (200, 15): 257,
+    (300, 15): 291,
+}
+MARFORMER_RUNTIMES_MIN = {
+    pair: MARFORMER_FULL_300_EPOCH_RUNTIMES_MIN[pair] * MARFORMER_EPOCHS_RUN[pair] / 300.0
+    for pair in SIZE_PAIRS
 }
 STAN_TENSOR_RUNTIMES_MIN = {
     (10, 5): 30 + 13 / 60,
@@ -380,12 +392,53 @@ def _plot_metric_broken_y(
         gridspec_kw={"height_ratios": [1.0, 4.2], "hspace": 0.05},
     )
 
+    def draw_broken_series(label: str, xs: list[float], ys: list[float], style: dict) -> None:
+        if not xs:
+            return
+
+        ax_top.plot([], [], label=label, **style)
+
+        xs_arr = np.asarray(xs, dtype=float)
+        ys_arr = np.asarray(ys, dtype=float)
+
+        line_style = {k: v for k, v in style.items() if k != "marker"}
+        marker_style = {
+            "linestyle": "None",
+            "marker": style.get("marker", "o"),
+            "color": style.get("color", "k"),
+            "markersize": mpl.rcParams["lines.markersize"],
+        }
+
+        for idx in range(len(xs_arr) - 1):
+            x1, x2 = xs_arr[idx], xs_arr[idx + 1]
+            y1, y2 = ys_arr[idx], ys_arr[idx + 1]
+            y1_top = y1 > break_at
+            y2_top = y2 > break_at
+
+            if y1_top == y2_top:
+                target_ax = ax_top if y1_top else ax_bottom
+                target_ax.plot([x1, x2], [y1, y2], label="_nolegend_", **line_style)
+                continue
+
+            x_cross = x1 + (break_at - y1) * (x2 - x1) / (y2 - y1)
+            if y1_top:
+                ax_top.plot([x1, x_cross], [y1, break_at], label="_nolegend_", **line_style)
+                ax_bottom.plot([x_cross, x2], [break_at, y2], label="_nolegend_", **line_style)
+            else:
+                ax_bottom.plot([x1, x_cross], [y1, break_at], label="_nolegend_", **line_style)
+                ax_top.plot([x_cross, x2], [break_at, y2], label="_nolegend_", **line_style)
+
+        top_mask = ys_arr > break_at
+        bottom_mask = ~top_mask
+        if np.any(top_mask):
+            ax_top.plot(xs_arr[top_mask], ys_arr[top_mask], label="_nolegend_", **marker_style)
+        if np.any(bottom_mask):
+            ax_bottom.plot(xs_arr[bottom_mask], ys_arr[bottom_mask], label="_nolegend_", **marker_style)
+
     all_y: list[float] = []
     for label, xs, ys, style in series:
         all_y.extend(ys)
-        if xs:
-            ax_top.plot(xs, ys, label=label, **style)
-            ax_bottom.plot(xs, ys, label=label, **style)
+        draw_broken_series(label, xs, ys, style)
 
     below = [y for y in all_y if y <= break_at]
     above = [y for y in all_y if y > break_at]
@@ -413,6 +466,12 @@ def _plot_metric_broken_y(
     kwargs.update(transform=ax_bottom.transAxes)
     ax_bottom.plot((-d, +d), (1 - d, 1 + d), **kwargs)
     ax_bottom.plot((1 - d, 1 + d), (1 - d, 1 + d), **kwargs)
+
+    xs = np.linspace(0.0, 1.0, 33)
+    top_y = np.where(np.arange(xs.size) % 2 == 0, -0.006, 0.006)
+    bottom_y = np.where(np.arange(xs.size) % 2 == 0, 1.006, 0.994)
+    ax_top.plot(xs, top_y, transform=ax_top.transAxes, color="0.35", alpha=0.28, linewidth=0.9, clip_on=False)
+    ax_bottom.plot(xs, bottom_y, transform=ax_bottom.transAxes, color="0.35", alpha=0.28, linewidth=0.9, clip_on=False)
 
     ax_bottom.set_xlabel("Train Size (Items / Annotators)")
     ax_bottom.set_ylabel(ylabel)
@@ -590,13 +649,24 @@ def main() -> None:
         title="Compositional Projection Model: Item-Annotator Generalization by Training Size",
         series=[
             ("Marformer", *marformer_loss, {"color": "#1f6fba", "marker": "o"}),
-            ("Marformer NT", *marformer_nt_loss, {"color": "#1f6fba", "marker": "o", "linestyle": "--"}),
             ("Oracle Tensor Stan", *stan_tensor_loss, {"color": "#d55e00", "marker": "s"}),
-            ("Oracle Tensor Stan NT", *stan_tensor_nt_loss, {"color": "#d55e00", "marker": "s", "linestyle": "--"}),
             ("Stan Discrete", *stan_discrete_loss, {"color": "#009e73", "marker": "^"}),
             ("Unigram", *unigram_loss, {"color": "#7a7a7a", "marker": "D", "linestyle": ":"}),
         ],
-        break_at=1.5,
+        break_at=1.1,
+    )
+
+    _plot_metric_broken_y(
+        OUT_DIR / "sparse_tensor_itemannot_test_loss_by_size_nt.png",
+        ylabel="Test Missing Log Loss",
+        title="Compositional Projection Model: Item-Annotator Generalization by Training Size (Non-Transductive)",
+        series=[
+            ("Marformer", *marformer_loss, {"color": "#1f6fba", "marker": "o", "linestyle": "--"}),
+            ("Marformer NT", *marformer_nt_loss, {"color": "#1f6fba", "marker": "o"}),
+            ("Oracle Tensor Stan NT", *stan_tensor_nt_loss, {"color": "#d55e00", "marker": "s"}),
+            ("Unigram", *unigram_loss, {"color": "#7a7a7a", "marker": "D", "linestyle": ":"}),
+        ],
+        break_at=1.1,
     )
 
     _plot_runtime(OUT_DIR / "sparse_tensor_itemannot_runtime_by_size.png")
