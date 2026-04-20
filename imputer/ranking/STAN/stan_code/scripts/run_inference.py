@@ -33,6 +33,7 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 import logging
 import shutil
@@ -204,11 +205,6 @@ def build_stan_data(
             "use_dawid_skene_noise":      int(config.use_dawid_skene_noise),
             "derive_thresholds_from_annotator":
                                           int(config.derive_thresholds_from_annotator),
-            "sigma_u":                    config.sigma_u,
-            "sigma_v":                    config.sigma_v,
-            "sigma_uit":                  config.sigma_uit,
-            "sigma_measurement":          config.sigma_measurement if config.sigma_measurement is not None else 0.0,
-            "alpha_dirichlet":            config.kappa,
             "alpha_dirichlet_jt":         1.0,   # uniform Dirichlet over T prototypes
             "alpha_confusion":            config.alpha_confusion,
             **ratings_base,
@@ -274,6 +270,50 @@ def _run_sample(
     else:
         print(f"No divergent transitions in {label} — good mixing!")
     return fit
+
+
+def _save_tensor_hyperparameter_posterior(
+    fit: cmdstanpy.CmdStanMCMC,
+    output_dir: Path,
+    stan_type: str,
+) -> None:
+    """
+    Save posterior draws for tensor hyperparameters needed for experiment auditing.
+    """
+    if stan_type != "tensor":
+        return
+
+    param_names = ["sigma_u", "sigma_v", "sigma_uit", "sigma_measurement", "kappa"]
+    posterior_draws = {}
+    for name in param_names:
+        try:
+            posterior_draws[name] = fit.stan_variable(name)
+        except Exception:
+            logger.warning("Could not extract posterior draws for %s", name)
+            return
+
+    draws_len = len(posterior_draws[param_names[0]])
+    csv_path = output_dir / "posterior_hyperparameters.csv"
+    with csv_path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(param_names)
+        for i in range(draws_len):
+            writer.writerow([float(posterior_draws[name][i]) for name in param_names])
+
+    summary = {}
+    for name in param_names:
+        values = np.asarray(posterior_draws[name], dtype=float)
+        summary[name] = {
+            "mean": float(np.mean(values)),
+            "sd": float(np.std(values, ddof=1)) if values.size > 1 else 0.0,
+            "q05": float(np.quantile(values, 0.05)),
+            "q50": float(np.quantile(values, 0.50)),
+            "q95": float(np.quantile(values, 0.95)),
+        }
+    summary_path = output_dir / "posterior_hyperparameters_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    print(f"Saved tensor hyperparameter posterior draws: {csv_path}")
+    print(f"Saved tensor hyperparameter posterior summary: {summary_path}")
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -500,6 +540,7 @@ def main():
     # ── Save outputs ───────────────────────────────────────────────────────────
     fit.save_csvfiles(str(output_dir))
     print(f"\nMCMC complete. Samples saved to {output_dir}")
+    _save_tensor_hyperparameter_posterior(fit, output_dir, stan_type)
 
     divergences = fit.divergences.sum()
     if divergences > 0:

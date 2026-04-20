@@ -5,7 +5,7 @@
  *   z_ijk = sum_t alpha_jt * exp(u_i + v_t + u_it) . e_k
  *
  * Noise model (use_dawid_skene_noise):
- *   0 = continuous: ordinal probit with fixed sigma_measurement
+ *   0 = continuous: ordinal probit with inferred sigma_measurement
  *       log P(c | z) = log [ Phi((thresh_c - z/sigma_total) / (sigma_m/sigma_total))
  *                           - Phi((thresh_{c-1} - ...) / ...) ]
  *       sigma_total = sqrt(||eff_pref[ij]||^2 + sigma_measurement^2)
@@ -17,9 +17,14 @@
  *   u_attr[I, D]              ~ N(0, sigma_u)
  *   v_proto[T, D]             ~ N(0, sigma_v)
  *   u_inter[I][T, D]          ~ N(0, sigma_uit)
+ *   sigma_u                   ~ Gamma(2, 2)          [mean 1.0]
+ *   sigma_v                   ~ Gamma(2, 2)          [mean 1.0]
+ *   sigma_uit                 ~ Gamma(2, 20)         [mean 0.1]
+ *   sigma_measurement         ~ Gamma(2, 20)         [mean 0.1]
+ *   kappa                     ~ Gamma(2, 2/15)       [mean 15.0]
  *   alpha_jt[J][T]            ~ Dirichlet(alpha_dirichlet_jt, ...)
  *   embeddings[K, D]          ~ N(0, 1)
- *   rating_probs[I*J][C]      ~ Dirichlet(alpha_dirichlet / C, ...)
+ *   rating_probs[I*J][C]      ~ Dirichlet(kappa / C, ...)
  *   confusion_matrix[C][C]    ~ Dirichlet(alpha_confusion on diag, 1 off-diag)
  *                                (only enters likelihood when use_dawid_skene_noise=1;
  *                                 gets its prior when use_dawid_skene_noise=0)
@@ -78,12 +83,7 @@ data {
     array[N_missing_ratings] int<lower=1, upper=J> missing_rating_annotators;
     array[N_missing_ratings] int<lower=1, upper=K> missing_rating_items;
 
-    // ── Hyperparameters ──────────────────────────────────────────────────────
-    real<lower=0> sigma_u;           // prior std for u_attr
-    real<lower=0> sigma_v;           // prior std for v_proto
-    real<lower=0> sigma_uit;         // prior std for u_inter
-    real<lower=0> sigma_measurement; // continuous noise std (only used if use_dawid_skene_noise=0)
-    real<lower=0> alpha_dirichlet;   // Dirichlet prior concentration for rating_probs
+    // ── Hyperparameters fixed as data ────────────────────────────────────────
     real<lower=0> alpha_dirichlet_jt; // Dirichlet prior concentration for alpha_jt
     real<lower=0> alpha_confusion;   // diagonal concentration for confusion matrix prior
 
@@ -98,6 +98,11 @@ parameters {
     matrix[I, D] u_attr;                  // attribute embeddings u_i
     matrix[T, D] v_proto;                 // prototype embeddings v_t
     array[I] matrix[T, D] u_inter;        // attribute-prototype interactions u_it
+    real<lower=0> sigma_u;                // flat prior over positive reals
+    real<lower=0> sigma_v;                // flat prior over positive reals
+    real<lower=0> sigma_uit;              // flat prior over positive reals
+    real<lower=0> sigma_measurement;      // flat prior over positive reals (used when continuous noise)
+    real<lower=0> kappa;                  // flat prior over positive reals for rating_probs concentration
 
     // Annotator mixing weights: alpha_j ~ Dirichlet(alpha_dirichlet_jt, ...)
     array[J] simplex[T] alpha_jt;
@@ -176,6 +181,13 @@ model {
     for (k in 1:K)
         embeddings[k] ~ normal(0, 1);
 
+    // Continuous hyperparameters (proper priors centered at legacy defaults).
+    sigma_u           ~ gamma(2, 2);
+    sigma_v           ~ gamma(2, 2);
+    sigma_uit         ~ gamma(2, 20);
+    sigma_measurement ~ gamma(2, 20);
+    kappa             ~ gamma(2, 2.0 / 15.0);
+
     to_vector(u_attr)  ~ normal(0, sigma_u);
     to_vector(v_proto) ~ normal(0, sigma_v);
     for (i in 1:I)
@@ -185,7 +197,7 @@ model {
         alpha_jt[j] ~ dirichlet(rep_vector(alpha_dirichlet_jt, T));
 
     for (ij in 1:(I*J))
-        rating_probs[ij] ~ dirichlet(rep_vector(alpha_dirichlet / C, C));
+        rating_probs[ij] ~ dirichlet(rep_vector(kappa / C, C));
 
     // threshold_transform priors (regularizing; meaningful when flag=1)
     to_vector(threshold_transform_W) ~ normal(0, 1.0 / sqrt(T));
