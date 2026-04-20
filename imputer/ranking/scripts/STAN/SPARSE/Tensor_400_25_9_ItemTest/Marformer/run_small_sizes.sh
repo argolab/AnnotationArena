@@ -86,7 +86,7 @@ echo "  DEVICE       : ${DEVICE}"
 echo "============================================================"
 
 for SIZE in 10 50 100; do
-    DATA_ROOT="DATA/STAN/SPARSE/Tensor_400_25_9_ItemTest/Tensor_400_25_9_ItemTest_${SIZE}"
+    DATA_ROOT="DATA/STAN/DOMAIN3-ITEM/Tensor_400_25_9_ItemTest/Tensor_400_25_9_ItemTest_${SIZE}"
     RUN_NAME="Tensor_400_25_9_ItemTest_${SIZE}_NOITEMDEV_TRANS_MARFORMER"
     RUN_START=$SECONDS
 

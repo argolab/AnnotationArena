@@ -27,7 +27,7 @@ set -e
 
 SCRIPT_START=$SECONDS
 
-DATA_ROOT="DATA/STAN/SPARSE/Tensor_400_25_9_ItemTest"
+DATA_ROOT="DATA/STAN/DOMAIN3-ITEM/Tensor_400_25_9_ItemTest"
 
 echo ""
 echo "============================================================"
