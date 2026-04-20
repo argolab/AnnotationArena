@@ -184,7 +184,7 @@ model {
     // Continuous hyperparameters (proper priors centered at legacy defaults).
     sigma_u           ~ gamma(2, 2);
     sigma_v           ~ gamma(2, 2);
-    sigma_uit         ~ gamma(2, 20);
+    sigma_uit         ~ gamma(2, 4);
     sigma_measurement ~ gamma(2, 20);
     kappa             ~ gamma(2, 2.0 / 15.0);
 
