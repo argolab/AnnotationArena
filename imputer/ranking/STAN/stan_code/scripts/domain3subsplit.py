@@ -317,6 +317,7 @@ def _save_item_split(
             int(dg["K_train"]) + int(dg.get("K_val", 0)) + int(dg["K_test"]),
         )
     )
+    bundle_dict["missing_ratings_indexes_in_test_instance"] = missing_test_idx
 
     run_dir = output_dir / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -418,6 +419,7 @@ def _save_annot_split(
             int(dg["K_train"]) + int(dg.get("K_val", 0)) + int(dg["K_test"]),
         )
     )
+    bundle_dict["missing_ratings_indexes_in_test_instance"] = missing_test_idx
 
     run_dir = output_dir / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
