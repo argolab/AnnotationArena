@@ -226,7 +226,17 @@ def _remap_rows(rows: Iterable[Dict[str, Any]], *, item_map: Dict[int, int], ann
     return out
 
 
-def _save_item_split(bundle: GroundTruthBundle, dg: Dict[str, Any], output_dir: Path, run_name: str, *, train_items_orig: Sequence[int], test_items_orig: Sequence[int], annot_orig_ids: Sequence[int]) -> None:
+def _save_item_split(
+    bundle: GroundTruthBundle,
+    dg: Dict[str, Any],
+    output_dir: Path,
+    run_name: str,
+    *,
+    train_items_orig: Sequence[int],
+    test_items_orig: Sequence[int],
+    annot_orig_ids: Sequence[int],
+    protocol: str,
+) -> None:
     item_orig_ids = list(train_items_orig) + list(test_items_orig)
     item_map = {orig: idx + 1 for idx, orig in enumerate(item_orig_ids)}
     annot_map = {orig: idx + 1 for idx, orig in enumerate(annot_orig_ids)}
@@ -290,7 +300,7 @@ def _save_item_split(bundle: GroundTruthBundle, dg: Dict[str, Any], output_dir: 
         "stats": stats,
         "domain3_metadata": {
             "experiment_axis": "item",
-            "protocol": "transductive" if len(train_items_orig) == 0 else "nontransductive",
+            "protocol": protocol,
             "selected_item_orig_ids": item_orig_ids,
             "selected_annotator_orig_ids": list(annot_orig_ids),
             "test_block_item_orig_ids": list(test_items_orig),
@@ -318,7 +328,17 @@ def _save_item_split(bundle: GroundTruthBundle, dg: Dict[str, Any], output_dir: 
     save_json(config.to_stan_data(), run_dir / "stan_data.json")
 
 
-def _save_annot_split(bundle: GroundTruthBundle, dg: Dict[str, Any], output_dir: Path, run_name: str, *, item_orig_ids: Sequence[int], train_annot_orig: Sequence[int], test_annot_orig: Sequence[int]) -> None:
+def _save_annot_split(
+    bundle: GroundTruthBundle,
+    dg: Dict[str, Any],
+    output_dir: Path,
+    run_name: str,
+    *,
+    item_orig_ids: Sequence[int],
+    train_annot_orig: Sequence[int],
+    test_annot_orig: Sequence[int],
+    protocol: str,
+) -> None:
     annot_orig_ids = list(train_annot_orig) + list(test_annot_orig)
     item_map = {orig: idx + 1 for idx, orig in enumerate(item_orig_ids)}
     annot_map = {orig: idx + 1 for idx, orig in enumerate(annot_orig_ids)}
@@ -381,7 +401,7 @@ def _save_annot_split(bundle: GroundTruthBundle, dg: Dict[str, Any], output_dir:
         "stats": stats,
         "domain3_metadata": {
             "experiment_axis": "annotator",
-            "protocol": "transductive" if len(train_annot_orig) == 0 else "nontransductive",
+            "protocol": protocol,
             "selected_item_orig_ids": list(item_orig_ids),
             "selected_annotator_orig_ids": annot_orig_ids,
             "test_block_item_orig_ids": list(item_orig_ids),
@@ -449,15 +469,17 @@ def main() -> None:
         if total_selected < args.test_items or total_selected > total_items:
             raise ValueError(f"Invalid item transductive size: {total_selected}")
         selected_items = list(range(total_items - total_selected + 1, total_items + 1))
+        train_items_orig = selected_items[:-args.test_items]
         run_name = f"{args.run_prefix}_Item_T_{total_selected}"
         _save_item_split(
             bundle,
             dg,
             item_t_root,
             run_name,
-            train_items_orig=[],
-            test_items_orig=selected_items,
+            train_items_orig=train_items_orig,
+            test_items_orig=test_items_orig,
             annot_orig_ids=test_annots_orig,
+            protocol="transductive",
         )
 
     for train_size in _parse_sizes(args.item_nt_sizes):
@@ -473,6 +495,7 @@ def main() -> None:
             train_items_orig=train_items_orig,
             test_items_orig=test_items_orig,
             annot_orig_ids=test_annots_orig,
+            protocol="nontransductive",
         )
 
     fixed_items_orig = test_items_orig
@@ -480,6 +503,7 @@ def main() -> None:
         if total_selected < args.test_annotators or total_selected > total_annots:
             raise ValueError(f"Invalid annotator transductive size: {total_selected}")
         selected_annots = list(range(total_annots - total_selected + 1, total_annots + 1))
+        train_annots = selected_annots[:-args.test_annotators]
         run_name = f"{args.run_prefix}_Annot_T_{total_selected}"
         _save_annot_split(
             bundle,
@@ -487,8 +511,9 @@ def main() -> None:
             annot_t_root,
             run_name,
             item_orig_ids=fixed_items_orig,
-            train_annot_orig=[],
-            test_annot_orig=selected_annots,
+            train_annot_orig=train_annots,
+            test_annot_orig=test_annots_orig,
+            protocol="transductive",
         )
 
     for train_size in _parse_sizes(args.annot_nt_sizes):
@@ -504,6 +529,7 @@ def main() -> None:
             item_orig_ids=fixed_items_orig,
             train_annot_orig=train_annots,
             test_annot_orig=test_annots_orig,
+            protocol="nontransductive",
         )
 
     metadata = {
