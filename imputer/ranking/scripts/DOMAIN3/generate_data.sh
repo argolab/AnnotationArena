@@ -8,14 +8,14 @@
 #SBATCH --partition=cpu
 #SBATCH --time=06:00:00
 
-set -e
+# set -e
 
-source /home/psingh54/.bashrc
-module load anaconda3/2024.02-1
-conda activate prabhav2
-cd /home/psingh54/scratchjeisner1/psingh54/AnnotationArena/imputer/ranking
-export PYTHONPATH=.
-export PYTHONUNBUFFERED=1
+# source /home/psingh54/.bashrc
+# module load anaconda3/2024.02-1
+# conda activate prabhav2
+# cd /home/psingh54/scratchjeisner1/psingh54/AnnotationArena/imputer/ranking
+# export PYTHONPATH=.
+# export PYTHONUNBUFFERED=1
 
 SCRIPT_START=$SECONDS
 DATA_ROOT="DATA/STAN/DOMAIN3"
@@ -37,17 +37,17 @@ python STAN/stan_code/scripts/generate_data.py \
     --K-val                 50                                  \
     --I                     9                                   \
     --J                     25                                  \
-    --C                     5                                   \
+    --C                     4                                   \
     --D                     32                                  \
-    --kappa                 15.0                                \
-    --sigma-measurement     0.1                                 \
+    --kappa                 5.0                                 \
+    --sigma-measurement     0.6                                 \
     --mcar-missing-rate     0.5                                 \
     --observation-protocol  mcar                                \
     --seed                  42                                  \
     --stan-arg              T=3                                 \
-    --stan-arg              sigma_u=1.0                         \
-    --stan-arg              sigma_v=1.0                         \
-    --stan-arg              sigma_uit=0.1                       \
+    --stan-arg              sigma_u=0.8                         \
+    --stan-arg              sigma_v=8                           \
+    --stan-arg              sigma_uit=0.8                       \
     --stan-arg              use_dawid_skene_noise=0             \
     --stan-arg              derive_thresholds_from_annotator=0  \
     --stan-arg              alpha_confusion=15.0                \

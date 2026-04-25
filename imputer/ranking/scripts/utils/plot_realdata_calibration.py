@@ -267,6 +267,31 @@ def _load_stan_probs(spec: DatasetSpec, size: int, variant: str) -> tuple[np.nda
     return probs, labels
 
 
+def _load_llm_rubric_cpm_probs(spec: DatasetSpec, size: int) -> tuple[np.ndarray, np.ndarray] | None:
+    probs_path = spec.stan_root / f"LLMRubric_225_25_9_{size}_eval" / "rating_probabilities.csv"
+    bundle_path = spec.data_root / spec.baseline_run(size) / "data_bundle.json"
+    if not probs_path.exists() or not bundle_path.exists():
+        return None
+
+    bundle = _read_json(bundle_path)
+    test_idxs, labels = _test_missing_indices_and_labels(bundle)
+    if not test_idxs:
+        return None
+
+    prob_cols = [PROB_COL_TEMPLATE.format(idx=i) for i in range(1, spec.num_classes + 1)]
+    df = pd.read_csv(probs_path)
+    grouped = (
+        df[df["missing_rating_idx"].isin(test_idxs)]
+        .groupby("missing_rating_idx")[prob_cols]
+        .mean()
+        .reindex(test_idxs)
+    )
+    if grouped.isnull().any().any():
+        return None
+    probs = grouped.to_numpy(dtype=np.float32)
+    return probs, labels
+
+
 def _load_baseline_probs(spec: DatasetSpec, method: str, size: int) -> tuple[np.ndarray, np.ndarray] | None:
     pred_path = spec.baseline_roots[method] / spec.baseline_run(size) / "test_predictions.json"
     if not pred_path.exists():
@@ -280,16 +305,27 @@ def _load_baseline_probs(spec: DatasetSpec, method: str, size: int) -> tuple[np.
 
 
 def _plot_panels(spec: DatasetSpec, size: int, stem: str) -> None:
-    panels = [
-        ("Marformer", _load_marformer_probs(spec, size), "#1f6fba"),
-        ("Stan Factor", _load_stan_probs(spec, size, "Factor"), "#27ae60"),
-        ("Stan Normal", _load_stan_probs(spec, size, "Normal"), "#e67e22"),
-        ("REMASKER", _load_baseline_probs(spec, "REMASKER", size), "#8e44ad"),
-        ("MIWAE", _load_baseline_probs(spec, "MIWAE", size), "#c0392b"),
-    ]
+    if spec.name == "LLMRubric":
+        panels = [
+            ("Marformer", _load_marformer_probs(spec, size), "#1f6fba"),
+            ("CPM Stan", _load_llm_rubric_cpm_probs(spec, size), "#1b9e77"),
+            ("REMASKER", _load_baseline_probs(spec, "REMASKER", size), "#8e44ad"),
+            ("MIWAE", _load_baseline_probs(spec, "MIWAE", size), "#c0392b"),
+        ]
+        fig, axes = plt.subplots(2, 2, figsize=(14.0, 10.0))
+        panel_iter = panels
+    else:
+        panels = [
+            ("Marformer", _load_marformer_probs(spec, size), "#1f6fba"),
+            ("Stan Factor", _load_stan_probs(spec, size, "Factor"), "#27ae60"),
+            ("Stan Normal", _load_stan_probs(spec, size, "Normal"), "#e67e22"),
+            ("REMASKER", _load_baseline_probs(spec, "REMASKER", size), "#8e44ad"),
+            ("MIWAE", _load_baseline_probs(spec, "MIWAE", size), "#c0392b"),
+        ]
+        fig, axes = plt.subplots(2, 3, figsize=(17.5, 10.2))
+        panel_iter = panels + [("", None, "0.5")]
 
-    fig, axes = plt.subplots(2, 3, figsize=(17.5, 10.2))
-    for ax, (panel_title, payload, color) in zip(axes.flat, panels + [("", None, "0.5")]):
+    for ax, (panel_title, payload, color) in zip(axes.flat, panel_iter):
         if not panel_title:
             ax.axis("off")
             continue
@@ -346,7 +382,8 @@ SUMMEVAL = DatasetSpec(
 
 
 def main() -> None:
-    _plot_panels(LLM_RUBRIC, 175, "ece_reliability_llm_rubric_size175.png")
+    for size in LLM_RUBRIC.sizes:
+        _plot_panels(LLM_RUBRIC, size, f"ece_reliability_llm_rubric_size{size}.png")
     _plot_panels(SUMMEVAL, 1280, "ece_reliability_summeval_size1280.png")
 
 

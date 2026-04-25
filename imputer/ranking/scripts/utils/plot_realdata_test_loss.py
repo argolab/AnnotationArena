@@ -50,6 +50,7 @@ mpl.rcParams.update({
 PROB_COL_TEMPLATE = "prob_cat_{idx}"
 COLORS = {
     "Marformer": "#1f6fba",
+    "CPM Stan": "#1b9e77",
     "Stan Factor": "#27ae60",
     "Stan Normal": "#e67e22",
     "REMASKER": "#8e44ad",
@@ -57,6 +58,7 @@ COLORS = {
 }
 MARKERS = {
     "Marformer": "o",
+    "CPM Stan": "^",
     "Stan Factor": "^",
     "Stan Normal": "D",
     "REMASKER": "s",
@@ -166,6 +168,45 @@ def _stan_missing_log_loss(spec: DatasetSpec, size: int, variant: str) -> float 
     return float(-ll)
 
 
+def _llm_rubric_cpm_probs_and_labels(spec: DatasetSpec, size: int) -> tuple[np.ndarray, np.ndarray] | None:
+    eval_dir = spec.stan_root / f"LLMRubric_225_25_9_{size}_eval"
+    probs_path = eval_dir / "rating_probabilities.csv"
+    bundle_path = spec.data_root / spec.baseline_run(size) / "data_bundle.json"
+    if not probs_path.exists() or not bundle_path.exists():
+        return None
+
+    bundle = _read_json(bundle_path)
+    test_idxs, labels = _test_missing_indices_and_labels(bundle)
+    if not test_idxs:
+        return None
+
+    df = pd.read_csv(probs_path)
+    prob_cols = [PROB_COL_TEMPLATE.format(idx=i) for i in range(1, spec.num_classes + 1)]
+    grouped = (
+        df[df["missing_rating_idx"].isin(test_idxs)]
+        .groupby("missing_rating_idx")[prob_cols]
+        .mean()
+        .reindex(test_idxs)
+    )
+    if grouped.isnull().any().any():
+        return None
+    probs = grouped.to_numpy(dtype=np.float64)
+    if probs.shape[0] != labels.shape[0]:
+        return None
+    return probs, labels
+
+
+def _llm_rubric_cpm_log_loss(spec: DatasetSpec, size: int) -> float | None:
+    path = spec.stan_root / f"LLMRubric_225_25_9_{size}_eval" / "predictive_metrics.json"
+    if not path.exists():
+        return None
+    data = _read_json(path)
+    ll = data.get("rating_missing_log_likelihood")
+    if ll is None:
+        return None
+    return float(-ll)
+
+
 def _baseline_probs_and_labels(spec: DatasetSpec, method: str, size: int) -> tuple[np.ndarray, np.ndarray] | None:
     pred_path = spec.baseline_roots[method] / spec.baseline_run(size) / "test_predictions.json"
     if not pred_path.exists():
@@ -237,8 +278,11 @@ def _collect_loss_series(spec: DatasetSpec) -> dict[str, tuple[list[int], list[f
         series[method] = (xs, ys)
 
     collect("Marformer", lambda size: None if (m := _marformer_missing_metrics(spec, size)) is None else float(m["log_loss"]))
-    collect("Stan Factor", lambda size: _stan_missing_log_loss(spec, size, "Factor"))
-    collect("Stan Normal", lambda size: _stan_missing_log_loss(spec, size, "Normal"))
+    if spec.name == "LLMRubric":
+        collect("CPM Stan", lambda size: _llm_rubric_cpm_log_loss(spec, size))
+    else:
+        collect("Stan Factor", lambda size: _stan_missing_log_loss(spec, size, "Factor"))
+        collect("Stan Normal", lambda size: _stan_missing_log_loss(spec, size, "Normal"))
     collect("REMASKER", lambda size: _baseline_missing_log_loss(spec, "REMASKER", size))
     collect("MIWAE", lambda size: _baseline_missing_log_loss(spec, "MIWAE", size))
     collect("Unigram", lambda size: _empirical_unigram_log_loss(spec, size))
@@ -258,8 +302,11 @@ def _collect_mse_series(spec: DatasetSpec) -> dict[str, tuple[list[int], list[fl
         series[method] = (xs, ys)
 
     collect("Marformer", lambda size: None if (m := _marformer_missing_metrics(spec, size)) is None else float(m["rmse"]) ** 2)
-    collect("Stan Factor", lambda size: None if (payload := _stan_probs_and_labels(spec, size, "Factor")) is None else _mse_from_probs_labels(*payload))
-    collect("Stan Normal", lambda size: None if (payload := _stan_probs_and_labels(spec, size, "Normal")) is None else _mse_from_probs_labels(*payload))
+    if spec.name == "LLMRubric":
+        collect("CPM Stan", lambda size: None if (payload := _llm_rubric_cpm_probs_and_labels(spec, size)) is None else _mse_from_probs_labels(*payload))
+    else:
+        collect("Stan Factor", lambda size: None if (payload := _stan_probs_and_labels(spec, size, "Factor")) is None else _mse_from_probs_labels(*payload))
+        collect("Stan Normal", lambda size: None if (payload := _stan_probs_and_labels(spec, size, "Normal")) is None else _mse_from_probs_labels(*payload))
     collect("REMASKER", lambda size: None if (payload := _baseline_probs_and_labels(spec, "REMASKER", size)) is None else _mse_from_probs_labels(*payload))
     collect("MIWAE", lambda size: None if (payload := _baseline_probs_and_labels(spec, "MIWAE", size)) is None else _mse_from_probs_labels(*payload))
     return series
@@ -273,7 +320,7 @@ def _plot_series(
     out_name: str,
 ) -> None:
     fig, ax = plt.subplots(figsize=(10.5, 5.8))
-    order = ["Marformer", "Stan Factor", "Stan Normal", "REMASKER", "MIWAE", "Unigram"]
+    order = ["Marformer", "CPM Stan", "Stan Factor", "Stan Normal", "REMASKER", "MIWAE", "Unigram"]
     for method in order:
         xs, ys = series.get(method, ([], []))
         if not xs:
@@ -313,7 +360,7 @@ def _plot_broken_series(
         sharex=True,
         gridspec_kw={"height_ratios": [1.0, 2.6], "hspace": 0.06},
     )
-    order = ["Marformer", "Stan Factor", "Stan Normal", "REMASKER", "MIWAE", "Unigram"]
+    order = ["Marformer", "CPM Stan", "Stan Factor", "Stan Normal", "REMASKER", "MIWAE", "Unigram"]
     for method in order:
         xs, ys = series.get(method, ([], []))
         if not xs:
@@ -363,21 +410,31 @@ def _plot_broken_series(
     print(f"Saved -> {out_path}")
 
 
-def _plot_mbr_l2_snapshot(spec: DatasetSpec) -> None:
-    size = spec.sizes[-1]
+def _plot_mbr_l2_snapshot(spec: DatasetSpec, size: int | None = None) -> None:
+    size = spec.sizes[-1] if size is None else size
     method_rows: list[tuple[str, float, str]] = []
 
     metrics = _marformer_missing_metrics(spec, size)
     if metrics is not None:
         method_rows.append(("Marformer", float(metrics["rmse"]) ** 2, COLORS["Marformer"]))
 
-    for method, payload in [
-        ("Stan Factor", _stan_probs_and_labels(spec, size, "Factor")),
-        ("Stan Normal", _stan_probs_and_labels(spec, size, "Normal")),
-        ("REMASKER", _baseline_probs_and_labels(spec, "REMASKER", size)),
-        ("MIWAE", _baseline_probs_and_labels(spec, "MIWAE", size)),
-        ("Unigram", _empirical_unigram_probs_and_labels(spec, size)),
-    ]:
+    if spec.name == "LLMRubric":
+        comparisons = [
+            ("CPM Stan", _llm_rubric_cpm_probs_and_labels(spec, size)),
+            ("REMASKER", _baseline_probs_and_labels(spec, "REMASKER", size)),
+            ("MIWAE", _baseline_probs_and_labels(spec, "MIWAE", size)),
+            ("Unigram", _empirical_unigram_probs_and_labels(spec, size)),
+        ]
+    else:
+        comparisons = [
+            ("Stan Factor", _stan_probs_and_labels(spec, size, "Factor")),
+            ("Stan Normal", _stan_probs_and_labels(spec, size, "Normal")),
+            ("REMASKER", _baseline_probs_and_labels(spec, "REMASKER", size)),
+            ("MIWAE", _baseline_probs_and_labels(spec, "MIWAE", size)),
+            ("Unigram", _empirical_unigram_probs_and_labels(spec, size)),
+        ]
+
+    for method, payload in comparisons:
         if payload is not None:
             color = "0.45" if method == "Unigram" else COLORS[method]
             method_rows.append((method, _mse_from_probs_labels(*payload), color))
@@ -409,11 +466,17 @@ def _plot_runtime_series(spec: DatasetSpec) -> None:
         return
 
     fig, ax = plt.subplots(figsize=(10.5, 5.8))
-    runtime_series = [
-        ("Marformer", spec.marformer_runtime_seconds, "#1f6fba", "o"),
-        ("Stan Factor", spec.stan_runtime_seconds["Factor"], "#27ae60", "^"),
-        ("Stan Normal", spec.stan_runtime_seconds["Normal"], "#e67e22", "D"),
-    ]
+    if spec.name == "LLMRubric":
+        runtime_series = [
+            ("Marformer", spec.marformer_runtime_seconds, COLORS["Marformer"], MARKERS["Marformer"]),
+            ("CPM Stan", spec.stan_runtime_seconds["CPM Stan"], COLORS["CPM Stan"], MARKERS["CPM Stan"]),
+        ]
+    else:
+        runtime_series = [
+            ("Marformer", spec.marformer_runtime_seconds, "#1f6fba", "o"),
+            ("Stan Factor", spec.stan_runtime_seconds["Factor"], "#27ae60", "^"),
+            ("Stan Normal", spec.stan_runtime_seconds["Normal"], "#e67e22", "D"),
+        ]
 
     for label, runtime_map, color, marker in runtime_series:
         xs = [size for size in spec.sizes if size in runtime_map]
@@ -444,8 +507,8 @@ def _plot_dataset(spec: DatasetSpec) -> None:
             title=f"{spec.pretty_name}: Test Log Loss by Training Size",
             y_label="Test Log Loss",
             out_name=f"{spec.name.lower()}_test_loss_by_size.png",
-            lower_ylim=(0.55, 1.5),
-            upper_ylim=(4.8, 7.3),
+            lower_ylim=(0.55, 2.0),
+            upper_ylim=(4.0, 5.6),
         )
     else:
         _plot_series(
@@ -455,7 +518,11 @@ def _plot_dataset(spec: DatasetSpec) -> None:
             y_label="Test Log Loss",
             out_name=f"{spec.name.lower()}_test_loss_by_size.png",
         )
-    _plot_mbr_l2_snapshot(spec)
+    if spec.name == "LLMRubric":
+        for size in spec.sizes:
+            _plot_mbr_l2_snapshot(spec, size)
+    else:
+        _plot_mbr_l2_snapshot(spec)
     _plot_runtime_series(spec)
 
 
@@ -473,29 +540,14 @@ LLM_RUBRIC_MARFORMER_RUNTIME_SECONDS = {
 }
 
 LLM_RUBRIC_STAN_RUNTIME_SECONDS = {
-    "Factor": {
-        10: 2584,
-        20: 2951,
-        30: 3372,
-        40: 3771,
-        50: 4255,
-        75: 5285,
-        100: 6454,
-        125: 7482,
-        150: 8486,
-        175: 9282,
-    },
-    "Normal": {
-        10: 1159,
-        20: 1426,
-        30: 1683,
-        40: 2276,
-        50: 2313,
-        75: 4905,
-        100: 5982,
-        125: 7148,
-        150: 8142,
-        175: 8952,
+    "CPM Stan": {
+        10: 20 * 60,
+        20: 23 * 60,
+        75: 43 * 60,
+        100: 74 * 60,
+        125: 91 * 60,
+        150: 153 * 60,
+        175: 162 * 60,
     },
 }
 
