@@ -10,7 +10,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=18GB
 #SBATCH --partition=cpu
-#SBATCH --time=12:00:00
+#SBATCH --time=24:00:00
 
 source /home/psingh54/.bashrc
 module load anaconda3/2024.02-1

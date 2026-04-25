@@ -4,13 +4,13 @@
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
 
-#SBATCH --job-name=CPM_LLM_RUBRIC_LLMRubric_225_25_9_175
+#SBATCH --job-name=CPM_LLM_RUBRIC_LLMRubric_225_25_9_40
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=18GB
 #SBATCH --partition=cpu
-#SBATCH --time=48:00:00
+#SBATCH --time=12:00:00
 
 source /home/psingh54/.bashrc
 module load anaconda3/2024.02-1
@@ -24,11 +24,11 @@ set -e
 
 SCRIPT_START=$SECONDS
 
-SPLIT="LLMRubric_225_25_9_175"
+SPLIT="LLMRubric_225_25_9_40"
 DATA_DIR="DATA/LLM_RUBRIC/${SPLIT}"
 DATA_BUNDLE="${DATA_DIR}/data_bundle.json"
 OUTPUT_DIR="RESULTS/STAN/LLM_RUBRIC/CPM"
-RUN_NAME="LLMRubric_225_25_9_175"
+RUN_NAME="LLMRubric_225_25_9_40"
 
 CHAINS=1
 ITER_WARMUP=300
