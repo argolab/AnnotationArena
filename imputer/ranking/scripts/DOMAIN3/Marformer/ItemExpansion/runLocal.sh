@@ -1,7 +1,7 @@
 #!/bin/bash
 
 SCRIPT_START=$SECONDS
-OUTPUT_ROOT="RESULTS/MARFORMER/STAN/DOMAIN3"
+OUTPUT_ROOT="RESULTS/MARFORMER/STAN/DOMAIN3_LOCAL"
 
 SEED=42
 TYPE_EMBEDDING_INIT="kaiming"
@@ -48,7 +48,7 @@ GRAPHMASK_FLAG="";     [ "$USE_GRAPH_MASK"     = "true"  ] && GRAPHMASK_FLAG="--
 LLM_DIST_FLAG="";      [ "$LLM_INPUT_DIST"     = "true"  ] && LLM_DIST_FLAG="--llm-input-dist"
 OVERWRITE_FLAG="";     [ "$OVERWRITE_EXISTING" = "true"  ] && OVERWRITE_FLAG="--overwrite-existing-data"
 
-SIZE_LIST=(350)
+SIZE_LIST=(400)
 
 echo ""
 echo "============================================================"
@@ -99,7 +99,6 @@ for SIZE in "${SIZE_LIST[@]}"; do
         --masked-loss-weight     "$MASKED_LOSS_WEIGHT"     \
         --observed-loss-weight   "$OBSERVED_LOSS_WEIGHT"   \
         --device                 "$DEVICE"                 \
-        --max-item               "$MAX_ITEM"               \
         --type-embedding-init    "$TYPE_EMBEDDING_INIT"    \
         --item-reg-weight        "$ITEM_REG_WEIGHT"        \
         --attribute-reg-weight   "$ATTRIBUTE_REG_WEIGHT"   \

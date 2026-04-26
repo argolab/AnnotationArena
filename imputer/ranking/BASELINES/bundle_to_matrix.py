@@ -43,6 +43,8 @@ class BundleMatrix:
     M_train: np.ndarray        # (K_train, D) float32, 1 = observed
     X_test:  np.ndarray        # (K_test,  D) float32, NaN = missing (target cols)
     M_test:  np.ndarray        # (K_test,  D) float32, 1 = observed (context cols)
+    X_fit:   np.ndarray        # matrix actually used for baseline fitting
+    M_fit:   np.ndarray        # observed-mask for X_fit
 
     col_map: Dict[Tuple[int, int], int]  # (ann_1idx, attr_1idx) → col_idx
     context_annotators: Set[int]         # 1-indexed ann IDs observed at test time
@@ -52,10 +54,12 @@ class BundleMatrix:
 
     train_items: List[int]
     test_items:  List[int]
+    fit_items:   List[int]
 
     meta: dict                           # K_train, K_test, J, I, C, D
 
     test_targets: List[Tuple[int, int, int]]  # (row_idx, col_idx, value_0idx)
+    training_mode: str
 
 
 def load_bundle(bundle_path: str) -> BundleMatrix:
@@ -65,6 +69,11 @@ def load_bundle(bundle_path: str) -> BundleMatrix:
 
     observed = bundle["observed_ratings"]
     missing  = bundle["missing_ratings"]
+    domain3_meta = bundle.get("domain3_metadata", {})
+    is_domain3_item_transductive = (
+        domain3_meta.get("experiment_axis") == "item"
+        and domain3_meta.get("protocol") == "transductive"
+    )
 
     # ── Discover context vs target annotators from the bundle ─────────────────
     context_annotators = {r["annotator"] for r in observed if r["instance"] == "test"}
@@ -146,6 +155,27 @@ def load_bundle(bundle_path: str) -> BundleMatrix:
             X_test[row, col] = val
             M_test[row, col] = 1.0
 
+    # ── Build actual fitting matrix ──────────────────────────────────────────
+    if is_domain3_item_transductive:
+        fit_items = sorted(train_items + test_items)
+        fit_row = {item: i for i, item in enumerate(fit_items)}
+        X_fit = np.full((len(fit_items), D), np.nan, dtype=np.float32)
+        M_fit = np.zeros((len(fit_items), D), dtype=np.float32)
+        for r in observed:
+            item = r["item"]
+            if item not in fit_row:
+                continue
+            row = fit_row[item]
+            col = col_map[(r["annotator"], r["attribute"])]
+            X_fit[row, col] = float(r["value"])
+            M_fit[row, col] = 1.0
+        training_mode = "transductive_item_domain3"
+    else:
+        X_fit = X_train
+        M_fit = M_train
+        fit_items = train_items
+        training_mode = "standard"
+
     # ── Collect ground-truth targets for test evaluation ──────────────────────
     test_targets: List[Tuple[int, int, int]] = []
     for r in missing:
@@ -173,6 +203,8 @@ def load_bundle(bundle_path: str) -> BundleMatrix:
         M_train=M_train,
         X_test=X_test,
         M_test=M_test,
+        X_fit=X_fit,
+        M_fit=M_fit,
         col_map=col_map,
         context_annotators=context_annotators,
         target_annotators=target_annotators,
@@ -180,8 +212,10 @@ def load_bundle(bundle_path: str) -> BundleMatrix:
         target_cols_mask=target_cols_mask,
         train_items=train_items,
         test_items=test_items,
+        fit_items=fit_items,
         meta=meta,
         test_targets=test_targets,
+        training_mode=training_mode,
     )
 
 

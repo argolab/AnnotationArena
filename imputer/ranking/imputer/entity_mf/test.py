@@ -159,6 +159,7 @@ def _load_checkpoint(model: EntityMarformer, ckpt_path: Path, device: torch.devi
         if k.startswith("model.")
     }
     model.load_state_dict(state)
+    model.eval()
 
 
 # ── Metrics computation ───────────────────────────────────────────────────────
@@ -225,7 +226,7 @@ def _evaluate_checkpoint(
         types=model.types,
         global_param_dim=model.global_param_dim,
         device=device,
-        max_item=train_cfg.get("max_item", None),
+        max_item=None
     )
 
     metrics = _compute_metrics(result)

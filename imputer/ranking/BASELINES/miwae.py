@@ -209,6 +209,8 @@ class CategoricalMIWAE:
         M: np.ndarray,
         context_cols_mask: np.ndarray | None = None,
         target_cols_mask:  np.ndarray | None = None,
+        random_mask_observed: bool = False,
+        train_mask_ratio: float | None = None,
     ) -> "CategoricalMIWAE":
         """
         X: (N, D) float, 1-indexed values, NaN for missing
@@ -220,7 +222,10 @@ class CategoricalMIWAE:
         N, p = X.shape
         self._build_networks(p)
 
-        if context_cols_mask is not None and target_cols_mask is not None:
+        if random_mask_observed:
+            M_input = M.astype(np.float32)
+            M_label = M.astype(np.float32)
+        elif context_cols_mask is not None and target_cols_mask is not None:
             # Encoder input: context cols only
             M_input = (M * context_cols_mask[None, :]).astype(np.float32)
             # Likelihood mask: target cols with observed ground truth
@@ -256,6 +261,20 @@ class CategoricalMIWAE:
                 x_b = x_b.to(self.device)
                 m_b = m_b.to(self.device)
                 t_b = t_b.to(self.device)
+
+                if random_mask_observed:
+                    mask_ratio = 0.5 if train_mask_ratio is None else float(train_mask_ratio)
+                    keep_prob = max(0.0, min(1.0, 1.0 - mask_ratio))
+                    sampled = (torch.rand_like(m_b) < keep_prob).float() * m_b
+                    row_has_input = sampled.sum(dim=1) > 0
+                    if not bool(row_has_input.all()):
+                        missing_rows = (~row_has_input).nonzero(as_tuple=False).flatten()
+                        for row_idx in missing_rows.tolist():
+                            obs_cols = (m_b[row_idx] > 0.5).nonzero(as_tuple=False).flatten()
+                            if obs_cols.numel() > 0:
+                                sampled[row_idx, obs_cols[0]] = 1.0
+                    x_b = torch.where(sampled > 0.5, x_b, torch.zeros_like(x_b))
+                    m_b = sampled
 
                 optimizer.zero_grad()
                 loss = self._miwae_loss(x_b, m_b, t_b)

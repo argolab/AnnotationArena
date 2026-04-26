@@ -298,6 +298,8 @@ class CategoricalReMasker:
         M: np.ndarray,
         context_cols_mask: np.ndarray | None = None,
         target_cols_mask:  np.ndarray | None = None,
+        random_mask_observed: bool = False,
+        train_mask_ratio: float | None = None,
     ) -> "CategoricalReMasker":
         """
         X: (N, D) float, 1-indexed values, NaN for missing
@@ -310,7 +312,10 @@ class CategoricalReMasker:
         torch.manual_seed(self.seed)
         N, D = X.shape
 
-        if context_cols_mask is not None and target_cols_mask is not None:
+        if random_mask_observed:
+            M_input = M.astype(np.float32)
+            M_label = M.astype(np.float32)
+        elif context_cols_mask is not None and target_cols_mask is not None:
             # Encoder input: context cols only (target cols zeroed)
             M_input = (M * context_cols_mask[None, :]).astype(np.float32)
             # Loss mask: target cols with observed ground truth
@@ -360,6 +365,19 @@ class CategoricalReMasker:
                 mi_b = mi_b.to(self.device)
                 ml_b = ml_b.to(self.device)
                 t_b  = t_b.to(self.device)
+
+                if random_mask_observed:
+                    mask_ratio = self.mask_ratio if train_mask_ratio is None else float(train_mask_ratio)
+                    keep_prob = max(0.0, min(1.0, 1.0 - mask_ratio))
+                    sampled = (torch.rand_like(mi_b) < keep_prob).float() * mi_b
+                    row_has_input = sampled.sum(dim=1) > 0
+                    if not bool(row_has_input.all()):
+                        missing_rows = (~row_has_input).nonzero(as_tuple=False).flatten()
+                        for row_idx in missing_rows.tolist():
+                            obs_cols = (mi_b[row_idx] > 0.5).nonzero(as_tuple=False).flatten()
+                            if obs_cols.numel() > 0:
+                                sampled[row_idx, obs_cols[0]] = 1.0
+                    mi_b = sampled
 
                 optimizer.zero_grad()
                 loss, _ = self.model(x_b, mi_b, ml_b, t_b)

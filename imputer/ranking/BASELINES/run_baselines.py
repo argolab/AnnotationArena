@@ -61,6 +61,8 @@ def parse_args():
     p.add_argument("--seed",        type=int,   default=42)
     p.add_argument("--device",      default="cpu",
                    help="'cpu', 'cuda', or 'cuda:0' etc.")
+    p.add_argument("--train-mask-ratio", type=float, default=0.5,
+                   help="Random observed-cell masking ratio used only for transductive item bundles.")
 
     # ReMasker-specific
     p.add_argument("--embed-dim",       type=int,   default=32)
@@ -103,9 +105,14 @@ def main():
     print(f"Data dimensions:")
     print(f"  K_train = {data.meta['K_train']},  K_test = {data.meta['K_test']}")
     print(f"  J = {data.meta['J']},  I = {data.meta['I']},  C = {C},  D = {data.meta['D']}")
+    print(f"  Training mode: {data.training_mode}")
+    print(f"  Fit rows: {data.X_fit.shape[0]}")
     print(f"  Context annotators (observed at test): {sorted(data.context_annotators)}")
     print(f"  Target  annotators (to predict):       {sorted(data.target_annotators)}")
     print(f"  Test targets to evaluate: {len(data.test_targets)}\n")
+
+    if data.X_fit.shape[0] == 0:
+        raise ValueError("Training matrix is empty. No observed rows available for baseline fitting.")
 
     # ── Build and train model ─────────────────────────────────────────────────
     t0 = time.time()
@@ -147,11 +154,15 @@ def main():
         )
 
     print(f"Training {args.method.upper()} for {epochs} epochs...")
-    model.fit(
-        data.X_train, data.M_train,
-        context_cols_mask=data.context_cols_mask,
-        target_cols_mask=data.target_cols_mask,
-    )
+    fit_kwargs = {}
+    if data.training_mode == "transductive_item_domain3":
+        fit_kwargs["random_mask_observed"] = True
+        fit_kwargs["train_mask_ratio"] = args.train_mask_ratio
+    else:
+        fit_kwargs["context_cols_mask"] = data.context_cols_mask
+        fit_kwargs["target_cols_mask"] = data.target_cols_mask
+
+    model.fit(data.X_fit, data.M_fit, **fit_kwargs)
     train_elapsed = time.time() - t0
     print(f"\nTraining complete in {train_elapsed:.1f}s\n")
 
