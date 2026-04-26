@@ -293,11 +293,15 @@ def _save_tensor_hyperparameter_posterior(
     fit: cmdstanpy.CmdStanMCMC,
     output_dir: Path,
     stan_type: str,
+    stan_file: str | None = None,
 ) -> None:
     """
     Save posterior draws for tensor hyperparameters needed for experiment auditing.
     """
     if stan_type != "tensor":
+        return
+
+    if stan_file is not None and Path(stan_file).name == "tensor_model_fixed_hyperparams.stan":
         return
 
     param_names = ["sigma_u", "sigma_v", "sigma_uit", "sigma_measurement", "kappa"]
@@ -557,7 +561,7 @@ def main():
     # ── Save outputs ───────────────────────────────────────────────────────────
     fit.save_csvfiles(str(output_dir))
     print(f"\nMCMC complete. Samples saved to {output_dir}")
-    _save_tensor_hyperparameter_posterior(fit, output_dir, stan_type)
+    _save_tensor_hyperparameter_posterior(fit, output_dir, stan_type, stan_file)
 
     divergences = fit.divergences.sum()
     if divergences > 0:
