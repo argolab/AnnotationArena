@@ -210,6 +210,23 @@ def build_stan_data(
             **ratings_base,
         }
 
+    if stan_type == "discrete":
+        return {
+            "K":                         K,
+            "I":                         config.I,
+            "J":                         J,
+            "D":                         getattr(config, "D", 1) or 1,
+            "C":                         C,
+            "M":                         config.M,
+            "S":                         config.S,
+            "sigma_annotator":           config.sigma_annotator if config.sigma_annotator is not None else 0.0,
+            "sigma_measurement_anchor":  config.sigma_measurement if config.sigma_measurement is not None else 0.0,
+            "alpha_dirichlet_anchor":    config.kappa,
+            "temperature":               config.temperature,
+            "use_flat_priors":           0,
+            **ratings_base,
+        }
+
     # Default: all other types (normal-noise-dot-product, factored-dot-product, dawid-skene)
     return {
         "K":                         K,

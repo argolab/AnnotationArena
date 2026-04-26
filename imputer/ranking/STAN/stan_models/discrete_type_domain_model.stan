@@ -57,9 +57,10 @@ data {
     
     // Hyperparameters
     real<lower=0> sigma_annotator;   // kept for compatibility; not used directly
-    real<lower=0> sigma_measurement;
-    real<lower=0> alpha_dirichlet;
+    real<lower=0> sigma_measurement_anchor;
+    real<lower=0> alpha_dirichlet_anchor;
     real<lower=0> temperature;
+    int<lower=0, upper=1> use_flat_priors;  // 1 = weak/flat-like proper priors for real-data fitting
 }
 
 transformed data {
@@ -96,6 +97,12 @@ parameters {
     // This is separate from measurement noise and captures uncertainty
     // in the rubric table lookup itself.
     real<lower=0> sigma_rubric_fuzz;
+
+    // Positive hyperparameters. In weak-prior mode these are inferred with
+    // tensor-style gamma priors; in legacy mode they are tightly anchored to
+    // the provided data values.
+    real<lower=0> sigma_measurement;
+    real<lower=0> alpha_dirichlet;
 }
 
 transformed parameters {
@@ -176,33 +183,65 @@ transformed parameters {
 model {
     // ===== PRIORS =====
 
-    // Criterion biases
-    a_attr ~ normal(0, 1);
+    if (use_flat_priors == 1) {
+        // Broad but proper priors for real-data "fit the structure freely" runs.
+        // We keep them proper to avoid the additive-location non-identifiability
+        // in mu_{i,m,s} = a_i + u_m + v_s + delta_{i,m,s}.
+        // Positive hyperparameters match the tensor CPM treatment.
+        a_attr ~ normal(0, 5);
+        u_proto ~ normal(0, 5);
+        v_style ~ normal(0, 5);
+        delta_ims ~ normal(0, 5);
+        sigma_measurement ~ gamma(2, 20);
+        alpha_dirichlet ~ gamma(2, 2.0 / 15.0);
 
-    // Prototype and style strengths (Version A knobs)
-    // Using Cauchy priors for flatter, weakly informative priors
-    u_proto ~ cauchy(0, 2.0);
-    v_style ~ cauchy(0, 1.5);
+        // Uniform simplex priors.
+        for (k in 1:K) {
+            proto_weights[k] ~ dirichlet(rep_vector(1.0, M));
+        }
+        for (j in 1:J) {
+            style_weights[j] ~ dirichlet(rep_vector(1.0, S));
+        }
+        for (ij in 1:(I*J)) {
+            rating_probs[ij] ~ dirichlet(rep_vector(alpha_dirichlet / C, C));
+        }
 
-    // Residual interactions
-    delta_ims ~ cauchy(0, 0.5);
+        // Broad half-normal on the positive scale.
+        sigma_rubric_fuzz ~ normal(0, 5);
+    } else {
+        // Legacy behavior: effectively fix these two hyperparameters to the
+        // supplied values while still keeping the model proper.
+        sigma_measurement ~ lognormal(log(fmax(sigma_measurement_anchor, 1e-8)), 0.02);
+        alpha_dirichlet ~ lognormal(log(fmax(alpha_dirichlet_anchor, 1e-8)), 0.02);
 
-    // Soft prototype/style assignments:
-    for (k in 1:K) {
-        proto_weights[k] ~ dirichlet(rep_vector(0.8, M));   // encourages near-sparse mixtures
+        // Criterion biases
+        a_attr ~ normal(0, 1);
+
+        // Prototype and style strengths (Version A knobs)
+        // Using Cauchy priors for flatter, weakly informative priors
+        u_proto ~ cauchy(0, 2.0);
+        v_style ~ cauchy(0, 1.5);
+
+        // Residual interactions
+        delta_ims ~ cauchy(0, 0.5);
+
+        // Soft prototype/style assignments:
+        for (k in 1:K) {
+            proto_weights[k] ~ dirichlet(rep_vector(0.8, M));   // encourages near-sparse mixtures
+        }
+        for (j in 1:J) {
+            style_weights[j] ~ dirichlet(rep_vector(0.8, S));
+        }
+
+        // Rating probabilities: p_ij ~ Dir(α/C, ..., α/C)
+        for (ij in 1:(I*J)) {
+            rating_probs[ij] ~ dirichlet(rep_vector(alpha_dirichlet / C, C));
+        }
+        
+        // Rubric fuzz prior: relatively flat, weakly informative prior
+        // Using half-Cauchy which is standard for scale parameters
+        sigma_rubric_fuzz ~ cauchy(0, 1);
     }
-    for (j in 1:J) {
-        style_weights[j] ~ dirichlet(rep_vector(0.8, S));
-    }
-
-    // Rating probabilities: p_ij ~ Dir(α/C, ..., α/C)
-    for (ij in 1:(I*J)) {
-        rating_probs[ij] ~ dirichlet(rep_vector(alpha_dirichlet / C, C));
-    }
-    
-    // Rubric fuzz prior: relatively flat, weakly informative prior
-    // Using half-Cauchy which is standard for scale parameters
-    sigma_rubric_fuzz ~ cauchy(0, 1);
 
     // ===== LIKELIHOODS =====
 
@@ -487,4 +526,3 @@ generated quantities {
         }
     }
 }
-
