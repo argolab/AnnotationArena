@@ -14,10 +14,10 @@
 #SBATCH --exclude=c001
 #SBATCH --time=10:00:00
 
-source /home/psingh54/.bashrc
-module load anaconda3/2024.02-1
-conda activate prabhav2
-cd /home/psingh54/scratchjeisner1/psingh54/AnnotationArena/imputer/ranking
+# source /home/psingh54/.bashrc
+# module load anaconda3/2024.02-1
+# conda activate prabhav2
+# cd /home/psingh54/scratchjeisner1/psingh54/AnnotationArena/imputer/ranking
 export PYTHONPATH=.
 export CUDA_LAUNCH_BLOCKING=1
 export PYTHONUNBUFFERED=1

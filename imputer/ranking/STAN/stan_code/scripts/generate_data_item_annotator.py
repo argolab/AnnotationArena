@@ -278,6 +278,11 @@ def main() -> None:
                         choices=["normal-noise-dot-product", "factored-dot-product", "discrete", "tensor", "dawid-skene"])
     parser.add_argument("--stan-file", type=str, default=None)
     parser.add_argument("--overwrite-existing-data", action="store_true")
+    parser.add_argument(
+        "--force-stan-recompile",
+        action="store_true",
+        help="Force cmdstanpy to recompile the Stan generator (use after editing .stan files).",
+    )
     parser.add_argument("--K-train", type=int, required=True)
     parser.add_argument("--K-test", type=int, required=True)
     parser.add_argument("--K-val", type=int, required=True)
@@ -388,7 +393,11 @@ def main() -> None:
     print(f"  Annotator split: train={args.J_train}, val={args.J_val}, test={args.J_test}")
     print(f"Output directory: {run_dir}")
 
-    bundle = generate_data(config, stan_file=args.stan_file)
+    bundle = generate_data(
+        config,
+        stan_file=args.stan_file,
+        force_stan_recompile=bool(args.force_stan_recompile),
+    )
     bundle_dict = _repartition_bundle(
         bundle,
         config=config,

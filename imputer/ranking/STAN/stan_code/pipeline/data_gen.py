@@ -15,14 +15,16 @@ from .configs import DataGenConfig
 from .bundle import GroundTruthBundle
 
 
-def compile_data_generation_model(stan_file: str) -> cmdstanpy.CmdStanModel:
+def compile_data_generation_model(stan_file: str, *, force_recompile: bool = False) -> cmdstanpy.CmdStanModel:
     """Compile the data generation Stan model."""
-    return cmdstanpy.CmdStanModel(stan_file=stan_file)
+    return cmdstanpy.CmdStanModel(stan_file=stan_file, force_compile=bool(force_recompile))
 
 
 def generate_data(
     config: DataGenConfig,
     stan_file: Optional[str] = None,
+    *,
+    force_stan_recompile: bool = False,
 ) -> GroundTruthBundle:
     """
     Generate synthetic data using Stan data generation model.
@@ -41,6 +43,8 @@ def generate_data(
             stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "discrete_type_data_generation.stan")
         elif stan_type == "tensor":
             stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "tensor_generation.stan")
+        elif stan_type == "tensor-nobin":
+            stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "tensor_nobin_generation.stan")
         elif stan_type in ("normal-noise-dot-product", "factored-dot-product"):
             stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "normal_noise_dot_product_generation.stan")
         elif stan_type == "dawid-skene":
@@ -56,7 +60,7 @@ def generate_data(
         else:
             stan_file = str(Path(__file__).parent.parent.parent / "models" / "iclr_data_generation.stan")
 
-    model = compile_data_generation_model(stan_file)
+    model = compile_data_generation_model(stan_file, force_recompile=bool(force_stan_recompile))
     stan_data = config.to_stan_data()  # Core + type-specific fields dump to json and passed to Stan
 
     # Sample with fixed parameters (data generation)
@@ -170,14 +174,33 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     # Get the single sample (since we used fixed_param=True with 1 sample)
     sample = fit.stan_variables()
     
-    # Extract core data structures (always present)
-    train_rating_values = sample["train_rating_values"][0]    # Shape: [I*J, K_train]
+    # Extract core data structures (always present for a given generator family)
+    train_rating_values = sample.get("train_rating_values")
+    train_rating_scores = sample.get("train_rating_scores")
+    if train_rating_scores is not None:
+        train_rating_values = train_rating_scores
+    if train_rating_values is None:
+        raise KeyError("Stan output must contain train_rating_values or train_rating_scores")
+    train_rating_values = train_rating_values[0]    # Shape: [I*J, K_train]
     train_rating_observed = sample["train_rating_observed"][0]  # Shape: [I*J, K_train]
-    test_rating_values = sample["test_rating_values"][0]      # Shape: [I*J, K_test]
+    test_rating_values = sample.get("test_rating_values")
+    test_rating_scores = sample.get("test_rating_scores")
+    if test_rating_scores is not None:
+        test_rating_values = test_rating_scores
+    if test_rating_values is None:
+        raise KeyError("Stan output must contain test_rating_values or test_rating_scores")
+    test_rating_values = test_rating_values[0]      # Shape: [I*J, K_test]
     test_rating_observed = sample["test_rating_observed"][0]   # Shape: [I*J, K_test]
-    val_rating_values = sample["val_rating_values"][0]        # Shape: [I*J, K_val]
+    val_rating_values = sample.get("val_rating_values")
+    val_rating_scores = sample.get("val_rating_scores")
+    if val_rating_scores is not None:
+        val_rating_values = val_rating_scores
+    if val_rating_values is None:
+        raise KeyError("Stan output must contain val_rating_values or val_rating_scores")
+    val_rating_values = val_rating_values[0]        # Shape: [I*J, K_val]
     val_rating_observed = sample["val_rating_observed"][0]     # Shape: [I*J, K_val]
 
+    is_scalar_scores = train_rating_scores is not None
     num_classes = config.C
 
     # Extract optional standard embedding-world ground truth (if present)
@@ -296,23 +319,21 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
                 if _is_cross_instance(annotator, item, config):
                     continue
                 
+                rating_value = float(train_rating_values[ij_idx, k]) if is_scalar_scores else int(train_rating_values[ij_idx, k])
                 rating_dict = {
                     "attribute": i + 1,
                     "annotator": annotator,
                     "item": item,
-                    "value": int(train_rating_values[ij_idx, k]),
+                    "value": rating_value,
                     "instance": "train",
-                    "rating_dist": [0.0] * num_classes
                 }
-                try:
-                    rating_dict["rating_dist"][int(train_rating_values[ij_idx, k]) - 1] = 1.0
-                    train_ratings.append(rating_dict)
-                    if train_rating_observed[ij_idx, k] == 1:
-                        train_observed_ratings.append(rating_dict)
-                    else:
-                        train_missing_ratings.append(rating_dict)
-                except IndexError:
+                if (not is_scalar_scores) and (not (1 <= int(rating_value) <= num_classes)):
                     continue
+                train_ratings.append(rating_dict)
+                if train_rating_observed[ij_idx, k] == 1:
+                    train_observed_ratings.append(rating_dict)
+                else:
+                    train_missing_ratings.append(rating_dict)
 
     # ===== CONVERT TEST RATINGS =====
     test_ratings = []
@@ -328,14 +349,15 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
                 if _is_cross_instance(annotator, item, config):
                     continue
                 
+                rating_value = float(test_rating_values[ij_idx, k]) if is_scalar_scores else int(test_rating_values[ij_idx, k])
                 rating_dict = {
                     "attribute": i + 1,
                     "annotator": annotator,
                     "item": item,
-                    "value": int(test_rating_values[ij_idx, k]),
+                    "value": rating_value,
                     "instance": "test"
                 }
-                if not (1 <= int(test_rating_values[ij_idx, k]) <= num_classes):
+                if (not is_scalar_scores) and (not (1 <= int(rating_value) <= num_classes)):
                     continue
                 test_ratings.append(rating_dict)
                 if test_rating_observed[ij_idx, k] == 1:
@@ -356,23 +378,21 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
                 item = k + 1 + config.K_train  # Val: K_train+1 .. K_train+K_val
                 # Val items are never cross-instance (all annotators can rate them)
 
+                rating_value = float(val_rating_values[ij_idx, k]) if is_scalar_scores else int(val_rating_values[ij_idx, k])
                 rating_dict = {
                     "attribute": i + 1,
                     "annotator": annotator,
                     "item": item,
-                    "value": int(val_rating_values[ij_idx, k]),
+                    "value": rating_value,
                     "instance": "val",
-                    "rating_dist": [0.0] * num_classes
                 }
-                try:
-                    rating_dict["rating_dist"][int(val_rating_values[ij_idx, k]) - 1] = 1.0
-                    val_ratings.append(rating_dict)
-                    if val_rating_observed[ij_idx, k] == 1:
-                        val_observed_ratings.append(rating_dict)
-                    else:
-                        val_missing_ratings.append(rating_dict)
-                except IndexError:
+                if (not is_scalar_scores) and (not (1 <= int(rating_value) <= num_classes)):
                     continue
+                val_ratings.append(rating_dict)
+                if val_rating_observed[ij_idx, k] == 1:
+                    val_observed_ratings.append(rating_dict)
+                else:
+                    val_missing_ratings.append(rating_dict)
 
     # Combine all ratings in order: train, val, test
     all_ratings = train_ratings + val_ratings + test_ratings
@@ -778,6 +798,8 @@ def apply_pairwise_observation_rate(bundle: GroundTruthBundle, observation_rate:
 def generate_data_annotator_split(
     config: "AnnotatorSplitConfig",
     stan_file: Optional[str] = None,
+    *,
+    force_stan_recompile: bool = False,
 ) -> GroundTruthBundle:
     """
     Generate synthetic data using the annotator-split Stan model.
@@ -806,7 +828,7 @@ def generate_data_annotator_split(
                 / "normal_noise_dot_product_annotator_gen.stan"
             )
 
-    model = compile_data_generation_model(stan_file)
+    model = compile_data_generation_model(stan_file, force_recompile=bool(force_stan_recompile))
     stan_data = config.to_stan_data()
 
     fit = model.sample(
@@ -846,7 +868,6 @@ def extract_bundle_from_annotator_split_stan_output(
     from .configs import AnnotatorSplitConfig  # local import to avoid circular
 
     sample = fit.stan_variables()
-    num_classes = config.C
     J_total = config.J
 
     # Annotator group boundaries (1-indexed)
@@ -856,8 +877,15 @@ def extract_bundle_from_annotator_split_stan_output(
     test_start = config.J_train + config.J_val + 1
 
     # Core rating arrays: shape [I*J, K]
-    rating_values = sample["rating_values"][0]    # [I*J_total, K]
+    rating_values_arr = sample.get("rating_values")
+    rating_scores_arr = sample.get("rating_scores")
+    if rating_scores_arr is not None:
+        rating_values_arr = rating_scores_arr
+    if rating_values_arr is None:
+        raise KeyError("Stan output must contain rating_values or rating_scores")
+    rating_values = rating_values_arr[0]    # [I*J_total, K]
     rating_observed = sample["rating_observed"][0] # [I*J_total, K] — all 1s from Stan
+    is_scalar_scores = rating_scores_arr is not None
 
     # Optional ground-truth arrays
     mean_preferences = sample.get("mean_preferences")
@@ -925,7 +953,7 @@ def extract_bundle_from_annotator_split_stan_output(
 
             for k in range(config.K):
                 item = k + 1  # All instances share item IDs 1..K
-                value = int(rating_values[ij_idx, k])
+                value = float(rating_values[ij_idx, k]) if is_scalar_scores else int(rating_values[ij_idx, k])
 
                 rating_dict = {
                     "attribute": i + 1,
@@ -933,12 +961,7 @@ def extract_bundle_from_annotator_split_stan_output(
                     "item": item,
                     "value": value,
                     "instance": instance,
-                    "rating_dist": [0.0] * num_classes,
                 }
-                try:
-                    rating_dict["rating_dist"][value - 1] = 1.0
-                except IndexError:
-                    continue
 
                 observed = int(rating_observed[ij_idx, k]) == 1
 

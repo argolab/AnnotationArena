@@ -30,7 +30,7 @@ def _aggregate_loss_from_breakdowns(
     n_observed = 0
     n_masked = 0
     n_missing = 0
-    # Per-(status, type_name) metrics: metrics[status][type_name] = {"xent": ..., "n": ...}
+    # Per-(status, type_name) metrics: metrics[status][type_name] = {"nll": ..., "n": ...}
     per_type: Dict[str, Dict[str, Dict[str, float]]] = {
         "observed": {},
         "masked": {},
@@ -58,21 +58,21 @@ def _aggregate_loss_from_breakdowns(
             sum_observed += b.loss_observed * b.n_observed
             n_observed += b.n_observed
             per_type["observed"][type_name] = {
-                "xent": float(b.loss_observed),
+                "nll": float(b.loss_observed),
                 "n": float(b.n_observed),
             }
         if b.n_masked > 0:
             sum_masked += b.loss_masked * b.n_masked
             n_masked += b.n_masked
             per_type["masked"][type_name] = {
-                "xent": float(b.loss_masked),
+                "nll": float(b.loss_masked),
                 "n": float(b.n_masked),
             }
         if b.n_missing > 0:
             sum_missing += b.loss_missing * b.n_missing
             n_missing += b.n_missing
             per_type["missing"][type_name] = {
-                "xent": float(b.loss_missing),
+                "nll": float(b.loss_missing),
                 "n": float(b.n_missing),
             }
     
@@ -100,21 +100,19 @@ class EntityEvalResults:
     Evaluation results for Entity Marformer on a single split.
 
     metrics[status][type_name] = {
-        "xent": <cross-entropy per token>,
-        "n":    <token count>,
-        "acc":  <accuracy, rating missing only>,
+        "nll": <gaussian NLL per token>,
+        "n":   <token count>,
     }
 
-    missing_preds / missing_true  : expected-value predictions and true labels
-                                    (0-indexed) for missing rating tokens.
+    missing_preds / missing_true  : scalar mean predictions and true scores for missing rating tokens.
     observed_preds / observed_true: same for observed rating tokens.
     """
     split: str
     metrics: Dict[str, Dict[str, Dict[str, float]]]
     missing_preds: List[float] = field(default_factory=list)
-    missing_true:  List[int]   = field(default_factory=list)
+    missing_true:  List[float] = field(default_factory=list)
     observed_preds: List[float] = field(default_factory=list)
-    observed_true:  List[int]   = field(default_factory=list)
+    observed_true:  List[float] = field(default_factory=list)
 
 
 # Used in train.py
@@ -135,8 +133,8 @@ def compute_trainable_loss(
     Returns:
         (loss_tensor, raw_masked_ce, raw_observed_ce)
         - loss_tensor: weighted objective (has grad, used for backprop)
-        - raw_masked_ce: unweighted mean CE on masked tokens (float, for logging)
-        - raw_observed_ce: unweighted mean CE on observed tokens (float, for logging)
+        - raw_masked_ce: unweighted mean NLL on masked tokens (float, for logging)
+        - raw_observed_ce: unweighted mean NLL on observed tokens (float, for logging)
     """
     out = _aggregate_loss_from_breakdowns(params, graph, types, global_param_dim, device)
     loss = masked_loss_weight * out["trainable_masked_loss"]
@@ -154,30 +152,30 @@ def _merge_chunk_results(split: str, chunk_results: List["EntityEvalResults"]) -
                 agg[status] = {}
             for type_name, vals in type_dict.items():
                 if type_name not in agg[status]:
-                    agg[status][type_name] = {"xent_numer": 0.0, "n": 0.0}
+                    agg[status][type_name] = {"n": 0.0}
                 n = vals.get("n", 0.0)
-                agg[status][type_name]["xent_numer"] += vals.get("xent", 0.0) * n
                 agg[status][type_name]["n"] += n
-                if "acc" in vals:
-                    if "acc_numer" not in agg[status][type_name]:
-                        agg[status][type_name]["acc_numer"] = 0.0
-                    agg[status][type_name]["acc_numer"] += vals["acc"] * n
+                for k, v in vals.items():
+                    if k == "n":
+                        continue
+                    numer_key = f"{k}_numer"
+                    agg[status][type_name][numer_key] = agg[status][type_name].get(numer_key, 0.0) + v * n
     merged: Dict[str, Dict[str, Dict[str, float]]] = {}
     for status, type_dict in agg.items():
         merged[status] = {}
         for type_name, sums in type_dict.items():
             n = sums["n"]
-            entry: Dict[str, float] = {
-                "xent": sums["xent_numer"] / n if n > 0 else 0.0,
-                "n": n,
-            }
-            if "acc_numer" in sums and n > 0:
-                entry["acc"] = sums["acc_numer"] / n
+            entry: Dict[str, float] = {"n": n}
+            for k, v in sums.items():
+                if k == "n" or not k.endswith("_numer"):
+                    continue
+                metric_name = k[:-6]
+                entry[metric_name] = v / n if n > 0 else 0.0
             merged[status][type_name] = entry
     m_preds: List[float] = []
-    m_true:  List[int]   = []
+    m_true:  List[float] = []
     o_preds: List[float] = []
-    o_true:  List[int]   = []
+    o_true:  List[float] = []
     for result in chunk_results:
         m_preds.extend(result.missing_preds)
         m_true.extend(result.missing_true)
@@ -204,7 +202,7 @@ def evaluate_entity_marformer_split(
 ) -> EntityEvalResults:
     """
     Evaluate Entity Marformer on a list of RankingData variables.
-    Focus on rating tokens with status=0 (missing) for accuracy and xent.
+    Focus on rating tokens with status=0 (missing) for scalar prediction metrics.
 
     If max_item is set and the variable list spans more items than max_item,
     evaluation is run in item-chunks (matching the training graph size) and
@@ -242,18 +240,13 @@ def evaluate_entity_marformer_split(
     # Aggregate loss breakdown over observed/masked/missing (with per-type details).
     loss_info = _aggregate_loss_from_breakdowns(params, graph, types, global_param_dim, device)
 
-    # Rating accuracy, CE, and expected-value predictions for missing + observed.
+    # Rating metrics and scalar predictions for missing + observed.
     rating_type = types["rating"]
-    num_classes = rating_type.num_classes
-
-    correct = 0
-    total = 0
 
     missing_preds: List[float] = []
-    missing_true:  List[int]   = []
+    missing_true:  List[float] = []
     observed_preds: List[float] = []
-    observed_true:  List[int]   = []
-    arange = torch.arange(num_classes, device=device, dtype=torch.float32)
+    observed_true:  List[float] = []
 
     # Variable tokens are first in the graph, in the same order as `variables`.
     for idx, var in enumerate(variables):
@@ -266,35 +259,35 @@ def evaluate_entity_marformer_split(
         if rating_value is None:
             continue
 
-        # Convert (mu_raw, var_raw) -> class probabilities via truncated-normal binning.
-        probs = rating_type.probs_from_params(params[0, idx : idx + 1, :]).squeeze(0)  # [C]
-        expected = float((probs * arange).sum().item())
+        pred_mu = float(params[0, idx, 1].item())
+        true_y = float(rating_value)
 
         if tok.status == 0:  # missing
-            pred_class = int(torch.argmax(probs).item())
-            if pred_class == int(rating_value):
-                correct += 1
-            total += 1
-            missing_preds.append(expected)
-            missing_true.append(int(rating_value))
+            missing_preds.append(pred_mu)
+            missing_true.append(true_y)
         else:  # status == 2, observed
-            observed_preds.append(expected)
-            observed_true.append(int(rating_value))
-
-    # If there are no missing rating tokens, return without accuracy fields.
-    if total == 0:
-        return EntityEvalResults(
-            split=split,
-            metrics=loss_info["per_type"],
-            missing_preds=missing_preds,
-            missing_true=missing_true,
-            observed_preds=observed_preds,
-            observed_true=observed_true,
-        )
-    acc = float(correct) / float(total)
+            observed_preds.append(pred_mu)
+            observed_true.append(true_y)
 
     per_type_metrics = loss_info["per_type"]
-    per_type_metrics.setdefault("missing", {}).setdefault("rating", {})["acc"] = acc
+    if missing_true:
+        miss_pred_t = torch.tensor(missing_preds, device=device, dtype=torch.float32)
+        miss_true_t = torch.tensor(missing_true, device=device, dtype=torch.float32)
+        per_type_metrics.setdefault("missing", {}).setdefault("rating", {})["mse"] = float(
+            torch.mean((miss_pred_t - miss_true_t).pow(2)).item()
+        )
+        per_type_metrics["missing"]["rating"]["mae"] = float(
+            torch.mean(torch.abs(miss_pred_t - miss_true_t)).item()
+        )
+    if observed_true:
+        obs_pred_t = torch.tensor(observed_preds, device=device, dtype=torch.float32)
+        obs_true_t = torch.tensor(observed_true, device=device, dtype=torch.float32)
+        per_type_metrics.setdefault("observed", {}).setdefault("rating", {})["mse"] = float(
+            torch.mean((obs_pred_t - obs_true_t).pow(2)).item()
+        )
+        per_type_metrics["observed"]["rating"]["mae"] = float(
+            torch.mean(torch.abs(obs_pred_t - obs_true_t)).item()
+        )
 
     return EntityEvalResults(
         split=split,

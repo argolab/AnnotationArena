@@ -41,6 +41,18 @@ STAN_TYPE_REQUIRED: Dict[str, Set[str]] = {
         "use_dawid_skene_noise",
         "derive_thresholds_from_annotator",
     },
+    "tensor-nobin": {
+        "D",
+        "sigma_u",
+        "sigma_v",
+        "sigma_uit",
+        "sigma_measurement",
+        "kappa",
+        "temperature",
+        "alpha_confusion",
+        "use_dawid_skene_noise",
+        "derive_thresholds_from_annotator",
+    },
 }
 
 # All Stan-data field names that are type-specific (used for validation: only required set may be non-None).
@@ -296,6 +308,26 @@ class AnnotatorSplitConfig:
             base.update({
                 "D": self.D,
                 "T": self.T,
+                "sigma_u": self.sigma_u,
+                "sigma_v": self.sigma_v,
+                "sigma_uit": self.sigma_uit,
+                "sigma_measurement": self.sigma_measurement,
+                "kappa": self.kappa,
+                "alpha_confusion": self.alpha_confusion,
+                "temperature": self.temperature,
+                "use_dawid_skene_noise": int(self.use_dawid_skene_noise),
+                "derive_thresholds_from_annotator": int(self.derive_thresholds_from_annotator),
+                "num_annotate_annotator": 4,
+            })
+        elif self.stan_type == "tensor-nobin":
+            for field in ("D", "sigma_u", "sigma_v", "sigma_uit",
+                          "sigma_measurement", "kappa", "alpha_confusion",
+                          "temperature", "use_dawid_skene_noise",
+                          "derive_thresholds_from_annotator"):
+                if getattr(self, field) is None:
+                    raise ValueError(f"AnnotatorSplitConfig (tensor-nobin): {field!r} must be set")
+            base.update({
+                "D": self.D,
                 "sigma_u": self.sigma_u,
                 "sigma_v": self.sigma_v,
                 "sigma_uit": self.sigma_uit,

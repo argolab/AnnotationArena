@@ -3,15 +3,7 @@
 # WARNING — do not run training on the login node.
 # Submit with: sbatch run_size100_triplet_anneal.sh
 
-#SBATCH --job-name=TEN_100_TRIPLET_ANN
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=18GB
-#SBATCH --gpus=1
-#SBATCH --partition=a100
-#SBATCH --exclude=c001
-#SBATCH --time=06:00:00
+
 
 set -euo pipefail
 

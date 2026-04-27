@@ -388,11 +388,11 @@ class EntityMarformerLightningModule(pl.LightningModule):
         # Accumulate loss tensors (for a single scalar loss).
         loss_tensors: List[torch.Tensor] = []
         loss_weights: List[int] = []  # number of masked tokens per chunk
-        # Accumulate raw (unweighted) CEs for readable logging.
-        masked_ce_accum: float = 0.0
-        masked_ce_count: int = 0
-        observed_ce_accum: float = 0.0
-        observed_ce_count: int = 0
+        # Accumulate raw (unweighted) rating NLLs for readable logging.
+        masked_nll_accum: float = 0.0
+        masked_nll_count: int = 0
+        observed_nll_accum: float = 0.0
+        observed_nll_count: int = 0
 
         for chunk_data in active_chunks:
             chunk_observed = chunk_data["chunk_observed"]
@@ -450,11 +450,11 @@ class EntityMarformerLightningModule(pl.LightningModule):
             weight = n_masked if n_masked > 0 else 1
             loss_tensors.append(chunk_loss)
             loss_weights.append(weight)
-            # Accumulate raw CEs weighted by token counts for averaging across chunks.
-            masked_ce_accum += chunk_masked_ce * n_masked
-            masked_ce_count += n_masked
-            observed_ce_accum += chunk_observed_ce * n_observed_chunk
-            observed_ce_count += n_observed_chunk
+            # Accumulate raw NLLs weighted by token counts for averaging across chunks.
+            masked_nll_accum += chunk_masked_ce * n_masked
+            masked_nll_count += n_masked
+            observed_nll_accum += chunk_observed_ce * n_observed_chunk
+            observed_nll_count += n_observed_chunk
 
             if reg_loss.requires_grad and reg_loss.item() != 0:
                 self.log("train/reg_loss", reg_loss, prog_bar=False, on_step=True, on_epoch=True)
@@ -468,11 +468,10 @@ class EntityMarformerLightningModule(pl.LightningModule):
             loss = torch.zeros((), device=device, requires_grad=True)
 
         self.log("train/loss", loss, prog_bar=True, on_step=True, on_epoch=True)
-        # Raw unweighted CEs — comparable scale to test xent (~1.3 for random on 4-class).
-        if masked_ce_count > 0:
-            self.log("train/masked_ce", masked_ce_accum / masked_ce_count, prog_bar=True, on_step=True, on_epoch=True)
-        if observed_ce_count > 0:
-            self.log("train/observed_ce", observed_ce_accum / observed_ce_count, prog_bar=False, on_step=True, on_epoch=True)
+        if masked_nll_count > 0:
+            self.log("train/masked_nll", masked_nll_accum / masked_nll_count, prog_bar=True, on_step=True, on_epoch=True)
+        if observed_nll_count > 0:
+            self.log("train/observed_nll", observed_nll_accum / observed_nll_count, prog_bar=False, on_step=True, on_epoch=True)
 
         return loss
 
@@ -523,11 +522,13 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     if combined_eval.metrics
                     else {}
                 )
-                acc_val = rating_missing.get("acc", None)
-                xent_val = rating_missing.get("xent", None)
-                acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
-                xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
-                print(f"  [combined_missing] acc={acc_str}  xent={xent_str}")
+                nll_val = rating_missing.get("nll", None)
+                mse_val = rating_missing.get("mse", None)
+                mae_val = rating_missing.get("mae", None)
+                nll_str = f"{nll_val:.4f}" if nll_val is not None else "N/A"
+                mse_str = f"{mse_val:.4f}" if mse_val is not None else "N/A"
+                mae_str = f"{mae_val:.4f}" if mae_val is not None else "N/A"
+                print(f"  [combined_missing] nll={nll_str}  mse={mse_str}  mae={mae_str}")
                 epoch_metrics["combined_eval"] = {
                     "split": combined_eval.split,
                     "metrics": combined_eval.metrics,
@@ -551,13 +552,17 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     if val_eval.metrics
                     else {}
                 )
-                acc_val = rating_missing.get("acc", None)
-                xent_val = rating_missing.get("xent", None)
-                acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
-                xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
-                print(f"  [val_missing] acc={acc_str}  xent={xent_str}")
-                if xent_val is not None:
-                    self.log("val/missing_ce", xent_val, prog_bar=True, on_epoch=True, on_step=False)
+                nll_val = rating_missing.get("nll", None)
+                mse_val = rating_missing.get("mse", None)
+                mae_val = rating_missing.get("mae", None)
+                nll_str = f"{nll_val:.4f}" if nll_val is not None else "N/A"
+                mse_str = f"{mse_val:.4f}" if mse_val is not None else "N/A"
+                mae_str = f"{mae_val:.4f}" if mae_val is not None else "N/A"
+                print(f"  [val_missing] nll={nll_str}  mse={mse_str}  mae={mae_str}")
+                if nll_val is not None:
+                    self.log("val/missing_nll", nll_val, prog_bar=True, on_epoch=True, on_step=False)
+                if mse_val is not None:
+                    self.log("val/missing_mse", mse_val, prog_bar=True, on_epoch=True, on_step=False)
                 epoch_metrics["val_eval"] = {
                     "split": val_eval.split,
                     "metrics": val_eval.metrics,
@@ -581,11 +586,13 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     if train_eval.metrics
                     else {}
                 )
-                acc_val = rating_missing.get("acc", None)
-                xent_val = rating_missing.get("xent", None)
-                acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
-                xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
-                print(f"  [train_missing] acc={acc_str}  xent={xent_str}")
+                nll_val = rating_missing.get("nll", None)
+                mse_val = rating_missing.get("mse", None)
+                mae_val = rating_missing.get("mae", None)
+                nll_str = f"{nll_val:.4f}" if nll_val is not None else "N/A"
+                mse_str = f"{mse_val:.4f}" if mse_val is not None else "N/A"
+                mae_str = f"{mae_val:.4f}" if mae_val is not None else "N/A"
+                print(f"  [train_missing] nll={nll_str}  mse={mse_str}  mae={mae_str}")
                 epoch_metrics["train_eval"] = {
                     "split": train_eval.split,
                     "metrics": train_eval.metrics,
@@ -608,13 +615,17 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     if val_eval.metrics
                     else {}
                 )
-                acc_val = rating_missing.get("acc", None)
-                xent_val = rating_missing.get("xent", None)
-                acc_str = f"{acc_val:.4f}" if acc_val is not None else "N/A"
-                xent_str = f"{xent_val:.4f}" if xent_val is not None else "N/A"
-                print(f"  [val_missing] acc={acc_str}  xent={xent_str}")
-                if xent_val is not None:
-                    self.log("val/missing_ce", xent_val, prog_bar=True, on_epoch=True, on_step=False)
+                nll_val = rating_missing.get("nll", None)
+                mse_val = rating_missing.get("mse", None)
+                mae_val = rating_missing.get("mae", None)
+                nll_str = f"{nll_val:.4f}" if nll_val is not None else "N/A"
+                mse_str = f"{mse_val:.4f}" if mse_val is not None else "N/A"
+                mae_str = f"{mae_val:.4f}" if mae_val is not None else "N/A"
+                print(f"  [val_missing] nll={nll_str}  mse={mse_str}  mae={mae_str}")
+                if nll_val is not None:
+                    self.log("val/missing_nll", nll_val, prog_bar=True, on_epoch=True, on_step=False)
+                if mse_val is not None:
+                    self.log("val/missing_mse", mse_val, prog_bar=True, on_epoch=True, on_step=False)
                 epoch_metrics["val_eval"] = {
                     "split": val_eval.split,
                     "metrics": val_eval.metrics,
@@ -1186,7 +1197,7 @@ def main():
     checkpoint_best = ModelCheckpoint(
         dirpath=str(run_dir / "checkpoints"),
         filename="best-{epoch:04d}",
-        monitor="val/missing_ce",
+        monitor="val/missing_nll",
         mode="min",
         save_top_k=1,
         save_last=True,

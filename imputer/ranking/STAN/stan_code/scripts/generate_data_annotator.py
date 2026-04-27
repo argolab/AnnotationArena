@@ -41,6 +41,11 @@ def main():
                         help="Path to .stan file (overrides --stan-type default)")
     parser.add_argument("--overwrite-existing-data", action="store_true",
                         help="Overwrite existing output directory if it exists")
+    parser.add_argument(
+        "--force-stan-recompile",
+        action="store_true",
+        help="Force cmdstanpy to recompile the Stan generator (use after editing .stan files).",
+    )
 
     # ---------- Core dimensions ----------
     parser.add_argument("--K", type=int, default=20,
@@ -172,7 +177,11 @@ def main():
     print(f"Output directory: {run_dir}")
 
     # ========== 4. Run data generation ==========
-    bundle = generate_data_annotator_split(config, stan_file=args.stan_file)
+    bundle = generate_data_annotator_split(
+        config,
+        stan_file=args.stan_file,
+        force_stan_recompile=bool(args.force_stan_recompile),
+    )
 
     # ========== 5. Save outputs ==========
     from dataclasses import asdict

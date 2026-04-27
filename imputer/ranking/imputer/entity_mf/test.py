@@ -7,8 +7,8 @@ validation, and saves metrics to TEST_RESULTS/ inside the run directory.
 
 Metrics saved per checkpoint:
   missing / observed:
-    log_loss    — mean cross-entropy (from LossBreakdown; handles soft targets)
-    rmse        — root-mean-square error on expected-value predictions (1-indexed)
+    nll         — mean Gaussian NLL from LossBreakdown
+    rmse        — root-mean-square error on scalar score predictions
     n           — number of tokens evaluated
     spearman_r  — Spearman rank correlation
     kendall_tau — Kendall tau
@@ -177,24 +177,22 @@ def _load_checkpoint(model: EntityMarformer, ckpt_path: Path, device: torch.devi
 
 def _compute_metrics(result: EntityEvalResults) -> Dict[str, Any]:
     """
-    Derive RMSE + correlations from the expected-value predictions stored in
-    result.  Log-loss comes from the metrics tree (handles soft targets).
-    All values converted to 1-indexed scale before RMSE/correlation.
+    Derive RMSE + correlations from scalar score predictions stored in result.
+    NLL comes from the metrics tree.
     """
     out: Dict[str, Any] = {}
     for status in ("missing", "observed"):
         preds = result.missing_preds  if status == "missing" else result.observed_preds
         trues = result.missing_true   if status == "missing" else result.observed_true
 
-        log_loss = result.metrics.get(status, {}).get("rating", {}).get("xent", None)
+        nll = result.metrics.get(status, {}).get("rating", {}).get("nll", None)
 
         if len(preds) == 0:
-            out[status] = {"log_loss": log_loss, "n": 0}
+            out[status] = {"nll": nll, "n": 0}
             continue
 
-        # 0-indexed internally → convert to 1-indexed for interpretable RMSE scale
-        p = np.array(preds) + 1.0
-        t = np.array(trues,  dtype=float) + 1.0
+        p = np.array(preds, dtype=float)
+        t = np.array(trues, dtype=float)
 
         rmse = float(np.sqrt(np.mean((p - t) ** 2)))
         sp_r,  sp_p  = stats.spearmanr(p, t)
@@ -202,7 +200,7 @@ def _compute_metrics(result: EntityEvalResults) -> Dict[str, Any]:
         pe_r,  pe_p  = stats.pearsonr(p, t)
 
         out[status] = {
-            "log_loss":    log_loss,
+            "nll":         nll,
             "rmse":        rmse,
             "n":           len(preds),
             "spearman_r":  float(sp_r),

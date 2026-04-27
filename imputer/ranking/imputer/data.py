@@ -21,7 +21,7 @@ class RankingData:
     - item_ids: for rating, a list with one item id; for ranking, the ranked item ids
     - status: status code (0=missing, 1=masked, 2=observed)
     - instance: "train", "val", or "test"
-    - rating_value: class index [0..C-1] if rating observed
+    - rating_value: scalar score if rating observed
     - ranking_order: list of positions in [1..R] aligned with item_ids when ranking observed
     """
     annotator_id: int
@@ -30,12 +30,10 @@ class RankingData:
     item_ids: List[int]
     status: int
     instance: str
-    rating_value: Optional[int] = None
+    rating_value: Optional[float] = None
     ranking_order: Optional[List[int]] = None
-    # Soft target distribution over rating categories [length C, sums to 1].
-    # None  → use one-hot of rating_value (synthetic / hard-label data).
-    # List  → use as soft CE target (real data: LLM gives full distribution,
-    #          human gives one-hot stored explicitly for uniform handling).
+    # Optional soft target distribution over rating categories, used by some
+    # non-scalar data sources.
     rating_dist: Optional[List[float]] = None
 
     @property
@@ -111,7 +109,7 @@ class DataConverter:
                     item_ids=[rating['item'] - 1],
                     status=status_code,
                     instance=rating['instance'],
-                    rating_value=rating['value'] - 1,
+                    rating_value=float(rating['value']),
                     rating_dist=rating.get('rating_dist'),  # None for synthetic; list for real
                 ))
 

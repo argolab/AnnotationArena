@@ -44,6 +44,65 @@ def _parse_stan_arg(s: str) -> tuple:
     return (key, value)
 
 
+def _validate_tensor_nobin_scalar_bundle(bundle) -> None:
+    """
+    Catch the common failure mode where Stan output still contains many literal-zero
+    scores (stale compilation / old generator) that disagree with base_scores.
+    """
+    if bundle.base_scores is None:
+        return
+    obs = getattr(bundle, "observed_ratings", None) or []
+    if not obs:
+        return
+
+    bs = np.asarray(bundle.base_scores, dtype=np.float64)
+    if bs.ndim != 2:
+        return
+
+    # Infer J from Stan layout rows = I*J (I is stored in bundle.stats).
+    stats = getattr(bundle, "stats", None) or {}
+    dg_I = int(stats.get("I", 0) or 0)
+    if dg_I <= 0:
+        return
+    if bs.shape[0] % dg_I != 0:
+        return
+    j_dim = bs.shape[0] // dg_I
+
+    bad = 0
+    checked = 0
+    max_check = 5000
+    rng = np.random.default_rng(0)
+
+    idxs = np.arange(len(obs), dtype=int)
+    if len(idxs) > max_check:
+        idxs = rng.choice(idxs, size=max_check, replace=False)
+
+    for idx in idxs.tolist():
+        r = obs[int(idx)]
+        y = float(r.get("value", 0.0))
+        if abs(y) > 1e-12:
+            continue
+        i = int(r["attribute"]) - 1
+        j = int(r["annotator"]) - 1
+        k = int(r["item"]) - 1
+        z = float(bs[i * j_dim + j, k])
+        checked += 1
+        if abs(z) > 1e-3:
+            bad += 1
+
+    if checked == 0:
+        return
+    bad_frac = bad / checked
+    if bad_frac > 0.01:
+        raise RuntimeError(
+            "tensor-nobin bundle validation failed: many observed labels are exactly 0 but "
+            "base_scores are non-negligible for the same (i,j,k). "
+            "This almost always means cmdstanpy ran a stale compiled generator.\n"
+            "Fix: rerun with --force-stan-recompile (and/or delete the cached exe cmdstanpy built "
+            "for tensor_nobin_generation.stan)."
+        )
+
+
 def main():
     # ========== 1. Parse CLI ==========
     parser = argparse.ArgumentParser(description="Generate synthetic data using Stan")
@@ -54,12 +113,24 @@ def main():
     parser.add_argument("--run-name", type=str, default=None,
                         help="Custom run name (default: auto-generated)")
     parser.add_argument("--stan-type", type=str, default="factored-dot-product",
-                        choices=["normal-noise-dot-product", "factored-dot-product", "discrete", "tensor", "dawid-skene"],
-                        help="Stan model: normal-noise-dot-product, factored-dot-product, discrete, tensor, dawid-skene.")
+                        choices=[
+                            "normal-noise-dot-product",
+                            "factored-dot-product",
+                            "discrete",
+                            "tensor",
+                            "tensor-nobin",
+                            "dawid-skene",
+                        ],
+                        help="Stan model: normal-noise-dot-product, factored-dot-product, discrete, tensor, tensor-nobin, dawid-skene.")
     parser.add_argument("--stan-file", type=str, default=None,
                         help="Path to .stan file (overrides --stan-type when set)")
     parser.add_argument("--overwrite-existing-data", action="store_true",
                         help="Overwrite existing output directory if it exists")
+    parser.add_argument(
+        "--force-stan-recompile",
+        action="store_true",
+        help="Force cmdstanpy to recompile the Stan generator (use after editing .stan files).",
+    )
 
     # ---------- Core dimensions ----------
     parser.add_argument("--K-train", type=int, default=10, help="Number of items in training instance")
@@ -104,9 +175,9 @@ def main():
                         help="Annotator embedding dimension (default: D). Normal-noise and factored-dot-product only.")
     parser.add_argument("--derive-thresholds-from-annotator", action="store_true", default=False,
                         help="Derive rating thresholds from annotator embedding (factored-dot-product only).")
-    # tensor-prototype only:
+    # Legacy tensor (tensor_generation.stan) only:
     parser.add_argument("--T", type=int, default=3,
-                        help="Number of annotator prototypes (tensor model; default: 3).")
+                        help="Number of annotator prototypes (stan_type=tensor only; ignored for tensor-nobin).")
     parser.add_argument("--sigma-u", type=float, default=1.0,
                         help="Prior std for attribute embeddings u_i (tensor model; default: 1.0).")
     parser.add_argument("--sigma-v", type=float, default=1.0,
@@ -145,13 +216,13 @@ def main():
         "use_logistic_link": 0,
         "use_normal_loadings": 0,
         "alpha_confusion": args.alpha_confusion,
-        # Tensor-prototype fields.
-        "T": args.T,
         "sigma_u": args.sigma_u,
         "sigma_v": args.sigma_v,
         "sigma_uit": args.sigma_uit,
         "use_dawid_skene_noise": args.use_dawid_skene_noise,
     }
+    if stan_type == "tensor":
+        defaults["T"] = args.T
     if stan_type == "normal-noise-dot-product":
         defaults["use_factored_annotator"] = 0
         defaults["derive_thresholds_from_annotator"] = 0
@@ -162,6 +233,9 @@ def main():
         defaults["use_factored_annotator"] = 1
         defaults["derive_thresholds_from_annotator"] = 1 if args.derive_thresholds_from_annotator else 0
     elif stan_type == "tensor":
+        defaults["use_dawid_skene_noise"] = args.use_dawid_skene_noise
+        defaults["derive_thresholds_from_annotator"] = 1 if args.derive_thresholds_from_annotator else 0
+    elif stan_type == "tensor-nobin":
         defaults["use_dawid_skene_noise"] = args.use_dawid_skene_noise
         defaults["derive_thresholds_from_annotator"] = 1 if args.derive_thresholds_from_annotator else 0
     type_kwargs = {k: stan_arg.get(k, defaults.get(k)) for k in required}
@@ -207,7 +281,14 @@ def main():
     print(f"Output directory: {run_dir}")
 
     # ========== 4. Run data generation ==========
-    bundle = generate_data(config, stan_file=args.stan_file)
+    bundle = generate_data(
+        config,
+        stan_file=args.stan_file,
+        force_stan_recompile=bool(args.force_stan_recompile),
+    )
+
+    if stan_type == "tensor-nobin":
+        _validate_tensor_nobin_scalar_bundle(bundle)
 
     # ========== 5. Save outputs (configs, Stan data JSON for inference, bundle) ==========
     from dataclasses import asdict
