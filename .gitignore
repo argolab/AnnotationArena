@@ -310,3 +310,11 @@ imputer/ranking/RESULTS/
 imputer/ranking/scripts/TESTING_SCRIPTS/
 
 imputer/ranking/scripts/BASELINES
+imputer/ranking/imputer/entity_mf/ranked_eval_lineplot_v2.py
+imputer/ranking/STAN/stan_models/*.hpp
+imputer/ranking/imputer/entity_mf/ranked_eval_lineplot.py
+imputer/ranking/imputer/entity_mf/ranked_eval_report_v2.py
+imputer/ranking/imputer/entity_mf/ranked_eval_report.py
+imputer/ranking/imputer/entity_mf/ranked_eval.py
+.codex
+imputer/ranking/DATA/STAN/SPARSE/MARFORMER_NOBIN*
