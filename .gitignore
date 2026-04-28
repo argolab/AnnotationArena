@@ -308,6 +308,7 @@ imputer/ranking/DATA/OLD_DATA/
 imputer/ranking/ARCHITECTURE
 imputer/ranking/RESULTS/
 imputer/ranking/scripts/TESTING_SCRIPTS/
+imputer/ranking/scripts/DOMAIN3/BASELINE
 
 imputer/ranking/scripts/BASELINES
 imputer/ranking/imputer/entity_mf/ranked_eval_lineplot_v2.py
