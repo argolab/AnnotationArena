@@ -72,6 +72,7 @@ _DEFAULT_STAN_FILES = {
     "factored-dot-product":      str(_MODELS_DIR / "normal_noise_dot_product_model.stan"),
     "tensor":                    str(_MODELS_DIR / "tensor_model.stan"),
     "dawid-skene":               str(_MODELS_DIR / "dawid_skene_model.stan"),
+    "dawid-skene-true":          str(_MODELS_DIR / "true_dawid_skene_model.stan"),
 }
 
 
@@ -192,6 +193,89 @@ def build_stan_data(
         "missing_rating_annotators": [r["annotator"]  for r in missing],
         "missing_rating_items":      [r["item"]        for r in missing],
     }
+
+    if stan_type == "dawid-skene-true":
+        # True Dawid-Skene: no embeddings, no dot-product, no ordinal probit.
+        # Ratings are grouped into (attribute, item) cells so annotators are
+        # coupled through the shared latent true class T_ik.
+        # Hyperparameters can either be anchored (legacy mode) or learned
+        # under broad proper priors when use_flat_priors=1.
+        from collections import defaultdict
+
+        # Build cell map: (attribute, item) -> 0-indexed cell_id.
+        # Covers all cells in observed AND missing so every missing rating
+        # has a valid cell reference.
+        cell_map: dict = {}
+        for r in observed:
+            key = (r["attribute"], r["item"])
+            if key not in cell_map:
+                cell_map[key] = len(cell_map)
+        for r in missing:
+            key = (r["attribute"], r["item"])
+            if key not in cell_map:
+                cell_map[key] = len(cell_map)
+
+        N_cells = len(cell_map)
+        cell_attr_arr = [0] * N_cells
+        cell_item_arr = [0] * N_cells
+        for (attr, item), idx in cell_map.items():
+            cell_attr_arr[idx] = attr
+            cell_item_arr[idx] = item
+
+        # Group observed ratings by cell.
+        cell_ratings: dict = defaultdict(list)
+        for r in observed:
+            key = (r["attribute"], r["item"])
+            cell_ratings[cell_map[key]].append((r["annotator"], r["value"]))
+
+        # Build contiguous sorted obs arrays with per-cell start/count (1-indexed).
+        obs_annotator_arr: list = []
+        obs_value_arr: list = []
+        cell_obs_start_arr: list = []
+        cell_obs_count_arr: list = []
+        pos = 1  # Stan is 1-indexed
+        for cell_idx in range(N_cells):
+            ratings = cell_ratings.get(cell_idx, [])
+            cell_obs_start_arr.append(pos)
+            cell_obs_count_arr.append(len(ratings))
+            for ann, val in ratings:
+                obs_annotator_arr.append(ann)
+                obs_value_arr.append(val)
+            pos += len(ratings)
+
+        # Missing rating arrays — cell index is 1-indexed for Stan.
+        missing_cell_arr: list = []
+        missing_annotator_arr: list = []
+        for r in missing:
+            key = (r["attribute"], r["item"])
+            missing_cell_arr.append(cell_map[key] + 1)  # 1-indexed
+            missing_annotator_arr.append(r["annotator"])
+
+        return {
+            "K":                  K,
+            "I":                  config.I,
+            "J":                  J,
+            "C":                  C,
+            # Cell structure
+            "N_cells":            N_cells,
+            "cell_attr":          cell_attr_arr,
+            "cell_item":          cell_item_arr,
+            "cell_obs_start":     cell_obs_start_arr,
+            "cell_obs_count":     cell_obs_count_arr,
+            # Observed ratings (sorted by cell)
+            "N_ratings":          len(obs_annotator_arr),
+            "obs_annotator":      obs_annotator_arr,
+            "obs_value":          obs_value_arr,
+            # Missing ratings
+            "N_missing_ratings":  len(missing),
+            "missing_cell":       missing_cell_arr,
+            "missing_annotator":  missing_annotator_arr,
+            # Hyperparameter defaults — overridable via --stan-arg
+            "alpha_pi_anchor":                 1.0,
+            "alpha_confusion_diag_anchor":     15.0,
+            "alpha_confusion_offdiag_anchor":  1.0,
+            "use_flat_priors":                 0,
+        }
 
     if stan_type == "tensor":
         # Tensor-prototype model: different parameter set, no LLM fields.

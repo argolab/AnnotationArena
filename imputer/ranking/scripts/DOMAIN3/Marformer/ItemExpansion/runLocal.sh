@@ -48,7 +48,7 @@ GRAPHMASK_FLAG="";     [ "$USE_GRAPH_MASK"     = "true"  ] && GRAPHMASK_FLAG="--
 LLM_DIST_FLAG="";      [ "$LLM_INPUT_DIST"     = "true"  ] && LLM_DIST_FLAG="--llm-input-dist"
 OVERWRITE_FLAG="";     [ "$OVERWRITE_EXISTING" = "true"  ] && OVERWRITE_FLAG="--overwrite-existing-data"
 
-SIZE_LIST=(400)
+SIZE_LIST=(250)
 
 echo ""
 echo "============================================================"
@@ -97,6 +97,7 @@ for SIZE in "${SIZE_LIST[@]}"; do
         --masking-rate           "$MASKING_RATE"           \
         --mask-augmentations     "$MASK_AUGMENTATIONS"     \
         --masked-loss-weight     "$MASKED_LOSS_WEIGHT"     \
+        --max-item               "$MAX_ITEM"               \
         --observed-loss-weight   "$OBSERVED_LOSS_WEIGHT"   \
         --device                 "$DEVICE"                 \
         --type-embedding-init    "$TYPE_EMBEDDING_INIT"    \

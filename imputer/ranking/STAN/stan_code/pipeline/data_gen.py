@@ -45,6 +45,8 @@ def generate_data(
             stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "normal_noise_dot_product_generation.stan")
         elif stan_type == "dawid-skene":
             stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "dawid_skene_generation.stan")
+        elif stan_type == "dawid-skene-true":
+            stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "true_dawid_skene_generation.stan")
         elif getattr(config, "observation_protocol", None) == "extended_rankings":
             import warnings
             warnings.warn(
@@ -249,6 +251,13 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
     # Dawid-Skene confusion matrix
     if "confusion_matrix" in sample:
         extra_ground_truth["confusion_matrix"] = sample["confusion_matrix"][0]
+    if "pi" in sample:
+        extra_ground_truth["pi"] = sample["pi"][0]
+    if "confusion" in sample:
+        extra_ground_truth["confusion"] = sample["confusion"][0]
+    for key in ["train_true_classes", "val_true_classes", "test_true_classes"]:
+        if key in sample:
+            extra_ground_truth[key] = sample[key][0]
 
     # Extract pairwise rankings counts
     num_train_pairwise = 0
@@ -304,15 +313,15 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
                     "instance": "train",
                     "rating_dist": [0.0] * num_classes
                 }
-                try:
-                    rating_dict["rating_dist"][int(train_rating_values[ij_idx, k]) - 1] = 1.0
-                    train_ratings.append(rating_dict)
-                    if train_rating_observed[ij_idx, k] == 1:
-                        train_observed_ratings.append(rating_dict)
-                    else:
-                        train_missing_ratings.append(rating_dict)
-                except IndexError:
+                value = int(train_rating_values[ij_idx, k])
+                if not (1 <= value <= num_classes):
                     continue
+                rating_dict["rating_dist"][value - 1] = 1.0
+                train_ratings.append(rating_dict)
+                if train_rating_observed[ij_idx, k] == 1:
+                    train_observed_ratings.append(rating_dict)
+                else:
+                    train_missing_ratings.append(rating_dict)
 
     # ===== CONVERT TEST RATINGS =====
     test_ratings = []
@@ -364,15 +373,15 @@ def extract_bundle_from_stan_output(fit: cmdstanpy.CmdStanMCMC, config: DataGenC
                     "instance": "val",
                     "rating_dist": [0.0] * num_classes
                 }
-                try:
-                    rating_dict["rating_dist"][int(val_rating_values[ij_idx, k]) - 1] = 1.0
-                    val_ratings.append(rating_dict)
-                    if val_rating_observed[ij_idx, k] == 1:
-                        val_observed_ratings.append(rating_dict)
-                    else:
-                        val_missing_ratings.append(rating_dict)
-                except IndexError:
+                value = int(val_rating_values[ij_idx, k])
+                if not (1 <= value <= num_classes):
                     continue
+                rating_dict["rating_dist"][value - 1] = 1.0
+                val_ratings.append(rating_dict)
+                if val_rating_observed[ij_idx, k] == 1:
+                    val_observed_ratings.append(rating_dict)
+                else:
+                    val_missing_ratings.append(rating_dict)
 
     # Combine all ratings in order: train, val, test
     all_ratings = train_ratings + val_ratings + test_ratings

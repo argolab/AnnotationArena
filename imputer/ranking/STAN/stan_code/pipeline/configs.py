@@ -28,6 +28,9 @@ STAN_TYPE_REQUIRED: Dict[str, Set[str]] = {
         "D", "d_annotator", "sigma_annotator", "kappa", "temperature",
         "use_factored_annotator", "derive_thresholds_from_annotator", "alpha_confusion",
     },
+    "dawid-skene-true": {
+        "alpha_pi", "alpha_confusion_diag", "alpha_confusion_offdiag",
+    },
     "tensor": {
         "D",
         "T",
@@ -51,6 +54,8 @@ STAN_DATA_FIELDS: frozenset = frozenset({
     "use_log_scores", "use_logistic_link", "use_normal_loadings",
     # Dawid-Skene / tensor-prototype confusion prior.
     "alpha_confusion",
+    # True Dawid-Skene generation hyperparameters.
+    "alpha_pi", "alpha_confusion_diag", "alpha_confusion_offdiag",
     # Tensor-prototype model fields.
     "T", "sigma_u", "sigma_v", "sigma_uit", "use_dawid_skene_noise",
 })
@@ -123,6 +128,9 @@ class DataGenConfig:
     d_annotator: Optional[int] = None
     factor_decay: Optional[float] = None
     alpha_confusion: Optional[float] = None  # Dawid-Skene / tensor-prototype confusion prior
+    alpha_pi: Optional[float] = None
+    alpha_confusion_diag: Optional[float] = None
+    alpha_confusion_offdiag: Optional[float] = None
 
     # Old CP tensor misspecification flags (no longer required by any type; kept for compat).
     use_log_scores: Optional[int] = None
@@ -260,6 +268,9 @@ class AnnotatorSplitConfig:
     sigma_uit: Optional[float] = None
     use_dawid_skene_noise: Optional[int] = None
     alpha_confusion: Optional[float] = None
+    alpha_pi: Optional[float] = None
+    alpha_confusion_diag: Optional[float] = None
+    alpha_confusion_offdiag: Optional[float] = None
 
     # Observation protocol
     observation_protocol: str = "mcar"     # "mcar" is the only supported protocol
@@ -305,6 +316,16 @@ class AnnotatorSplitConfig:
                 "temperature": self.temperature,
                 "use_dawid_skene_noise": int(self.use_dawid_skene_noise),
                 "derive_thresholds_from_annotator": int(self.derive_thresholds_from_annotator),
+                "num_annotate_annotator": 4,
+            })
+        elif self.stan_type == "dawid-skene-true":
+            for field in ("alpha_pi", "alpha_confusion_diag", "alpha_confusion_offdiag"):
+                if getattr(self, field) is None:
+                    raise ValueError(f"AnnotatorSplitConfig (dawid-skene-true): {field!r} must be set")
+            base.update({
+                "alpha_pi": self.alpha_pi,
+                "alpha_confusion_diag": self.alpha_confusion_diag,
+                "alpha_confusion_offdiag": self.alpha_confusion_offdiag,
                 "num_annotate_annotator": 4,
             })
         else:

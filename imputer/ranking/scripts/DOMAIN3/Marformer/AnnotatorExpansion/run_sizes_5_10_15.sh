@@ -1,30 +1,7 @@
 #!/bin/bash
 
-# Copyright
-# 2024, Johns Hopkins University (Author: Prabhav Singh)
-# Apache 2.0.
-
-#SBATCH --job-name=D3MATA
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem-per-cpu=18GB
-#SBATCH --gpus=1
-#SBATCH --partition=a100
-#SBATCH --exclude=c001
-#SBATCH --time=10:00:00
-
-source /home/psingh54/.bashrc
-module load anaconda3/2024.02-1
-conda activate prabhav2
-cd /home/psingh54/scratchjeisner1/psingh54/AnnotationArena/imputer/ranking
-export PYTHONPATH=.
-export CUDA_LAUNCH_BLOCKING=1
-export PYTHONUNBUFFERED=1
-set -e
-
 SCRIPT_START=$SECONDS
-OUTPUT_ROOT="RESULTS/MARFORMER/STAN/DOMAIN3"
+OUTPUT_ROOT="RESULTS/MARFORMER/DOMAIN3/ANNOT_DROP"
 
 SEED=42
 TYPE_EMBEDDING_INIT="kaiming"
@@ -45,11 +22,11 @@ MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
 DEVICE="cuda"
 MAX_ITEM=10
-ANNOTATOR_REG_WEIGHT=1e-3
+ANNOTATOR_REG_WEIGHT=0.0
 
-ITEM_DROPOUT_RATE=1.0
-ANNOTATOR_DROPOUT_RATE=0.1
-ITEM_REG_WEIGHT=0.0
+ITEM_DROPOUT_RATE=0.0
+ANNOTATOR_DROPOUT_RATE=1.0
+ITEM_REG_WEIGHT=1e-3
 ATTRIBUTE_REG_WEIGHT=0.0
 USE_PER_HEAD_REL=false
 SCALE_SHARED_REL=true

@@ -58,12 +58,13 @@ def _json_default(o: Any) -> Any:
 def _reconstruct(run_dir: Path) -> tuple:
     """
     Read train_config.json and reconstruct:
-      model, types, test_all (List[RankingData]), train_cfg dict.
+      model, eval_vars (List[RankingData]), train_cfg dict.
     """
     with open(run_dir / "train_config.json") as f:
         train_config = json.load(f)
 
     data_dir   = Path(train_config["data"]["data_dir"])
+    print(data_dir)
     sizes      = train_config["resolved_sizes"]
     mcfg       = train_config["model"]
     train_cfg  = train_config["training"]
@@ -121,12 +122,19 @@ def _reconstruct(run_dir: Path) -> tuple:
         num_relationships=graph0.num_relationships,
     )
 
-    # ── Test split ────────────────────────────────────────────────────────────
+    # ── Evaluation variables ─────────────────────────────────────────────────
+    # For transductive runs, include train_observed as extra context at test time
+    # while still evaluating only on test_missing. Never include train_missing.
     test_obs  = converter.create_variables_from_bundle(bundle, partition="test", status="observed")
     test_miss = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
-    test_all  = test_obs + test_miss
 
-    return model, test_all, train_cfg
+    if bool(train_cfg.get("transductive_learning", False)):
+        eval_vars = train_obs + test_obs + test_miss + train_miss
+
+    else:
+        eval_vars = test_obs + test_miss + train_miss
+
+    return model, eval_vars, train_cfg
 
 
 # ── Checkpoint loading ────────────────────────────────────────────────────────
@@ -263,8 +271,8 @@ def main() -> None:
     print(f"Run dir  : {run_dir}")
     print(f"Device   : {device}")
 
-    model, test_all, train_cfg = _reconstruct(run_dir)
-    print(f"Test vars: {len(test_all)}")
+    model, eval_vars, train_cfg = _reconstruct(run_dir)
+    print(f"Eval vars: {len(eval_vars)}")
 
     if args.checkpoint == "all":
         ckpt_dir = run_dir / "checkpoints"
@@ -282,7 +290,7 @@ def main() -> None:
                 run_dir=run_dir,
                 which=which,
                 model=model,
-                test_all=test_all,
+                test_all=eval_vars,
                 train_cfg=train_cfg,
                 device=device,
             )

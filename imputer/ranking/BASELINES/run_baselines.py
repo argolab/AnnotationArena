@@ -156,8 +156,12 @@ def main():
     print(f"Training {args.method.upper()} for {epochs} epochs...")
     fit_kwargs = {}
     if data.training_mode == "transductive_item_domain3":
-        fit_kwargs["random_mask_observed"] = True
-        fit_kwargs["train_mask_ratio"] = args.train_mask_ratio
+        # Domain 3 item-expansion is trained transductively on train_obs + test_obs.
+        # Keep MIWAE on its standard observed-entry objective; only ReMasker gets
+        # extra random observed-cell masking to create reconstruction targets.
+        if args.method == "remasker":
+            fit_kwargs["random_mask_observed"] = True
+            fit_kwargs["train_mask_ratio"] = args.train_mask_ratio
     else:
         fit_kwargs["context_cols_mask"] = data.context_cols_mask
         fit_kwargs["target_cols_mask"] = data.target_cols_mask

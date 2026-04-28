@@ -54,8 +54,8 @@ def main():
     parser.add_argument("--run-name", type=str, default=None,
                         help="Custom run name (default: auto-generated)")
     parser.add_argument("--stan-type", type=str, default="factored-dot-product",
-                        choices=["normal-noise-dot-product", "factored-dot-product", "discrete", "tensor", "dawid-skene"],
-                        help="Stan model: normal-noise-dot-product, factored-dot-product, discrete, tensor, dawid-skene.")
+                        choices=["normal-noise-dot-product", "factored-dot-product", "discrete", "tensor", "dawid-skene", "dawid-skene-true"],
+                        help="Stan model: normal-noise-dot-product, factored-dot-product, discrete, tensor, dawid-skene, dawid-skene-true.")
     parser.add_argument("--stan-file", type=str, default=None,
                         help="Path to .stan file (overrides --stan-type when set)")
     parser.add_argument("--overwrite-existing-data", action="store_true",
@@ -121,6 +121,12 @@ def main():
     # dawid-skene / tensor-prototype:
     parser.add_argument("--alpha-confusion", type=float, default=10.0,
                         help="Dirichlet concentration for confusion matrix diagonal (dawid-skene / tensor; default: 10.0).")
+    parser.add_argument("--alpha-pi", type=float, default=1.0,
+                        help="Dirichlet concentration for attribute class prevalence (true Dawid-Skene generation; default: 1.0).")
+    parser.add_argument("--alpha-confusion-diag", type=float, default=7.0,
+                        help="Diagonal concentration for per-annotator confusion rows (true Dawid-Skene generation; default: 7.0).")
+    parser.add_argument("--alpha-confusion-offdiag", type=float, default=1.0,
+                        help="Off-diagonal concentration for per-annotator confusion rows (true Dawid-Skene generation; default: 1.0).")
     
     args = parser.parse_args()
 
@@ -145,6 +151,9 @@ def main():
         "use_logistic_link": 0,
         "use_normal_loadings": 0,
         "alpha_confusion": args.alpha_confusion,
+        "alpha_pi": args.alpha_pi,
+        "alpha_confusion_diag": args.alpha_confusion_diag,
+        "alpha_confusion_offdiag": args.alpha_confusion_offdiag,
         # Tensor-prototype fields.
         "T": args.T,
         "sigma_u": args.sigma_u,
