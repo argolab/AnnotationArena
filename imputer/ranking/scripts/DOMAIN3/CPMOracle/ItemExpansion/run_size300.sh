@@ -34,6 +34,7 @@ for SIZE in "${SIZE_LIST[@]}"; do
     python STAN/stan_code/scripts/run_inference.py \
         --data-bundle "${DATA_BUNDLE}" --configs "${DATA_DIR}/configs.json" \
         --output-dir "${OUTPUT_DIR}" --run-name "${RUN_NAME}" --stan-type "tensor" \
+        --stan-file "STAN/stan_models/tensor_model_fixed_hyperparams.stan" \
         --chains "$CHAINS" --iter-warmup "$ITER_WARMUP" --iter-sampling "$ITER_SAMPLING" \
         --adapt-delta "$ADAPT_DELTA" --max-treedepth "$MAX_TREEDEPTH" --seed "$SEED" \
         --override-D 32 --override-sigma-measurement 0.6 --override-alpha-dirichlet 5.0 \
@@ -44,7 +45,7 @@ for SIZE in "${SIZE_LIST[@]}"; do
     python STAN/stan_code/scripts/evaluate_predictions.py \
         --data-bundle "${DATA_BUNDLE}" --mcmc-dir "${OUTPUT_DIR}/${RUN_NAME}" \
         --output-dir "${OUTPUT_DIR}" --run-name "${RUN_NAME}_eval" \
-        --csv-pattern "tensor_model-*.csv" --overwrite-existing-data --verbose
+        --csv-pattern "tensor_model_fixed_hyperparams-*.csv" --overwrite-existing-data --verbose
 done
 
 TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))

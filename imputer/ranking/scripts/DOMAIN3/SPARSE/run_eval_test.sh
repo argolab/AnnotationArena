@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Local — evaluate all saved checkpoints for every DOMAIN3 item-split Marformer run
+# Local — evaluate all saved checkpoints for every DOMAIN3 sparse Marformer run
 # and save the best test checkpoint summary to TEST_RESULTS/best.json.
 
 set -euo pipefail
@@ -11,12 +11,12 @@ export PYTHONUNBUFFERED=1
 
 SCRIPT_START=$SECONDS
 
-RESULTS_ROOT="RESULTS/MARFORMER/DOMAIN3/ANNOT_NEW"
-RUN_GLOB="Tensor_400_25_9_DOMAIN3_Annot_T_*_MARFORMER"
+RESULTS_ROOT="RESULTS/MARFORMER/DOMAIN3/SPARSE"
+RUN_GLOB="*_MARFORMER"
 
 echo ""
 echo "============================================================"
-echo " DOMAIN3 AnnotSplit — Test Evaluation (all checkpoints)"
+echo " DOMAIN3 SPARSE — Test Evaluation (all checkpoints)"
 echo "============================================================"
 
 shopt -s nullglob
@@ -35,9 +35,61 @@ for RUN_DIR in "${RUN_DIRS[@]}"; do
 
     RUN_NAME="$(basename "$RUN_DIR")"
     TEST_RESULTS_DIR="${RUN_DIR}/TEST_RESULTS"
+    TRAIN_CONFIG="${RUN_DIR}/train_config.json"
 
     echo ""
     echo "--- ${RUN_NAME} ---"
+
+    python - "$TRAIN_CONFIG" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+cfg_path = Path(sys.argv[1])
+with open(cfg_path) as f:
+    cfg = json.load(f)
+
+data = cfg.get("data", {})
+data_dir = data.get("data_dir")
+if not data_dir:
+    raise SystemExit(0)
+
+current = Path(data_dir)
+if current.exists():
+    raise SystemExit(0)
+
+old_prefix = Path("DATA/STAN/DOMAIN3-ITEM")
+new_prefix = Path("DATA/STAN")
+fallbacks = []
+
+try:
+    rel = current.relative_to(old_prefix)
+    fallbacks.append(new_prefix / rel)
+except ValueError:
+    pass
+
+old_sparse_prefix = Path("DATA/STAN/SPARSE")
+old_sparse_root = Path("DATA/STAN/OLD-SPARSE")
+try:
+    rel = current.relative_to(old_sparse_prefix)
+    fallbacks.append(old_sparse_root / rel)
+except ValueError:
+    pass
+
+for candidate in fallbacks:
+    if candidate.exists():
+        cfg["data"]["data_dir"] = str(candidate)
+        with open(cfg_path, "w") as f:
+            json.dump(cfg, f, indent=2)
+        print(f"  patched train_config.json data_dir -> {candidate}")
+        raise SystemExit(0)
+
+fallback_msg = ", ".join(str(p) for p in fallbacks) if fallbacks else "no fallback candidates"
+raise SystemExit(
+    f"Missing data_dir for {cfg_path.parent.name}: {current} does not exist, "
+    f"and fallback(s) {fallback_msg} were not found."
+)
+PY
 
     rm -rf "${TEST_RESULTS_DIR}"
 

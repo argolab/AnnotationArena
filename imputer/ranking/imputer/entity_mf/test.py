@@ -8,6 +8,7 @@ validation, and saves metrics to TEST_RESULTS/ inside the run directory.
 Metrics saved per checkpoint:
   missing / observed:
     log_loss    — mean cross-entropy (from LossBreakdown; handles soft targets)
+    accuracy    — rating accuracy (currently available for missing ratings)
     rmse        — root-mean-square error on expected-value predictions (1-indexed)
     n           — number of tokens evaluated
     spearman_r  — Spearman rank correlation
@@ -129,10 +130,10 @@ def _reconstruct(run_dir: Path) -> tuple:
     test_miss = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
 
     if bool(train_cfg.get("transductive_learning", False)):
+        print('Hello!')
         eval_vars = train_obs + test_obs + test_miss + train_miss
-
     else:
-        eval_vars = test_obs + test_miss + train_miss
+        eval_vars = test_obs + test_miss
 
     return model, eval_vars, train_cfg
 
@@ -174,8 +175,9 @@ def _load_checkpoint(model: EntityMarformer, ckpt_path: Path, device: torch.devi
 
 def _compute_metrics(result: EntityEvalResults) -> Dict[str, Any]:
     """
-    Derive RMSE + correlations from the expected-value predictions stored in
-    result.  Log-loss comes from the metrics tree (handles soft targets).
+    Derive accuracy / RMSE / correlations from the expected-value predictions
+    stored in result. Log-loss and missing-rating accuracy come from the
+    metrics tree (handles soft targets).
     All values converted to 1-indexed scale before RMSE/correlation.
     """
     out: Dict[str, Any] = {}
@@ -183,10 +185,12 @@ def _compute_metrics(result: EntityEvalResults) -> Dict[str, Any]:
         preds = result.missing_preds  if status == "missing" else result.observed_preds
         trues = result.missing_true   if status == "missing" else result.observed_true
 
-        log_loss = result.metrics.get(status, {}).get("rating", {}).get("xent", None)
+        rating_metrics = result.metrics.get(status, {}).get("rating", {})
+        log_loss = rating_metrics.get("xent", None)
+        accuracy = rating_metrics.get("acc", None)
 
         if len(preds) == 0:
-            out[status] = {"log_loss": log_loss, "n": 0}
+            out[status] = {"log_loss": log_loss, "accuracy": accuracy, "n": 0}
             continue
 
         # 0-indexed internally → convert to 1-indexed for interpretable RMSE scale
@@ -200,6 +204,7 @@ def _compute_metrics(result: EntityEvalResults) -> Dict[str, Any]:
 
         out[status] = {
             "log_loss":    log_loss,
+            "accuracy":    accuracy,
             "rmse":        rmse,
             "n":           len(preds),
             "spearman_r":  float(sp_r),

@@ -68,6 +68,7 @@ for SIZE in "${SIZE_LIST[@]}"; do
         --output-dir                   "${OUTPUT_DIR}"              \
         --run-name                     "${RUN_NAME}"                \
         --stan-type                    "tensor"                     \
+        --stan-file                    "STAN/stan_models/tensor_model_fixed_hyperparams.stan" \
         --chains                       "$CHAINS"                    \
         --iter-warmup                  "$ITER_WARMUP"               \
         --iter-sampling                "$ITER_SAMPLING"             \
@@ -93,7 +94,7 @@ for SIZE in "${SIZE_LIST[@]}"; do
         --mcmc-dir           "${OUTPUT_DIR}/${RUN_NAME}"   \
         --output-dir         "${OUTPUT_DIR}"               \
         --run-name           "${RUN_NAME}_eval"            \
-        --csv-pattern        "tensor_model-*.csv"          \
+        --csv-pattern        "tensor_model_fixed_hyperparams-*.csv" \
         --overwrite-existing-data                           \
         --verbose
 done
