@@ -338,6 +338,31 @@ def build_stan_data(
     }
 
 
+def _augment_fixed_tensor_hyperparams(stan_data: dict, config, stan_file: str) -> dict:
+    """
+    Ensure tensor fixed-hyperparameter Stan models receive their required data fields.
+    """
+    if Path(stan_file).name != "tensor_model_fixed_hyperparams.stan":
+        return stan_data
+
+    required = ("sigma_u", "sigma_v", "sigma_uit", "sigma_measurement", "kappa")
+    missing = [name for name in required if getattr(config, name, None) is None]
+    if missing:
+        raise ValueError(
+            "Fixed tensor Stan model requires hyperparameters in config data: "
+            + ", ".join(missing)
+        )
+
+    stan_data.update({
+        "sigma_u": float(config.sigma_u),
+        "sigma_v": float(config.sigma_v),
+        "sigma_uit": float(config.sigma_uit),
+        "sigma_measurement": float(config.sigma_measurement),
+        "kappa": float(config.kappa),
+    })
+    return stan_data
+
+
 # ── MCMC runner ────────────────────────────────────────────────────────────────
 
 def _run_sample(
@@ -630,6 +655,7 @@ def main():
         stan_type=stan_type,
     )
     stan_data.update(stan_arg)
+    stan_data = _augment_fixed_tensor_hyperparams(stan_data, data_config, stan_file)
 
     # ── Run inference ──────────────────────────────────────────────────────────
     try:

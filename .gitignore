@@ -319,3 +319,5 @@ imputer/ranking/imputer/entity_mf/ranked_eval_report.py
 imputer/ranking/imputer/entity_mf/ranked_eval.py
 .codex
 imputer/ranking/DATA/STAN/SPARSE/MARFORMER_NOBIN*
+
+imputer/ranking/DATA/STAN/Tensor_400_25_9_ItemTest_SharedThreshold
