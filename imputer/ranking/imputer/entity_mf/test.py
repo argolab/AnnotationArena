@@ -133,7 +133,7 @@ def _reconstruct(run_dir: Path) -> tuple:
         print('Hello!')
         eval_vars = train_obs + test_obs + test_miss + train_miss
     else:
-        eval_vars = test_obs + test_miss
+        eval_vars = test_obs + test_miss + train_obs + train_miss
 
     return model, eval_vars, train_cfg
 
