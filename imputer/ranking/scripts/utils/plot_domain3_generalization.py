@@ -10,7 +10,6 @@ Outputs:
 from __future__ import annotations
 
 import json
-import math
 import re
 import sys
 from collections import defaultdict
@@ -59,7 +58,6 @@ mpl.rcParams.update({
 rp.config.use_tex_fonts = False
 
 PROB_PREFIX = "prob_cat_"
-BOOTSTRAP_SAMPLES = 400
 
 COLORS = {
     "Marformer": "#1f6fba",
@@ -105,7 +103,6 @@ class DatasetSpec:
     marformer_nt_root: Path
     marformer_nt_run_glob: str
     nt_offset: int
-    log_loss_break_at: float | None
 
 
 ITEM_SPEC = DatasetSpec(
@@ -139,11 +136,10 @@ ITEM_SPEC = DatasetSpec(
         350: 3 * 3600 + 4 * 60 + 7,
         400: 3 * 3600 + 32 * 60 + 48,
     },
-    figure_size=(13.0, 5.7),
+    figure_size=(15.2, 7.8),
     marformer_nt_root=ROOT / "RESULTS/MARFORMER-NT/STAN/DOMAIN3/ITEM",
     marformer_nt_run_glob="Tensor_400_25_9_DOMAIN3_Item_NT_{size}_MARFORMER*",
     nt_offset=50,
-    log_loss_break_at=None,
 )
 
 
@@ -172,11 +168,10 @@ ANNOT_SPEC = DatasetSpec(
         20: 2 * 3600 + 49 * 60 + 41,
         25: 3 * 3600 + 29 * 60 + 59,
     },
-    figure_size=(10.4, 5.8),
+    figure_size=(15.6, 7.8),
     marformer_nt_root=ROOT / "RESULTS/MARFORMER-NT/STAN/DOMAIN3/ANNOT",
     marformer_nt_run_glob="Tensor_400_25_9_DOMAIN3_Annot_NT_{size}_MARFORMER*",
     nt_offset=5,
-    log_loss_break_at=1.30,
 )
 
 
@@ -397,17 +392,6 @@ def _per_example_mse(probs: np.ndarray, labels: np.ndarray) -> np.ndarray:
     return (expected - truth) ** 2
 
 
-def _bootstrap_mean_ci(values: np.ndarray, rng_seed: int) -> tuple[float, float, float]:
-    mean = float(np.mean(values))
-    if values.size < 2:
-        return mean, mean, mean
-    rng = np.random.default_rng(rng_seed)
-    idx = rng.integers(0, values.size, size=(BOOTSTRAP_SAMPLES, values.size))
-    samples = values[idx].mean(axis=1)
-    lo, hi = np.quantile(samples, [0.025, 0.975])
-    return mean, float(lo), float(hi)
-
-
 def _all_class_calibration(probs: np.ndarray, labels: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
     classes = np.arange(probs.shape[1], dtype=np.int64)
     conf = probs.flatten()
@@ -428,6 +412,7 @@ def _draw_empty(ax: plt.Axes, title: str) -> None:
 def _style_legend(ax: plt.Axes, loc: str = "best") -> None:
     leg = ax.legend(
         loc=loc,
+        bbox_to_anchor=(1.02, 0.5),
         frameon=True,
         fancybox=False,
         framealpha=0.96,
@@ -444,6 +429,10 @@ def _series_style(label: str) -> tuple[str, str, str]:
     if label == "Marformer NT":
         return ":", COLORS["Marformer"], MARKERS["Marformer"]
     return "-", COLORS[label], MARKERS[label]
+
+
+def _series_labels() -> list[str]:
+    return list(COLORS) + ["Marformer NT"]
 
 
 def _plot_ece(ax: plt.Axes, probs: np.ndarray, labels: np.ndarray, title: str, color: str) -> None:
@@ -477,11 +466,16 @@ def _plot_ece(ax: plt.Axes, probs: np.ndarray, labels: np.ndarray, title: str, c
     ax.yaxis.label.set_size(12)
 
 
-def _collect_metric_series(spec: DatasetSpec, metric: str) -> tuple[dict[str, list[float]], dict[str, list[float]], dict[str, list[float]], list[dict]]:
-    labels_in_plot = list(COLORS) + ["Marformer NT"]
-    means = {label: [np.nan] * len(spec.sizes) for label in labels_in_plot}
-    lowers = {label: [np.nan] * len(spec.sizes) for label in labels_in_plot}
-    uppers = {label: [np.nan] * len(spec.sizes) for label in labels_in_plot}
+def _collect_metric_series(
+    spec: DatasetSpec,
+    metric: str,
+) -> tuple[dict[str, dict[str, list[float]]], dict[str, list[np.ndarray | None]], list[dict]]:
+    labels_in_plot = _series_labels()
+    stats = {
+        stat_name: {label: [np.nan] * len(spec.sizes) for label in labels_in_plot}
+        for stat_name in ("mean", "std", "q10", "q25", "median", "q75", "q90", "min", "max")
+    }
+    raw_values = {label: [None] * len(spec.sizes) for label in labels_in_plot}
     summary_rows: list[dict] = []
 
     for idx, size in enumerate(spec.sizes):
@@ -495,10 +489,19 @@ def _collect_metric_series(spec: DatasetSpec, metric: str) -> tuple[dict[str, li
                 continue
             probs, labels = payload
             values = _per_example_nll(probs, labels) if metric == "log_loss" else _per_example_mse(probs, labels)
-            mean, lo, hi = _bootstrap_mean_ci(values, rng_seed=hash((spec.slug, size, label, metric)) % (2**32))
-            means[label][idx] = mean
-            lowers[label][idx] = lo
-            uppers[label][idx] = hi
+            raw_values[label][idx] = values
+            mean = float(np.mean(values))
+            std = float(np.std(values, ddof=0))
+            q10, q25, median, q75, q90 = np.quantile(values, [0.10, 0.25, 0.50, 0.75, 0.90])
+            stats["mean"][label][idx] = mean
+            stats["std"][label][idx] = std
+            stats["q10"][label][idx] = float(q10)
+            stats["q25"][label][idx] = float(q25)
+            stats["median"][label][idx] = float(median)
+            stats["q75"][label][idx] = float(q75)
+            stats["q90"][label][idx] = float(q90)
+            stats["min"][label][idx] = float(np.min(values))
+            stats["max"][label][idx] = float(np.max(values))
 
             if label == "Best Unigram":
                 best_uni = _best_unigram_result(spec.slug, size)
@@ -511,8 +514,15 @@ def _collect_metric_series(spec: DatasetSpec, metric: str) -> tuple[dict[str, li
                 "model": label,
                 "metric": metric,
                 "mean": mean,
-                "ci_lower": lo,
-                "ci_upper": hi,
+                "std": std,
+                "q10": float(q10),
+                "q25": float(q25),
+                "median": float(median),
+                "q75": float(q75),
+                "q90": float(q90),
+                "min": float(np.min(values)),
+                "max": float(np.max(values)),
+                "count": int(values.size),
                 "unigram_variant": unigram_variant,
             })
 
@@ -525,23 +535,63 @@ def _collect_metric_series(spec: DatasetSpec, metric: str) -> tuple[dict[str, li
             continue
         probs, labels = payload
         values = _per_example_nll(probs, labels) if metric == "log_loss" else _per_example_mse(probs, labels)
-        mean, lo, hi = _bootstrap_mean_ci(values, rng_seed=hash((spec.slug, nt_train_size, "Marformer NT", metric)) % (2**32))
+        mean = float(np.mean(values))
+        std = float(np.std(values, ddof=0))
+        q10, q25, median, q75, q90 = np.quantile(values, [0.10, 0.25, 0.50, 0.75, 0.90])
         idx = spec.sizes.index(total_size)
-        means["Marformer NT"][idx] = mean
-        lowers["Marformer NT"][idx] = lo
-        uppers["Marformer NT"][idx] = hi
+        raw_values["Marformer NT"][idx] = values
+        stats["mean"]["Marformer NT"][idx] = mean
+        stats["std"]["Marformer NT"][idx] = std
+        stats["q10"]["Marformer NT"][idx] = float(q10)
+        stats["q25"]["Marformer NT"][idx] = float(q25)
+        stats["median"]["Marformer NT"][idx] = float(median)
+        stats["q75"]["Marformer NT"][idx] = float(q75)
+        stats["q90"]["Marformer NT"][idx] = float(q90)
+        stats["min"]["Marformer NT"][idx] = float(np.min(values))
+        stats["max"]["Marformer NT"][idx] = float(np.max(values))
         summary_rows.append({
             "dataset": spec.slug,
             "size": total_size,
             "model": "Marformer NT",
             "metric": metric,
             "mean": mean,
-            "ci_lower": lo,
-            "ci_upper": hi,
+            "std": std,
+            "q10": float(q10),
+            "q25": float(q25),
+            "median": float(median),
+            "q75": float(q75),
+            "q90": float(q90),
+            "min": float(np.min(values)),
+            "max": float(np.max(values)),
+            "count": int(values.size),
             "unigram_variant": None,
             "nt_train_size": nt_train_size,
         })
-    return means, lowers, uppers, summary_rows
+    return stats, raw_values, summary_rows
+
+
+def _interval_bounds(
+    stats: dict[str, dict[str, list[float]]],
+    label: str,
+    interval_kind: str,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    mean = np.asarray(stats["mean"][label], dtype=float)
+    if interval_kind == "std01":
+        std = np.asarray(stats["std"][label], dtype=float)
+        lower = np.maximum(0.0, mean - 0.05 * std)
+        upper = mean + 0.05 * std
+        return mean, lower, upper
+    if interval_kind == "p10_p90":
+        lower = np.asarray(stats["q10"][label], dtype=float)
+        upper = np.asarray(stats["q90"][label], dtype=float)
+        return mean, lower, upper
+    raise ValueError(f"Unknown interval kind: {interval_kind}")
+
+
+def _metric_variant_title(title: str, interval_kind: str) -> str:
+    if interval_kind == "std01":
+        return f"{title} (mean ± 0.05 SD)"
+    raise ValueError(f"Unknown interval kind: {interval_kind}")
 
 
 def _plot_metric_series(
@@ -550,21 +600,30 @@ def _plot_metric_series(
     ylabel: str,
     title: str,
     output_name: str,
-) -> list[dict]:
-    means, lowers, uppers, summary_rows = _collect_metric_series(spec, metric)
+) -> tuple[list[dict], dict[str, list[np.ndarray | None]]]:
+    stats, raw_values, summary_rows = _collect_metric_series(spec, metric)
+    render_title = _metric_variant_title(title, "std01")
+    if spec.slug == "annot" and metric == "log_loss":
+        _plot_annot_log_loss_broken(spec, stats, ylabel, render_title, output_name, "std01")
+    else:
+        _plot_metric_band_series(spec, stats, ylabel, render_title, output_name, "std01")
+    return summary_rows, raw_values
 
-    if metric == "log_loss" and _should_use_log_loss_break(spec, means):
-        _plot_log_loss_broken(spec, means, lowers, uppers, ylabel, title, output_name)
-        return summary_rows
 
+def _plot_metric_band_series(
+    spec: DatasetSpec,
+    stats: dict[str, dict[str, list[float]]],
+    ylabel: str,
+    title: str,
+    output_name: str,
+    interval_kind: str,
+) -> None:
     fig, ax = plt.subplots(figsize=spec.figure_size)
     ymins: list[float] = []
     ymaxs: list[float] = []
-    for label in ("Marformer", "Marformer NT", "Stan Oracle", "Best Unigram"):
+    for label in _series_labels():
         xs = np.asarray(spec.sizes, dtype=float)
-        ys = np.asarray(means[label], dtype=float)
-        lo = np.asarray(lowers[label], dtype=float)
-        hi = np.asarray(uppers[label], dtype=float)
+        ys, lo, hi = _interval_bounds(stats, label, interval_kind)
         valid = ~np.isnan(ys)
         if not np.any(valid):
             continue
@@ -579,7 +638,7 @@ def _plot_metric_series(
         )
         ymins.extend(lo[valid].tolist())
         ymaxs.extend(hi[valid].tolist())
-        if label not in {"Best Unigram", "Marformer NT"} and np.any(~np.isnan(lo[valid])) and np.any(~np.isnan(hi[valid])):
+        if label != "Best Unigram":
             ax.fill_between(xs[valid], lo[valid], hi[valid], color=color, alpha=0.14, linewidth=0)
 
     ax.set_xlabel(spec.x_label)
@@ -587,146 +646,84 @@ def _plot_metric_series(
     ax.set_title(title, pad=14)
     ax.set_xticks(spec.sizes)
     ax.set_xticklabels(_x_tick_labels(spec))
-    if metric == "log_loss" and ymins and ymaxs:
+    if spec.slug == "annot":
+        ax.set_xlim(spec.sizes[0] - 1.0, spec.sizes[-1] + 1.0)
+    if ymins and ymaxs:
         ymin = min(ymins)
         ymax = max(ymaxs)
         pad = max(0.03, 0.07 * (ymax - ymin))
         ax.set_ylim(max(0.0, ymin - pad), ymax + pad)
-    _style_legend(ax, loc="upper right")
+    _style_legend(ax, loc="center left")
     ax.margins(x=0.03)
 
     output_path = spec.out_dir / output_name
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.98], pad=0.9)
+    fig.tight_layout(rect=[0.0, 0.0, 0.82, 0.98], pad=1.0)
     fig.savefig(output_path)
     plt.close(fig)
     print(f"Saved -> {output_path}")
-    return summary_rows
 
 
-def _should_use_log_loss_break(spec: DatasetSpec, means: dict[str, list[float]]) -> bool:
-    if spec.log_loss_break_at is None:
-        return False
-    cutoff = spec.log_loss_break_at
-    for label in ("Marformer", "Marformer NT", "Stan Oracle", "Best Unigram"):
-        ys = np.asarray(means[label], dtype=float)
-        if np.any(ys[~np.isnan(ys)] > cutoff):
-            return True
-    return False
-
-
-def _plot_log_loss_broken(
+def _plot_annot_log_loss_broken(
     spec: DatasetSpec,
-    means: dict[str, list[float]],
-    lowers: dict[str, list[float]],
-    uppers: dict[str, list[float]],
+    stats: dict[str, dict[str, list[float]]],
     ylabel: str,
     title: str,
     output_name: str,
+    interval_kind: str,
 ) -> None:
-    break_center = spec.log_loss_break_at if spec.log_loss_break_at is not None else 1.30
-
-    all_lo = []
-    all_hi = []
-    below_band_hi = []
-    above_band_lo = []
-    for label in ("Marformer", "Marformer NT", "Stan Oracle", "Best Unigram"):
-        lo = np.asarray(lowers[label], dtype=float)
-        hi = np.asarray(uppers[label], dtype=float)
-        y = np.asarray(means[label], dtype=float)
-        valid_lo = lo[~np.isnan(lo)]
-        valid_hi = hi[~np.isnan(hi)]
-        valid_y = y[~np.isnan(y)]
-        if valid_lo.size:
-            all_lo.extend(valid_lo.tolist())
-        if valid_hi.size:
-            all_hi.extend(valid_hi.tolist())
-        elif valid_y.size:
-            all_hi.extend(valid_y.tolist())
-        if valid_hi.size:
-            below_band_hi.extend(valid_hi[valid_hi <= break_center].tolist())
-        if valid_lo.size:
-            above_band_lo.extend(valid_lo[valid_lo > break_center].tolist())
-
-    ymin = min(all_lo) if all_lo else 0.0
-    ymax = max(all_hi) if all_hi else 2.0
-
-    lower_upper = min(
-        break_center - 0.05,
-        (max(below_band_hi) + 0.04) if below_band_hi else break_center - 0.08,
-    )
-    upper_lower = max(
-        break_center + 0.05,
-        (min(above_band_lo) - 0.08) if above_band_lo else break_center + 0.08,
-    )
-    if upper_lower - lower_upper < 0.10:
-        lower_upper = break_center - 0.05
-        upper_lower = break_center + 0.05
-
-    lower_pad = max(0.03, 0.08 * max(lower_upper - ymin, 0.2))
-    upper_pad = max(0.05, 0.06 * max(ymax - upper_lower, 0.5))
-    lower_ylim = (max(0.0, ymin - lower_pad), lower_upper)
-    upper_ylim = (upper_lower, ymax + upper_pad)
-
     fig, (ax_top, ax_bottom) = plt.subplots(
         2,
         1,
         figsize=spec.figure_size,
         sharex=True,
-        gridspec_kw={"height_ratios": [1.0, 2.5], "hspace": 0.06},
+        gridspec_kw={"height_ratios": [1.0, 4.2], "hspace": 0.05},
     )
 
-    for label in ("Marformer", "Marformer NT", "Stan Oracle", "Best Unigram"):
+    for label in _series_labels():
         xs = np.asarray(spec.sizes, dtype=float)
-        ys = np.asarray(means[label], dtype=float)
-        lo = np.asarray(lowers[label], dtype=float)
-        hi = np.asarray(uppers[label], dtype=float)
+        ys, lo, hi = _interval_bounds(stats, label, interval_kind)
         valid = ~np.isnan(ys)
         if not np.any(valid):
             continue
         linestyle, color, marker = _series_style(label)
         ax_top.plot(xs[valid], ys[valid], color=color, marker=marker, linestyle=linestyle, label=label)
         ax_bottom.plot(xs[valid], ys[valid], color=color, marker=marker, linestyle=linestyle, label=label)
-        if label not in {"Best Unigram", "Marformer NT"} and np.any(~np.isnan(lo[valid])) and np.any(~np.isnan(hi[valid])):
+        if label != "Best Unigram":
             ax_top.fill_between(xs[valid], lo[valid], hi[valid], color=color, alpha=0.14, linewidth=0)
             ax_bottom.fill_between(xs[valid], lo[valid], hi[valid], color=color, alpha=0.14, linewidth=0)
 
-    ax_top.set_ylim(*upper_ylim)
-    ax_bottom.set_ylim(*lower_ylim)
+    ax_bottom.set_ylim(0.3, 1.5)
+    ax_bottom.set_yticks(np.arange(0.3, 1.51, 0.2))
+    ax_top.set_ylim(1.95, 4.05)
+    ax_top.set_yticks([2.0, 3.0, 4.0])
+
     ax_top.spines["bottom"].set_visible(False)
     ax_bottom.spines["top"].set_visible(False)
-    ax_top.tick_params(labeltop=False, bottom=False)
+    ax_top.tick_params(labeltop=False, bottom=False, labelbottom=False)
     ax_bottom.tick_params(top=False)
 
-    d = 0.012
-    kwargs = dict(transform=ax_top.transAxes, color="k", clip_on=False, linewidth=1.2)
-    ax_top.plot((-d, +d), (-d, +d), **kwargs)
-    ax_top.plot((1 - d, 1 + d), (-d, +d), **kwargs)
-    kwargs.update(transform=ax_bottom.transAxes)
-    ax_bottom.plot((-d, +d), (1 - d, 1 + d), **kwargs)
-    ax_bottom.plot((1 - d, 1 + d), (1 - d, 1 + d), **kwargs)
-
-    xs_diag = np.linspace(0.0, 1.0, 33)
-    top_y = np.where(np.arange(xs_diag.size) % 2 == 0, -0.006, 0.006)
-    bottom_y = np.where(np.arange(xs_diag.size) % 2 == 0, 1.006, 0.994)
-    ax_top.plot(xs_diag, top_y, transform=ax_top.transAxes, color="0.35", alpha=0.28, linewidth=0.9, clip_on=False)
-    ax_bottom.plot(xs_diag, bottom_y, transform=ax_bottom.transAxes, color="0.35", alpha=0.28, linewidth=0.9, clip_on=False)
+    xs_break = np.linspace(0.0, 1.0, 61)
+    top_break = np.where(np.arange(xs_break.size) % 2 == 0, -0.005, 0.005)
+    bottom_break = np.where(np.arange(xs_break.size) % 2 == 0, 1.005, 0.995)
+    ax_top.plot(xs_break, top_break, transform=ax_top.transAxes, color="0.25", linewidth=1.0, clip_on=False)
+    ax_bottom.plot(xs_break, bottom_break, transform=ax_bottom.transAxes, color="0.25", linewidth=1.0, clip_on=False)
 
     ax_bottom.set_xlabel(spec.x_label)
     ax_bottom.set_ylabel(ylabel)
-    ax_top.set_title(title, pad=18)
+    ax_top.set_title(title, pad=14)
     ax_bottom.set_xticks(spec.sizes)
     ax_bottom.set_xticklabels(_x_tick_labels(spec))
+    ax_bottom.set_xlim(spec.sizes[0] - 1.0, spec.sizes[-1] + 1.0)
 
     for ax in (ax_top, ax_bottom):
         ax.grid(True, alpha=0.35)
-        ax.margins(x=0.03)
 
-    _style_legend(ax_top, loc="upper right")
+    _style_legend(ax_bottom, loc="center left")
 
     output_path = spec.out_dir / output_name
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.98], pad=0.9)
+    fig.tight_layout(rect=[0.0, 0.0, 0.82, 0.98], pad=1.0)
     fig.savefig(output_path)
     plt.close(fig)
     print(f"Saved -> {output_path}")
@@ -779,11 +776,11 @@ def _plot_runtime(spec: DatasetSpec) -> list[dict]:
     ax.set_title(f"{spec.title_prefix}: Runtime by {spec.x_label}", pad=14)
     ax.set_xticks(spec.sizes)
     ax.set_xticklabels(_x_tick_labels(spec))
-    _style_legend(ax, loc="upper left")
+    _style_legend(ax, loc="center left")
 
     output_path = spec.out_dir / f"{spec.slug}_generalization_runtime.png"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.98], pad=0.9)
+    fig.tight_layout(rect=[0.0, 0.0, 0.82, 0.98], pad=1.0)
     fig.savefig(output_path)
     plt.close(fig)
     print(f"Saved -> {output_path}")
@@ -884,20 +881,22 @@ def _save_summary(spec: DatasetSpec, rows: list[dict]) -> None:
 
 def _plot_dataset(spec: DatasetSpec) -> None:
     rows: list[dict] = []
-    rows.extend(_plot_metric_series(
+    metric_rows, _ = _plot_metric_series(
         spec,
         metric="log_loss",
-        ylabel="Test Log Loss",
-        title=f"{spec.title_prefix}: Log Loss on Novel {'Items' if spec.slug == 'item' else 'Annotators'}",
+        ylabel="Test Log-Loss",
+        title=f"{spec.title_prefix}: Log-Loss with Additional Training {'Items' if spec.slug == 'item' else 'Annotators'}",
         output_name=f"{spec.slug}_generalization_log_loss.png",
-    ))
-    rows.extend(_plot_metric_series(
+    )
+    rows.extend(metric_rows)
+    metric_rows, _ = _plot_metric_series(
         spec,
         metric="mbr_l2",
         ylabel="MBR L2 (MSE)",
-        title=f"{spec.title_prefix}: MBR L2 on Novel {'Items' if spec.slug == 'item' else 'Annotators'}",
+        title=f"{spec.title_prefix}: MBR L2 with Additional Training {'Items' if spec.slug == 'item' else 'Annotators'}",
         output_name=f"{spec.slug}_generalization_mbr_l2.png",
-    ))
+    )
+    rows.extend(metric_rows)
     rows.extend(_plot_runtime(spec))
     rows.extend(_plot_calibration_grid(spec))
     _save_summary(spec, rows)
