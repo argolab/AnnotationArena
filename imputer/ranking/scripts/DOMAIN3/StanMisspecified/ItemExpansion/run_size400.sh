@@ -72,12 +72,12 @@ for SIZE in "${SIZE_LIST[@]}"; do
         --adapt-delta                "$ADAPT_DELTA"               \
         --max-treedepth              "$MAX_TREEDEPTH"             \
         --seed                       "$SEED"                      \
-        --override-alpha-dirichlet   2.0                          \
-        --override-sigma-measurement 0.5                          \
-        --override-sigma-annotator   0.6                          \
+        --override-alpha-dirichlet   20.0                          \
+        --override-sigma-measurement 0.1                          \
+        --override-sigma-annotator   0.1                          \
         --override-temperature       1.0                          \
-        --stan-arg                   M=32                         \
-        --stan-arg                   S=32                         \
+        --stan-arg                   M=6                         \
+        --stan-arg                   S=6                         \
         --stan-arg                   d_annotator=4                \
         --stan-arg                   use_factored_annotator=0     \
         --stan-arg                   N_pairwise_rankings=0        \
