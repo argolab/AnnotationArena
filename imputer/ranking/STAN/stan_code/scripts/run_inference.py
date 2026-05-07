@@ -33,6 +33,7 @@ Usage:
 """
 
 import argparse
+import csv
 import json
 import logging
 import shutil
@@ -70,6 +71,8 @@ _DEFAULT_STAN_FILES = {
     "normal-noise-dot-product":  str(_MODELS_DIR / "normal_noise_dot_product_model.stan"),
     "factored-dot-product":      str(_MODELS_DIR / "normal_noise_dot_product_model.stan"),
     "tensor":                    str(_MODELS_DIR / "tensor_model.stan"),
+    "dawid-skene":               str(_MODELS_DIR / "dawid_skene_model.stan"),
+    "dawid-skene-true":          str(_MODELS_DIR / "true_dawid_skene_model.stan"),
 }
 
 
@@ -153,6 +156,7 @@ def build_stan_data(
     K: int,
     J: int,
     alpha_llm: float,
+    stan_type: str = None,
 ) -> dict:
     """
     Build the Stan data dict for inference.
@@ -166,16 +170,148 @@ def build_stan_data(
                          annotator IDs remapped at subset time to be contiguous
 
     Args:
-        observed: Observed ratings (train + val instances).
-        missing:  Missing ratings (test instance only).
-        config:   DataGenConfig or AnnotatorSplitConfig.
-        mode:     "item_split" or "annotator_split".
-        K:        Total number of items passed to Stan.
-        J:        Total number of annotators passed to Stan.
+        observed:  Observed ratings (train + val instances).
+        missing:   Missing ratings (test instance only).
+        config:    DataGenConfig or AnnotatorSplitConfig.
+        mode:      "item_split" or "annotator_split".
+        K:         Total number of items passed to Stan.
+        J:         Total number of annotators passed to Stan.
         alpha_llm: Dirichlet concentration for LLM observations.
+        stan_type: Stan model type (determines which fields to include).
     """
     C = config.C
 
+    # Shared ratings arrays (all types)
+    ratings_base = {
+        "N_ratings":                 len(observed),
+        "rating_attributes":         [r["attribute"] for r in observed],
+        "rating_annotators":         [r["annotator"]  for r in observed],
+        "rating_items":              [r["item"]        for r in observed],
+        "rating_values":             [r["value"]       for r in observed],
+        "N_missing_ratings":         len(missing),
+        "missing_rating_attributes": [r["attribute"] for r in missing],
+        "missing_rating_annotators": [r["annotator"]  for r in missing],
+        "missing_rating_items":      [r["item"]        for r in missing],
+    }
+
+    if stan_type == "dawid-skene-true":
+        # True Dawid-Skene: no embeddings, no dot-product, no ordinal probit.
+        # Ratings are grouped into (attribute, item) cells so annotators are
+        # coupled through the shared latent true class T_ik.
+        # Hyperparameters can either be anchored (legacy mode) or learned
+        # under broad proper priors when use_flat_priors=1.
+        from collections import defaultdict
+
+        # Build cell map: (attribute, item) -> 0-indexed cell_id.
+        # Covers all cells in observed AND missing so every missing rating
+        # has a valid cell reference.
+        cell_map: dict = {}
+        for r in observed:
+            key = (r["attribute"], r["item"])
+            if key not in cell_map:
+                cell_map[key] = len(cell_map)
+        for r in missing:
+            key = (r["attribute"], r["item"])
+            if key not in cell_map:
+                cell_map[key] = len(cell_map)
+
+        N_cells = len(cell_map)
+        cell_attr_arr = [0] * N_cells
+        cell_item_arr = [0] * N_cells
+        for (attr, item), idx in cell_map.items():
+            cell_attr_arr[idx] = attr
+            cell_item_arr[idx] = item
+
+        # Group observed ratings by cell.
+        cell_ratings: dict = defaultdict(list)
+        for r in observed:
+            key = (r["attribute"], r["item"])
+            cell_ratings[cell_map[key]].append((r["annotator"], r["value"]))
+
+        # Build contiguous sorted obs arrays with per-cell start/count (1-indexed).
+        obs_annotator_arr: list = []
+        obs_value_arr: list = []
+        cell_obs_start_arr: list = []
+        cell_obs_count_arr: list = []
+        pos = 1  # Stan is 1-indexed
+        for cell_idx in range(N_cells):
+            ratings = cell_ratings.get(cell_idx, [])
+            cell_obs_start_arr.append(pos)
+            cell_obs_count_arr.append(len(ratings))
+            for ann, val in ratings:
+                obs_annotator_arr.append(ann)
+                obs_value_arr.append(val)
+            pos += len(ratings)
+
+        # Missing rating arrays — cell index is 1-indexed for Stan.
+        missing_cell_arr: list = []
+        missing_annotator_arr: list = []
+        for r in missing:
+            key = (r["attribute"], r["item"])
+            missing_cell_arr.append(cell_map[key] + 1)  # 1-indexed
+            missing_annotator_arr.append(r["annotator"])
+
+        return {
+            "K":                  K,
+            "I":                  config.I,
+            "J":                  J,
+            "C":                  C,
+            # Cell structure
+            "N_cells":            N_cells,
+            "cell_attr":          cell_attr_arr,
+            "cell_item":          cell_item_arr,
+            "cell_obs_start":     cell_obs_start_arr,
+            "cell_obs_count":     cell_obs_count_arr,
+            # Observed ratings (sorted by cell)
+            "N_ratings":          len(obs_annotator_arr),
+            "obs_annotator":      obs_annotator_arr,
+            "obs_value":          obs_value_arr,
+            # Missing ratings
+            "N_missing_ratings":  len(missing),
+            "missing_cell":       missing_cell_arr,
+            "missing_annotator":  missing_annotator_arr,
+            # Hyperparameter defaults — overridable via --stan-arg
+            "alpha_pi_anchor":                 1.0,
+            "alpha_confusion_diag_anchor":     15.0,
+            "alpha_confusion_offdiag_anchor":  1.0,
+            "use_flat_priors":                 0,
+        }
+
+    if stan_type == "tensor":
+        # Tensor-prototype model: different parameter set, no LLM fields.
+        return {
+            "K":                          K,
+            "I":                          config.I,
+            "J":                          J,
+            "D":                          config.D,
+            "C":                          C,
+            "T":                          config.T,
+            "use_dawid_skene_noise":      int(config.use_dawid_skene_noise),
+            "derive_thresholds_from_annotator":
+                                          int(config.derive_thresholds_from_annotator),
+            "alpha_dirichlet_jt":         1.0,   # uniform Dirichlet over T prototypes
+            "alpha_confusion":            config.alpha_confusion,
+            **ratings_base,
+        }
+
+    if stan_type == "discrete":
+        return {
+            "K":                         K,
+            "I":                         config.I,
+            "J":                         J,
+            "D":                         getattr(config, "D", 1) or 1,
+            "C":                         C,
+            "M":                         config.M,
+            "S":                         config.S,
+            "sigma_annotator":           config.sigma_annotator if config.sigma_annotator is not None else 0.0,
+            "sigma_measurement_anchor":  config.sigma_measurement if config.sigma_measurement is not None else 0.0,
+            "alpha_dirichlet_anchor":    config.kappa,
+            "temperature":               config.temperature,
+            "use_flat_priors":           0,
+            **ratings_base,
+        }
+
+    # Default: all other types (normal-noise-dot-product, factored-dot-product, dawid-skene)
     return {
         "K":                         K,
         "I":                         config.I,
@@ -188,24 +324,43 @@ def build_stan_data(
         "kappa":                     config.kappa if hasattr(config, "kappa")
                                      else config.kappa,
         "sigma_annotator":           config.sigma_annotator,
-        "sigma_measurement":         config.sigma_measurement,
+        "sigma_measurement":         config.sigma_measurement if config.sigma_measurement is not None else 0.0,
         "alpha_dirichlet":           config.kappa,
         "temperature":               config.temperature,
         "alpha_llm":                 alpha_llm,
-        # Observed ratings
-        "N_ratings":                 len(observed),
-        "rating_attributes":         [r["attribute"] for r in observed],
-        "rating_annotators":         [r["annotator"]  for r in observed],
-        "rating_items":              [r["item"]        for r in observed],
-        "rating_values":             [r["value"]       for r in observed],
+        **({
+            "alpha_confusion": config.alpha_confusion,
+        } if getattr(config, "alpha_confusion", None) is not None else {}),
+        # Observed ratings (with LLM soft-dist support)
+        **ratings_base,
         "rating_dists":              [_to_dist(r, C)   for r in observed],
         "is_llm_rating":             [_is_llm(r)       for r in observed],
-        # Missing ratings (test only — these are what we predict)
-        "N_missing_ratings":         len(missing),
-        "missing_rating_attributes": [r["attribute"] for r in missing],
-        "missing_rating_annotators": [r["annotator"]  for r in missing],
-        "missing_rating_items":      [r["item"]        for r in missing],
     }
+
+
+def _augment_fixed_tensor_hyperparams(stan_data: dict, config, stan_file: str) -> dict:
+    """
+    Ensure tensor fixed-hyperparameter Stan models receive their required data fields.
+    """
+    if Path(stan_file).name != "tensor_model_fixed_hyperparams.stan":
+        return stan_data
+
+    required = ("sigma_u", "sigma_v", "sigma_uit", "sigma_measurement", "kappa")
+    missing = [name for name in required if getattr(config, name, None) is None]
+    if missing:
+        raise ValueError(
+            "Fixed tensor Stan model requires hyperparameters in config data: "
+            + ", ".join(missing)
+        )
+
+    stan_data.update({
+        "sigma_u": float(config.sigma_u),
+        "sigma_v": float(config.sigma_v),
+        "sigma_uit": float(config.sigma_uit),
+        "sigma_measurement": float(config.sigma_measurement),
+        "kappa": float(config.kappa),
+    })
+    return stan_data
 
 
 # ── MCMC runner ────────────────────────────────────────────────────────────────
@@ -241,6 +396,54 @@ def _run_sample(
     else:
         print(f"No divergent transitions in {label} — good mixing!")
     return fit
+
+
+def _save_tensor_hyperparameter_posterior(
+    fit: cmdstanpy.CmdStanMCMC,
+    output_dir: Path,
+    stan_type: str,
+    stan_file: str | None = None,
+) -> None:
+    """
+    Save posterior draws for tensor hyperparameters needed for experiment auditing.
+    """
+    if stan_type != "tensor":
+        return
+
+    if stan_file is not None and Path(stan_file).name == "tensor_model_fixed_hyperparams.stan":
+        return
+
+    param_names = ["sigma_u", "sigma_v", "sigma_uit", "sigma_measurement", "kappa"]
+    posterior_draws = {}
+    for name in param_names:
+        try:
+            posterior_draws[name] = fit.stan_variable(name)
+        except Exception:
+            logger.warning("Could not extract posterior draws for %s", name)
+            return
+
+    draws_len = len(posterior_draws[param_names[0]])
+    csv_path = output_dir / "posterior_hyperparameters.csv"
+    with csv_path.open("w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(param_names)
+        for i in range(draws_len):
+            writer.writerow([float(posterior_draws[name][i]) for name in param_names])
+
+    summary = {}
+    for name in param_names:
+        values = np.asarray(posterior_draws[name], dtype=float)
+        summary[name] = {
+            "mean": float(np.mean(values)),
+            "sd": float(np.std(values, ddof=1)) if values.size > 1 else 0.0,
+            "q05": float(np.quantile(values, 0.05)),
+            "q50": float(np.quantile(values, 0.50)),
+            "q95": float(np.quantile(values, 0.95)),
+        }
+    summary_path = output_dir / "posterior_hyperparameters_summary.json"
+    summary_path.write_text(json.dumps(summary, indent=2))
+    print(f"Saved tensor hyperparameter posterior draws: {csv_path}")
+    print(f"Saved tensor hyperparameter posterior summary: {summary_path}")
 
 
 # ── CLI ────────────────────────────────────────────────────────────────────────
@@ -295,6 +498,12 @@ def parse_args() -> argparse.Namespace:
     # ── Dirichlet-specific ────────────────────────────────────────────────────
     parser.add_argument("--alpha-llm", type=float, default=5.0,
                         help="Dirichlet concentration for LLM observations (default: 5.0)")
+    parser.add_argument("--transductive-use-test-observed", dest="transductive_use_test_observed",
+                        action="store_true", default=True,
+                        help="Include observed test rows during Stan inference (default: on)")
+    parser.add_argument("--no-transductive-use-test-observed", dest="transductive_use_test_observed",
+                        action="store_false",
+                        help="Exclude observed test rows during Stan inference")
 
     return parser.parse_args()
 
@@ -371,15 +580,24 @@ def main():
         stan_arg.setdefault("DEBUG_INIT", 0)
 
     # ── Instance filtering ─────────────────────────────────────────────────────
-    # Observed: train + val treated as training signal
-    # Missing to predict: test only
-    observed = bundle.observed_ratings        # train + val + test observed
-    missing  = bundle.missing_ratings         # train + val + test missing
+    if args.transductive_use_test_observed:
+        observed = bundle.observed_ratings
+    else:
+        observed = [r for r in bundle.observed_ratings if r["instance"] != "test"]
+    missing = bundle.missing_ratings
+
+    observed_train = sum(1 for r in observed if r["instance"] == "train")
+    observed_val = sum(1 for r in observed if r["instance"] == "val")
+    observed_test = sum(1 for r in observed if r["instance"] == "test")
+    missing_test = sum(1 for r in missing if r["instance"] == "test")
 
     n_llm   = sum(_is_llm(r) for r in observed)
     n_human = len(observed) - n_llm
-    print(f"\nObserved (train+val): {len(observed)} ({n_human} human, {n_llm} LLM)")
-    print(f"Missing  (test only): {len(missing)}")
+    print(f"\nObserved used: {len(observed)} ({n_human} human, {n_llm} LLM)")
+    print(f"  train={observed_train}, val={observed_val}, test={observed_test}")
+    print(f"Missing total: {len(missing)}")
+    print(f"Missing test:  {missing_test}")
+    print(f"transductive_use_test_observed={args.transductive_use_test_observed}")
     print(f"alpha_llm={args.alpha_llm}")
 
     # ── Resolve Stan file ──────────────────────────────────────────────────────
@@ -417,6 +635,11 @@ def main():
         "n_missing":     len(missing),
         "n_llm":         n_llm,
         "n_human":       n_human,
+        "transductive_use_test_observed": args.transductive_use_test_observed,
+        "observed_train": observed_train,
+        "observed_val": observed_val,
+        "observed_test": observed_test,
+        "missing_test": missing_test,
     }
     save_configs(output_dir, inference=inference_cfg_dict)
 
@@ -429,8 +652,10 @@ def main():
         K=K,
         J=J,
         alpha_llm=args.alpha_llm,
+        stan_type=stan_type,
     )
     stan_data.update(stan_arg)
+    stan_data = _augment_fixed_tensor_hyperparams(stan_data, data_config, stan_file)
 
     # ── Run inference ──────────────────────────────────────────────────────────
     try:
@@ -446,6 +671,7 @@ def main():
     # ── Save outputs ───────────────────────────────────────────────────────────
     fit.save_csvfiles(str(output_dir))
     print(f"\nMCMC complete. Samples saved to {output_dir}")
+    _save_tensor_hyperparameter_posterior(fit, output_dir, stan_type, stan_file)
 
     divergences = fit.divergences.sum()
     if divergences > 0:

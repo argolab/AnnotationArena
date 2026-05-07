@@ -8,6 +8,7 @@ validation, and saves metrics to TEST_RESULTS/ inside the run directory.
 Metrics saved per checkpoint:
   missing / observed:
     log_loss    — mean cross-entropy (from LossBreakdown; handles soft targets)
+    accuracy    — rating accuracy (currently available for missing ratings)
     rmse        — root-mean-square error on expected-value predictions (1-indexed)
     n           — number of tokens evaluated
     spearman_r  — Spearman rank correlation
@@ -58,12 +59,13 @@ def _json_default(o: Any) -> Any:
 def _reconstruct(run_dir: Path) -> tuple:
     """
     Read train_config.json and reconstruct:
-      model, types, test_all (List[RankingData]), train_cfg dict.
+      model, eval_vars (List[RankingData]), train_cfg dict.
     """
     with open(run_dir / "train_config.json") as f:
         train_config = json.load(f)
 
     data_dir   = Path(train_config["data"]["data_dir"])
+    print(data_dir)
     sizes      = train_config["resolved_sizes"]
     mcfg       = train_config["model"]
     train_cfg  = train_config["training"]
@@ -83,8 +85,8 @@ def _reconstruct(run_dir: Path) -> tuple:
     config.type_embedding_init  = mcfg["type_embedding_init"]
     config.use_deviation_norm   = mcfg["use_deviation_norm"]
     config.scale_shared_rel     = mcfg["scale_shared_rel"]
-    config.use_learned_embedding = mcfg.get("use_learned_embedding", False)
     config.use_graph_mask       = mcfg["use_graph_mask"]
+    config.use_param_output_head = mcfg.get("use_param_output_head", False)
 
     # ── DataConverter + bundle ────────────────────────────────────────────────
     converter = DataConverter(
@@ -121,12 +123,19 @@ def _reconstruct(run_dir: Path) -> tuple:
         num_relationships=graph0.num_relationships,
     )
 
-    # ── Test split ────────────────────────────────────────────────────────────
+    # ── Evaluation variables ─────────────────────────────────────────────────
+    # For transductive runs, include train_observed as extra context at test time
+    # while still evaluating only on test_missing. Never include train_missing.
     test_obs  = converter.create_variables_from_bundle(bundle, partition="test", status="observed")
     test_miss = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
-    test_all  = test_obs + test_miss
 
-    return model, test_all, train_cfg
+    if bool(train_cfg.get("transductive_learning", False)):
+        print('Hello!')
+        eval_vars = train_obs + test_obs + test_miss + train_miss
+    else:
+        eval_vars = test_obs + test_miss + train_obs + train_miss
+
+    return model, eval_vars, train_cfg
 
 
 # ── Checkpoint loading ────────────────────────────────────────────────────────
@@ -137,11 +146,16 @@ def _find_checkpoint(ckpt_dir: Path, which: str) -> Path:
         if not p.exists():
             raise FileNotFoundError(f"last.ckpt not found in {ckpt_dir}")
         return p
-    # best
-    candidates = sorted(ckpt_dir.glob("best-*.ckpt"))
-    if not candidates:
-        raise FileNotFoundError(f"No best-*.ckpt found in {ckpt_dir}")
-    return candidates[0]
+    if which == "best":
+        candidates = sorted(ckpt_dir.glob("best-*.ckpt"))
+        if not candidates:
+            raise FileNotFoundError(f"No best-*.ckpt found in {ckpt_dir}")
+        return candidates[0]
+    # Direct filename (e.g. "periodic-epoch=0024.ckpt")
+    p = ckpt_dir / which
+    if not p.exists():
+        raise FileNotFoundError(f"{which} not found in {ckpt_dir}")
+    return p
 
 
 def _load_checkpoint(model: EntityMarformer, ckpt_path: Path, device: torch.device) -> None:
@@ -154,14 +168,16 @@ def _load_checkpoint(model: EntityMarformer, ckpt_path: Path, device: torch.devi
         if k.startswith("model.")
     }
     model.load_state_dict(state)
+    model.eval()
 
 
 # ── Metrics computation ───────────────────────────────────────────────────────
 
 def _compute_metrics(result: EntityEvalResults) -> Dict[str, Any]:
     """
-    Derive RMSE + correlations from the expected-value predictions stored in
-    result.  Log-loss comes from the metrics tree (handles soft targets).
+    Derive accuracy / RMSE / correlations from the expected-value predictions
+    stored in result. Log-loss and missing-rating accuracy come from the
+    metrics tree (handles soft targets).
     All values converted to 1-indexed scale before RMSE/correlation.
     """
     out: Dict[str, Any] = {}
@@ -169,10 +185,12 @@ def _compute_metrics(result: EntityEvalResults) -> Dict[str, Any]:
         preds = result.missing_preds  if status == "missing" else result.observed_preds
         trues = result.missing_true   if status == "missing" else result.observed_true
 
-        log_loss = result.metrics.get(status, {}).get("rating", {}).get("xent", None)
+        rating_metrics = result.metrics.get(status, {}).get("rating", {})
+        log_loss = rating_metrics.get("xent", None)
+        accuracy = rating_metrics.get("acc", None)
 
         if len(preds) == 0:
-            out[status] = {"log_loss": log_loss, "n": 0}
+            out[status] = {"log_loss": log_loss, "accuracy": accuracy, "n": 0}
             continue
 
         # 0-indexed internally → convert to 1-indexed for interpretable RMSE scale
@@ -186,6 +204,7 @@ def _compute_metrics(result: EntityEvalResults) -> Dict[str, Any]:
 
         out[status] = {
             "log_loss":    log_loss,
+            "accuracy":    accuracy,
             "rmse":        rmse,
             "n":           len(preds),
             "spearman_r":  float(sp_r),
@@ -220,7 +239,7 @@ def _evaluate_checkpoint(
         types=model.types,
         global_param_dim=model.global_param_dim,
         device=device,
-        max_item=train_cfg.get("max_item", None),
+        max_item=None
     )
 
     metrics = _compute_metrics(result)
@@ -241,8 +260,8 @@ def main() -> None:
         help="Path to run directory (contains train_config.json and checkpoints/).",
     )
     parser.add_argument(
-        "--checkpoint", default="both", choices=["best", "last", "both"],
-        help="Checkpoint(s) to evaluate (default: both).",
+        "--checkpoint", default="both", choices=["best", "last", "both", "all"],
+        help="Checkpoint(s) to evaluate (default: both). 'all' runs every ckpt except last.",
     )
     parser.add_argument("--device", default="cuda")
     args = parser.parse_args()
@@ -257,10 +276,18 @@ def main() -> None:
     print(f"Run dir  : {run_dir}")
     print(f"Device   : {device}")
 
-    model, test_all, train_cfg = _reconstruct(run_dir)
-    print(f"Test vars: {len(test_all)}")
+    model, eval_vars, train_cfg = _reconstruct(run_dir)
+    print(f"Eval vars: {len(eval_vars)}")
 
-    which_list = ["best", "last"] if args.checkpoint == "both" else [args.checkpoint]
+    if args.checkpoint == "all":
+        ckpt_dir = run_dir / "checkpoints"
+        best = sorted(ckpt_dir.glob("best-*.ckpt"))
+        periodic = sorted(ckpt_dir.glob("periodic-*.ckpt"))
+        which_list = [p.name for p in best] + [p.name for p in periodic]
+    elif args.checkpoint == "both":
+        which_list = ["best", "last"]
+    else:
+        which_list = [args.checkpoint]
     for which in which_list:
         print(f"\n--- {which} ---")
         try:
@@ -268,11 +295,12 @@ def main() -> None:
                 run_dir=run_dir,
                 which=which,
                 model=model,
-                test_all=test_all,
+                test_all=eval_vars,
                 train_cfg=train_cfg,
                 device=device,
             )
-            out_path = out_dir / f"{which}.json"
+            stem = Path(which).stem if which.endswith(".ckpt") else which
+            out_path = out_dir / f"{stem}.json"
             with open(out_path, "w") as f:
                 json.dump(result_dict, f, indent=2, default=_json_default)
 

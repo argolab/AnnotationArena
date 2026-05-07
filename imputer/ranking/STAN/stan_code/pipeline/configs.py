@@ -24,17 +24,25 @@ STAN_TYPE_REQUIRED: Dict[str, Set[str]] = {
         "D", "d_annotator", "sigma_annotator", "sigma_measurement", "kappa", "temperature",
         "use_factored_annotator", "derive_thresholds_from_annotator",
     },
+    "dawid-skene": {
+        "D", "d_annotator", "sigma_annotator", "kappa", "temperature",
+        "use_factored_annotator", "derive_thresholds_from_annotator", "alpha_confusion",
+    },
+    "dawid-skene-true": {
+        "alpha_pi", "alpha_confusion_diag", "alpha_confusion_offdiag",
+    },
     "tensor": {
         "D",
-        "factor_decay",
-        "sigma_annotator",
+        "T",
+        "sigma_u",
+        "sigma_v",
+        "sigma_uit",
         "sigma_measurement",
         "kappa",
         "temperature",
-        # Misspecification flags and loading distribution for tensor-only data generation.
-        "use_log_scores",
-        "use_logistic_link",
-        "use_normal_loadings",
+        "alpha_confusion",
+        "use_dawid_skene_noise",
+        "derive_thresholds_from_annotator",
     },
 }
 
@@ -42,8 +50,14 @@ STAN_TYPE_REQUIRED: Dict[str, Set[str]] = {
 STAN_DATA_FIELDS: frozenset = frozenset({
     "D", "M", "S", "sigma_annotator", "sigma_measurement", "kappa", "temperature",
     "use_factored_annotator", "derive_thresholds_from_annotator", "d_annotator", "factor_decay",
-    # Tensor-only misspecification flags / loading distribution.
+    # Tensor-only misspecification flags / loading distribution (old CP model; kept for compat).
     "use_log_scores", "use_logistic_link", "use_normal_loadings",
+    # Dawid-Skene / tensor-prototype confusion prior.
+    "alpha_confusion",
+    # True Dawid-Skene generation hyperparameters.
+    "alpha_pi", "alpha_confusion_diag", "alpha_confusion_offdiag",
+    # Tensor-prototype model fields.
+    "T", "sigma_u", "sigma_v", "sigma_uit", "use_dawid_skene_noise",
 })
 
 
@@ -113,12 +127,22 @@ class DataGenConfig:
     derive_thresholds_from_annotator: Optional[int] = None  # 0 or 1
     d_annotator: Optional[int] = None
     factor_decay: Optional[float] = None
+    alpha_confusion: Optional[float] = None  # Dawid-Skene / tensor-prototype confusion prior
+    alpha_pi: Optional[float] = None
+    alpha_confusion_diag: Optional[float] = None
+    alpha_confusion_offdiag: Optional[float] = None
 
-    # Misspecification flags (tensor-only). These are part of Stan data for the tensor
-    # data-generation model and are required (0/1) for stan_type="tensor".
-    use_log_scores: Optional[int] = None       # 0/1: apply log() to raw CP scores before binning
-    use_logistic_link: Optional[int] = None    # 0/1: use inv_logit instead of Phi for binning
-    use_normal_loadings: Optional[int] = None  # 0/1: use N(0,1) instead of Exp(1) loadings
+    # Old CP tensor misspecification flags (no longer required by any type; kept for compat).
+    use_log_scores: Optional[int] = None
+    use_logistic_link: Optional[int] = None
+    use_normal_loadings: Optional[int] = None
+
+    # Tensor-prototype model fields.
+    T: Optional[int] = None                    # number of annotator prototypes (default 3)
+    sigma_u: Optional[float] = None            # prior std for attribute embeddings u_i
+    sigma_v: Optional[float] = None            # prior std for prototype embeddings v_t
+    sigma_uit: Optional[float] = None          # prior std for attribute-prototype interactions u_it
+    use_dawid_skene_noise: Optional[int] = None  # 0=continuous noise, 1=discrete confusion matrix
 
     # Observation protocol
     observation_protocol: str = "tie_breaking"  # "tie_breaking", "mcar", "extended_rankings"
@@ -130,21 +154,7 @@ class DataGenConfig:
     stan_type: str = "factored-dot-product"
 
     def __post_init__(self) -> None:
-        """
-        Backwards-compatible defaults for tensor-only misspecification flags.
-
-        Older `configs.json` files produced before these fields were added will not
-        contain them; when such a config is reconstructed with stan_type="tensor",
-        we treat the missing flags as 0 (off) so that validation still passes and
-        Stan data is well-defined.
-        """
-        if self.stan_type == "tensor":
-            if self.use_log_scores is None:
-                self.use_log_scores = 0
-            if self.use_logistic_link is None:
-                self.use_logistic_link = 0
-            if self.use_normal_loadings is None:
-                self.use_normal_loadings = 0
+        pass
 
     def to_stan_data(self) -> Dict[str, Any]:
         """
@@ -163,7 +173,8 @@ class DataGenConfig:
             "C": self.C,
             "enable_pairwise_rankings": 1 if self.enable_pairwise_rankings else 0,
             "pairwise_cap_per_item": self.pairwise_cap_per_item,
-            "num_annotate_annotator": self.J
+            "num_annotate_annotator": 4,
+            "N_pairwise_max": 1,
         }
 
         required = STAN_TYPE_REQUIRED[self.stan_type]
@@ -175,6 +186,7 @@ class DataGenConfig:
                 "use_log_scores",
                 "use_logistic_link",
                 "use_normal_loadings",
+                "use_dawid_skene_noise",
             ):
                 base[key] = int(val) if isinstance(val, (bool, int)) else val
             else:
@@ -184,9 +196,7 @@ class DataGenConfig:
         if self.stan_type == "discrete":
             base.setdefault("D", 1)
             base.setdefault("sigma_annotator", 0.1)
-        # Tensor CP model: all dimensions match (rank D); d_annotator is set to D for Stan data block compatibility.
-        if self.stan_type == "tensor":
-            base["d_annotator"] = base["D"]
+        # (Old CP tensor set d_annotator=D here; tensor-prototype model has no d_annotator field.)
 
         return base
 
@@ -251,6 +261,17 @@ class AnnotatorSplitConfig:
     use_factored_annotator: Optional[int] = None
     derive_thresholds_from_annotator: Optional[int] = None
 
+    # Tensor-prototype fields (used when stan_type="tensor")
+    T: Optional[int] = None
+    sigma_u: Optional[float] = None
+    sigma_v: Optional[float] = None
+    sigma_uit: Optional[float] = None
+    use_dawid_skene_noise: Optional[int] = None
+    alpha_confusion: Optional[float] = None
+    alpha_pi: Optional[float] = None
+    alpha_confusion_diag: Optional[float] = None
+    alpha_confusion_offdiag: Optional[float] = None
+
     # Observation protocol
     observation_protocol: str = "mcar"     # "mcar" is the only supported protocol
     mcar_missing_rate: float = 0.5
@@ -267,13 +288,7 @@ class AnnotatorSplitConfig:
 
     def to_stan_data(self) -> Dict[str, Any]:
         """Build Stan data dict for the annotator-split model."""
-        for field in ("D", "d_annotator", "sigma_annotator", "sigma_measurement",
-                      "kappa", "temperature", "use_factored_annotator",
-                      "derive_thresholds_from_annotator"):
-            if getattr(self, field) is None:
-                raise ValueError(f"AnnotatorSplitConfig: {field!r} must be set")
-
-        return {
+        base = {
             "K": self.K,
             "J_train": self.J_train,
             "J_val": self.J_val,
@@ -281,12 +296,52 @@ class AnnotatorSplitConfig:
             "J": self.J,
             "I": self.I,
             "C": self.C,
-            "D": self.D,
-            "d_annotator": self.d_annotator,
-            "sigma_annotator": self.sigma_annotator,
-            "sigma_measurement": self.sigma_measurement,
-            "kappa": self.kappa,
-            "temperature": self.temperature,
-            "use_factored_annotator": int(self.use_factored_annotator),
-            "derive_thresholds_from_annotator": int(self.derive_thresholds_from_annotator),
         }
+        if self.stan_type == "tensor":
+            for field in ("D", "T", "sigma_u", "sigma_v", "sigma_uit",
+                          "sigma_measurement", "kappa", "alpha_confusion",
+                          "temperature", "use_dawid_skene_noise",
+                          "derive_thresholds_from_annotator"):
+                if getattr(self, field) is None:
+                    raise ValueError(f"AnnotatorSplitConfig (tensor): {field!r} must be set")
+            base.update({
+                "D": self.D,
+                "T": self.T,
+                "sigma_u": self.sigma_u,
+                "sigma_v": self.sigma_v,
+                "sigma_uit": self.sigma_uit,
+                "sigma_measurement": self.sigma_measurement,
+                "kappa": self.kappa,
+                "alpha_confusion": self.alpha_confusion,
+                "temperature": self.temperature,
+                "use_dawid_skene_noise": int(self.use_dawid_skene_noise),
+                "derive_thresholds_from_annotator": int(self.derive_thresholds_from_annotator),
+                "num_annotate_annotator": 4,
+            })
+        elif self.stan_type == "dawid-skene-true":
+            for field in ("alpha_pi", "alpha_confusion_diag", "alpha_confusion_offdiag"):
+                if getattr(self, field) is None:
+                    raise ValueError(f"AnnotatorSplitConfig (dawid-skene-true): {field!r} must be set")
+            base.update({
+                "alpha_pi": self.alpha_pi,
+                "alpha_confusion_diag": self.alpha_confusion_diag,
+                "alpha_confusion_offdiag": self.alpha_confusion_offdiag,
+                "num_annotate_annotator": 4,
+            })
+        else:
+            for field in ("D", "d_annotator", "sigma_annotator", "sigma_measurement",
+                          "kappa", "temperature", "use_factored_annotator",
+                          "derive_thresholds_from_annotator"):
+                if getattr(self, field) is None:
+                    raise ValueError(f"AnnotatorSplitConfig: {field!r} must be set")
+            base.update({
+                "D": self.D,
+                "d_annotator": self.d_annotator,
+                "sigma_annotator": self.sigma_annotator,
+                "sigma_measurement": self.sigma_measurement,
+                "kappa": self.kappa,
+                "temperature": self.temperature,
+                "use_factored_annotator": int(self.use_factored_annotator),
+                "derive_thresholds_from_annotator": int(self.derive_thresholds_from_annotator),
+            })
+        return base

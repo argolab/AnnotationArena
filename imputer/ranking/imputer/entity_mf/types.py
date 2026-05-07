@@ -60,9 +60,8 @@ class EntityType(ABC):
 
     def build_simple_value(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
         """
-        Binary value representation for use with learned embeddings (use_learned_embedding=True).
-        Same layout as build_param but values are binary {0, 1} — no prescribed scale.
-        Entity types return zeros (identity comes from type centroid + deviation, not value encoding).
+        Binary value representation mirroring build_param but with {0, 1} values.
+        Currently unused by the standard model path; entity types return zeros.
         """
         return torch.zeros(global_param_dim, device=device)
 
@@ -604,4 +603,3 @@ def build_default_domain3_types(
         "rating": RatingVariableType(num_classes=num_likert_classes, logit_high=logit_high, llm_input_dist=llm_input_dist),
         "ranking_pairwise": PairwiseRankingVariableType(max_rank_size=max_rank_size, logit_high=logit_high),
     }
-
