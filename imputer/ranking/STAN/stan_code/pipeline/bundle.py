@@ -91,6 +91,7 @@ class GroundTruthBundle:
         
         # Extra ground truth: collect all remaining keys that aren't core or standard optional fields
         standard_keys = {"all_ratings", "all_pairwise", "observed_ratings", "missing_ratings",
+                        "missing_ratings_indexes_in_test_instance",
                         "observed_pairwise", "missing_pairwise", "stats",
                         "embeddings", "mean_preferences", "annotator_preferences",
                         "rating_probs", "rating_cumprobs", "rating_thresholds_z", "base_scores",
@@ -125,5 +126,4 @@ class ObservedSet:
 class MissingSet:
     ratings: List[Dict[str, Any]]
     pairwise: List[Dict[str, Any]]
-
 
