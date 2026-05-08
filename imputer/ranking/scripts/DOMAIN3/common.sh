@@ -69,9 +69,12 @@ domain3_enter_repo() {
 }
 
 domain3_setup_env() {
-    set -euo pipefail
+    set -eo pipefail
 
     if [ -f "${HOME}/.bashrc" ]; then
+        # Cluster bash init can reference unset guard variables, so do not enable
+        # nounset until after shell initialization and environment activation.
+        set +u
         # shellcheck disable=SC1090
         source "${HOME}/.bashrc"
     fi
@@ -79,8 +82,10 @@ domain3_setup_env() {
         module load anaconda3/2024.02-1 >/dev/null 2>&1 || true
     fi
     if command -v conda >/dev/null 2>&1; then
+        set +u
         conda activate prabhav2 >/dev/null 2>&1 || true
     fi
+    set -u
 
     export PYTHONPATH="${DOMAIN3_REPO_ROOT}"
     export CUDA_LAUNCH_BLOCKING=1
