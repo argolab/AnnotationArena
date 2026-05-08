@@ -20,6 +20,21 @@ domain3__resolve_repo_root() {
         return
     fi
 
+    if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+        if domain3__looks_like_repo_root "${DOMAIN3_DEFAULT_CLUSTER_ROOT}"; then
+            echo "${DOMAIN3_DEFAULT_CLUSTER_ROOT}"
+            return
+        fi
+
+        if domain3__looks_like_repo_root "${DOMAIN3_SCRIPT_REPO_ROOT}"; then
+            echo "${DOMAIN3_SCRIPT_REPO_ROOT}"
+            return
+        fi
+
+        echo "${DOMAIN3_DEFAULT_CLUSTER_ROOT}"
+        return
+    fi
+
     if domain3__looks_like_repo_root "${DOMAIN3_SCRIPT_REPO_ROOT}"; then
         echo "${DOMAIN3_SCRIPT_REPO_ROOT}"
         return
@@ -27,6 +42,11 @@ domain3__resolve_repo_root() {
 
     if domain3__looks_like_repo_root "${DOMAIN3_DEFAULT_LOCAL_ROOT}"; then
         echo "${DOMAIN3_DEFAULT_LOCAL_ROOT}"
+        return
+    fi
+
+    if domain3__looks_like_repo_root "${PWD:-}"; then
+        echo "${PWD}"
         return
     fi
 
