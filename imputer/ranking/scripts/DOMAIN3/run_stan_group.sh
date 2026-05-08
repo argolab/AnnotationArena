@@ -59,6 +59,10 @@ if [[ -z "${FAMILY_LABEL}" || -z "${MODEL_LABEL}" || -z "${MODEL_TAG}" || -z "${
 fi
 
 domain3_setup_env
+SIZES_TAG="${SIZES_CSV//,/__}"
+EXP_NAME="domain3_final_${FAMILY_LABEL,,}_${MODEL_TAG,,}_${AXIS}_${SIZES_TAG}"
+EXP_NAME="${EXP_NAME// /_}"
+domain3_enable_file_logging "${EXP_NAME}"
 domain3_enter_repo
 
 SCRIPT_START=$SECONDS
@@ -78,6 +82,8 @@ IFS=',' read -r -a SIZE_LIST <<< "${SIZES_CSV}"
 
 domain3_print_block "DOMAIN3-FINAL | ${FAMILY_LABEL} | ${MODEL_LABEL} | ${AXIS}"
 echo " OUTPUT_ROOT         : ${OUTPUT_ROOT}"
+echo " REPO_ROOT           : ${DOMAIN3_REPO_ROOT}"
+echo " LOG_FILE            : ${DOMAIN3_LOG_FILE}"
 echo " STAN_FILE           : ${STAN_FILE}"
 echo " STAGED_STAN_FILE    : ${LOCAL_STAN_FILE}"
 echo " CSV_PATTERN         : ${CSV_PATTERN}"
@@ -214,4 +220,3 @@ TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))
 domain3_print_block "DOMAIN3-FINAL | ${FAMILY_LABEL} | ${MODEL_LABEL} | ${AXIS} complete"
 echo " TOTAL_TIME  : $(( TOTAL_ELAPSED / 60 ))m $(( TOTAL_ELAPSED % 60 ))s"
 echo " OUTPUT_ROOT : ${OUTPUT_ROOT}"
-
