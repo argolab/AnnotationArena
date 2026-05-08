@@ -14,7 +14,7 @@ import math
 import re
 import sys
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
 
@@ -117,6 +117,7 @@ class DatasetSpec:
     marformer_nt_root: Path
     marformer_nt_run_glob: str
     nt_offset: int
+    misspec_runtime_seconds: dict[str, dict[int, float]] = field(default_factory=dict)
 
 
 ITEM_SPEC = DatasetSpec(
@@ -902,13 +903,27 @@ def _runtime_minutes_for_stan(spec: DatasetSpec, size: int) -> float | None:
     return total / 60.0
 
 
+def _runtime_minutes_for_misspec(spec: DatasetSpec, label: str, size: int) -> float | None:
+    per_model = spec.misspec_runtime_seconds.get(label, {})
+    total = per_model.get(size)
+    if total is None:
+        return None
+    return total / 60.0
+
+
 def _plot_runtime(spec: DatasetSpec) -> list[dict]:
     summary_rows: list[dict] = []
     fig, ax = plt.subplots(figsize=spec.figure_size)
-    for label, fn in (
+    runtime_series = [
         ("Marformer", lambda size: _runtime_minutes_for_marformer(spec, size)),
         ("Stan Oracle", lambda size: _runtime_minutes_for_stan(spec, size)),
-    ):
+    ]
+    runtime_series.extend(
+        (misspec_label, lambda size, label=misspec_label: _runtime_minutes_for_misspec(spec, label, size))
+        for misspec_label, _misspec_tag in MISSPEC_MODELS
+    )
+
+    for label, fn in runtime_series:
         xs: list[int] = []
         ys: list[float] = []
         for size in spec.sizes:

@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""Create DOMAIN3 expansion splits from one full 400x25x9 tensor bundle.
+"""Create DOMAIN3 expansion splits from one full tensor bundle.
 
-DOMAIN3 fixes the lower-right 50 x 5 block as the evaluation block:
-- test items:      last 50 items
-- test annotators: last 5 annotators
+DOMAIN3 fixes a lower-right held-out block as the evaluation block:
+- test items:      last ``test_items`` items
+- test annotators: last ``test_annotators`` annotators
 
 We then create two families of bundles:
 1. Item expansion:
-   - Transductive: use only the bottom 5 annotators and expand left over items.
+   - Transductive: use only the held-out annotator slice and expand left over items.
    - Non-transductive: train on items immediately left of the test block, evaluate on
-     the fixed test block, still using only the bottom 5 annotators.
+     the fixed test block, still using only the held-out annotator slice.
 2. Annotator expansion:
-   - Transductive: use only the rightmost 50 items and expand upward over annotators.
+   - Transductive: use only the held-out item slice and expand upward over annotators.
    - Non-transductive: train on annotators immediately above the test block,
-     evaluate on the fixed test block, still using only the rightmost 50 items.
+     evaluate on the fixed test block, still using only the held-out item slice.
 
 The output bundles are written in formats already supported by the codebase:
 - item expansion bundles use item-split style configs (K_train/K_test/K_val).
