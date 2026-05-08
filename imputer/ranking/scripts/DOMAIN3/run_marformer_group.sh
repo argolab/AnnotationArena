@@ -49,6 +49,10 @@ if [[ -z "${FAMILY_LABEL}" || -z "${OUTPUT_ROOT}" || -z "${AXIS}" || -z "${PROTO
 fi
 
 domain3_setup_env
+SIZES_TAG="${SIZES_CSV//,/__}"
+EXP_NAME="domain3_final_${FAMILY_LABEL,,}_${AXIS}_${PROTOCOL}_${SIZES_TAG}"
+EXP_NAME="${EXP_NAME// /_}"
+domain3_enable_file_logging "${EXP_NAME}"
 domain3_enter_repo
 
 SCRIPT_START=$SECONDS
@@ -71,7 +75,7 @@ MASKING_RATE=0.15
 MASK_AUGMENTATIONS=5
 MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
-DEVICE="cuda"
+DEVICE="$(domain3_choose_torch_device)"
 MAX_ITEM=50
 ITEM_DROPOUT_RATE=1.0
 ANNOTATOR_DROPOUT_RATE=0.0
@@ -113,6 +117,8 @@ IFS=',' read -r -a SIZE_LIST <<< "${SIZES_CSV}"
 
 domain3_print_block "DOMAIN3-FINAL | ${FAMILY_LABEL} | ${AXIS} | ${PROTOCOL}"
 echo " OUTPUT_ROOT         : ${OUTPUT_ROOT}"
+echo " REPO_ROOT           : ${DOMAIN3_REPO_ROOT}"
+echo " LOG_FILE            : ${DOMAIN3_LOG_FILE}"
 echo " SIZES               : ${SIZE_LIST[*]}"
 echo " EMBEDDING_DIM       : ${EMBEDDING_DIM}"
 echo " NUM_LAYERS          : ${NUM_LAYERS}"
@@ -266,4 +272,3 @@ TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))
 domain3_print_block "DOMAIN3-FINAL | ${FAMILY_LABEL} | ${AXIS} | ${PROTOCOL} complete"
 echo " TOTAL_TIME  : $(( TOTAL_ELAPSED / 60 ))m $(( TOTAL_ELAPSED % 60 ))s"
 echo " OUTPUT_ROOT : ${OUTPUT_ROOT}"
-

@@ -5,6 +5,7 @@
 # Apache 2.0.
 
 #SBATCH --job-name=D3FINALGEN
+#SBATCH --output=/home/psingh54/scratchjeisner1/psingh54/Marformer/imputer/ranking/logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
@@ -17,6 +18,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
 domain3_setup_env
+domain3_enable_file_logging "domain3_final_generate_data"
 domain3_enter_repo
 
 SCRIPT_START=$SECONDS
@@ -72,6 +74,8 @@ echo " sigma_uit                    : ${SIGMA_UIT}"
 echo " sigma_measurement            : ${SIGMA_MEASUREMENT}"
 echo " kappa                        : ${KAPPA}"
 echo " alpha_confusion              : ${ALPHA_CONFUSION}"
+echo " REPO_ROOT                    : ${DOMAIN3_REPO_ROOT}"
+echo " LOG_FILE                     : ${DOMAIN3_LOG_FILE}"
 
 GEN_START=$SECONDS
 python STAN/stan_code/scripts/generate_data.py \

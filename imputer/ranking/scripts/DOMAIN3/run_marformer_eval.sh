@@ -34,12 +34,19 @@ if [[ -z "${FAMILY_LABEL}" || -z "${RESULTS_ROOT}" ]]; then
 fi
 
 domain3_setup_env
+EXP_NAME="domain3_final_${FAMILY_LABEL,,}_eval"
+EXP_NAME="${EXP_NAME// /_}"
+domain3_enable_file_logging "${EXP_NAME}"
 domain3_enter_repo
 
 SCRIPT_START=$SECONDS
+DEVICE="$(domain3_choose_torch_device)"
 
 domain3_print_block "DOMAIN3-FINAL | ${FAMILY_LABEL} | checkpoint evaluation"
 echo " RESULTS_ROOT : ${RESULTS_ROOT}"
+echo " REPO_ROOT    : ${DOMAIN3_REPO_ROOT}"
+echo " LOG_FILE     : ${DOMAIN3_LOG_FILE}"
+echo " DEVICE       : ${DEVICE}"
 
 shopt -s nullglob
 RUN_DIRS=( "${RESULTS_ROOT}/ITEM"/*_MARFORMER "${RESULTS_ROOT}/ANNOT"/*_MARFORMER )
@@ -70,12 +77,12 @@ for RUN_DIR in "${RUN_DIRS[@]}"; do
     python -u -m imputer.entity_mf.test \
         --run-dir "${RUN_DIR}" \
         --checkpoint all \
-        --device cpu
+        --device "${DEVICE}"
 
     python -u -m imputer.entity_mf.test \
         --run-dir "${RUN_DIR}" \
         --checkpoint last \
-        --device cpu
+        --device "${DEVICE}"
 
     python - "${RUN_DIR}" <<'PY'
 import json
@@ -126,7 +133,7 @@ PY
   "run_dir": "${RUN_DIR}",
   "test_results_dir": "${TEST_RESULTS_DIR}",
   "elapsed_seconds": ${RUN_ELAPSED},
-  "device": "cpu",
+  "device": "${DEVICE}",
   "selection_metric": "missing.log_loss"
 }
 EOF
@@ -140,4 +147,3 @@ TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))
 domain3_print_block "DOMAIN3-FINAL | ${FAMILY_LABEL} | checkpoint evaluation complete"
 echo " TOTAL_TIME  : $(( TOTAL_ELAPSED / 60 ))m $(( TOTAL_ELAPSED % 60 ))s"
 echo " RESULTS_ROOT: ${RESULTS_ROOT}"
-
