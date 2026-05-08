@@ -1,0 +1,21 @@
+{
+  "K": 100,
+  "J_train": 25,
+  "J_val": 0,
+  "J_test": 10,
+  "J": 35,
+  "I": 9,
+  "C": 4,
+  "D": 32,
+  "T": 3,
+  "sigma_u": 0.72186008678,
+  "sigma_v": 10.0771146648,
+  "sigma_uit": 1.40871172142,
+  "sigma_measurement": 0.58704029672,
+  "kappa": 25.284987056,
+  "alpha_confusion": 15.0,
+  "temperature": 0.5,
+  "use_dawid_skene_noise": 0,
+  "derive_thresholds_from_annotator": 0,
+  "num_annotate_annotator": 4
+}
