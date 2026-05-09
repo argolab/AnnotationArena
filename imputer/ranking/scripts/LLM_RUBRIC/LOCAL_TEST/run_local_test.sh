@@ -16,15 +16,11 @@ SCRIPT_START=$SECONDS
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 DATA_ROOT="DATA/LLM_RUBRIC"
-OUTPUT_ROOT="RESULTS/MARFORMER/LLM_RUBRIC"
+OUTPUT_ROOT="RESULTS/MARFORMER/LLM_RUBRIC-2"
 
 # ── Splits to run ─────────────────────────────────────────────────────────────
 SPLITS=(
-    "LLMRubric_225_25_9_10"
-    "LLMRubric_225_25_9_50"
-    "LLMRubric_225_25_9_100"
     "LLMRubric_225_25_9_150"
-    "LLMRubric_225_25_9_175"
 )
 
 # ── Fixed hyperparams ─────────────────────────────────────────────────────────
@@ -36,7 +32,7 @@ ATTENTION_HEADS=4
 D_FF=128
 NUM_FFN_LAYERS=1
 DROPOUT=0.1
-EPOCHS=5
+EPOCHS=300
 LR=2e-4
 LR_SCHEDULE="none"
 LR_MIN=1e-5
@@ -48,7 +44,7 @@ OBSERVED_LOSS_WEIGHT=1.0
 DEVICE="cuda"
 LLM_ANNOTATOR_ID=24
 HUMAN_OBSERVED_RATE=0.0
-MAX_ITEM=10
+MAX_ITEM=50
 ANNOTATOR_REG_WEIGHT=0.0
 
 # ── Experiment-specific flags ─────────────────────────────────────────────────

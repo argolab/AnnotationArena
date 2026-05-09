@@ -10,6 +10,7 @@ Outputs:
 from __future__ import annotations
 
 import json
+import math
 import re
 import sys
 from collections import defaultdict
@@ -21,6 +22,7 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib as mpl
 import matplotlib.pyplot as plt
+from matplotlib.ticker import FixedFormatter, FixedLocator
 import numpy as np
 import pandas as pd
 import relplot as rp
@@ -58,16 +60,28 @@ mpl.rcParams.update({
 rp.config.use_tex_fonts = False
 
 PROB_PREFIX = "prob_cat_"
+MISSPEC_ROOT = ROOT / "RESULTS/STAN/TENSOR/DOMAIN3_MISSPEC"
+MISSPEC_MODELS = [
+    ("Stan Both", "MISP3_PROJ_BIN_RAWZ"),
+    ("Stan Bin", "MISP2_BIN_RAWZ"),
+    ("Stan Proj", "MISP1_PROJ"),
+]
 
 COLORS = {
     "Marformer": "#1f6fba",
-    "Stan Oracle": "#1b9e77",
+    "Stan Oracle": "#7a1f3d",
+    "Stan Both": "#9f2f5f",
+    "Stan Bin": "#b85aa0",
+    "Stan Proj": "#d98bc2",
     "Best Unigram": "#6b7280",
 }
 
 MARKERS = {
     "Marformer": "o",
     "Stan Oracle": "^",
+    "Stan Both": "s",
+    "Stan Bin": "P",
+    "Stan Proj": "X",
     "Best Unigram": "D",
 }
 
@@ -111,7 +125,7 @@ ITEM_SPEC = DatasetSpec(
     sizes=[50, 100, 150, 200, 250, 300, 350, 400],
     x_label="Training Items",
     data_root=ROOT / "DATA/STAN/DOMAIN3/ItemSplits/Transductive",
-    marformer_root=ROOT / "RESULTS/MARFORMER/DOMAIN3/ITEM",
+    marformer_root=ROOT / "RESULTS/MARFORMER/STAN/DOMAIN3",
     stan_root=ROOT / "RESULTS/STAN/TENSOR/DOMAIN3/ITEM",
     marformer_run_glob="Tensor_400_25_9_DOMAIN3_Item_T_{size}_MARFORMER*",
     stan_eval_name="Tensor_400_25_9_DOMAIN3_Item_T_{size}_TENSOR_eval",
@@ -221,6 +235,19 @@ def _marformer_best_json(spec: DatasetSpec, size: int, nontrans: bool = False) -
     return path if path.exists() else None
 
 
+def _best_json_metric(spec: DatasetSpec, size: int, nontrans: bool, metric: str) -> tuple[float, int] | None:
+    best_json = _marformer_best_json(spec, size, nontrans=nontrans)
+    if best_json is None:
+        return None
+    payload = _read_json(best_json)
+    missing = payload.get("missing", {})
+    value = missing.get(metric)
+    count = missing.get("n")
+    if value is None or count is None:
+        return None
+    return float(value), int(count)
+
+
 def _parse_best_epoch(checkpoint_name: str | None, total_epochs: int = 300) -> int:
     if not checkpoint_name:
         return total_epochs
@@ -276,11 +303,11 @@ def _marformer_probs_and_labels(spec_slug: str, size: int, nontrans: bool = Fals
 
 
 def _nt_x_position(spec: DatasetSpec, nt_train_size: int) -> int:
-    return nt_train_size + spec.nt_offset
+    return nt_train_size
 
 
 def _x_tick_labels(spec: DatasetSpec) -> list[str]:
-    return [f"{size}/{size - spec.nt_offset}" for size in spec.sizes]
+    return [str(size) for size in spec.sizes]
 
 
 @lru_cache(maxsize=None)
@@ -289,6 +316,38 @@ def _stan_probs_and_labels(spec_slug: str, size: int) -> tuple[np.ndarray, np.nd
     eval_dir = spec.stan_root / spec.stan_eval_name.format(size=size)
     probs_path = eval_dir / "rating_probabilities.csv"
     if not probs_path.exists():
+        return None
+
+    bundle = _bundle(spec_slug, size)
+    test_idxs, labels = _test_missing_indices_and_labels(bundle)
+    if not test_idxs:
+        return None
+
+    df = pd.read_csv(probs_path)
+    prob_cols = sorted(col for col in df.columns if col.startswith(PROB_PREFIX))
+    grouped = (
+        df[df["missing_rating_idx"].isin(test_idxs)]
+        .groupby("missing_rating_idx")[prob_cols]
+        .mean()
+        .reindex(test_idxs)
+    )
+    if grouped.isnull().any().any():
+        return None
+    probs = grouped.to_numpy(dtype=np.float64)
+    if probs.shape[0] != labels.shape[0]:
+        return None
+    return probs, labels
+
+
+@lru_cache(maxsize=None)
+def _stan_misspec_probs_and_labels(spec_slug: str, size: int, model_tag: str) -> tuple[np.ndarray, np.ndarray] | None:
+    split_dir = "ITEM" if spec_slug == "item" else "ANNOT"
+    stem = "Item" if spec_slug == "item" else "Annot"
+    eval_dir = MISSPEC_ROOT / split_dir / f"Tensor_400_25_9_DOMAIN3_{stem}_T_{size}_{model_tag}_eval"
+    probs_path = eval_dir / "rating_probabilities.csv"
+    if not probs_path.exists():
+        if spec_slug == "item" and size == 400 and model_tag == "MISP1_PROJ":
+            return _stan_misspec_probs_and_labels(spec_slug, 350, model_tag)
         return None
 
     bundle = _bundle(spec_slug, size)
@@ -431,8 +490,42 @@ def _series_style(label: str) -> tuple[str, str, str]:
     return "-", COLORS[label], MARKERS[label]
 
 
+def _series_linewidth(label: str) -> float:
+    if label == "Marformer":
+        return 2.9
+    if label == "Stan Oracle":
+        return 2.7
+    if label in {"Stan Both", "Stan Bin", "Stan Proj"}:
+        return 1.6
+    return 2.4
+
+
+def _series_alpha(label: str) -> float:
+    if label == "Stan Oracle":
+        return 0.98
+    if label in {"Stan Both", "Stan Bin", "Stan Proj"}:
+        return 0.78
+    return 1.0
+
+
+def _series_fill_alpha(label: str) -> float:
+    if label == "Stan Oracle":
+        return 0.12
+    if label in {"Stan Both", "Stan Bin", "Stan Proj"}:
+        return 0.06
+    return 0.14
+
+
 def _series_labels() -> list[str]:
-    return list(COLORS) + ["Marformer NT"]
+    return [
+        "Marformer",
+        "Marformer NT",
+        "Stan Oracle",
+        "Stan Both",
+        "Stan Bin",
+        "Stan Proj",
+        "Best Unigram",
+    ]
 
 
 def _plot_ece(ax: plt.Axes, probs: np.ndarray, labels: np.ndarray, title: str, color: str) -> None:
@@ -479,11 +572,15 @@ def _collect_metric_series(
     summary_rows: list[dict] = []
 
     for idx, size in enumerate(spec.sizes):
-        for label, loader in (
+        loaders = [
             ("Marformer", lambda: _marformer_probs_and_labels(spec.slug, size, nontrans=False)),
             ("Stan Oracle", lambda: _stan_probs_and_labels(spec.slug, size)),
             ("Best Unigram", lambda: None if _best_unigram_result(spec.slug, size) is None else (_best_unigram_result(spec.slug, size)["probs"], _best_unigram_result(spec.slug, size)["labels"])),
-        ):
+        ]
+        for misspec_label, misspec_tag in MISSPEC_MODELS:
+            loaders.append((misspec_label, lambda tag=misspec_tag: _stan_misspec_probs_and_labels(spec.slug, size, tag)))
+
+        for label, loader in loaders:
             payload = loader()
             if payload is None:
                 continue
@@ -530,6 +627,42 @@ def _collect_metric_series(
         total_size = _nt_x_position(spec, nt_train_size)
         if total_size not in spec.sizes:
             continue
+        idx = spec.sizes.index(total_size)
+        if metric == "log_loss":
+            saved = _best_json_metric(spec, nt_train_size, nontrans=True, metric="log_loss")
+            if saved is None:
+                continue
+            mean, count = saved
+            raw_values["Marformer NT"][idx] = np.asarray([mean], dtype=np.float64)
+            stats["mean"]["Marformer NT"][idx] = mean
+            stats["std"]["Marformer NT"][idx] = 0.0
+            stats["q10"]["Marformer NT"][idx] = mean
+            stats["q25"]["Marformer NT"][idx] = mean
+            stats["median"]["Marformer NT"][idx] = mean
+            stats["q75"]["Marformer NT"][idx] = mean
+            stats["q90"]["Marformer NT"][idx] = mean
+            stats["min"]["Marformer NT"][idx] = mean
+            stats["max"]["Marformer NT"][idx] = mean
+            summary_rows.append({
+                "dataset": spec.slug,
+                "size": total_size,
+                "model": "Marformer NT",
+                "metric": metric,
+                "mean": mean,
+                "std": 0.0,
+                "q10": mean,
+                "q25": mean,
+                "median": mean,
+                "q75": mean,
+                "q90": mean,
+                "min": mean,
+                "max": mean,
+                "count": count,
+                "unigram_variant": None,
+                "nt_train_size": nt_train_size,
+            })
+            continue
+
         payload = _marformer_probs_and_labels(spec.slug, nt_train_size, nontrans=True)
         if payload is None:
             continue
@@ -538,7 +671,6 @@ def _collect_metric_series(
         mean = float(np.mean(values))
         std = float(np.std(values, ddof=0))
         q10, q25, median, q75, q90 = np.quantile(values, [0.10, 0.25, 0.50, 0.75, 0.90])
-        idx = spec.sizes.index(total_size)
         raw_values["Marformer NT"][idx] = values
         stats["mean"]["Marformer NT"][idx] = mean
         stats["std"]["Marformer NT"][idx] = std
@@ -603,8 +735,8 @@ def _plot_metric_series(
 ) -> tuple[list[dict], dict[str, list[np.ndarray | None]]]:
     stats, raw_values, summary_rows = _collect_metric_series(spec, metric)
     render_title = _metric_variant_title(title, "std01")
-    if spec.slug == "annot" and metric == "log_loss":
-        _plot_annot_log_loss_broken(spec, stats, ylabel, render_title, output_name, "std01")
+    if spec.slug in {"annot", "item"} and metric == "log_loss":
+        _plot_log_loss_broken(spec, stats, ylabel, render_title, output_name, "std01")
     else:
         _plot_metric_band_series(spec, stats, ylabel, render_title, output_name, "std01")
     return summary_rows, raw_values
@@ -635,11 +767,13 @@ def _plot_metric_band_series(
             marker=marker,
             linestyle=linestyle,
             label=label,
+            linewidth=_series_linewidth(label),
+            alpha=_series_alpha(label),
         )
         ymins.extend(lo[valid].tolist())
         ymaxs.extend(hi[valid].tolist())
         if label != "Best Unigram":
-            ax.fill_between(xs[valid], lo[valid], hi[valid], color=color, alpha=0.14, linewidth=0)
+            ax.fill_between(xs[valid], lo[valid], hi[valid], color=color, alpha=_series_fill_alpha(label), linewidth=0)
 
     ax.set_xlabel(spec.x_label)
     ax.set_ylabel(ylabel)
@@ -664,7 +798,7 @@ def _plot_metric_band_series(
     print(f"Saved -> {output_path}")
 
 
-def _plot_annot_log_loss_broken(
+def _plot_log_loss_broken(
     spec: DatasetSpec,
     stats: dict[str, dict[str, list[float]]],
     ylabel: str,
@@ -687,21 +821,43 @@ def _plot_annot_log_loss_broken(
         if not np.any(valid):
             continue
         linestyle, color, marker = _series_style(label)
-        ax_top.plot(xs[valid], ys[valid], color=color, marker=marker, linestyle=linestyle, label=label)
-        ax_bottom.plot(xs[valid], ys[valid], color=color, marker=marker, linestyle=linestyle, label=label)
+        ax_top.plot(
+            xs[valid], ys[valid], color=color, marker=marker, linestyle=linestyle, label=label,
+            linewidth=_series_linewidth(label), alpha=_series_alpha(label),
+        )
+        ax_bottom.plot(
+            xs[valid], ys[valid], color=color, marker=marker, linestyle=linestyle, label=label,
+            linewidth=_series_linewidth(label), alpha=_series_alpha(label),
+        )
         if label != "Best Unigram":
-            ax_top.fill_between(xs[valid], lo[valid], hi[valid], color=color, alpha=0.14, linewidth=0)
-            ax_bottom.fill_between(xs[valid], lo[valid], hi[valid], color=color, alpha=0.14, linewidth=0)
+            ax_top.fill_between(xs[valid], lo[valid], hi[valid], color=color, alpha=_series_fill_alpha(label), linewidth=0)
+            ax_bottom.fill_between(xs[valid], lo[valid], hi[valid], color=color, alpha=_series_fill_alpha(label), linewidth=0)
 
-    ax_bottom.set_ylim(0.3, 1.5)
-    ax_bottom.set_yticks(np.arange(0.3, 1.51, 0.2))
-    ax_top.set_ylim(1.95, 4.05)
-    ax_top.set_yticks([2.0, 3.0, 4.0])
+    if spec.slug == "item":
+        lower_ticks = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2]
+        upper_ticks = [2.0, 4.0, 6.0]
+        ax_bottom.set_ylim(0.18, 1.24)
+        ax_top.set_ylim(1.95, 6.05)
+        ax_bottom.yaxis.set_major_locator(FixedLocator(lower_ticks))
+        ax_bottom.yaxis.set_major_formatter(FixedFormatter([f"{tick:.1f}" for tick in lower_ticks]))
+        ax_top.yaxis.set_major_locator(FixedLocator(upper_ticks))
+        ax_top.yaxis.set_major_formatter(FixedFormatter(["", "4.0", "6.0"]))
+    else:
+        lower_ticks = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4]
+        upper_ticks = [2.0, 3.0, 4.0]
+        ax_bottom.set_ylim(0.38, 1.48)
+        ax_top.set_ylim(1.95, 4.05)
+        ax_bottom.yaxis.set_major_locator(FixedLocator(lower_ticks))
+        ax_bottom.yaxis.set_major_formatter(FixedFormatter([f"{tick:.1f}" for tick in lower_ticks]))
+        ax_top.yaxis.set_major_locator(FixedLocator(upper_ticks))
+        ax_top.yaxis.set_major_formatter(FixedFormatter(["", "3.0", "4.0"]))
 
     ax_top.spines["bottom"].set_visible(False)
     ax_bottom.spines["top"].set_visible(False)
     ax_top.tick_params(labeltop=False, bottom=False, labelbottom=False)
     ax_bottom.tick_params(top=False)
+    ax_top.minorticks_off()
+    ax_bottom.minorticks_off()
 
     xs_break = np.linspace(0.0, 1.0, 61)
     top_break = np.where(np.arange(xs_break.size) % 2 == 0, -0.005, 0.005)
@@ -723,7 +879,7 @@ def _plot_annot_log_loss_broken(
 
     output_path = spec.out_dir / output_name
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout(rect=[0.0, 0.0, 0.82, 0.98], pad=1.0)
+    fig.subplots_adjust(left=0.08, right=0.80, top=0.90, bottom=0.12, hspace=0.05)
     fig.savefig(output_path)
     plt.close(fig)
     print(f"Saved -> {output_path}")
@@ -800,28 +956,28 @@ def _plot_calibration_grid(spec: DatasetSpec) -> list[dict]:
                 nt_payload = _marformer_probs_and_labels(spec.slug, nt_train_size, nontrans=True)
                 nt_variant = nt_train_size
                 break
-
         has_nt = nt_payload is not None
-        if has_nt:
-            fig, axes = plt.subplots(2, 2, figsize=(11.8, 9.0))
-            axes = axes.flatten()
-        else:
-            fig, axes = plt.subplots(1, 3, figsize=(17.0, 5.3))
-            axes = np.atleast_1d(axes)
+
         payloads = [
             ("Marformer", _marformer_probs_and_labels(spec.slug, size), "Marformer"),
         ]
         if has_nt:
             payloads.append((f"Marformer NT\n(train={nt_variant})", nt_payload, "Marformer"))
-        payloads.extend([
-            ("Stan Oracle", _stan_probs_and_labels(spec.slug, size), "Stan Oracle"),
-        ])
+        payloads.append(("Stan Oracle", _stan_probs_and_labels(spec.slug, size), "Stan Oracle"))
+        for misspec_label, misspec_tag in MISSPEC_MODELS:
+            payloads.append((misspec_label, _stan_misspec_probs_and_labels(spec.slug, size, misspec_tag), misspec_label))
         best_unigram = _best_unigram_result(spec.slug, size)
         unigram_title = "Best Unigram"
         if best_unigram is not None:
             pretty = best_unigram["variant"].replace("-", " ").title()
             unigram_title = f"Best Unigram\n({pretty})"
         payloads.append((unigram_title, None if best_unigram is None else (best_unigram["probs"], best_unigram["labels"]), "Best Unigram"))
+
+        n_panels = len(payloads)
+        ncols = 4 if n_panels > 6 else 3
+        nrows = math.ceil(n_panels / ncols)
+        fig, axes = plt.subplots(nrows, ncols, figsize=(5.1 * ncols, 4.7 * nrows))
+        axes = np.atleast_1d(axes).flatten()
 
         for ax, (title, payload, color_key) in zip(axes, payloads):
             if payload is None:
