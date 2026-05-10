@@ -11,10 +11,11 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem-per-cpu=18GB
 #SBATCH --gpus=1
-#SBATCH --partition=gpu-a100
-#SBATCH --account=a100acct
+#SBATCH --partition=a100
+#SBATCH --exclude=c001
 #SBATCH --mail-user="psingh54@jhu.edu"
-#SBATCH --time=96:00:00
+#SBATCH --time=48:00:00
+
 DOMAIN3_DEFAULT_CLUSTER_ROOT="/home/psingh54/scratchjeisner1/psingh54/Marformer/imputer/ranking"
 DOMAIN3_DEFAULT_LOCAL_ROOT="/Users/prabhavsingh/Documents/JHU/JHUResearch/Marformer/imputer/ranking"
 
