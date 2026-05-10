@@ -65,7 +65,8 @@ fi
 
 domain3_setup_env
 SIZES_TAG="${SIZES_CSV//,/__}"
-EXP_NAME="domain3_final_${FAMILY_LABEL,,}_${AXIS}_${PROTOCOL}_${SIZES_TAG}"
+FAMILY_LABEL_LOWER="$(domain3_to_lower "${FAMILY_LABEL}")"
+EXP_NAME="domain3_final_${FAMILY_LABEL_LOWER}_${AXIS}_${PROTOCOL}_${SIZES_TAG}"
 EXP_NAME="${EXP_NAME// /_}"
 domain3_enable_file_logging "${EXP_NAME}"
 domain3_enter_repo
