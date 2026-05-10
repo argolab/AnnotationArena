@@ -49,7 +49,8 @@ if [[ -z "${FAMILY_LABEL}" || -z "${RESULTS_ROOT}" ]]; then
 fi
 
 domain3_setup_env
-EXP_NAME="domain3_final_${FAMILY_LABEL,,}_eval"
+FAMILY_LABEL_LOWER="$(domain3_to_lower "${FAMILY_LABEL}")"
+EXP_NAME="domain3_final_${FAMILY_LABEL_LOWER}_eval"
 EXP_NAME="${EXP_NAME// /_}"
 domain3_enable_file_logging "${EXP_NAME}"
 domain3_enter_repo

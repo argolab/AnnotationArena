@@ -134,6 +134,10 @@ domain3_print_block() {
     echo "============================================================"
 }
 
+domain3_to_lower() {
+    printf '%s' "$1" | tr '[:upper:]' '[:lower:]'
+}
+
 domain3_stage_stan_file() {
     local stan_src="$1"
     local resolved_src="${stan_src}"
