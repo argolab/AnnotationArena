@@ -14,7 +14,7 @@
 #SBATCH --partition=a100
 #SBATCH --exclude=c001
 #SBATCH --mail-user="psingh54@jhu.edu"
-#SBATCH --time=48:00:00
+#SBATCH --time=10:00:00
 
 DOMAIN3_DEFAULT_CLUSTER_ROOT="/home/psingh54/scratchjeisner1/psingh54/Marformer/imputer/ranking"
 DOMAIN3_DEFAULT_LOCAL_ROOT="/Users/prabhavsingh/Documents/JHU/JHUResearch/Marformer/imputer/ranking"
