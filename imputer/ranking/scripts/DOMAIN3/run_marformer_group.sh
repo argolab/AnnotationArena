@@ -63,6 +63,15 @@ if [[ -z "${FAMILY_LABEL}" || -z "${OUTPUT_ROOT}" || -z "${AXIS}" || -z "${PROTO
     exit 1
 fi
 
+if [[ "${AXIS}" == "annotator" ]]; then
+    AXIS="annot"
+fi
+
+if [[ "${AXIS}" != "item" && "${AXIS}" != "annot" ]]; then
+    echo "Unsupported axis for run_marformer_group.sh: ${AXIS}" >&2
+    exit 1
+fi
+
 domain3_setup_env
 SIZES_TAG="${SIZES_CSV//,/__}"
 FAMILY_LABEL_LOWER="$(domain3_to_lower "${FAMILY_LABEL}")"
@@ -92,7 +101,7 @@ MASK_AUGMENTATIONS=5
 MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
 DEVICE="$(domain3_choose_torch_device)"
-MAX_ITEM=50
+MAX_ITEM=100
 ITEM_DROPOUT_RATE=1.0
 ANNOTATOR_DROPOUT_RATE=0.0
 ITEM_REG_WEIGHT=0.0
@@ -107,6 +116,14 @@ USE_DEVIATION_NORM=false
 USE_GRAPH_MASK=false
 LLM_INPUT_DIST=false
 OVERWRITE_EXISTING=true
+
+if [[ "${AXIS}" == "annot" ]]; then
+    ANNOTATOR_REG_WEIGHT=1e-3
+    ITEM_DROPOUT_RATE=0.0
+    ANNOTATOR_DROPOUT_RATE=0.8
+    ITEM_REG_WEIGHT=0.0
+    ATTRIBUTE_REG_WEIGHT=0.0
+fi
 
 PER_HEAD_FLAG=""
 [ "${USE_PER_HEAD_REL}" = "false" ] && PER_HEAD_FLAG="--no-per-head-rel"

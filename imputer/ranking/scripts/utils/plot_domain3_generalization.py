@@ -13,6 +13,7 @@ import json
 import math
 import re
 import sys
+import textwrap
 from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -31,18 +32,26 @@ import torch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
+from BASELINES.structured_baselines.dataset_adapter import (
+    build_test_examples,
+    build_training_examples,
+    bundle_dims,
+)
+from BASELINES.structured_baselines.log_linear_structured import StructuredLogLinear
+from BASELINES.structured_baselines.naive_bayes_ijk import NaiveBayesIJK
+from BASELINES.structured_baselines.naive_bayes_structured import StructuredNaiveBayes
 from imputer.entity_mf.data import variable_list_to_entity_graph
 from imputer.entity_mf.test import _load_checkpoint, _reconstruct
 
 
 mpl.rcParams.update({
     "font.family": "serif",
-    "font.size": 13,
-    "axes.labelsize": 15,
-    "axes.titlesize": 18,
-    "xtick.labelsize": 13,
-    "ytick.labelsize": 13,
-    "legend.fontsize": 12,
+    "font.size": 12,
+    "axes.labelsize": 14,
+    "axes.titlesize": 16,
+    "xtick.labelsize": 12,
+    "ytick.labelsize": 12,
+    "legend.fontsize": 11,
     "legend.framealpha": 0.92,
     "legend.edgecolor": "0.75",
     "axes.spines.top": False,
@@ -73,6 +82,9 @@ COLORS = {
     "Stan Both": "#9f2f5f",
     "Stan Bin": "#b85aa0",
     "Stan Proj": "#d98bc2",
+    "Naive Bayes IJK": "#1f7a4d",
+    "Structured NB": "#2fa36b",
+    "Structured Log-Linear": "#73c69d",
     "Best Unigram": "#6b7280",
 }
 
@@ -82,6 +94,9 @@ MARKERS = {
     "Stan Both": "s",
     "Stan Bin": "P",
     "Stan Proj": "X",
+    "Naive Bayes IJK": "v",
+    "Structured NB": ">",
+    "Structured Log-Linear": "<",
     "Best Unigram": "D",
 }
 
@@ -97,6 +112,12 @@ UNIGRAM_VARIANTS = {
     "item-annotator": ("item", "annotator"),
     "attribute-item-annotator": ("attribute", "item", "annotator"),
 }
+
+STRUCTURED_BASELINE_LABELS = [
+    "Naive Bayes IJK",
+    "Structured NB",
+    "Structured Log-Linear",
+]
 
 
 @dataclass(frozen=True)
@@ -196,9 +217,19 @@ def _read_json(path: Path) -> dict:
 
 
 def _dataset_dir(spec: DatasetSpec, size: int) -> Path:
-    if spec.slug == "item":
-        return spec.data_root / f"Tensor_400_25_9_DOMAIN3_Item_T_{size}"
-    return spec.data_root / f"Tensor_400_25_9_DOMAIN3_Annot_T_{size}"
+    stem = "Item" if spec.slug == "item" else "Annot"
+
+    legacy = spec.data_root / f"Tensor_400_25_9_DOMAIN3_{stem}_T_{size}"
+    if legacy.exists():
+        return legacy
+
+    candidates = sorted(
+        path for path in spec.data_root.glob(f"*_{stem}_T_{size}") if path.is_dir()
+    )
+    if candidates:
+        return candidates[0]
+
+    return legacy
 
 
 @lru_cache(maxsize=None)
@@ -311,6 +342,10 @@ def _x_tick_labels(spec: DatasetSpec) -> list[str]:
     return [str(size) for size in spec.sizes]
 
 
+def _bundle_path(spec: DatasetSpec, size: int) -> Path:
+    return _dataset_dir(spec, size) / "data_bundle.json"
+
+
 @lru_cache(maxsize=None)
 def _stan_probs_and_labels(spec_slug: str, size: int) -> tuple[np.ndarray, np.ndarray] | None:
     spec = ITEM_SPEC if spec_slug == "item" else ANNOT_SPEC
@@ -345,6 +380,14 @@ def _stan_misspec_probs_and_labels(spec_slug: str, size: int, model_tag: str) ->
     split_dir = "ITEM" if spec_slug == "item" else "ANNOT"
     stem = "Item" if spec_slug == "item" else "Annot"
     eval_dir = MISSPEC_ROOT / split_dir / f"Tensor_400_25_9_DOMAIN3_{stem}_T_{size}_{model_tag}_eval"
+    if not eval_dir.exists():
+        candidates = sorted(
+            path
+            for path in (MISSPEC_ROOT / split_dir).glob(f"*_{stem}_T_{size}_{model_tag}_eval")
+            if path.is_dir()
+        )
+        if candidates:
+            eval_dir = candidates[0]
     probs_path = eval_dir / "rating_probabilities.csv"
     if not probs_path.exists():
         if spec_slug == "item" and size == 400 and model_tag == "MISP1_PROJ":
@@ -367,6 +410,63 @@ def _stan_misspec_probs_and_labels(spec_slug: str, size: int, model_tag: str) ->
     if grouped.isnull().any().any():
         return None
     probs = grouped.to_numpy(dtype=np.float64)
+    if probs.shape[0] != labels.shape[0]:
+        return None
+    return probs, labels
+
+
+def _bundle_num_items(bundle: dict) -> int:
+    rows = bundle.get("observed_ratings", []) + bundle.get("missing_ratings", [])
+    if not rows:
+        return 0
+    return max(int(r["item"]) for r in rows)
+
+
+@lru_cache(maxsize=None)
+def _structured_baseline_probs_and_labels(spec_slug: str, size: int, method: str) -> tuple[np.ndarray, np.ndarray] | None:
+    spec = ITEM_SPEC if spec_slug == "item" else ANNOT_SPEC
+    bundle = _bundle(spec_slug, size)
+    bundle_path = _bundle_path(spec, size)
+    test_examples = build_test_examples(bundle)
+    if not test_examples:
+        return None
+
+    I, J, C = bundle_dims(bundle, bundle_path)
+    K = _bundle_num_items(bundle)
+
+    if method == "Naive Bayes IJK":
+        model = NaiveBayesIJK.fit_from_bundle(bundle, transductive=True)
+        probs = model.predict_proba(test_examples)
+    else:
+        train_examples = build_training_examples(bundle, instances={"train"})
+        if not train_examples:
+            return None
+        if method == "Structured NB":
+            model = StructuredNaiveBayes.fit(
+                train_examples,
+                num_attrs=I,
+                num_classes=C,
+                num_anns=J,
+                num_items=K,
+            )
+            probs = model.predict_proba(test_examples)
+        elif method == "Structured Log-Linear":
+            model = StructuredLogLinear.fit(
+                train_examples,
+                num_attrs=I,
+                num_classes=C,
+                epochs=40,
+                lr=0.05,
+                batch_size=256,
+                device=None,
+                verbose=False,
+                show_progress=False,
+            )
+            probs = model.predict_proba(test_examples)
+        else:
+            raise ValueError(f"Unknown structured baseline method: {method}")
+
+    labels = np.asarray([ex.y for ex in test_examples], dtype=np.int64)
     if probs.shape[0] != labels.shape[0]:
         return None
     return probs, labels
@@ -483,6 +583,28 @@ def _style_legend(ax: plt.Axes, loc: str = "best") -> None:
         leg.get_frame().set_linewidth(1.0)
 
 
+def _style_legend_below(fig: plt.Figure, ax: plt.Axes, ncol: int = 3) -> None:
+    handles, labels = ax.get_legend_handles_labels()
+    if not handles:
+        return
+    leg = fig.legend(
+        handles,
+        labels,
+        loc="lower center",
+        bbox_to_anchor=(0.5, 0.01),
+        ncol=ncol,
+        frameon=True,
+        fancybox=False,
+        framealpha=0.96,
+        facecolor="white",
+        edgecolor="0.75",
+        columnspacing=1.4,
+        handlelength=2.6,
+    )
+    if leg is not None:
+        leg.get_frame().set_linewidth(1.0)
+
+
 def _series_style(label: str) -> tuple[str, str, str]:
     if label == "Best Unigram":
         return ":", COLORS["Best Unigram"], MARKERS["Best Unigram"]
@@ -498,6 +620,8 @@ def _series_linewidth(label: str) -> float:
         return 2.7
     if label in {"Stan Both", "Stan Bin", "Stan Proj"}:
         return 1.6
+    if label in STRUCTURED_BASELINE_LABELS:
+        return 2.1
     return 2.4
 
 
@@ -506,6 +630,8 @@ def _series_alpha(label: str) -> float:
         return 0.98
     if label in {"Stan Both", "Stan Bin", "Stan Proj"}:
         return 0.78
+    if label in STRUCTURED_BASELINE_LABELS:
+        return 0.95
     return 1.0
 
 
@@ -514,6 +640,8 @@ def _series_fill_alpha(label: str) -> float:
         return 0.12
     if label in {"Stan Both", "Stan Bin", "Stan Proj"}:
         return 0.06
+    if label in STRUCTURED_BASELINE_LABELS:
+        return 0.08
     return 0.14
 
 
@@ -525,6 +653,9 @@ def _series_labels() -> list[str]:
         "Stan Both",
         "Stan Bin",
         "Stan Proj",
+        "Naive Bayes IJK",
+        "Structured NB",
+        "Structured Log-Linear",
         "Best Unigram",
     ]
 
@@ -580,6 +711,8 @@ def _collect_metric_series(
         ]
         for misspec_label, misspec_tag in MISSPEC_MODELS:
             loaders.append((misspec_label, lambda tag=misspec_tag: _stan_misspec_probs_and_labels(spec.slug, size, tag)))
+        for baseline_label in STRUCTURED_BASELINE_LABELS:
+            loaders.append((baseline_label, lambda name=baseline_label: _structured_baseline_probs_and_labels(spec.slug, size, name)))
 
         for label, loader in loaders:
             payload = loader()
@@ -727,6 +860,10 @@ def _metric_variant_title(title: str, interval_kind: str) -> str:
     raise ValueError(f"Unknown interval kind: {interval_kind}")
 
 
+def _wrapped_metric_title(title: str) -> str:
+    return textwrap.fill(title, width=58, break_long_words=False)
+
+
 def _plot_metric_series(
     spec: DatasetSpec,
     metric: str,
@@ -736,8 +873,8 @@ def _plot_metric_series(
 ) -> tuple[list[dict], dict[str, list[np.ndarray | None]]]:
     stats, raw_values, summary_rows = _collect_metric_series(spec, metric)
     render_title = _metric_variant_title(title, "std01")
-    if spec.slug in {"annot", "item"} and metric == "log_loss":
-        _plot_log_loss_broken(spec, stats, ylabel, render_title, output_name, "std01")
+    if spec.slug in {"annot", "item"} and metric in {"log_loss", "mbr_l2"}:
+        _plot_metric_broken_at_one(spec, stats, ylabel, render_title, output_name, "std01")
     else:
         _plot_metric_band_series(spec, stats, ylabel, render_title, output_name, "std01")
     return summary_rows, raw_values
@@ -778,7 +915,7 @@ def _plot_metric_band_series(
 
     ax.set_xlabel(spec.x_label)
     ax.set_ylabel(ylabel)
-    ax.set_title(title, pad=14)
+    ax.set_title(_wrapped_metric_title(title), pad=12)
     ax.set_xticks(spec.sizes)
     ax.set_xticklabels(_x_tick_labels(spec))
     if spec.slug == "annot":
@@ -788,18 +925,18 @@ def _plot_metric_band_series(
         ymax = max(ymaxs)
         pad = max(0.03, 0.07 * (ymax - ymin))
         ax.set_ylim(max(0.0, ymin - pad), ymax + pad)
-    _style_legend(ax, loc="center left")
     ax.margins(x=0.03)
+    _style_legend_below(fig, ax, ncol=3)
 
     output_path = spec.out_dir / output_name
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout(rect=[0.0, 0.0, 0.82, 0.98], pad=1.0)
+    fig.tight_layout(rect=[0.03, 0.09, 0.995, 0.98], pad=1.0)
     fig.savefig(output_path)
     plt.close(fig)
     print(f"Saved -> {output_path}")
 
 
-def _plot_log_loss_broken(
+def _plot_metric_broken_at_one(
     spec: DatasetSpec,
     stats: dict[str, dict[str, list[float]]],
     ylabel: str,
@@ -834,24 +971,15 @@ def _plot_log_loss_broken(
             ax_top.fill_between(xs[valid], lo[valid], hi[valid], color=color, alpha=_series_fill_alpha(label), linewidth=0)
             ax_bottom.fill_between(xs[valid], lo[valid], hi[valid], color=color, alpha=_series_fill_alpha(label), linewidth=0)
 
-    if spec.slug == "item":
-        lower_ticks = [0.2, 0.4, 0.6, 0.8, 1.0, 1.2]
-        upper_ticks = [2.0, 4.0, 6.0]
-        ax_bottom.set_ylim(0.18, 1.24)
-        ax_top.set_ylim(1.95, 6.05)
-        ax_bottom.yaxis.set_major_locator(FixedLocator(lower_ticks))
-        ax_bottom.yaxis.set_major_formatter(FixedFormatter([f"{tick:.1f}" for tick in lower_ticks]))
-        ax_top.yaxis.set_major_locator(FixedLocator(upper_ticks))
-        ax_top.yaxis.set_major_formatter(FixedFormatter(["", "4.0", "6.0"]))
-    else:
-        lower_ticks = [0.4, 0.6, 0.8, 1.0, 1.2, 1.4]
-        upper_ticks = [2.0, 3.0, 4.0]
-        ax_bottom.set_ylim(0.38, 1.48)
-        ax_top.set_ylim(1.95, 4.05)
-        ax_bottom.yaxis.set_major_locator(FixedLocator(lower_ticks))
-        ax_bottom.yaxis.set_major_formatter(FixedFormatter([f"{tick:.1f}" for tick in lower_ticks]))
-        ax_top.yaxis.set_major_locator(FixedLocator(upper_ticks))
-        ax_top.yaxis.set_major_formatter(FixedFormatter(["", "3.0", "4.0"]))
+    metric_key = "mbr_l2" if "MBR" in ylabel else "log_loss"
+    lower_ticks = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8] if metric_key == "mbr_l2" else [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+    upper_ticks = [1.0, 1.5, 2.0, 2.5, 3.0]
+    ax_bottom.set_ylim(0.08 if metric_key == "mbr_l2" else 0.18, 0.82)
+    ax_top.set_ylim(0.98, 3.05)
+    ax_bottom.yaxis.set_major_locator(FixedLocator(lower_ticks))
+    ax_bottom.yaxis.set_major_formatter(FixedFormatter([f"{tick:.1f}" for tick in lower_ticks]))
+    ax_top.yaxis.set_major_locator(FixedLocator(upper_ticks))
+    ax_top.yaxis.set_major_formatter(FixedFormatter([f"{tick:.1f}" for tick in upper_ticks]))
 
     ax_top.spines["bottom"].set_visible(False)
     ax_bottom.spines["top"].set_visible(False)
@@ -868,7 +996,7 @@ def _plot_log_loss_broken(
 
     ax_bottom.set_xlabel(spec.x_label)
     ax_bottom.set_ylabel(ylabel)
-    ax_top.set_title(title, pad=14)
+    fig.suptitle(_wrapped_metric_title(title), fontsize=16, y=0.985)
     ax_bottom.set_xticks(spec.sizes)
     ax_bottom.set_xticklabels(_x_tick_labels(spec))
     ax_bottom.set_xlim(spec.sizes[0] - 1.0, spec.sizes[-1] + 1.0)
@@ -876,11 +1004,11 @@ def _plot_log_loss_broken(
     for ax in (ax_top, ax_bottom):
         ax.grid(True, alpha=0.35)
 
-    _style_legend(ax_bottom, loc="center left")
+    _style_legend_below(fig, ax_bottom, ncol=3)
 
     output_path = spec.out_dir / output_name
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.subplots_adjust(left=0.08, right=0.80, top=0.90, bottom=0.12, hspace=0.05)
+    fig.subplots_adjust(left=0.08, right=0.98, top=0.86, bottom=0.16, hspace=0.05)
     fig.savefig(output_path)
     plt.close(fig)
     print(f"Saved -> {output_path}")
@@ -973,20 +1101,28 @@ def _plot_calibration_grid(spec: DatasetSpec) -> list[dict]:
                 break
         has_nt = nt_payload is not None
 
-        payloads = [
-            ("Marformer", _marformer_probs_and_labels(spec.slug, size), "Marformer"),
-        ]
+        payloads = []
+        marformer_payload = _marformer_probs_and_labels(spec.slug, size)
+        if marformer_payload is not None:
+            payloads.append(("Marformer", marformer_payload, "Marformer"))
         if has_nt:
             payloads.append((f"Marformer NT\n(train={nt_variant})", nt_payload, "Marformer"))
-        payloads.append(("Stan Oracle", _stan_probs_and_labels(spec.slug, size), "Stan Oracle"))
+        stan_payload = _stan_probs_and_labels(spec.slug, size)
+        if stan_payload is not None:
+            payloads.append(("Stan Oracle", stan_payload, "Stan Oracle"))
         for misspec_label, misspec_tag in MISSPEC_MODELS:
-            payloads.append((misspec_label, _stan_misspec_probs_and_labels(spec.slug, size, misspec_tag), misspec_label))
+            misspec_payload = _stan_misspec_probs_and_labels(spec.slug, size, misspec_tag)
+            if misspec_payload is not None:
+                payloads.append((misspec_label, misspec_payload, misspec_label))
+        for baseline_label in STRUCTURED_BASELINE_LABELS:
+            baseline_payload = _structured_baseline_probs_and_labels(spec.slug, size, baseline_label)
+            if baseline_payload is not None:
+                payloads.append((baseline_label, baseline_payload, baseline_label))
         best_unigram = _best_unigram_result(spec.slug, size)
-        unigram_title = "Best Unigram"
         if best_unigram is not None:
             pretty = best_unigram["variant"].replace("-", " ").title()
             unigram_title = f"Best Unigram\n({pretty})"
-        payloads.append((unigram_title, None if best_unigram is None else (best_unigram["probs"], best_unigram["labels"]), "Best Unigram"))
+            payloads.append((unigram_title, (best_unigram["probs"], best_unigram["labels"]), "Best Unigram"))
 
         n_panels = len(payloads)
         ncols = 4 if n_panels > 6 else 3
@@ -995,9 +1131,6 @@ def _plot_calibration_grid(spec: DatasetSpec) -> list[dict]:
         axes = np.atleast_1d(axes).flatten()
 
         for ax, (title, payload, color_key) in zip(axes, payloads):
-            if payload is None:
-                _draw_empty(ax, title)
-                continue
             probs, labels = payload
             _plot_ece(ax, probs, labels, title, COLORS[color_key])
             summary_rows.append({

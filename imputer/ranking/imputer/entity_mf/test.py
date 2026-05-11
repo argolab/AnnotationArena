@@ -129,12 +129,8 @@ def _reconstruct(run_dir: Path) -> tuple:
     test_obs  = converter.create_variables_from_bundle(bundle, partition="test", status="observed")
     test_miss = converter.create_variables_from_bundle(bundle, partition="test", status="missing")
 
-    if bool(train_cfg.get("transductive_learning", False)):
-        print('Hello!')
-        eval_vars = train_obs + test_obs + test_miss + train_miss
-    else:
-        eval_vars = test_obs + test_miss + train_obs + train_miss
-
+    eval_vars = train_obs + test_obs + test_miss + train_miss
+    
     return model, eval_vars, train_cfg
 
 

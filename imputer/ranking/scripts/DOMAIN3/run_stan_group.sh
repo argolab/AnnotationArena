@@ -73,6 +73,15 @@ if [[ -z "${FAMILY_LABEL}" || -z "${MODEL_LABEL}" || -z "${MODEL_TAG}" || -z "${
     exit 1
 fi
 
+if [[ "${AXIS}" == "annotator" ]]; then
+    AXIS="annot"
+fi
+
+if [[ "${AXIS}" != "item" && "${AXIS}" != "annot" ]]; then
+    echo "Unsupported axis for run_stan_group.sh: ${AXIS}" >&2
+    exit 1
+fi
+
 domain3_setup_env
 SIZES_TAG="${SIZES_CSV//,/__}"
 FAMILY_LABEL_LOWER="$(domain3_to_lower "${FAMILY_LABEL}")"
