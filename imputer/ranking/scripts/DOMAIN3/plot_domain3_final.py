@@ -9,6 +9,7 @@ Outputs:
 
 from __future__ import annotations
 
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -64,7 +65,18 @@ def _misspec_runtime_seconds(root: Path, sizes: list[int], stem: str, suffix: st
     return runtime_map
 
 
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Plot DOMAIN3-FINAL generalization figures.")
+    parser.add_argument(
+        "--use-summary",
+        action="store_true",
+        help="Reuse metric/runtime values from saved summary JSON when available instead of recomputing them.",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = parse_args()
     base.MISSPEC_ROOT = ROOT / "RESULTS/STAN/DOMAIN3-FINAL/MISSPEC"
     base.MISSPEC_MODELS = [
         ("Stan Both", "BOTH"),
@@ -101,7 +113,7 @@ def main() -> None:
         stan_runtime_seconds=_stan_runtime_seconds(
             item_oracle_root, item_sizes, "DOMAIN3-FINAL_Item_T_", "SHARED_THRESH_ORACLE"
         ),
-        figure_size=(15.2, 7.8),
+        figure_size=(17.4, 7.2),
         marformer_nt_root=item_marformer_nt_root,
         marformer_nt_run_glob="DOMAIN3-FINAL_Item_NT_{size}_MARFORMER*",
         nt_offset=100,
@@ -129,7 +141,7 @@ def main() -> None:
         stan_runtime_seconds=_stan_runtime_seconds(
             annot_oracle_root, annot_sizes, "DOMAIN3-FINAL_Annot_T_", "SHARED_THRESH_ORACLE"
         ),
-        figure_size=(15.6, 7.8),
+        figure_size=(17.0, 7.2),
         marformer_nt_root=annot_marformer_nt_root,
         marformer_nt_run_glob="DOMAIN3-FINAL_Annot_NT_{size}_MARFORMER*",
         nt_offset=10,
@@ -140,8 +152,8 @@ def main() -> None:
         },
     )
 
-    base.plot_item()
-    base.plot_annot()
+    base.plot_item(use_summary=args.use_summary)
+    base.plot_annot(use_summary=args.use_summary)
 
 
 if __name__ == "__main__":
