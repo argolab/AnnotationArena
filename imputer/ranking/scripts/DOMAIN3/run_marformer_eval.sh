@@ -49,8 +49,10 @@ if [[ -z "${FAMILY_LABEL}" || -z "${RESULTS_ROOT}" ]]; then
 fi
 
 domain3_setup_env
+DATASET_LABEL="${DOMAIN3_DATASET_LABEL:-DOMAIN3-FINAL}"
+EXP_PREFIX="${DOMAIN3_EXP_PREFIX:-domain3_final}"
 FAMILY_LABEL_LOWER="$(domain3_to_lower "${FAMILY_LABEL}")"
-EXP_NAME="domain3_final_${FAMILY_LABEL_LOWER}_eval"
+EXP_NAME="${EXP_PREFIX}_${FAMILY_LABEL_LOWER}_eval"
 EXP_NAME="${EXP_NAME// /_}"
 domain3_enable_file_logging "${EXP_NAME}"
 domain3_enter_repo
@@ -58,7 +60,7 @@ domain3_enter_repo
 SCRIPT_START=$SECONDS
 DEVICE="$(domain3_choose_torch_device)"
 
-domain3_print_block "DOMAIN3-FINAL | ${FAMILY_LABEL} | checkpoint evaluation"
+domain3_print_block "${DATASET_LABEL} | ${FAMILY_LABEL} | checkpoint evaluation"
 echo " RESULTS_ROOT : ${RESULTS_ROOT}"
 echo " REPO_ROOT    : ${DOMAIN3_REPO_ROOT}"
 echo " LOG_FILE     : ${DOMAIN3_LOG_FILE}"
@@ -160,6 +162,6 @@ EOF
 done
 
 TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))
-domain3_print_block "DOMAIN3-FINAL | ${FAMILY_LABEL} | checkpoint evaluation complete"
+domain3_print_block "${DATASET_LABEL} | ${FAMILY_LABEL} | checkpoint evaluation complete"
 echo " TOTAL_TIME  : $(( TOTAL_ELAPSED / 60 ))m $(( TOTAL_ELAPSED % 60 ))s"
 echo " RESULTS_ROOT: ${RESULTS_ROOT}"
