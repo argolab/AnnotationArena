@@ -13,7 +13,6 @@ import json
 import math
 import re
 import sys
-import textwrap
 from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import lru_cache
@@ -46,11 +45,11 @@ from imputer.entity_mf.test import _load_checkpoint, _reconstruct
 
 mpl.rcParams.update({
     "font.family": "serif",
-    "font.size": 12,
-    "axes.labelsize": 14,
-    "axes.titlesize": 16,
-    "xtick.labelsize": 12,
-    "ytick.labelsize": 12,
+    "font.size": 11,
+    "axes.labelsize": 13,
+    "axes.titlesize": 15,
+    "xtick.labelsize": 11,
+    "ytick.labelsize": 11,
     "legend.fontsize": 11,
     "legend.framealpha": 0.92,
     "legend.edgecolor": "0.75",
@@ -583,23 +582,23 @@ def _style_legend(ax: plt.Axes, loc: str = "best") -> None:
         leg.get_frame().set_linewidth(1.0)
 
 
-def _style_legend_below(fig: plt.Figure, ax: plt.Axes, ncol: int = 3) -> None:
-    handles, labels = ax.get_legend_handles_labels()
+def _style_legend_right(ax_leg: plt.Axes, source_ax: plt.Axes) -> None:
+    handles, labels = source_ax.get_legend_handles_labels()
     if not handles:
         return
-    leg = fig.legend(
+    ax_leg.axis("off")
+    leg = ax_leg.legend(
         handles,
         labels,
-        loc="lower center",
-        bbox_to_anchor=(0.5, 0.01),
-        ncol=ncol,
+        loc="center left",
         frameon=True,
         fancybox=False,
         framealpha=0.96,
         facecolor="white",
         edgecolor="0.75",
-        columnspacing=1.4,
-        handlelength=2.6,
+        borderpad=0.8,
+        labelspacing=0.7,
+        handlelength=2.4,
     )
     if leg is not None:
         leg.get_frame().set_linewidth(1.0)
@@ -861,7 +860,57 @@ def _metric_variant_title(title: str, interval_kind: str) -> str:
 
 
 def _wrapped_metric_title(title: str) -> str:
-    return textwrap.fill(title, width=58, break_long_words=False)
+    return title
+
+
+def _empty_stats(spec: DatasetSpec) -> dict[str, dict[str, list[float]]]:
+    labels_in_plot = _series_labels()
+    return {
+        stat_name: {label: [np.nan] * len(spec.sizes) for label in labels_in_plot}
+        for stat_name in ("mean", "std", "q10", "q25", "median", "q75", "q90", "min", "max")
+    }
+
+
+def _summary_path(spec: DatasetSpec) -> Path:
+    return spec.out_dir / f"{spec.slug}_generalization_summary.json"
+
+
+def _load_summary_rows(spec: DatasetSpec) -> list[dict] | None:
+    path = _summary_path(spec)
+    if not path.exists():
+        return None
+    payload = _read_json(path)
+    rows = payload.get("rows")
+    if not isinstance(rows, list):
+        return None
+    return rows
+
+
+def _collect_metric_series_from_summary(
+    spec: DatasetSpec,
+    metric: str,
+    rows: list[dict],
+) -> tuple[dict[str, dict[str, list[float]]], dict[str, list[np.ndarray | None]], list[dict]]:
+    stats = _empty_stats(spec)
+    raw_values = {label: [None] * len(spec.sizes) for label in _series_labels()}
+    filtered_rows: list[dict] = []
+    index_by_size = {size: idx for idx, size in enumerate(spec.sizes)}
+
+    for row in rows:
+        if row.get("metric") != metric:
+            continue
+        label = row.get("model")
+        size = row.get("size")
+        if label not in stats["mean"] or size not in index_by_size:
+            continue
+        idx = index_by_size[size]
+        for stat_name in stats:
+            value = row.get(stat_name)
+            if value is not None:
+                stats[stat_name][label][idx] = float(value)
+        filtered_rows.append(row)
+
+    return stats, raw_values, filtered_rows
 
 
 def _plot_metric_series(
@@ -870,11 +919,15 @@ def _plot_metric_series(
     ylabel: str,
     title: str,
     output_name: str,
+    summary_rows_override: list[dict] | None = None,
 ) -> tuple[list[dict], dict[str, list[np.ndarray | None]]]:
-    stats, raw_values, summary_rows = _collect_metric_series(spec, metric)
+    if summary_rows_override is None:
+        stats, raw_values, summary_rows = _collect_metric_series(spec, metric)
+    else:
+        stats, raw_values, summary_rows = _collect_metric_series_from_summary(spec, metric, summary_rows_override)
     render_title = _metric_variant_title(title, "std01")
     if spec.slug in {"annot", "item"} and metric in {"log_loss", "mbr_l2"}:
-        _plot_metric_broken_at_one(spec, stats, ylabel, render_title, output_name, "std01")
+        _plot_metric_broken(spec, stats, ylabel, render_title, output_name, "std01", metric)
     else:
         _plot_metric_band_series(spec, stats, ylabel, render_title, output_name, "std01")
     return summary_rows, raw_values
@@ -888,7 +941,10 @@ def _plot_metric_band_series(
     output_name: str,
     interval_kind: str,
 ) -> None:
-    fig, ax = plt.subplots(figsize=spec.figure_size)
+    fig = plt.figure(figsize=spec.figure_size)
+    gs = fig.add_gridspec(1, 2, width_ratios=[5.9, 1.5], wspace=0.05)
+    ax = fig.add_subplot(gs[0, 0])
+    ax_leg = fig.add_subplot(gs[0, 1])
     ymins: list[float] = []
     ymaxs: list[float] = []
     for label in _series_labels():
@@ -926,31 +982,37 @@ def _plot_metric_band_series(
         pad = max(0.03, 0.07 * (ymax - ymin))
         ax.set_ylim(max(0.0, ymin - pad), ymax + pad)
     ax.margins(x=0.03)
-    _style_legend_below(fig, ax, ncol=3)
+    _style_legend_right(ax_leg, ax)
 
     output_path = spec.out_dir / output_name
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout(rect=[0.03, 0.09, 0.995, 0.98], pad=1.0)
+    fig.tight_layout(rect=[0.02, 0.02, 0.995, 0.98], pad=0.8)
     fig.savefig(output_path)
     plt.close(fig)
     print(f"Saved -> {output_path}")
 
 
-def _plot_metric_broken_at_one(
+def _plot_metric_broken(
     spec: DatasetSpec,
     stats: dict[str, dict[str, list[float]]],
     ylabel: str,
     title: str,
     output_name: str,
     interval_kind: str,
+    metric: str,
 ) -> None:
-    fig, (ax_top, ax_bottom) = plt.subplots(
+    fig = plt.figure(figsize=spec.figure_size)
+    gs = fig.add_gridspec(
         2,
-        1,
-        figsize=spec.figure_size,
-        sharex=True,
-        gridspec_kw={"height_ratios": [1.0, 4.2], "hspace": 0.05},
+        2,
+        width_ratios=[5.9, 1.5],
+        height_ratios=[1.0, 4.7],
+        hspace=0.05,
+        wspace=0.05,
     )
+    ax_top = fig.add_subplot(gs[0, 0])
+    ax_bottom = fig.add_subplot(gs[1, 0], sharex=ax_top)
+    ax_leg = fig.add_subplot(gs[:, 1])
 
     for label in _series_labels():
         xs = np.asarray(spec.sizes, dtype=float)
@@ -971,15 +1033,24 @@ def _plot_metric_broken_at_one(
             ax_top.fill_between(xs[valid], lo[valid], hi[valid], color=color, alpha=_series_fill_alpha(label), linewidth=0)
             ax_bottom.fill_between(xs[valid], lo[valid], hi[valid], color=color, alpha=_series_fill_alpha(label), linewidth=0)
 
-    metric_key = "mbr_l2" if "MBR" in ylabel else "log_loss"
-    lower_ticks = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8] if metric_key == "mbr_l2" else [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
-    upper_ticks = [1.0, 1.5, 2.0, 2.5, 3.0]
-    ax_bottom.set_ylim(0.08 if metric_key == "mbr_l2" else 0.18, 0.82)
-    ax_top.set_ylim(0.98, 3.05)
+    if metric == "mbr_l2":
+        lower_ticks = [0.0, 0.05, 0.10, 0.15, 0.20, 0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60]
+        upper_ticks = [1.5]
+        ax_bottom.set_ylim(0.0, 0.60)
+        ax_top.set_ylim(1.35, 1.65)
+        lower_tick_labels = ["0" if tick == 0 else f"{tick:.2f}" for tick in lower_ticks]
+        upper_tick_labels = ["1.5"]
+    else:
+        lower_ticks = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8]
+        upper_ticks = [2.0, 3.0]
+        ax_bottom.set_ylim(0.2, 0.82)
+        ax_top.set_ylim(1.2, 3.05)
+        lower_tick_labels = [f"{tick:.1f}" for tick in lower_ticks]
+        upper_tick_labels = [f"{tick:.1f}" for tick in upper_ticks]
     ax_bottom.yaxis.set_major_locator(FixedLocator(lower_ticks))
-    ax_bottom.yaxis.set_major_formatter(FixedFormatter([f"{tick:.1f}" for tick in lower_ticks]))
+    ax_bottom.yaxis.set_major_formatter(FixedFormatter(lower_tick_labels))
     ax_top.yaxis.set_major_locator(FixedLocator(upper_ticks))
-    ax_top.yaxis.set_major_formatter(FixedFormatter([f"{tick:.1f}" for tick in upper_ticks]))
+    ax_top.yaxis.set_major_formatter(FixedFormatter(upper_tick_labels))
 
     ax_top.spines["bottom"].set_visible(False)
     ax_bottom.spines["top"].set_visible(False)
@@ -1004,11 +1075,11 @@ def _plot_metric_broken_at_one(
     for ax in (ax_top, ax_bottom):
         ax.grid(True, alpha=0.35)
 
-    _style_legend_below(fig, ax_bottom, ncol=3)
+    _style_legend_right(ax_leg, ax_bottom)
 
     output_path = spec.out_dir / output_name
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.subplots_adjust(left=0.08, right=0.98, top=0.86, bottom=0.16, hspace=0.05)
+    fig.subplots_adjust(left=0.07, right=0.98, top=0.88, bottom=0.10, hspace=0.05, wspace=0.04)
     fig.savefig(output_path)
     plt.close(fig)
     print(f"Saved -> {output_path}")
@@ -1039,9 +1110,12 @@ def _runtime_minutes_for_misspec(spec: DatasetSpec, label: str, size: int) -> fl
     return total / 60.0
 
 
-def _plot_runtime(spec: DatasetSpec) -> list[dict]:
+def _plot_runtime(spec: DatasetSpec, summary_rows_override: list[dict] | None = None) -> list[dict]:
     summary_rows: list[dict] = []
-    fig, ax = plt.subplots(figsize=spec.figure_size)
+    fig = plt.figure(figsize=spec.figure_size)
+    gs = fig.add_gridspec(1, 2, width_ratios=[5.9, 1.5], wspace=0.05)
+    ax = fig.add_subplot(gs[0, 0])
+    ax_leg = fig.add_subplot(gs[0, 1])
     runtime_series = [
         ("Marformer", lambda size: _runtime_minutes_for_marformer(spec, size)),
         ("Stan Oracle", lambda size: _runtime_minutes_for_stan(spec, size)),
@@ -1051,11 +1125,25 @@ def _plot_runtime(spec: DatasetSpec) -> list[dict]:
         for misspec_label, _misspec_tag in MISSPEC_MODELS
     )
 
+    runtime_map: dict[tuple[str, int], float] = {}
+    if summary_rows_override is not None:
+        for row in summary_rows_override:
+            if row.get("metric") != "runtime_minutes":
+                continue
+            label = row.get("model")
+            size = row.get("size")
+            mean = row.get("mean")
+            if label is None or size is None or mean is None:
+                continue
+            runtime_map[(str(label), int(size))] = float(mean)
+
     for label, fn in runtime_series:
         xs: list[int] = []
         ys: list[float] = []
         for size in spec.sizes:
-            value = fn(size)
+            value = runtime_map.get((label, size))
+            if value is None and summary_rows_override is None:
+                value = fn(size)
             if value is None:
                 continue
             xs.append(size)
@@ -1075,11 +1163,11 @@ def _plot_runtime(spec: DatasetSpec) -> list[dict]:
     ax.set_title(f"{spec.title_prefix}: Runtime by {spec.x_label}", pad=14)
     ax.set_xticks(spec.sizes)
     ax.set_xticklabels(_x_tick_labels(spec))
-    _style_legend(ax, loc="center left")
+    _style_legend_right(ax_leg, ax)
 
     output_path = spec.out_dir / f"{spec.slug}_generalization_runtime.png"
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.tight_layout(rect=[0.0, 0.0, 0.82, 0.98], pad=1.0)
+    fig.tight_layout(rect=[0.02, 0.02, 0.995, 0.98], pad=0.8)
     fig.savefig(output_path)
     plt.close(fig)
     print(f"Saved -> {output_path}")
@@ -1183,40 +1271,50 @@ def _save_summary(spec: DatasetSpec, rows: list[dict]) -> None:
     print(f"Saved -> {output_path}")
 
 
-def _plot_dataset(spec: DatasetSpec) -> None:
-    rows: list[dict] = []
+def _plot_dataset(spec: DatasetSpec, use_summary: bool = False) -> None:
+    summary_rows_override = _load_summary_rows(spec) if use_summary else None
+    rows: list[dict] = [] if summary_rows_override is None else list(summary_rows_override)
     metric_rows, _ = _plot_metric_series(
         spec,
         metric="log_loss",
         ylabel="Test Log-Loss",
         title=f"{spec.title_prefix}: Log-Loss with Additional Training {'Items' if spec.slug == 'item' else 'Annotators'}",
         output_name=f"{spec.slug}_generalization_log_loss.png",
+        summary_rows_override=summary_rows_override,
     )
-    rows.extend(metric_rows)
+    if summary_rows_override is None:
+        rows.extend(metric_rows)
     metric_rows, _ = _plot_metric_series(
         spec,
         metric="mbr_l2",
         ylabel="MBR L2 (MSE)",
         title=f"{spec.title_prefix}: MBR L2 with Additional Training {'Items' if spec.slug == 'item' else 'Annotators'}",
         output_name=f"{spec.slug}_generalization_mbr_l2.png",
+        summary_rows_override=summary_rows_override,
     )
-    rows.extend(metric_rows)
-    rows.extend(_plot_runtime(spec))
-    rows.extend(_plot_calibration_grid(spec))
-    _save_summary(spec, rows)
+    if summary_rows_override is None:
+        rows.extend(metric_rows)
+    runtime_rows = _plot_runtime(spec, summary_rows_override=summary_rows_override)
+    if summary_rows_override is None:
+        rows.extend(runtime_rows)
+        rows.extend(_plot_calibration_grid(spec))
+        _save_summary(spec, rows)
+    else:
+        print(f"Used cached summary -> {_summary_path(spec)}")
+        print(f"Skipped calibration replot from summary-only mode for {spec.slug}")
 
 
-def plot_item() -> None:
-    _plot_dataset(ITEM_SPEC)
+def plot_item(use_summary: bool = False) -> None:
+    _plot_dataset(ITEM_SPEC, use_summary=use_summary)
 
 
-def plot_annot() -> None:
-    _plot_dataset(ANNOT_SPEC)
+def plot_annot(use_summary: bool = False) -> None:
+    _plot_dataset(ANNOT_SPEC, use_summary=use_summary)
 
 
-def main() -> None:
-    plot_item()
-    plot_annot()
+def main(use_summary: bool = False) -> None:
+    plot_item(use_summary=use_summary)
+    plot_annot(use_summary=use_summary)
 
 
 if __name__ == "__main__":
