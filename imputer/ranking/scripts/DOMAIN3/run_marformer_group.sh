@@ -73,16 +73,19 @@ if [[ "${AXIS}" != "item" && "${AXIS}" != "annot" ]]; then
 fi
 
 domain3_setup_env
+DATASET_LABEL="${DOMAIN3_DATASET_LABEL:-DOMAIN3-FINAL}"
+DATA_ROOT="${DOMAIN3_DATA_ROOT:-DATA/STAN/DOMAIN3-FINAL}"
+SPLIT_PREFIX="${DOMAIN3_SPLIT_PREFIX:-DOMAIN3-FINAL}"
+EXP_PREFIX="${DOMAIN3_EXP_PREFIX:-domain3_final}"
 SIZES_TAG="${SIZES_CSV//,/__}"
 FAMILY_LABEL_LOWER="$(domain3_to_lower "${FAMILY_LABEL}")"
-EXP_NAME="domain3_final_${FAMILY_LABEL_LOWER}_${AXIS}_${PROTOCOL}_${SIZES_TAG}"
+EXP_NAME="${EXP_PREFIX}_${FAMILY_LABEL_LOWER}_${AXIS}_${PROTOCOL}_${SIZES_TAG}"
 EXP_NAME="${EXP_NAME// /_}"
 domain3_enable_file_logging "${EXP_NAME}"
 domain3_enter_repo
 
 SCRIPT_START=$SECONDS
 
-DATA_ROOT="DATA/STAN/DOMAIN3-FINAL"
 SEED=42
 TYPE_EMBEDDING_INIT="kaiming"
 EMBEDDING_DIM=80
@@ -101,7 +104,7 @@ MASK_AUGMENTATIONS=5
 MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
 DEVICE="$(domain3_choose_torch_device)"
-MAX_ITEM=100
+MAX_ITEM="${DOMAIN3_MAX_ITEM:-100}"
 ITEM_DROPOUT_RATE=1.0
 ANNOTATOR_DROPOUT_RATE=0.0
 ITEM_REG_WEIGHT=0.0
@@ -148,10 +151,12 @@ TRANSDUCTIVE_FLAG=""
 
 IFS=',' read -r -a SIZE_LIST <<< "${SIZES_CSV}"
 
-domain3_print_block "DOMAIN3-FINAL | ${FAMILY_LABEL} | ${AXIS} | ${PROTOCOL}"
+domain3_print_block "${DATASET_LABEL} | ${FAMILY_LABEL} | ${AXIS} | ${PROTOCOL}"
 echo " OUTPUT_ROOT         : ${OUTPUT_ROOT}"
 echo " REPO_ROOT           : ${DOMAIN3_REPO_ROOT}"
 echo " LOG_FILE            : ${DOMAIN3_LOG_FILE}"
+echo " DATA_ROOT           : ${DATA_ROOT}"
+echo " SPLIT_PREFIX        : ${SPLIT_PREFIX}"
 echo " SIZES               : ${SIZE_LIST[*]}"
 echo " EMBEDDING_DIM       : ${EMBEDDING_DIM}"
 echo " NUM_LAYERS          : ${NUM_LAYERS}"
@@ -181,18 +186,18 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
 
     if [[ "${AXIS}" == "item" ]]; then
         if [[ "${PROTOCOL}" == "transductive" ]]; then
-            SPLIT_NAME="DOMAIN3-FINAL_Item_T_${SIZE}"
+            SPLIT_NAME="${SPLIT_PREFIX}_Item_T_${SIZE}"
             DATA_DIR="${DATA_ROOT}/ItemSplits/Transductive/${SPLIT_NAME}"
         else
-            SPLIT_NAME="DOMAIN3-FINAL_Item_NT_${SIZE}"
+            SPLIT_NAME="${SPLIT_PREFIX}_Item_NT_${SIZE}"
             DATA_DIR="${DATA_ROOT}/ItemSplits/NonTransductive/${SPLIT_NAME}"
         fi
     else
         if [[ "${PROTOCOL}" == "transductive" ]]; then
-            SPLIT_NAME="DOMAIN3-FINAL_Annot_T_${SIZE}"
+            SPLIT_NAME="${SPLIT_PREFIX}_Annot_T_${SIZE}"
             DATA_DIR="${DATA_ROOT}/AnnotSplits/Transductive/${SPLIT_NAME}"
         else
-            SPLIT_NAME="DOMAIN3-FINAL_Annot_NT_${SIZE}"
+            SPLIT_NAME="${SPLIT_PREFIX}_Annot_NT_${SIZE}"
             DATA_DIR="${DATA_ROOT}/AnnotSplits/NonTransductive/${SPLIT_NAME}"
         fi
     fi
@@ -302,6 +307,6 @@ EOF
 done
 
 TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))
-domain3_print_block "DOMAIN3-FINAL | ${FAMILY_LABEL} | ${AXIS} | ${PROTOCOL} complete"
+domain3_print_block "${DATASET_LABEL} | ${FAMILY_LABEL} | ${AXIS} | ${PROTOCOL} complete"
 echo " TOTAL_TIME  : $(( TOTAL_ELAPSED / 60 ))m $(( TOTAL_ELAPSED % 60 ))s"
 echo " OUTPUT_ROOT : ${OUTPUT_ROOT}"

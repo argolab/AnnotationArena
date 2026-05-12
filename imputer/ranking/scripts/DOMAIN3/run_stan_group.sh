@@ -83,17 +83,24 @@ if [[ "${AXIS}" != "item" && "${AXIS}" != "annot" ]]; then
 fi
 
 domain3_setup_env
+DATASET_LABEL="${DOMAIN3_DATASET_LABEL:-DOMAIN3-FINAL}"
+DATA_ROOT="${DOMAIN3_DATA_ROOT:-DATA/STAN/DOMAIN3-FINAL}"
+SPLIT_PREFIX="${DOMAIN3_SPLIT_PREFIX:-DOMAIN3-FINAL}"
+EXP_PREFIX="${DOMAIN3_EXP_PREFIX:-domain3_final}"
+OVERRIDE_D="${DOMAIN3_OVERRIDE_D:-}"
+if [[ -z "${OVERRIDE_D}" && "${FAMILY_LABEL}" == "StanMisspecs" ]]; then
+    OVERRIDE_D="${DOMAIN3_MISSPEC_OVERRIDE_D:-16}"
+fi
 SIZES_TAG="${SIZES_CSV//,/__}"
 FAMILY_LABEL_LOWER="$(domain3_to_lower "${FAMILY_LABEL}")"
 MODEL_TAG_LOWER="$(domain3_to_lower "${MODEL_TAG}")"
-EXP_NAME="domain3_final_${FAMILY_LABEL_LOWER}_${MODEL_TAG_LOWER}_${AXIS}_${SIZES_TAG}"
+EXP_NAME="${EXP_PREFIX}_${FAMILY_LABEL_LOWER}_${MODEL_TAG_LOWER}_${AXIS}_${SIZES_TAG}"
 EXP_NAME="${EXP_NAME// /_}"
 domain3_enable_file_logging "${EXP_NAME}"
 domain3_enter_repo
 
 SCRIPT_START=$SECONDS
 
-DATA_ROOT="DATA/STAN/DOMAIN3-FINAL"
 CHAINS=1
 ITER_WARMUP=300
 ITER_SAMPLING=500
@@ -106,10 +113,12 @@ CSV_PATTERN="$(basename "${LOCAL_STAN_FILE%.stan}")-*.csv"
 
 IFS=',' read -r -a SIZE_LIST <<< "${SIZES_CSV}"
 
-domain3_print_block "DOMAIN3-FINAL | ${FAMILY_LABEL} | ${MODEL_LABEL} | ${AXIS}"
+domain3_print_block "${DATASET_LABEL} | ${FAMILY_LABEL} | ${MODEL_LABEL} | ${AXIS}"
 echo " OUTPUT_ROOT         : ${OUTPUT_ROOT}"
 echo " REPO_ROOT           : ${DOMAIN3_REPO_ROOT}"
 echo " LOG_FILE            : ${DOMAIN3_LOG_FILE}"
+echo " DATA_ROOT           : ${DATA_ROOT}"
+echo " SPLIT_PREFIX        : ${SPLIT_PREFIX}"
 echo " STAN_FILE           : ${STAN_FILE}"
 echo " STAGED_STAN_FILE    : ${LOCAL_STAN_FILE}"
 echo " CSV_PATTERN         : ${CSV_PATTERN}"
@@ -120,16 +129,17 @@ echo " ITER_SAMPLING       : ${ITER_SAMPLING}"
 echo " ADAPT_DELTA         : ${ADAPT_DELTA}"
 echo " MAX_TREEDEPTH       : ${MAX_TREEDEPTH}"
 echo " SEED                : ${SEED}"
+echo " OVERRIDE_D          : ${OVERRIDE_D:-none}"
 
 for RAW_SIZE in "${SIZE_LIST[@]}"; do
     SIZE="$(echo "${RAW_SIZE}" | xargs)"
     RUN_START=$SECONDS
 
     if [[ "${AXIS}" == "item" ]]; then
-        SPLIT_NAME="DOMAIN3-FINAL_Item_T_${SIZE}"
+        SPLIT_NAME="${SPLIT_PREFIX}_Item_T_${SIZE}"
         DATA_DIR="${DATA_ROOT}/ItemSplits/Transductive/${SPLIT_NAME}"
     else
-        SPLIT_NAME="DOMAIN3-FINAL_Annot_T_${SIZE}"
+        SPLIT_NAME="${SPLIT_PREFIX}_Annot_T_${SIZE}"
         DATA_DIR="${DATA_ROOT}/AnnotSplits/Transductive/${SPLIT_NAME}"
     fi
 
@@ -148,20 +158,26 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
 
     FIT_START=$SECONDS
     echo "[1/2] Running MCMC..."
-    python STAN/stan_code/scripts/run_inference.py \
-        --data-bundle        "${DATA_BUNDLE}"           \
-        --configs            "${DATA_DIR}/configs.json" \
-        --output-dir         "${OUTPUT_ROOT}"           \
-        --run-name           "${RUN_NAME}"              \
-        --stan-type          "tensor"                   \
-        --stan-file          "${LOCAL_STAN_FILE}"       \
-        --chains             "${CHAINS}"                \
-        --iter-warmup        "${ITER_WARMUP}"           \
-        --iter-sampling      "${ITER_SAMPLING}"         \
-        --adapt-delta        "${ADAPT_DELTA}"           \
-        --max-treedepth      "${MAX_TREEDEPTH}"         \
-        --seed               "${SEED}"                  \
+    RUN_INFERENCE_ARGS=(
+        --data-bundle "${DATA_BUNDLE}"
+        --configs "${DATA_DIR}/configs.json"
+        --output-dir "${OUTPUT_ROOT}"
+        --run-name "${RUN_NAME}"
+        --stan-type "tensor"
+        --stan-file "${LOCAL_STAN_FILE}"
+        --chains "${CHAINS}"
+        --iter-warmup "${ITER_WARMUP}"
+        --iter-sampling "${ITER_SAMPLING}"
+        --adapt-delta "${ADAPT_DELTA}"
+        --max-treedepth "${MAX_TREEDEPTH}"
+        --seed "${SEED}"
         --overwrite-existing-data
+    )
+    if [[ -n "${OVERRIDE_D}" ]]; then
+        RUN_INFERENCE_ARGS+=(--override-D "${OVERRIDE_D}")
+    fi
+    python STAN/stan_code/scripts/run_inference.py \
+        "${RUN_INFERENCE_ARGS[@]}"
     FIT_ELAPSED=$(( SECONDS - FIT_START ))
 
     FIT_PAYLOAD_JSON=$(cat <<EOF
@@ -179,6 +195,7 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
   "stan_file": "${STAN_FILE}",
   "staged_stan_file": "${LOCAL_STAN_FILE}",
   "csv_pattern": "${CSV_PATTERN}",
+  "override_D": ${OVERRIDE_D:-null},
   "fit_elapsed_seconds": ${FIT_ELAPSED},
   "mcmc": {
     "chains": ${CHAINS},
@@ -221,6 +238,7 @@ EOF
   "stan_file": "${STAN_FILE}",
   "staged_stan_file": "${LOCAL_STAN_FILE}",
   "csv_pattern": "${CSV_PATTERN}",
+  "override_D": ${OVERRIDE_D:-null},
   "fit_elapsed_seconds": ${FIT_ELAPSED},
   "eval_elapsed_seconds": ${EVAL_ELAPSED},
   "total_elapsed_seconds": ${RUN_ELAPSED},
@@ -243,6 +261,6 @@ EOF
 done
 
 TOTAL_ELAPSED=$(( SECONDS - SCRIPT_START ))
-domain3_print_block "DOMAIN3-FINAL | ${FAMILY_LABEL} | ${MODEL_LABEL} | ${AXIS} complete"
+domain3_print_block "${DATASET_LABEL} | ${FAMILY_LABEL} | ${MODEL_LABEL} | ${AXIS} complete"
 echo " TOTAL_TIME  : $(( TOTAL_ELAPSED / 60 ))m $(( TOTAL_ELAPSED % 60 ))s"
 echo " OUTPUT_ROOT : ${OUTPUT_ROOT}"
