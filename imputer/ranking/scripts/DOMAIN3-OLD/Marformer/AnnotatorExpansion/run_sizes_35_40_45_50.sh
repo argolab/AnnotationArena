@@ -4,14 +4,17 @@
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
 
-#SBATCH --job-name=D3OBAT1
+#SBATCH --job-name=D3OMAT1
 #SBATCH --output=/home/psingh54/scratchjeisner1/psingh54/Marformer/imputer/ranking/logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem-per-cpu=24GB
-#SBATCH --partition=cpu
-#SBATCH --time=24:00:00
+#SBATCH --cpus-per-task=4
+#SBATCH --mem-per-cpu=18GB
+#SBATCH --gpus=1
+#SBATCH --partition=a100
+#SBATCH --exclude=c001
+#SBATCH --mail-user="psingh54@jhu.edu"
+#SBATCH --time=18:00:00
 
 DOMAIN3_DEFAULT_CLUSTER_ROOT="/home/psingh54/scratchjeisner1/psingh54/Marformer/imputer/ranking"
 DOMAIN3_DEFAULT_LOCAL_ROOT="/Users/prabhavsingh/Documents/JHU/JHUResearch/Marformer/imputer/ranking"
@@ -30,11 +33,9 @@ fi
 
 export DOMAIN3_REPO_ROOT_OVERRIDE="${DOMAIN3_REPO_ROOT}"
 
-bash "${DOMAIN3_REPO_ROOT}/scripts/DOMAIN3-OLD/run_stan_group.sh" \
-    --family-label "StanMisspecs" \
-    --model-label "Stan Both" \
-    --model-tag "BOTH" \
-    --stan-file "STAN/stan_models/tensor_shared_annotator_projection_binning_raw_z.stan" \
-    --output-root "RESULTS/STAN/DOMAIN3-OLD/MISSPEC/ANNOT" \
+bash "${DOMAIN3_REPO_ROOT}/scripts/DOMAIN3-OLD/run_marformer_group.sh" \
+    --family-label "Marformer" \
+    --output-root "RESULTS/MARFORMER/DOMAIN3-OLD/ANNOT" \
     --axis "annot" \
-    --sizes "10,15,20,25,30,35,40,45,50"
+    --protocol "transductive" \
+    --sizes "35,40,45,50"

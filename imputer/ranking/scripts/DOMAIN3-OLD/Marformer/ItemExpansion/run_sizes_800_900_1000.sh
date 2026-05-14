@@ -4,7 +4,7 @@
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
 
-#SBATCH --job-name=D3OMAT1
+#SBATCH --job-name=D3OMIT1-800-1000
 #SBATCH --output=/home/psingh54/scratchjeisner1/psingh54/Marformer/imputer/ranking/logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -35,7 +35,7 @@ export DOMAIN3_REPO_ROOT_OVERRIDE="${DOMAIN3_REPO_ROOT}"
 
 bash "${DOMAIN3_REPO_ROOT}/scripts/DOMAIN3-OLD/run_marformer_group.sh" \
     --family-label "Marformer" \
-    --output-root "RESULTS/MARFORMER/DOMAIN3-OLD/ANNOT" \
-    --axis "annot" \
+    --output-root "RESULTS/MARFORMER/DOMAIN3-OLD/ITEM" \
+    --axis "item" \
     --protocol "transductive" \
-    --sizes "10,15,20,25,30,35,40,45,50"
+    --sizes "800,900,1000"

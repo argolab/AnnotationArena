@@ -4,7 +4,7 @@
 # 2024, Johns Hopkins University (Author: Prabhav Singh)
 # Apache 2.0.
 
-#SBATCH --job-name=D3OIAT1
+#SBATCH --job-name=D3OPAT1
 #SBATCH --output=/home/psingh54/scratchjeisner1/psingh54/Marformer/imputer/ranking/logs/%x_%j.out
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
@@ -32,9 +32,9 @@ export DOMAIN3_REPO_ROOT_OVERRIDE="${DOMAIN3_REPO_ROOT}"
 
 bash "${DOMAIN3_REPO_ROOT}/scripts/DOMAIN3-OLD/run_stan_group.sh" \
     --family-label "StanMisspecs" \
-    --model-label "Stan Bin" \
-    --model-tag "BIN" \
-    --stan-file "STAN/stan_models/tensor_shared_annotator_binning_raw_z.stan" \
+    --model-label "Stan Proj" \
+    --model-tag "PROJ" \
+    --stan-file "STAN/stan_models/tensor_shared_annotator_projection.stan" \
     --output-root "RESULTS/STAN/DOMAIN3-OLD/MISSPEC/ANNOT" \
     --axis "annot" \
-    --sizes "10,15,20,25,30,35,40,45,50"
+    --sizes "10,15,20,25,30,35,40,45"
