@@ -235,7 +235,7 @@ def _evaluate_checkpoint(
         types=model.types,
         global_param_dim=model.global_param_dim,
         device=device,
-        max_item=None
+        max_item=200
     )
 
     metrics = _compute_metrics(result)
