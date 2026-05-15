@@ -2,7 +2,7 @@
 Structural relation labels between a source rating cell and a target cell.
 
 Each cell is X_{i,j,k} with 0-based indices (attribute i, annotator j, item k).
-The mapping is deterministic, documented, and shared by Naive Bayes and log-linear baselines.
+The mapping is deterministic and used by structured naive Bayes pair factors.
 
 Precedence: two-index coincidences (same item+annot, same item+attr, same annot+attr)
 are distinguished before single-index cases, before UNRELATED.

@@ -1,17 +1,16 @@
 #!/usr/bin/env python3
 """
-Evaluate three simple baselines on domain-3 missing-rating prediction (same task as Marformer).
+Evaluate structured baselines on data_bundle.json missing-cell prediction.
 
-  1) NaiveBayesIJK — P(y|i,j,k) ∝ P(y)P(i|y)P(j|y)P(k|y), fit on observed pool (transductive opt).
-  2) StructuredNaiveBayes — relation-aware conditional NB from leave-one-out train plates.
-  3) StructuredLogLinear — same unigram + bigram features, softmax / cross-entropy.
+Models (always transductive: train+val+test observed):
+  - Pooled unigram P(y | i, j)
+  - Naive Bayes IJK
+  - Structured NB (global plate, 7-way relation pairs)
 
-Run from imputer/ranking (recommended):
+Run from imputer/ranking:
 
   python BASELINES/run_structured_baselines.py \\
-      --bundle DATA/STAN/DOMAIN3-ITEM/Tensor_.../data_bundle.json
-
-Or from BASELINES/ with PYTHONPATH including imputer/ranking.
+      --bundle DATA/LLMRubric_225_25_8_175/data_bundle.json
 """
 
 from __future__ import annotations
@@ -22,106 +21,94 @@ import sys
 from pathlib import Path
 
 BASE = Path(__file__).resolve().parent
-# Allow `python BASELINES/run_structured_baselines.py` from ranking cwd
 sys.path.insert(0, str(BASE))
 
-from structured_baselines.dataset_adapter import (
-    build_eval_examples,
-    build_test_examples,
-    build_training_examples,
-    bundle_dims,
-    load_bundle_dict,
+from structured_baselines.cli_defaults import (
+    DEFAULT_IJK_ALPHA,
+    DEFAULT_SNB_ALPHA,
+    DEFAULT_UNIGRAM_ALPHA,
 )
-from structured_baselines.log_linear_structured import StructuredLogLinear
-from structured_baselines.naive_bayes_ijk import NaiveBayesIJK
 from structured_baselines.naive_bayes_structured import StructuredNaiveBayes
+from structured_baselines.plate_graph_factorized import accumulate_transductive_counts
+from structured_baselines.runner import evaluate_split, load_and_fit
+from structured_baselines.dataset_adapter import transductive_observed_cells
+
+
+def _parse_alpha_sweep(s: str) -> list[float]:
+    out: list[float] = []
+    for part in s.split(","):
+        p = part.strip()
+        if not p:
+            continue
+        a = float(p)
+        if a <= 0.0:
+            raise ValueError(f"SNB α must be positive, got {a!r}")
+        out.append(a)
+    return out
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Structured + IJK baselines on data_bundle.json")
-    p.add_argument("--bundle", type=Path, required=True, help="Path to data_bundle.json")
-    p.add_argument(
-        "--train-instances",
-        default="train",
-        help="Comma-separated instances for LOO training plates (default: train). "
-        "Example: train,val",
-    )
-    p.add_argument(
-        "--no-ijk-transductive",
-        action="store_true",
-        help="If set, IJK NB fits on train+val observed only (excludes test-observed pool).",
-    )
-    p.add_argument("--ll-epochs", type=int, default=40)
-    p.add_argument("--ll-lr", type=float, default=0.05)
-    p.add_argument("--ll-batch", type=int, default=256)
-    p.add_argument("--device", default=None, help="cpu / cuda / cuda:0 for log-linear")
-    p.add_argument(
-        "--no-ll-tqdm",
-        action="store_true",
-        help="Disable tqdm during log-linear training (use with --ll-verbose for text progress)",
-    )
-    p.add_argument(
-        "--ll-tqdm-batches",
-        action="store_true",
-        help="Per-epoch batch-level tqdm (finer progress, more console noise)",
-    )
-    p.add_argument(
-        "--ll-verbose",
-        action="store_true",
-        help="Print per-epoch mean NLL in addition to tqdm",
-    )
-    p.add_argument("--eval-val", action="store_true", help="Also print val missing metrics.")
+    p = argparse.ArgumentParser(description="Structured baselines on data_bundle.json")
+    p.add_argument("--bundle", type=Path, required=True)
+    p.add_argument("--eval-val", action="store_true")
+    p.add_argument("--unigram-alpha", type=float, default=DEFAULT_UNIGRAM_ALPHA)
+    p.add_argument("--ijk-alpha", type=float, default=DEFAULT_IJK_ALPHA)
+    p.add_argument("--snb-alpha", type=float, default=DEFAULT_SNB_ALPHA)
+    p.add_argument("--snb-alpha-sweep", type=str, default="")
+    p.add_argument("--out", type=Path, default=None, help="Write metrics JSON")
     args = p.parse_args()
 
-    bundle = load_bundle_dict(args.bundle)
-    I, _J, C = bundle_dims(bundle, args.bundle)
-    K = max(
-        int(r["item"]) for r in (bundle.get("observed_ratings", []) + bundle.get("missing_ratings", []))
+    bundle, fitted = load_and_fit(
+        args.bundle,
+        unigram_alpha=args.unigram_alpha,
+        ijk_alpha=args.ijk_alpha,
+        snb_alpha=args.snb_alpha,
     )
-    train_inst = {s.strip() for s in args.train_instances.split(",") if s.strip()}
+    n_cells = len(transductive_observed_cells(bundle))
+    print(f"bundle: {args.bundle}  transductive cells={n_cells}")
 
-    train_ex = build_training_examples(bundle, instances=train_inst)
-    test_ex = build_test_examples(bundle)
+    results: dict = {"bundle": str(args.bundle), "n_transductive_cells": n_cells}
 
-    print(f"bundle: {args.bundle}")
-    print(f"dims I={I}, C={C}  |  train LOO examples={len(train_ex)}  test missing={len(test_ex)}")
+    if args.snb_alpha_sweep.strip():
+        from structured_baselines.dataset_adapter import bundle_dims, build_test_examples, build_eval_examples
 
-    nb_ijk = NaiveBayesIJK.fit_from_bundle(bundle, transductive=not args.no_ijk_transductive)
-    print("--- Naive Bayes IJK (test missing) ---")
-    print(json.dumps(nb_ijk.evaluate(test_ex), indent=2))
-
-    snb = StructuredNaiveBayes.fit(
-        train_ex,
-        num_attrs=I,
-        num_classes=C,
-        num_anns=_J,
-        num_items=K,
-    )
-    print("--- Structured Naive Bayes (test missing) ---")
-    print(json.dumps(snb.evaluate(test_ex), indent=2))
-
-    ll = StructuredLogLinear.fit(
-        train_ex,
-        num_attrs=I,
-        num_classes=C,
-        epochs=args.ll_epochs,
-        lr=args.ll_lr,
-        batch_size=args.ll_batch,
-        device=args.device,
-        verbose=args.ll_verbose,
-        show_progress=not args.no_ll_tqdm,
-        tqdm_batches=args.ll_tqdm_batches,
-        tqdm_desc=f"Log-linear | {args.bundle.parent.name}",
-    )
-    print("--- Structured log-linear (test missing) ---")
-    print(json.dumps(ll.evaluate(test_ex), indent=2))
-
-    if args.eval_val:
+        I, J, C = bundle_dims(bundle, args.bundle)
+        K = max(int(r["item"]) for r in bundle["observed_ratings"] + bundle["missing_ratings"])
+        counts = accumulate_transductive_counts(
+            transductive_observed_cells(bundle),
+            num_attrs=I,
+            num_classes=C,
+            num_anns=J,
+            num_items=K,
+        )
+        alphas = _parse_alpha_sweep(args.snb_alpha_sweep)
+        test_ex = build_test_examples(bundle)
         val_ex = build_eval_examples(bundle, "val")
-        print("--- (val missing) ---")
-        print("IJK:", json.dumps(nb_ijk.evaluate(val_ex)))
-        print("SNB:", json.dumps(snb.evaluate(val_ex)))
-        print("LL: ", json.dumps(ll.evaluate(val_ex)))
+        sweep: dict = {}
+        for a in alphas:
+            snb = StructuredNaiveBayes(counts=counts, alpha=a)
+            sweep[str(a)] = {
+                "test": snb.evaluate(test_ex),
+                "val": snb.evaluate(val_ex) if val_ex else {},
+            }
+        results["snb_alpha_sweep"] = sweep
+        print(json.dumps(sweep, indent=2))
+    else:
+        test_m = evaluate_split(fitted, bundle, "test")
+        results["test"] = test_m
+        for name, m in test_m.items():
+            print(f"--- {name} (test missing) ---")
+            print(json.dumps(m, indent=2))
+        if args.eval_val:
+            val_m = evaluate_split(fitted, bundle, "val")
+            results["val"] = val_m
+            print("--- (val missing) ---")
+            print(json.dumps(val_m, indent=2))
+
+    if args.out is not None:
+        args.out.parent.mkdir(parents=True, exist_ok=True)
+        args.out.write_text(json.dumps(results, indent=2) + "\n")
+        print(f"wrote {args.out}")
 
 
 if __name__ == "__main__":

@@ -1,24 +1,37 @@
-"""
-Structured missing-cell baselines for domain-3 (i, j, k) rating tensors.
+"""Structured baselines: unigram (ij), IJK NB, structured NB."""
 
-See README.md for model forms and usage.
-"""
-
-from .dataset_adapter import LocalExample, bundle_dims, build_test_examples, build_training_examples
-from .feature_utils import NUM_RELATIONS, RelationKind, relation_label
-from .log_linear_structured import StructuredLogLinear
+from .dataset_adapter import (
+    LocalExample,
+    build_eval_examples,
+    build_test_examples,
+    bundle_dims,
+    load_bundle_dict,
+    transductive_observed_cells,
+)
+from .runner import (
+    FittedBaselines,
+    calibration_probs_labels,
+    evaluate_split,
+    fit_baselines,
+    load_and_fit,
+)
 from .naive_bayes_ijk import NaiveBayesIJK
 from .naive_bayes_structured import StructuredNaiveBayes
+from .unigram_pooled import PooledUnigramIJ
 
 __all__ = [
-    "NUM_RELATIONS",
-    "RelationKind",
-    "relation_label",
     "LocalExample",
-    "bundle_dims",
-    "build_training_examples",
-    "build_test_examples",
+    "FittedBaselines",
+    "fit_baselines",
+    "load_and_fit",
+    "evaluate_split",
+    "calibration_probs_labels",
+    "PooledUnigramIJ",
     "NaiveBayesIJK",
     "StructuredNaiveBayes",
-    "StructuredLogLinear",
+    "bundle_dims",
+    "build_test_examples",
+    "build_eval_examples",
+    "load_bundle_dict",
+    "transductive_observed_cells",
 ]
