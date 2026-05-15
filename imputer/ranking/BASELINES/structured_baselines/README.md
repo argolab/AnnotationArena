@@ -31,49 +31,35 @@ python BASELINES/run_structured_baselines.py \
   --out RESULTS/metrics.json
 ```
 
-**LLM Rubric figures** (log loss, RMSE, and **calibration** vs train size + CPM STAN):
+## Plots (calibration and learning curves)
 
-```bash
-# All three PNGs (default)
-python scripts/utils/plot_llm_rubric_cpm_with_structured_baselines.py
+Full command reference (structured-only and **all baselines** including Marformer, STAN, ReMasker, MIWAE) → **[../README.md](../README.md)**.
 
-# Calibration reliability diagram only
-python scripts/utils/plot_llm_rubric_cpm_with_structured_baselines.py --calibration-only
-
-# Use val missing instead of test for calibration panels
-python scripts/utils/plot_llm_rubric_cpm_with_structured_baselines.py --calibration-split val
-```
-
-Outputs (defaults under `PLOTS/TALK/LLM_RUBRIC/`):
-
-- `llm_rubric_cpm_structured_baselines_log_loss.png`
-- `llm_rubric_cpm_structured_baselines_rmse.png`
-- `llm_rubric_cpm_structured_baselines_calibration.png` (smECE reliability panels)
-
-#### What is a “calibration plot” here?
-
-Each panel is a **reliability diagram** (confidence vs. accuracy, with a smooth calibration curve).
-The title reports **smECE** — lower is better calibrated. This is separate from log-loss or RMSE curves.
-
-**Calibration on any single bundle:**
+**Calibration** (reliability diagram + smECE; one bundle):
 
 ```bash
 python scripts/utils/plot_structured_baselines_calibration.py \
   --bundle path/to/data_bundle.json \
   --output PLOTS/my_calibration.png \
   --split test
-
-# Optional CPM panel
-python scripts/utils/plot_structured_baselines_calibration.py \
-  --bundle DATA/LLMRubric_225_25_9_175/data_bundle.json \
-  --cpm-eval-dir RESULTS/STAN/LLM_RUBRIC/CPM_SHARED_THRESHOLD/LLMRubric_225_25_9_175_eval \
-  --output PLOTS/cal_with_cpm.png
 ```
 
-**Together with Marformer / neural baselines** (LLM Rubric or SummEval grid):
+**Learning curves** (log loss / RMSE vs train size; folder of bundles):
 
 ```bash
-python scripts/utils/plot_realdata_calibration.py --dataset LLMRubric --sizes 175
+python scripts/utils/plot_structured_baselines_learning_curve.py \
+  --data-root DATA/STAN/DOMAIN3-FINAL/ItemSplits/Transductive \
+  --size-regex 'DOMAIN3-FINAL_Item_T_(\d+)$' \
+  --xlabel 'Training items' \
+  --title 'DOMAIN3-FINAL structured baselines' \
+  --output-logloss PLOTS/TALK/DOMAIN3-FINAL/item_T_log_loss.png \
+  --output-rmse PLOTS/TALK/DOMAIN3-FINAL/item_T_rmse.png
+```
+
+**LLM Rubric** (structured + CPM STAN curves):
+
+```bash
+python scripts/utils/plot_llm_rubric_cpm_with_structured_baselines.py
 ```
 
 **Smoke test:**
