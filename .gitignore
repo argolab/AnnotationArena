@@ -357,3 +357,4 @@ imputer/ranking/PLOTS
 imputer/ranking/STAN/stan_models/tensor_shared_annotator_binning_raw_z
 imputer/ranking/STAN/stan_models/tensor_shared_annotator_projection
 imputer/ranking/STAN/stan_models/tensor_shared_annotator_projection_binning_raw_z
+imputer/ranking/DATA/
