@@ -353,3 +353,7 @@ imputer/ranking/DATA/STAN/DOMAIN3-ITEM/Tensor_400_25_9_ItemTest_SharedThreshold_
 imputer/ranking/DATA/STAN/DOMAIN3-ITEM/Tensor_400_25_9_ItemTest_SharedThreshold_C4/Tensor_400_25_9_ItemTest_SharedThreshold_50_C4/stan_data.json
 imputer/ranking/STAN/stan_models/shared_threshold_tensor_model
 imputer/ranking/STAN/stan_models/shared_threshold_tensor_generation
+imputer/ranking/PLOTS
+imputer/ranking/STAN/stan_models/tensor_shared_annotator_binning_raw_z
+imputer/ranking/STAN/stan_models/tensor_shared_annotator_projection
+imputer/ranking/STAN/stan_models/tensor_shared_annotator_projection_binning_raw_z
