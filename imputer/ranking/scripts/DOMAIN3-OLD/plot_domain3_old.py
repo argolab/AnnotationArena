@@ -41,14 +41,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from BASELINES.structured_baselines.dataset_adapter import (
-    build_test_examples,
-    build_training_examples,
-    bundle_dims,
-)
-from BASELINES.structured_baselines.log_linear_structured import StructuredLogLinear
-from BASELINES.structured_baselines.naive_bayes_ijk import NaiveBayesIJK
-from BASELINES.structured_baselines.naive_bayes_structured import StructuredNaiveBayes
+from BASELINES.structured_baselines import calibration_probs_labels, load_and_fit
 from imputer.entity_mf.data import variable_list_to_entity_graph
 from imputer.entity_mf.model import EntityMarformer
 from imputer.entity_mf.test import _load_checkpoint, _reconstruct
@@ -68,9 +61,9 @@ SERIES_ORDER = [
     "Stan Both",
     "Stan Bin",
     "Stan Proj",
+    "Unigram Pool ij",
     "Naive Bayes IJK",
     "Structured NB",
-    "Structured Log-Linear",
 ]
 
 
@@ -94,6 +87,7 @@ class DatasetConfig:
     x_left_sizes: list[int] | None = None
     x_right_sizes: list[int] | None = None
     stan_cutoff: int | None = None
+    baseline_cutoff: int | None = None
 
 
 ITEM_CFG = DatasetConfig(
@@ -115,6 +109,7 @@ ITEM_CFG = DatasetConfig(
     x_left_sizes=ITEM_X_LEFT,
     x_right_sizes=ITEM_X_RIGHT,
     stan_cutoff=ITEM_STAN_CUTOFF,
+    baseline_cutoff=1000,
 )
 
 ANNOT_CFG = DatasetConfig(
@@ -132,6 +127,7 @@ ANNOT_CFG = DatasetConfig(
     stan_oracle_root=ROOT / "RESULTS/STAN/DOMAIN3-OLD/ORACLE/ANNOT",
     stan_oracle_eval_suffix="TENSOR_eval",
     misspec_root=ROOT / "RESULTS/STAN/DOMAIN3-OLD/MISSPEC/ANNOT",
+    baseline_cutoff=None,
 )
 
 
@@ -141,6 +137,11 @@ def parse_args() -> argparse.Namespace:
         "--use-summary",
         action="store_true",
         help="Reuse saved summary + cache instead of recomputing metrics and calibration payloads.",
+    )
+    parser.add_argument(
+        "--use-marformer-summary-only",
+        action="store_true",
+        help="Reuse only cached Marformer summary/cache, while rebuilding Stan and structured baselines.",
     )
     parser.add_argument(
         "--device",
@@ -209,6 +210,12 @@ def _source_size_for_cfg(cfg: DatasetConfig, display_size: int, available_sizes:
     if cfg.slug == "annot" or cfg.stan_cutoff is None:
         return display_size if display_size in available_sizes else None
     return _source_size_for_exact_or_extend(display_size, available_sizes, cfg.stan_cutoff)
+
+
+def _source_size_for_baseline_cfg(cfg: DatasetConfig, display_size: int, available_sizes: set[int]) -> int | None:
+    if cfg.slug == "annot" or cfg.baseline_cutoff is None:
+        return display_size if display_size in available_sizes else None
+    return _source_size_for_exact_or_extend(display_size, available_sizes, cfg.baseline_cutoff)
 
 
 def _marformer_run_dir(cfg: DatasetConfig, size: int) -> Path:
@@ -471,50 +478,27 @@ def _collect_misspec_payloads(cfg: DatasetConfig, suffix: str) -> tuple[dict[int
 def _collect_baseline_payloads(cfg: DatasetConfig, cutoff: int) -> tuple[dict[str, dict[int, tuple[np.ndarray, np.ndarray]]], dict[str, dict[int, float]]]:
     payloads: dict[str, dict[int, tuple[np.ndarray, np.ndarray]]] = {label: {} for label in shared.STRUCTURED_BASELINE_LABELS}
     runtime_minutes: dict[str, dict[int, float]] = {label: {} for label in shared.STRUCTURED_BASELINE_LABELS}
+    key_map = {
+        "Unigram Pool ij": "unigram_ij",
+        "Naive Bayes IJK": "ijk",
+        "Structured NB": "snb",
+    }
     for size in [s for s in cfg.display_sizes if s <= cutoff]:
         bundle_path = _bundle_path(cfg, size)
         if not bundle_path.exists():
             continue
-        bundle = _read_json(bundle_path)
-        test_examples = build_test_examples(bundle)
-        if not test_examples:
+        bundle, fitted = load_and_fit(bundle_path)
+        calibration_payloads = calibration_probs_labels(fitted, bundle, split="test")
+        if not calibration_payloads:
             continue
-        labels = np.asarray([ex.y for ex in test_examples], dtype=np.int64)
-        num_attrs, num_anns, num_classes = bundle_dims(bundle, bundle_path)
-        num_items = max(int(row["item"]) for row in (bundle.get("observed_ratings", []) + bundle.get("missing_ratings", [])))
-        train_examples = build_training_examples(bundle, instances={"train"})
-
         for label in shared.STRUCTURED_BASELINE_LABELS:
             start = time.perf_counter()
-            if label == "Naive Bayes IJK":
-                model = NaiveBayesIJK.fit_from_bundle(bundle, transductive=True)
-                probs = model.predict_proba(test_examples)
-            elif label == "Structured NB":
-                model = StructuredNaiveBayes.fit(
-                    train_examples,
-                    num_attrs=num_attrs,
-                    num_classes=num_classes,
-                    num_anns=num_anns,
-                    num_items=num_items,
-                )
-                probs = model.predict_proba(test_examples)
-            elif label == "Structured Log-Linear":
-                model = StructuredLogLinear.fit(
-                    train_examples,
-                    num_attrs=num_attrs,
-                    num_classes=num_classes,
-                    epochs=40,
-                    lr=0.05,
-                    batch_size=256,
-                    device=None,
-                    verbose=False,
-                    show_progress=False,
-                )
-                probs = model.predict_proba(test_examples)
-            else:
+            payload = calibration_payloads.get(key_map[label])
+            if payload is None:
                 continue
+            probs, labels = payload
             runtime_minutes[label][size] = (time.perf_counter() - start) / 60.0
-            payloads[label][size] = (probs.astype(np.float64), labels)
+            payloads[label][size] = (probs.astype(np.float64), labels.astype(np.int64))
     return payloads, runtime_minutes
 
 
@@ -597,9 +581,9 @@ def _load_cache(cache_path: Path) -> dict[tuple[str, int], tuple[np.ndarray, np.
             "stan_both": "Stan Both",
             "stan_bin": "Stan Bin",
             "stan_proj": "Stan Proj",
+            "unigram_pool_ij": "Unigram Pool ij",
             "naive_bayes_ijk": "Naive Bayes IJK",
             "structured_nb": "Structured NB",
-            "structured_log_linear": "Structured Log-Linear",
         }.get(model_key)
         if label is None:
             continue
@@ -612,6 +596,42 @@ def _load_cache(cache_path: Path) -> dict[tuple[str, int], tuple[np.ndarray, np.
             ckpt_name = str(data[ckpt_key][0])
         out[(label, size)] = (data[key], data[labels_key], ckpt_name)
     return out
+
+
+def _load_marformer_from_summary_cache(
+    cfg: DatasetConfig,
+) -> tuple[dict[int, tuple[str, np.ndarray, np.ndarray]], dict[int, float], dict[int, float]]:
+    if not cfg.summary_path.exists():
+        raise FileNotFoundError(f"Missing summary for {cfg.slug}: {cfg.summary_path}")
+    if not cfg.cache_path.exists():
+        raise FileNotFoundError(f"Missing cache for {cfg.slug}: {cfg.cache_path}")
+
+    payload = _read_json(cfg.summary_path)
+    rows = payload.get("rows", [])
+    cache = _load_cache(cfg.cache_path)
+    if cache is None:
+        raise RuntimeError(f"Failed to load cache: {cfg.cache_path}")
+
+    marformer_payloads: dict[int, tuple[str, np.ndarray, np.ndarray]] = {}
+    marformer_runtimes: dict[int, float] = {}
+    marformer_logloss_override: dict[int, float] = {}
+
+    for size in cfg.display_sizes:
+        cached = cache.get(("Marformer", size))
+        if cached is not None:
+            probs, labels, checkpoint_name = cached
+            marformer_payloads[size] = (checkpoint_name or "unknown.ckpt", probs, labels)
+
+        runtime_row = _summary_lookup(rows, "runtime_minutes", "Marformer", size)
+        if runtime_row is not None:
+            marformer_runtimes[size] = float(runtime_row["mean"])
+
+        logloss_row = _summary_lookup(rows, "log_loss", "Marformer", size)
+        if logloss_row is not None:
+            marformer_logloss_override[size] = float(logloss_row["mean"])
+
+    print(f"Used cached Marformer summary/cache -> {cfg.summary_path}")
+    return marformer_payloads, marformer_runtimes, marformer_logloss_override
 
 
 def _summary_rows_by_metric(rows: list[dict], metric: str) -> list[dict]:
@@ -814,39 +834,22 @@ def _plot_runtime(cfg: DatasetConfig, rows: list[dict], output_path: Path) -> No
 
     for label in ["Marformer", "Stan Oracle"]:
         xs: list[float] = []
-        sizes_for_points: list[int] = []
         ys: list[float] = []
-        for size in ITEM_CFG.display_sizes:
+        for size in cfg.display_sizes:
             row = _summary_lookup(rows, "runtime_minutes", label, size)
             if row is None:
                 continue
+            if label != "Marformer" and int(row.get("source_size", size)) != size:
+                continue
             xs.append(float(xs_pos[size]))
-            sizes_for_points.append(size)
             ys.append(float(row["mean"]))
         if not xs:
             continue
         linestyle, color, marker = shared._series_style(label)
-        if label == "Stan Oracle" and cfg.slug == "item":
-            xs_arr = np.asarray(xs, dtype=float)
-            sizes_arr = np.asarray(sizes_for_points, dtype=int)
-            ys_arr = np.asarray(ys, dtype=float)
-            pre_mask = sizes_arr <= ITEM_STAN_CUTOFF
-            post_mask = sizes_arr >= ITEM_STAN_CUTOFF
-            if np.any(pre_mask):
-                ax.plot(
-                    xs_arr[pre_mask], ys_arr[pre_mask], color=color, marker=marker, linestyle=linestyle,
-                    linewidth=shared._series_linewidth(label), alpha=shared._series_alpha(label), label=label,
-                )
-            if np.any(post_mask):
-                ax.plot(
-                    xs_arr[post_mask], ys_arr[post_mask], color=color, marker=marker, linestyle=":",
-                    linewidth=shared._series_linewidth(label), alpha=shared._series_alpha(label), label="_nolegend_",
-                )
-        else:
-            ax.plot(
-                xs, ys, color=color, marker=marker, linestyle=linestyle,
-                linewidth=shared._series_linewidth(label), alpha=shared._series_alpha(label), label=label,
-            )
+        ax.plot(
+            xs, ys, color=color, marker=marker, linestyle=linestyle,
+            linewidth=shared._series_linewidth(label), alpha=shared._series_alpha(label), label=label,
+        )
 
     ax.set_xlim(-0.4, len(display_sizes) - 0.6)
     ax.set_xticks(np.arange(len(display_sizes), dtype=float))
@@ -881,7 +884,7 @@ def _plot_calibration(cfg: DatasetConfig, rows: list[dict], cache: dict[tuple[st
 
     cal_dir = cfg.out_dir / "calibration"
     cal_dir.mkdir(parents=True, exist_ok=True)
-    calibration_models = ["Marformer", "Stan Oracle", "Stan Both", "Stan Bin", "Stan Proj", "Naive Bayes IJK", "Structured NB", "Structured Log-Linear"]
+    calibration_models = ["Marformer", "Stan Oracle", "Stan Both", "Stan Bin", "Stan Proj", "Unigram Pool ij", "Naive Bayes IJK", "Structured NB"]
 
     for size in cfg.display_sizes:
         payloads: list[tuple[str, tuple[np.ndarray, np.ndarray], str]] = []
@@ -915,10 +918,17 @@ def _plot_calibration(cfg: DatasetConfig, rows: list[dict], cache: dict[tuple[st
         print(f"Saved -> {output_path}")
 
 
-def _build_rows_and_cache(cfg: DatasetConfig, device_name: str) -> tuple[list[dict], dict[tuple[str, int], tuple[np.ndarray, np.ndarray, str | None]]]:
+def _build_rows_and_cache(
+    cfg: DatasetConfig,
+    device_name: str,
+    use_marformer_summary_only: bool = False,
+) -> tuple[list[dict], dict[tuple[str, int], tuple[np.ndarray, np.ndarray, str | None]]]:
     rows: list[dict] = []
 
-    marformer_payloads, marformer_runtimes, marformer_logloss_override = _collect_marformer_payloads(cfg, device_name)
+    if use_marformer_summary_only:
+        marformer_payloads, marformer_runtimes, marformer_logloss_override = _load_marformer_from_summary_cache(cfg)
+    else:
+        marformer_payloads, marformer_runtimes, marformer_logloss_override = _collect_marformer_payloads(cfg, device_name)
     oracle_payloads, oracle_runtimes = _collect_oracle_payloads(cfg)
     misspec_specs = [
         ("Stan Both", "BOTH"),
@@ -934,7 +944,7 @@ def _build_rows_and_cache(cfg: DatasetConfig, device_name: str) -> tuple[list[di
 
     baseline_payloads, baseline_runtimes = _collect_baseline_payloads(
         cfg,
-        cfg.stan_cutoff if cfg.stan_cutoff is not None else max(cfg.display_sizes),
+        cfg.baseline_cutoff if cfg.baseline_cutoff is not None else max(cfg.display_sizes),
     )
 
     available_oracle_sizes = set(oracle_payloads.keys())
@@ -958,12 +968,8 @@ def _build_rows_and_cache(cfg: DatasetConfig, device_name: str) -> tuple[list[di
             probs, labels = oracle_payloads[oracle_source]
             rows.append(_metric_row("Stan Oracle", size, oracle_source, "log_loss", _per_example_nll(probs, labels)))
             rows.append(_metric_row("Stan Oracle", size, oracle_source, "mbr_l2", _per_example_mse(probs, labels)))
-            if cfg.slug == "item" and cfg.stan_cutoff is not None and size > cfg.stan_cutoff:
-                runtime_source = _source_size_for_cfg(cfg, cfg.stan_cutoff, available_oracle_sizes)
-            else:
-                runtime_source = oracle_source
-            if runtime_source is not None and runtime_source in oracle_runtimes:
-                rows.append(_runtime_row("Stan Oracle", size, runtime_source, oracle_runtimes[runtime_source]))
+            if size in oracle_runtimes:
+                rows.append(_runtime_row("Stan Oracle", size, size, oracle_runtimes[size]))
 
         for label, _suffix in misspec_specs:
             source_size = _source_size_for_cfg(cfg, size, available_misspec_sizes[label])
@@ -972,32 +978,25 @@ def _build_rows_and_cache(cfg: DatasetConfig, device_name: str) -> tuple[list[di
             probs, labels = misspec_payloads[label][source_size]
             rows.append(_metric_row(label, size, source_size, "log_loss", _per_example_nll(probs, labels)))
             rows.append(_metric_row(label, size, source_size, "mbr_l2", _per_example_mse(probs, labels)))
-            if cfg.slug == "item" and cfg.stan_cutoff is not None and size > cfg.stan_cutoff:
-                runtime_source = _source_size_for_cfg(cfg, cfg.stan_cutoff, available_misspec_sizes[label])
-            else:
-                runtime_source = source_size
-            if runtime_source is not None and runtime_source in misspec_runtimes[label]:
-                rows.append(_runtime_row(label, size, runtime_source, misspec_runtimes[label][runtime_source]))
+            if size in misspec_runtimes[label]:
+                rows.append(_runtime_row(label, size, size, misspec_runtimes[label][size]))
 
         for label in shared.STRUCTURED_BASELINE_LABELS:
-            source_size = _source_size_for_cfg(cfg, size, available_baseline_sizes[label])
+            source_size = _source_size_for_baseline_cfg(cfg, size, available_baseline_sizes[label])
             if source_size is None:
                 continue
             probs, labels = baseline_payloads[label][source_size]
             rows.append(_metric_row(label, size, source_size, "log_loss", _per_example_nll(probs, labels)))
             rows.append(_metric_row(label, size, source_size, "mbr_l2", _per_example_mse(probs, labels)))
-            if cfg.slug == "item" and cfg.stan_cutoff is not None and size > cfg.stan_cutoff:
-                runtime_source = _source_size_for_cfg(cfg, cfg.stan_cutoff, available_baseline_sizes[label])
-            else:
-                runtime_source = source_size
-            if runtime_source is not None and runtime_source in baseline_runtimes[label]:
-                rows.append(_runtime_row(label, size, runtime_source, baseline_runtimes[label][runtime_source]))
+            if size in baseline_runtimes[label]:
+                rows.append(_runtime_row(label, size, size, baseline_runtimes[label][size]))
 
     _write_json(cfg.summary_path, {
         "dataset": cfg.slug,
         "display_sizes": cfg.display_sizes,
         "stan_cutoff": cfg.stan_cutoff,
-        "marformer_eval_max_item_rule": "item: None through 700, then 300; annot: 100",
+        "baseline_cutoff": cfg.baseline_cutoff,
+        "marformer_eval_max_item_rule": "item: None through 700, then 300; annot: None",
         "rows": rows,
         "marformer_selection": {
             str(size): {"checkpoint": checkpoint_name}
@@ -1009,7 +1008,12 @@ def _build_rows_and_cache(cfg: DatasetConfig, device_name: str) -> tuple[list[di
     return rows, {} if cache is None else cache
 
 
-def _plot_dataset(cfg: DatasetConfig, use_summary: bool, device_name: str) -> None:
+def _plot_dataset(
+    cfg: DatasetConfig,
+    use_summary: bool,
+    device_name: str,
+    use_marformer_summary_only: bool = False,
+) -> None:
     if use_summary:
         if not cfg.summary_path.exists():
             raise FileNotFoundError(f"Missing summary for {cfg.slug}: {cfg.summary_path}")
@@ -1022,7 +1026,11 @@ def _plot_dataset(cfg: DatasetConfig, use_summary: bool, device_name: str) -> No
             raise RuntimeError(f"Failed to load cache: {cfg.cache_path}")
         print(f"Used cached summary -> {cfg.summary_path}")
     else:
-        rows, cache = _build_rows_and_cache(cfg, device_name)
+        rows, cache = _build_rows_and_cache(
+            cfg,
+            device_name,
+            use_marformer_summary_only=use_marformer_summary_only,
+        )
         print(f"Saved summary -> {cfg.summary_path}")
 
     _plot_metric(
@@ -1045,16 +1053,28 @@ def _plot_dataset(cfg: DatasetConfig, use_summary: bool, device_name: str) -> No
     _plot_calibration(cfg, rows, cache)
 
 
-def _plot_item(cfg: DatasetConfig, use_summary: bool, device_name: str) -> None:
-    _plot_dataset(cfg, use_summary, device_name)
+def _plot_item(
+    cfg: DatasetConfig,
+    use_summary: bool,
+    device_name: str,
+    use_marformer_summary_only: bool = False,
+) -> None:
+    _plot_dataset(cfg, use_summary, device_name, use_marformer_summary_only=use_marformer_summary_only)
 
 
-def _plot_annot(cfg: DatasetConfig, use_summary: bool, device_name: str) -> None:
-    _plot_dataset(cfg, use_summary, device_name)
+def _plot_annot(
+    cfg: DatasetConfig,
+    use_summary: bool,
+    device_name: str,
+    use_marformer_summary_only: bool = False,
+) -> None:
+    _plot_dataset(cfg, use_summary, device_name, use_marformer_summary_only=use_marformer_summary_only)
 
 
 def main() -> None:
     args = parse_args()
+    if args.use_summary and args.use_marformer_summary_only:
+        raise ValueError("Use either --use-summary or --use-marformer-summary-only, not both.")
     device_name = _choose_device(args.device)
     shared.MISSPEC_ROOT = ROOT / "RESULTS/STAN/DOMAIN3-OLD/MISSPEC"
     shared.MISSPEC_MODELS = [
@@ -1063,9 +1083,19 @@ def main() -> None:
         ("Stan Proj", "PROJ"),
     ]
     if args.part in {"all", "item"}:
-        _plot_item(ITEM_CFG, use_summary=args.use_summary, device_name=device_name)
+        _plot_item(
+            ITEM_CFG,
+            use_summary=args.use_summary,
+            device_name=device_name,
+            use_marformer_summary_only=args.use_marformer_summary_only,
+        )
     if args.part in {"all", "annot"}:
-        _plot_annot(ANNOT_CFG, use_summary=args.use_summary, device_name=device_name)
+        _plot_annot(
+            ANNOT_CFG,
+            use_summary=args.use_summary,
+            device_name=device_name,
+            use_marformer_summary_only=args.use_marformer_summary_only,
+        )
 
 
 if __name__ == "__main__":
