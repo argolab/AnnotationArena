@@ -1,6 +1,9 @@
 # Local test/scratch directory
 imputer/ranking/test_data/
 
+# Claude orientation notes
+imputer/ranking/CLAUDE/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -215,6 +218,7 @@ src/plot.py
 src/post_analysis.py
 src/analysis
 src/*.png 
+imputer/ranking/appendix/
 LLM-Rubric/*
 src/input_llm_rubric/data
 src/output_llm_rubric
@@ -318,3 +322,5 @@ imputer/ranking/STAN/stan_models/tensor_shared_annotator_projection_binning_raw_
 imputer/ranking/STAN/stan_models/tensor_shared_annotator_projection.an
 
 imputer/ranking/DATA/STAN/DOMAIN3-OLD
+imputer/ranking/CLAUDE
+imputer/ranking/scripts/DOMAIN3-OLD/MarformerEmb

@@ -31,14 +31,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
 
-from BASELINES.structured_baselines.dataset_adapter import (
-    build_test_examples,
-    build_training_examples,
-    bundle_dims,
-)
-from BASELINES.structured_baselines.log_linear_structured import StructuredLogLinear
-from BASELINES.structured_baselines.naive_bayes_ijk import NaiveBayesIJK
-from BASELINES.structured_baselines.naive_bayes_structured import StructuredNaiveBayes
+from BASELINES.structured_baselines import calibration_probs_labels, load_and_fit
 from imputer.entity_mf.data import variable_list_to_entity_graph
 from imputer.entity_mf.test import _load_checkpoint, _reconstruct
 
@@ -81,9 +74,9 @@ COLORS = {
     "Stan Both": "#9f2f5f",
     "Stan Bin": "#b85aa0",
     "Stan Proj": "#d98bc2",
+    "Unigram Pool ij": "#14532d",
     "Naive Bayes IJK": "#1f7a4d",
     "Structured NB": "#2fa36b",
-    "Structured Log-Linear": "#73c69d",
     "Best Unigram": "#6b7280",
 }
 
@@ -93,9 +86,9 @@ MARKERS = {
     "Stan Both": "s",
     "Stan Bin": "P",
     "Stan Proj": "X",
+    "Unigram Pool ij": "h",
     "Naive Bayes IJK": "v",
     "Structured NB": ">",
-    "Structured Log-Linear": "<",
     "Best Unigram": "D",
 }
 
@@ -113,9 +106,9 @@ UNIGRAM_VARIANTS = {
 }
 
 STRUCTURED_BASELINE_LABELS = [
+    "Unigram Pool ij",
     "Naive Bayes IJK",
     "Structured NB",
-    "Structured Log-Linear",
 ]
 
 
@@ -424,51 +417,21 @@ def _bundle_num_items(bundle: dict) -> int:
 @lru_cache(maxsize=None)
 def _structured_baseline_probs_and_labels(spec_slug: str, size: int, method: str) -> tuple[np.ndarray, np.ndarray] | None:
     spec = ITEM_SPEC if spec_slug == "item" else ANNOT_SPEC
-    bundle = _bundle(spec_slug, size)
     bundle_path = _bundle_path(spec, size)
-    test_examples = build_test_examples(bundle)
-    if not test_examples:
+    bundle, fitted = load_and_fit(bundle_path)
+    payloads = calibration_probs_labels(fitted, bundle, split="test")
+    key_map = {
+        "Unigram Pool ij": "unigram_ij",
+        "Naive Bayes IJK": "ijk",
+        "Structured NB": "snb",
+    }
+    payload = payloads.get(key_map[method])
+    if payload is None:
         return None
-
-    I, J, C = bundle_dims(bundle, bundle_path)
-    K = _bundle_num_items(bundle)
-
-    if method == "Naive Bayes IJK":
-        model = NaiveBayesIJK.fit_from_bundle(bundle, transductive=True)
-        probs = model.predict_proba(test_examples)
-    else:
-        train_examples = build_training_examples(bundle, instances={"train"})
-        if not train_examples:
-            return None
-        if method == "Structured NB":
-            model = StructuredNaiveBayes.fit(
-                train_examples,
-                num_attrs=I,
-                num_classes=C,
-                num_anns=J,
-                num_items=K,
-            )
-            probs = model.predict_proba(test_examples)
-        elif method == "Structured Log-Linear":
-            model = StructuredLogLinear.fit(
-                train_examples,
-                num_attrs=I,
-                num_classes=C,
-                epochs=40,
-                lr=0.05,
-                batch_size=256,
-                device=None,
-                verbose=False,
-                show_progress=False,
-            )
-            probs = model.predict_proba(test_examples)
-        else:
-            raise ValueError(f"Unknown structured baseline method: {method}")
-
-    labels = np.asarray([ex.y for ex in test_examples], dtype=np.int64)
+    probs, labels = payload
     if probs.shape[0] != labels.shape[0]:
         return None
-    return probs, labels
+    return probs.astype(np.float64), labels.astype(np.int64)
 
 
 def _global_probs_from_observed(observed: list[dict], num_classes: int) -> np.ndarray:
@@ -652,9 +615,9 @@ def _series_labels() -> list[str]:
         "Stan Both",
         "Stan Bin",
         "Stan Proj",
+        "Unigram Pool ij",
         "Naive Bayes IJK",
         "Structured NB",
-        "Structured Log-Linear",
         "Best Unigram",
     ]
 

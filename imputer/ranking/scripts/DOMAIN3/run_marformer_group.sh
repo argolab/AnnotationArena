@@ -28,6 +28,7 @@ OUTPUT_ROOT=""
 AXIS=""
 PROTOCOL=""
 SIZES_CSV=""
+USE_EMBED_UNEMBED=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -50,6 +51,10 @@ while [[ $# -gt 0 ]]; do
         --sizes)
             SIZES_CSV="$2"
             shift 2
+            ;;
+        --use-embed-unembed)
+            USE_EMBED_UNEMBED=true
+            shift 1
             ;;
         *)
             echo "Unknown argument: $1" >&2
@@ -148,6 +153,8 @@ OVERWRITE_FLAG=""
 [ "${OVERWRITE_EXISTING}" = "true" ] && OVERWRITE_FLAG="--overwrite-existing-data"
 TRANSDUCTIVE_FLAG=""
 [ "${PROTOCOL}" = "transductive" ] && TRANSDUCTIVE_FLAG="--transductive-learning"
+EMBED_UNEMBED_FLAG=""
+[ "${USE_EMBED_UNEMBED}" = "true" ] && EMBED_UNEMBED_FLAG="--use-embed-unembed"
 
 IFS=',' read -r -a SIZE_LIST <<< "${SIZES_CSV}"
 
@@ -179,6 +186,7 @@ echo " TYPE_EMBEDDING_INIT : ${TYPE_EMBEDDING_INIT}"
 echo " USE_POINTER         : ${USE_POINTER}"
 echo " SCALE_SHARED_REL    : ${SCALE_SHARED_REL}"
 echo " TRANSDUCTIVE        : $([ "${PROTOCOL}" = "transductive" ] && echo "true" || echo "false")"
+echo " USE_EMBED_UNEMBED   : ${USE_EMBED_UNEMBED}"
 
 for RAW_SIZE in "${SIZE_LIST[@]}"; do
     SIZE="$(echo "${RAW_SIZE}" | xargs)"
@@ -249,6 +257,7 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
         ${DEVNORM_FLAG}                                    \
         ${GRAPHMASK_FLAG}                                  \
         ${LLM_DIST_FLAG}                                   \
+        ${EMBED_UNEMBED_FLAG}                              \
         ${OVERWRITE_FLAG}
 
     RUN_ELAPSED=$(( SECONDS - RUN_START ))
@@ -296,7 +305,8 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
     "use_deviation_norm": ${USE_DEVIATION_NORM},
     "use_graph_mask": ${USE_GRAPH_MASK},
     "llm_input_dist": ${LLM_INPUT_DIST},
-    "transductive_learning": $([ "${PROTOCOL}" = "transductive" ] && echo true || echo false)
+    "transductive_learning": $([ "${PROTOCOL}" = "transductive" ] && echo true || echo false),
+    "use_embed_unembed": ${USE_EMBED_UNEMBED}
   }
 }
 EOF
