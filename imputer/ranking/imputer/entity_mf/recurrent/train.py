@@ -1,14 +1,14 @@
 """
-Entity Marformer training module.
+Recurrent Entity Marformer training.
 
 Usage:
-python -m imputer.entity_mf.train --data-dir path/to/bundle_dir --epochs 50 --device cuda
+  python -m imputer.entity_mf.recurrent.train --data-dir ... --prelude-depth 0 \\
+      --num-core-layers 4 --num-recurrence 2 --coda-depth 0
 """
 from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Any, Dict
 
 import torch
 import pytorch_lightning as pl
@@ -16,14 +16,10 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.plugins.environments import LightningEnvironment
 
-from imputer.data import DataConverter, RankingData
-
-from .config import EntityMarformerConfig
-from .types import build_default_domain3_types
-from .data import variable_list_to_entity_graph
-from .model import EntityMarformer
-from .lightning_module import EntityMarformerLightningModule
-from .train_utils import (
+from imputer.entity_mf.types import build_default_domain3_types
+from imputer.entity_mf.data import variable_list_to_entity_graph
+from imputer.entity_mf.lightning_module import EntityMarformerLightningModule
+from imputer.entity_mf.train_utils import (
     add_common_training_args,
     apply_common_model_config,
     load_bundle_and_converter,
@@ -33,64 +29,61 @@ from .train_utils import (
     shared_training_config_dict,
 )
 
+from .config import RecurrentMarformerConfig
+from .model import RecurrentEntityMarformer
 
-def build_entity_marformer_from_bundle(
-    bundle: Any,
-    converter: DataConverter,
-    sizes: Dict[str, int],
-    config: EntityMarformerConfig,
-    annotator_reg_weight: float = 0.0,
-    llm_input_dist: bool = False,
-    item_dropout_rate: float = 1.0,
-    annotator_dropout_rate: float = 0.0,
-) -> tuple[EntityMarformer, Any]:
-    train_observed: list[RankingData] = converter.create_variables_from_bundle(
-        bundle, partition="train", status="observed"
+
+def add_recurrent_training_args(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--prelude-depth",
+        type=int,
+        default=None,
+        help="Unique transformer blocks before the recurrent core.",
     )
-    train_missing: list[RankingData] = converter.create_variables_from_bundle(
-        bundle, partition="train", status="missing"
+    parser.add_argument(
+        "--num-core-layers",
+        type=int,
+        default=None,
+        help="Number of distinct parameter layers in the recurrent core.",
     )
-    train_all = train_observed + train_missing
-    types = build_default_domain3_types(
-        num_attributes=sizes["num_attributes"],
-        num_annotators=sizes["num_annotators"],
-        num_items=sizes["num_items"],
-        num_likert_classes=sizes["num_likert_classes"],
-        max_rank_size=converter.max_rank_size,
-        logit_high=config.logit_high,
-        annotator_reg_weight=annotator_reg_weight,
-        llm_input_dist=llm_input_dist,
-        item_dropout_rate=item_dropout_rate,
-        annotator_dropout_rate=annotator_dropout_rate,
+    parser.add_argument(
+        "--num-recurrence",
+        type=int,
+        default=None,
+        help="Number of times the core stack is applied (unroll steps).",
     )
-    graph = variable_list_to_entity_graph(train_all, types)
-    model = EntityMarformer(
-        config=config,
-        types=types,
-        num_relationships=graph.num_relationships,
+    parser.add_argument(
+        "--coda-depth",
+        type=int,
+        default=None,
+        help="Unique transformer blocks after the recurrent core.",
     )
-    return model, graph
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Trainer for flat Entity Marformer (entity_mf).")
-    add_common_training_args(parser)
-    parser.add_argument(
-        "--num-layers",
-        type=int,
-        default=None,
-        help="Override EntityMarformerConfig.num_layers (flat stack depth).",
+    parser = argparse.ArgumentParser(
+        description="Trainer for Recurrent Entity Marformer (entity_mf.recurrent)."
     )
+    add_common_training_args(parser)
+    add_recurrent_training_args(parser)
+    parser.set_defaults(output_root="RESULTS/RECURRENT_MARFORMER")
     args = parser.parse_args()
 
     pl.seed_everything(args.seed, workers=True)
     data_dir = Path(args.data_dir)
     bundle, converter, sizes = load_bundle_and_converter(data_dir)
 
-    config = EntityMarformerConfig()
+    config = RecurrentMarformerConfig()
     apply_common_model_config(config, args)
-    if args.num_layers is not None:
-        config.num_layers = args.num_layers
+    if args.prelude_depth is not None:
+        config.prelude_depth = args.prelude_depth
+    if args.num_core_layers is not None:
+        config.num_core_layers = args.num_core_layers
+    if args.num_recurrence is not None:
+        config.num_recurrence = args.num_recurrence
+    if args.coda_depth is not None:
+        config.coda_depth = args.coda_depth
+    config.validate()
 
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
@@ -114,7 +107,7 @@ def main():
         bundle, partition="train", status="missing"
     )
     graph0 = variable_list_to_entity_graph(train_observed_tmp + train_missing_tmp, types)
-    model = EntityMarformer(
+    model = RecurrentEntityMarformer(
         config=config,
         types=types,
         num_relationships=graph0.num_relationships,
@@ -129,12 +122,22 @@ def main():
         try:
             run_dir = new_run_dir(output_root, run_name=args.run_name)
         except FileExistsError as e:
-            raise RuntimeError(f"Run directory already exists for Entity Marformer: {e}") from e
+            raise RuntimeError(
+                f"Run directory already exists for Recurrent Marformer: {e}"
+            ) from e
 
     model_cfg = shared_model_config_dict(config, model.global_param_dim)
-    model_cfg["num_layers"] = config.num_layers
+    model_cfg.update(
+        {
+            "prelude_depth": config.prelude_depth,
+            "num_core_layers": config.num_core_layers,
+            "num_recurrence": config.num_recurrence,
+            "coda_depth": config.coda_depth,
+            "effective_depth": config.effective_depth,
+        }
+    )
     train_config = {
-        "model_type": "entity_marformer",
+        "model_type": "recurrent_entity_marformer",
         "data": {"data_dir": str(data_dir)},
         "resolved_sizes": sizes,
         "model": model_cfg,
@@ -165,7 +168,7 @@ def main():
         lr_min=args.lr_min,
         lr_step_epoch=args.lr_step_epoch,
         random_item_chunks=bool(args.random_item_chunks),
-        log_prefix="EntityMarformer",
+        log_prefix="RecurrentMarformer",
     )
 
     accelerator = "gpu" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
