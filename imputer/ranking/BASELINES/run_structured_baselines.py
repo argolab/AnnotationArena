@@ -6,11 +6,15 @@ Models (always transductive: train+val+test observed):
   - Pooled unigram P(y | i, j)
   - Naive Bayes IJK
   - Structured NB (global plate, 7-way relation pairs)
+  - Optional: structured log-linear (softmax over same features; PyTorch; val early stopping when val missing exists; train-missing supervision or train-observed fallback for LLM Rubric–style splits)
 
 Run from imputer/ranking:
 
   python BASELINES/run_structured_baselines.py \\
       --bundle DATA/LLMRubric_225_25_8_175/data_bundle.json
+
+  python BASELINES/run_structured_baselines.py \\
+      --bundle path/to/data_bundle.json --log-linear --log-linear-progress
 """
 
 from __future__ import annotations
@@ -25,6 +29,10 @@ sys.path.insert(0, str(BASE))
 
 from structured_baselines.cli_defaults import (
     DEFAULT_IJK_ALPHA,
+    DEFAULT_LOG_LINEAR_BATCH,
+    DEFAULT_LOG_LINEAR_EPOCHS,
+    DEFAULT_LOG_LINEAR_LR,
+    DEFAULT_LOG_LINEAR_PATIENCE,
     DEFAULT_SNB_ALPHA,
     DEFAULT_UNIGRAM_ALPHA,
 )
@@ -55,6 +63,17 @@ def main() -> None:
     p.add_argument("--ijk-alpha", type=float, default=DEFAULT_IJK_ALPHA)
     p.add_argument("--snb-alpha", type=float, default=DEFAULT_SNB_ALPHA)
     p.add_argument("--snb-alpha-sweep", type=str, default="")
+    p.add_argument("--log-linear", action="store_true", help="Fit structured log-linear (train-missing CE; val early stopping if val missing exists)")
+    p.add_argument("--log-linear-epochs", type=int, default=DEFAULT_LOG_LINEAR_EPOCHS)
+    p.add_argument("--log-linear-lr", type=float, default=DEFAULT_LOG_LINEAR_LR)
+    p.add_argument("--log-linear-batch", type=int, default=DEFAULT_LOG_LINEAR_BATCH)
+    p.add_argument(
+        "--log-linear-patience",
+        type=int,
+        default=DEFAULT_LOG_LINEAR_PATIENCE,
+        help="Val NLL early-stopping patience; 0 = run all epochs",
+    )
+    p.add_argument("--log-linear-progress", action="store_true", help="tqdm training progress for log-linear")
     p.add_argument("--out", type=Path, default=None, help="Write metrics JSON")
     args = p.parse_args()
 
@@ -63,6 +82,14 @@ def main() -> None:
         unigram_alpha=args.unigram_alpha,
         ijk_alpha=args.ijk_alpha,
         snb_alpha=args.snb_alpha,
+        fit_log_linear=args.log_linear,
+        log_linear_epochs=args.log_linear_epochs,
+        log_linear_lr=args.log_linear_lr,
+        log_linear_batch_size=args.log_linear_batch,
+        log_linear_early_stopping_patience=(
+            None if args.log_linear_patience == 0 else args.log_linear_patience
+        ),
+        log_linear_show_progress=args.log_linear_progress,
     )
     n_cells = len(transductive_observed_cells(bundle))
     print(f"bundle: {args.bundle}  transductive cells={n_cells}")

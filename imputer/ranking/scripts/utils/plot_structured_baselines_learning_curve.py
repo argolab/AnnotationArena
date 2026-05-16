@@ -44,7 +44,14 @@ _UTILS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_RANKING_ROOT / "BASELINES"))
 sys.path.insert(0, str(_UTILS_DIR))
 
-from structured_baselines.cli_defaults import DEFAULT_SNB_ALPHA, DEFAULT_UNIGRAM_ALPHA
+from structured_baselines.cli_defaults import (
+    DEFAULT_LOG_LINEAR_BATCH,
+    DEFAULT_LOG_LINEAR_EPOCHS,
+    DEFAULT_LOG_LINEAR_LR,
+    DEFAULT_LOG_LINEAR_PATIENCE,
+    DEFAULT_SNB_ALPHA,
+    DEFAULT_UNIGRAM_ALPHA,
+)
 from structured_baselines.dataset_adapter import (
     build_eval_examples,
     build_test_examples,
@@ -57,12 +64,14 @@ PANEL_TITLES = {
     "unigram_ij": "Unigram (pool ij)",
     "ijk": "Naive Bayes (i,j,k)",
     "snb": "Structured NB",
+    "log_linear": "Structured log-linear",
 }
 CURVE_STYLES = {
     "stan": ("#1b9e77", "o", "-"),
     "unigram_ij": ("#0b7285", ">", ":"),
     "ijk": ("#111111", "*", "-."),
     "snb": ("#e7298a", "s", "-"),
+    "log_linear": ("#7570b3", "d", "--"),
 }
 
 
@@ -82,6 +91,21 @@ def _rmse_from_proba(examples, probs: np.ndarray) -> float | None:
     pred = probs @ classes
     truth = np.array([ex.y + 1 for ex in examples], dtype=np.float64)
     return float(np.sqrt(np.mean((pred - truth) ** 2)))
+
+
+def _log_linear_fit_kw(args: argparse.Namespace) -> dict:
+    if not args.log_linear:
+        return {}
+    return {
+        "fit_log_linear": True,
+        "log_linear_epochs": args.log_linear_epochs,
+        "log_linear_lr": args.log_linear_lr,
+        "log_linear_batch_size": args.log_linear_batch,
+        "log_linear_early_stopping_patience": (
+            None if args.log_linear_patience == 0 else args.log_linear_patience
+        ),
+        "log_linear_show_progress": args.log_linear_progress,
+    }
 
 
 def _discover_bundles(data_root: Path, size_re: re.Pattern[str]) -> list[tuple[int, Path]]:
@@ -193,13 +217,16 @@ def _plot_calibration(
     split: str,
     snb_alpha: float,
     unigram_alpha: float,
+    fit_kw: dict,
     output: Path,
     stan_label: str,
 ) -> None:
     from reliability_diagram import plot_reliability_panels
 
     bundle = load_bundle_dict(bundle_path)
-    fitted = fit_baselines(bundle, bundle_path, snb_alpha=snb_alpha, unigram_alpha=unigram_alpha)
+    fitted = fit_baselines(
+        bundle, bundle_path, snb_alpha=snb_alpha, unigram_alpha=unigram_alpha, **fit_kw
+    )
     arrays = calibration_probs_labels(fitted, bundle, split)
 
     panels: list[tuple[str, np.ndarray | None, np.ndarray | None, str]] = []
@@ -225,8 +252,8 @@ def _plot_calibration(
                             (stan_label, grouped.to_numpy(dtype=np.float64), labels, CURVE_STYLES["stan"][0])
                         )
 
-    colors = {"unigram_ij": "#0b7285", "ijk": "#111111", "snb": "#e7298a"}
-    for key in ("unigram_ij", "ijk", "snb"):
+    colors = {"unigram_ij": "#0b7285", "ijk": "#111111", "snb": "#e7298a", "log_linear": "#7570b3"}
+    for key in ("unigram_ij", "ijk", "snb", "log_linear"):
         if key in arrays:
             probs, labels = arrays[key]
             panels.append((PANEL_TITLES[key], probs, labels, colors[key]))
@@ -268,6 +295,17 @@ def main() -> None:
     ap.add_argument("--output-calibration", type=Path, default=None)
     ap.add_argument("--calibration-size", type=int, default=0, help="0 = largest size")
     ap.add_argument("--no-calibration", action="store_true")
+    ap.add_argument("--log-linear", action="store_true")
+    ap.add_argument("--log-linear-epochs", type=int, default=DEFAULT_LOG_LINEAR_EPOCHS)
+    ap.add_argument("--log-linear-lr", type=float, default=DEFAULT_LOG_LINEAR_LR)
+    ap.add_argument("--log-linear-batch", type=int, default=DEFAULT_LOG_LINEAR_BATCH)
+    ap.add_argument(
+        "--log-linear-patience",
+        type=int,
+        default=DEFAULT_LOG_LINEAR_PATIENCE,
+        help="0 = no early stopping on val NLL",
+    )
+    ap.add_argument("--log-linear-progress", action="store_true")
     args = ap.parse_args()
 
     size_re = re.compile(args.size_regex)
@@ -293,12 +331,15 @@ def main() -> None:
         "snb": [],
         **stan_rmse,
     }
+    if args.log_linear:
+        ll["log_linear"] = []
+        rmse["log_linear"] = []
 
     for size, bundle_path in bundles:
         print(f"size={size}  {bundle_path.parent.name} …")
         bundle = load_bundle_dict(bundle_path)
         fitted = fit_baselines(
-            bundle, bundle_path, snb_alpha=args.snb_alpha, unigram_alpha=args.unigram_alpha
+            bundle, bundle_path, snb_alpha=args.snb_alpha, unigram_alpha=args.unigram_alpha, **_log_linear_fit_kw(args)
         )
         if args.split == "test":
             ex = build_test_examples(bundle)
@@ -320,8 +361,18 @@ def main() -> None:
             r_s = _rmse_from_proba(ex, fitted.snb.predict_proba(ex))
             if r_s is not None:
                 rmse["snb"].append((size, r_s))
+        if args.log_linear and fitted.log_linear is not None and ex:
+            ev_ll = fitted.log_linear.evaluate(ex)
+            if ev_ll["n"] > 0:
+                ll["log_linear"].append((size, float(ev_ll["mean_nll"])))
+                r_ll = _rmse_from_proba(ex, fitted.log_linear.predict_proba(ex))
+                if r_ll is not None:
+                    rmse["log_linear"].append((size, r_ll))
 
-    if not any(ll[k] for k in ("unigram_ij", "ijk", "snb")):
+    has_struct = any(ll[k] for k in ("unigram_ij", "ijk", "snb"))
+    if args.log_linear:
+        has_struct = has_struct or bool(ll.get("log_linear"))
+    if not has_struct:
         raise SystemExit("No structured-baseline metrics computed")
 
     _plot_curves(
@@ -351,6 +402,7 @@ def main() -> None:
                 split=args.split,
                 snb_alpha=args.snb_alpha,
                 unigram_alpha=args.unigram_alpha,
+                fit_kw=_log_linear_fit_kw(args),
                 output=args.output_calibration,
                 stan_label=args.stan_label,
             )

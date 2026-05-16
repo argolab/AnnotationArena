@@ -2,7 +2,8 @@
 
 Fast categorical baselines for **missing rating imputation** on `data_bundle.json` (same task as Marformer / CPM STAN: predict held-out cells on each item).
 
-**Three models:** pooled unigram, naive Bayes IJK, structured naive Bayes (relation-aware).
+**Three closed-form models:** pooled unigram, naive Bayes IJK, structured naive Bayes (relation-aware).  
+**Optional:** **structured log-linear** (`StructuredLogLinear` in `log_linear_structured.py`) — softmax linear model over the same unigram + pairwise relation features as SNB, trained with PyTorch (Adam); supervision on train-missing rows when present, otherwise on train-observed same-item examples; **validation early stopping** on val-missing mean NLL when val splits exist (`--log-linear` on the CLI).
 
 ---
 
@@ -68,6 +69,23 @@ python scripts/utils/plot_llm_rubric_cpm_with_structured_baselines.py
 python BASELINES/structured_baselines/test_smoke.py
 ```
 
+### Structured log-linear (optional; PyTorch)
+
+```bash
+python BASELINES/run_structured_baselines.py \
+  --bundle path/to/data_bundle.json \
+  --log-linear \
+  --log-linear-progress
+
+# Fixed epoch budget (no val early stopping)
+python BASELINES/run_structured_baselines.py \
+  --bundle path/to/data_bundle.json \
+  --log-linear \
+  --log-linear-patience 0
+```
+
+Training minimizes cross-entropy on **train-missing** examples when those exist; otherwise on **train-observed** same-item rows (see ``build_train_observed_examples``—needed for LLM Rubric–style bundles with no train missing). If the bundle has **val-missing** rows, each epoch evaluates val mean NLL and restores the best weights; stopping triggers after `--log-linear-patience` epochs without improvement (default 5; `0` disables). Hyperparameter defaults: `cli_defaults.py` (`DEFAULT_LOG_LINEAR_*`).
+
 ---
 
 ## Data format
@@ -98,7 +116,7 @@ Indices `(i, j, k)` are attribute, annotator, and item (0-based inside the code)
 
 Let `y` be the latent class of the **target** cell `(i*, j*, k*)`.  
 Let each **source** cell be `(i', j', k', y')` (observed label).  
-All models use **add-α Laplace smoothing** (defaults α = 1) on multinomial factors.
+All **count-based** models use **add-α Laplace smoothing** (defaults α = 1) on multinomial factors. The optional **log-linear** model does not use those counts at fit time; it is trained with gradient descent on train-missing labels.
 
 ### 1. Pooled unigram — `PooledUnigramIJ`
 
@@ -158,6 +176,10 @@ Compare source indices to target indices `(i*, j*, k*)`:
 
 Defined in `feature_utils.relation_label` (first matching row wins).
 
+### 4. Structured log-linear — `StructuredLogLinear`
+
+Same **feature groups** as SNB (unigram scores per \((i^*, y)\) and per-source contribution keyed by \((i_\text{src}, y_\text{src}, i^*, y, r)\)), but weights are **free parameters** fit by minimizing cross-entropy on **train** supervision: **train-missing** cells when present, else **train-observed** same-item pseudo-tasks (see ``build_train_observed_examples``). With val-missing data, training uses **early stopping** on val NLL and restores the best checkpoint.
+
 ---
 
 ## Python API
@@ -168,7 +190,14 @@ from structured_baselines.runner import load_and_fit, evaluate_split
 
 bundle, fitted = load_and_fit(Path("data_bundle.json"), snb_alpha=1.0)
 metrics = evaluate_split(fitted, bundle, "test")
-# metrics["unigram_ij"], metrics["ijk"], metrics["snb"]
+# metrics["unigram_ij"], metrics["ijk"], metrics["snb"], optional metrics["log_linear"]
+
+bundle, fitted = load_and_fit(
+    Path("data_bundle.json"),
+    fit_log_linear=True,
+    log_linear_epochs=64,
+    log_linear_early_stopping_patience=5,
+)
 ```
 
 ---
@@ -183,6 +212,7 @@ metrics = evaluate_split(fitted, bundle, "test")
 | `naive_bayes_ijk.py` | IJK naive Bayes |
 | `naive_bayes_structured.py` | Structured NB wrapper |
 | `plate_graph_factorized.py` | Counts + log-posterior for SNB |
+| `log_linear_structured.py` | Optional softmax log-linear (train missing; val early stopping) |
 | `feature_utils.py` | Relation labels |
 | `cli_defaults.py` | Default α values |
 | `../run_structured_baselines.py` | CLI |
@@ -196,4 +226,4 @@ metrics = evaluate_split(fitted, bundle, "test")
 | Fit pool | `train`, `val`, `test` observed |
 | `unigram_alpha`, `ijk_alpha`, `snb_alpha` | `1.0` |
 
-Flags: `--unigram-alpha`, `--ijk-alpha`, `--snb-alpha`, `--snb-alpha-sweep`, `--eval-val`, `--out`.
+Flags: `--unigram-alpha`, `--ijk-alpha`, `--snb-alpha`, `--snb-alpha-sweep`, `--eval-val`, `--out`, and log-linear: `--log-linear`, `--log-linear-epochs`, `--log-linear-lr`, `--log-linear-batch`, `--log-linear-patience`, `--log-linear-progress`.

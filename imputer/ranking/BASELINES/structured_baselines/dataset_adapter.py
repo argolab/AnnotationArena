@@ -114,3 +114,30 @@ def build_eval_examples(
             LocalExample(target_i=ti_i, target_j=ti_j, target_k=ti_k, y=y, sources=tuple(srcs))
         )
     return examples
+
+
+def build_train_observed_examples(bundle: dict) -> List[LocalExample]:
+    """
+    One LocalExample per **observed** train rating: predict that cell from other
+    train-observed cells on the same item.
+
+    Used to supervise structured log-linear when there are no train-**missing** rows
+    (e.g. LLM Rubric: humans only on val/test items).
+    """
+    obs_by_item: Dict[int, List[Cell]] = {}
+    for r in bundle["observed_ratings"]:
+        if str(r["instance"]) != "train":
+            continue
+        obs_by_item.setdefault(int(r["item"]), []).append(_rating_to_cell(r))
+
+    examples: List[LocalExample] = []
+    for r in bundle["observed_ratings"]:
+        if str(r["instance"]) != "train":
+            continue
+        item = int(r["item"])
+        ti_i, ti_j, ti_k, y = _rating_to_cell(r)
+        srcs = [c for c in obs_by_item.get(item, []) if (c[0], c[1], c[2]) != (ti_i, ti_j, ti_k)]
+        examples.append(
+            LocalExample(target_i=ti_i, target_j=ti_j, target_k=ti_k, y=y, sources=tuple(srcs))
+        )
+    return examples

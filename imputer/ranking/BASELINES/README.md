@@ -21,7 +21,7 @@ Each panel is a **reliability diagram** (predicted confidence vs. empirical accu
 
 ### Structured baselines only (any `data_bundle.json`)
 
-Three panels: pooled unigram **P(y|i,j)**, **NB IJK**, **structured NB**.
+By default three panels: pooled unigram **P(y|i,j)**, **NB IJK**, **structured NB**. Add **`--log-linear`** for a fourth panel (PyTorch softmax over the same structured features; uses val early stopping when you enable it via `fit_baselines` / CLI—see [structured_baselines/README.md](structured_baselines/README.md)).
 
 ```bash
 python scripts/utils/plot_structured_baselines_calibration.py \
@@ -180,7 +180,7 @@ Same bundle and result layout as the calibration table. Neural baselines must be
 
 ## Structured baselines (categorical)
 
-Missing-cell prediction on `data_bundle.json`: **unigram (ij)**, **NB IJK**, **structured NB** (always transductive: train+val+test observed used for fitting).
+Missing-cell prediction on `data_bundle.json`: **unigram (ij)**, **NB IJK**, **structured NB**, and optional **structured log-linear** (``--log-linear``; val early stopping, train-observed fallback when train-missing is empty).
 
 ```bash
 python BASELINES/run_structured_baselines.py \
@@ -188,6 +188,7 @@ python BASELINES/run_structured_baselines.py \
 
 python BASELINES/run_structured_baselines.py \
   --bundle path/to/data_bundle.json \
+  --log-linear \
   --eval-val \
   --out RESULTS/structured_baselines/metrics.json
 ```
@@ -227,3 +228,5 @@ Data lives under `DATA/STAN/DOMAIN3-FINAL/` (from the Marformer repo). Sizes are
 | Annot / transductive | same | `AnnotSplits/Transductive` |
 
 All-baseline Marformer/STAN/neural grids are **not** wired to DOMAIN3-FINAL in `plot_realdata_*.py`; use the structured scripts above, or extend those plotters once `RESULTS/` exist for DOMAIN3-FINAL runs.
+
+**Recurrent Marformer** (weight-shared core + prelude/coda) uses separate entrypoints and results: `python -m imputer.entity_mf.recurrent.train`, output under `RESULTS/RECURRENT_MARFORMER/`, scripts in `scripts/DOMAIN3-FINAL/RecurrentMarformer/`. See `imputer/entity_mf/recurrent/README.md`.

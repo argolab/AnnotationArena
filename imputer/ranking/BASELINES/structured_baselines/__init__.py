@@ -1,13 +1,15 @@
-"""Structured baselines: unigram (ij), IJK NB, structured NB."""
+"""Structured baselines: unigram (ij), IJK NB, structured NB, optional log-linear."""
 
 from .dataset_adapter import (
     LocalExample,
     build_eval_examples,
     build_test_examples,
+    build_train_observed_examples,
     bundle_dims,
     load_bundle_dict,
     transductive_observed_cells,
 )
+from .log_linear_structured import StructuredLogLinear
 from .runner import (
     FittedBaselines,
     calibration_probs_labels,
@@ -29,9 +31,11 @@ __all__ = [
     "PooledUnigramIJ",
     "NaiveBayesIJK",
     "StructuredNaiveBayes",
+    "StructuredLogLinear",
     "bundle_dims",
     "build_test_examples",
     "build_eval_examples",
+    "build_train_observed_examples",
     "load_bundle_dict",
     "transductive_observed_cells",
 ]

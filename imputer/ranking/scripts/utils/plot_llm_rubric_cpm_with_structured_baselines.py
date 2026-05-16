@@ -2,7 +2,7 @@
 """
 LLM Rubric: test-missing log loss, RMSE, and calibration vs train size.
 
-Curves: CPM SharedThreshold STAN, unigram P(y|i,j), NB IJK, structured NB.
+Curves: CPM SharedThreshold STAN, unigram P(y|i,j), NB IJK, structured NB; optional log-linear (``--log-linear``).
 
 Run from imputer/ranking (all three outputs by default):
 
@@ -35,7 +35,14 @@ _UTILS_DIR = Path(__file__).resolve().parent
 sys.path.insert(0, str(_RANKING_ROOT / "BASELINES"))
 sys.path.insert(0, str(_UTILS_DIR))
 
-from structured_baselines.cli_defaults import DEFAULT_SNB_ALPHA, DEFAULT_UNIGRAM_ALPHA
+from structured_baselines.cli_defaults import (
+    DEFAULT_LOG_LINEAR_BATCH,
+    DEFAULT_LOG_LINEAR_EPOCHS,
+    DEFAULT_LOG_LINEAR_LR,
+    DEFAULT_LOG_LINEAR_PATIENCE,
+    DEFAULT_SNB_ALPHA,
+    DEFAULT_UNIGRAM_ALPHA,
+)
 from structured_baselines.dataset_adapter import build_test_examples, load_bundle_dict
 from structured_baselines.runner import calibration_probs_labels, fit_baselines
 
@@ -46,13 +53,30 @@ PANEL_COLORS = {
     "unigram_ij": "#0b7285",
     "ijk": "#111111",
     "snb": "#e7298a",
+    "log_linear": "#7570b3",
 }
 PANEL_TITLES = {
     "cpm": "CPM SharedThreshold STAN",
     "unigram_ij": "Unigram (pool ij)",
     "ijk": "Naive Bayes (i,j,k)",
     "snb": "Structured NB",
+    "log_linear": "Structured log-linear",
 }
+
+
+def _log_linear_fit_kw(args: argparse.Namespace) -> dict:
+    if not args.log_linear:
+        return {}
+    return {
+        "fit_log_linear": True,
+        "log_linear_epochs": args.log_linear_epochs,
+        "log_linear_lr": args.log_linear_lr,
+        "log_linear_batch_size": args.log_linear_batch,
+        "log_linear_early_stopping_patience": (
+            None if args.log_linear_patience == 0 else args.log_linear_patience
+        ),
+        "log_linear_show_progress": args.log_linear_progress,
+    }
 
 
 def _read_json(path: Path) -> dict:
@@ -129,6 +153,7 @@ def _plot_curves(
         "unigram_ij": ("#0b7285", ">", ":"),
         "ijk": ("#111111", "*", "-."),
         "snb": ("#e7298a", "s", "-"),
+        "log_linear": ("#7570b3", "d", "--"),
     }
     labels_map = dict(PANEL_TITLES)
     for key, pts in series.items():
@@ -186,14 +211,16 @@ def _plot_calibration(
         return
 
     bundle = load_bundle_dict(bundle_path)
-    fitted = fit_baselines(bundle, bundle_path, snb_alpha=args.snb_alpha, unigram_alpha=args.unigram_alpha)
+    fitted = fit_baselines(
+        bundle, bundle_path, snb_alpha=args.snb_alpha, unigram_alpha=args.unigram_alpha, **_log_linear_fit_kw(args)
+    )
     arrays = calibration_probs_labels(fitted, bundle, split)
 
     panels: list[tuple[str, np.ndarray | None, np.ndarray | None, str]] = []
     cpm = _cpm_test_probs_and_labels(args.data_root, cal_size, eval_dir, split)
     if cpm is not None:
         panels.append((PANEL_TITLES["cpm"], cpm[0], cpm[1], PANEL_COLORS["cpm"]))
-    for key in ("unigram_ij", "ijk", "snb"):
+    for key in ("unigram_ij", "ijk", "snb", "log_linear"):
         if key in arrays:
             probs, labels = arrays[key]
             panels.append((PANEL_TITLES[key], probs, labels, PANEL_COLORS[key]))
@@ -243,6 +270,17 @@ def main() -> None:
         default="test",
         help="Missing split for reliability panels (default: test)",
     )
+    ap.add_argument("--log-linear", action="store_true")
+    ap.add_argument("--log-linear-epochs", type=int, default=DEFAULT_LOG_LINEAR_EPOCHS)
+    ap.add_argument("--log-linear-lr", type=float, default=DEFAULT_LOG_LINEAR_LR)
+    ap.add_argument("--log-linear-batch", type=int, default=DEFAULT_LOG_LINEAR_BATCH)
+    ap.add_argument(
+        "--log-linear-patience",
+        type=int,
+        default=DEFAULT_LOG_LINEAR_PATIENCE,
+        help="0 = no val early stopping on log-linear",
+    )
+    ap.add_argument("--log-linear-progress", action="store_true")
     args = ap.parse_args()
 
     if args.calibration_only:
@@ -258,6 +296,9 @@ def main() -> None:
 
     ll: dict[str, list[tuple[int, float]]] = {k: [] for k in ("cpm", "unigram_ij", "ijk", "snb")}
     rmse: dict[str, list[tuple[int, float]]] = {k: [] for k in ("cpm", "unigram_ij", "ijk", "snb")}
+    if args.log_linear:
+        ll["log_linear"] = []
+        rmse["log_linear"] = []
     sizes = []
 
     for metrics_path in sorted(args.results_root.glob("LLMRubric_225_25_9_*_eval/predictive_metrics.json")):
@@ -280,7 +321,11 @@ def main() -> None:
         print(f"size={size}  fitting baselines…")
         bundle = load_bundle_dict(bundle_path)
         fitted = fit_baselines(
-            bundle, bundle_path, snb_alpha=args.snb_alpha, unigram_alpha=args.unigram_alpha
+            bundle,
+            bundle_path,
+            snb_alpha=args.snb_alpha,
+            unigram_alpha=args.unigram_alpha,
+            **_log_linear_fit_kw(args),
         )
         test_ex = build_test_examples(bundle)
         ev_u = fitted.unigram_ij.evaluate_split(bundle, "test")
@@ -297,6 +342,13 @@ def main() -> None:
             rmse["ijk"].append((size, r_i))
         if r_s is not None:
             rmse["snb"].append((size, r_s))
+        if args.log_linear and fitted.log_linear is not None:
+            ev_ll = fitted.log_linear.evaluate(test_ex)
+            if ev_ll["n"] > 0:
+                ll["log_linear"].append((size, float(ev_ll["mean_nll"])))
+                r_l = _rmse_from_proba(test_ex, fitted.log_linear.predict_proba(test_ex))
+                if r_l is not None:
+                    rmse["log_linear"].append((size, r_l))
 
     if not ll["cpm"]:
         raise SystemExit(f"No CPM metrics under {args.results_root}")

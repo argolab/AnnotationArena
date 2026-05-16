@@ -3,6 +3,7 @@
 Reliability diagram (calibration) for structured baselines on one data_bundle.json.
 
 Panels: unigram (ij), NB IJK, structured NB — all on the same missing split.
+Optional: structured log-linear (``--log-linear``; PyTorch, validation early stopping when val missing exists).
 Optionally add CPM STAN if you pass --cpm-eval-dir with rating_probabilities.csv.
 
 Run from imputer/ranking:
@@ -31,7 +32,14 @@ _UTILS = Path(__file__).resolve().parent
 sys.path.insert(0, str(_ROOT / "BASELINES"))
 sys.path.insert(0, str(_UTILS))
 
-from structured_baselines.cli_defaults import DEFAULT_SNB_ALPHA, DEFAULT_UNIGRAM_ALPHA
+from structured_baselines.cli_defaults import (
+    DEFAULT_LOG_LINEAR_BATCH,
+    DEFAULT_LOG_LINEAR_EPOCHS,
+    DEFAULT_LOG_LINEAR_LR,
+    DEFAULT_LOG_LINEAR_PATIENCE,
+    DEFAULT_SNB_ALPHA,
+    DEFAULT_UNIGRAM_ALPHA,
+)
 from structured_baselines.runner import calibration_probs_labels, load_and_fit
 from reliability_diagram import plot_reliability_panels
 
@@ -40,12 +48,14 @@ PANEL_COLORS = {
     "unigram_ij": "#0b7285",
     "ijk": "#111111",
     "snb": "#e7298a",
+    "log_linear": "#7570b3",
 }
 PANEL_TITLES = {
     "cpm": "CPM SharedThreshold STAN",
     "unigram_ij": "Unigram (pool ij)",
     "ijk": "Naive Bayes (i,j,k)",
     "snb": "Structured NB",
+    "log_linear": "Structured log-linear",
 }
 
 
@@ -73,6 +83,21 @@ def _cpm_probs_labels(bundle: dict, eval_dir: Path, split: str) -> tuple[np.ndar
     return grouped.to_numpy(dtype=np.float64), labels
 
 
+def _log_linear_fit_kw(args: argparse.Namespace) -> dict:
+    if not args.log_linear:
+        return {}
+    return {
+        "fit_log_linear": True,
+        "log_linear_epochs": args.log_linear_epochs,
+        "log_linear_lr": args.log_linear_lr,
+        "log_linear_batch_size": args.log_linear_batch,
+        "log_linear_early_stopping_patience": (
+            None if args.log_linear_patience == 0 else args.log_linear_patience
+        ),
+        "log_linear_show_progress": args.log_linear_progress,
+    }
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Calibration / reliability diagram for structured baselines")
     ap.add_argument("--bundle", type=Path, required=True)
@@ -86,10 +111,24 @@ def main() -> None:
     )
     ap.add_argument("--snb-alpha", type=float, default=DEFAULT_SNB_ALPHA)
     ap.add_argument("--unigram-alpha", type=float, default=DEFAULT_UNIGRAM_ALPHA)
+    ap.add_argument("--log-linear", action="store_true")
+    ap.add_argument("--log-linear-epochs", type=int, default=DEFAULT_LOG_LINEAR_EPOCHS)
+    ap.add_argument("--log-linear-lr", type=float, default=DEFAULT_LOG_LINEAR_LR)
+    ap.add_argument("--log-linear-batch", type=int, default=DEFAULT_LOG_LINEAR_BATCH)
+    ap.add_argument(
+        "--log-linear-patience",
+        type=int,
+        default=DEFAULT_LOG_LINEAR_PATIENCE,
+        help="0 = no early stopping on val NLL",
+    )
+    ap.add_argument("--log-linear-progress", action="store_true")
     args = ap.parse_args()
 
     bundle, fitted = load_and_fit(
-        args.bundle, snb_alpha=args.snb_alpha, unigram_alpha=args.unigram_alpha
+        args.bundle,
+        snb_alpha=args.snb_alpha,
+        unigram_alpha=args.unigram_alpha,
+        **_log_linear_fit_kw(args),
     )
     arrays = calibration_probs_labels(fitted, bundle, args.split)
 
@@ -99,7 +138,7 @@ def main() -> None:
         if cpm is not None:
             panels.append((PANEL_TITLES["cpm"], cpm[0], cpm[1], PANEL_COLORS["cpm"]))
 
-    for key in ("unigram_ij", "ijk", "snb"):
+    for key in ("unigram_ij", "ijk", "snb", "log_linear"):
         if key in arrays:
             probs, labels = arrays[key]
             panels.append((PANEL_TITLES[key], probs, labels, PANEL_COLORS[key]))
