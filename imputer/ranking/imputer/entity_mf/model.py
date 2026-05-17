@@ -214,12 +214,40 @@ def _init_type_embedding(p: nn.Parameter, mode: str, feature_dim: int) -> None:
         )
 
 
+def _init_bias_as_type_centroid(bias_data: torch.Tensor, mode: str, dim: int) -> None:
+    """Initialize a 1-D bias tensor using the same scheme as type centroid embeddings."""
+    if mode == "normal":
+        nn.init.normal_(bias_data, mean=0.0, std=0.02)
+    elif mode == "scaled_normal":
+        nn.init.normal_(bias_data, mean=0.0, std=1.0 / math.sqrt(dim))
+    elif mode == "kaiming":
+        tmp = bias_data.unsqueeze(0)          # kaiming_normal_ requires >= 2D
+        nn.init.kaiming_normal_(tmp, mode="fan_out", nonlinearity="relu")
+        bias_data.copy_(tmp.squeeze(0))
+    else:
+        raise ValueError(
+            f"Unknown type_embedding_init: {mode!r}. "
+            f"Choose from 'normal', 'scaled_normal', 'kaiming'."
+        )
+
+
 class EntityMarformer(nn.Module):
     """
-    Minimal viable Entity Marformer with:
-      - feature stream updated by one FFN
-      - param stream updated by a separate FFN
-      - relational attention over a unified token sequence.
+    Entity Marformer with two selectable architectures (controlled by config.use_embed_unembed):
+
+    Dual-stream (default, use_embed_unembed=False):
+      Layer-0: [feature_centroid + deviation | param_from_build_param]  (feature_dim + param_dim = model_dim)
+      Blocks:  attn+FFN on combined; explicit proj_out and W_param residuals back to each stream.
+      Output:  param stream at layer L.
+
+    Embedding/unembedding (use_embed_unembed=True):
+      Layer-0: value_embedder(simple_value) + deviation  (single model_dim vector)
+               value_embedder is nn.Linear(param_dim, model_dim) whose bias is the type centroid.
+               For entity types (param_dim=0) only the bias (type centroid) is used.
+               Name embedding = deviation of parent entities (summed), same dropout logic as before.
+      Blocks:  standard pre-norm attn+FFN on a single residual stream; no split/concat.
+      Output:  per-type unembedder (nn.Linear(model_dim, param_dim)) applied to final residual;
+               returns same [1, L, global_param_dim] shape as the dual-stream path.
     """
 
     def __init__(
@@ -236,79 +264,148 @@ class EntityMarformer(nn.Module):
         self.use_rel_value = config.use_rel_value
         self.use_addone_attn = config.use_addone_attn
         self.use_param_output_head = config.use_param_output_head
+        self.use_embed_unembed = config.use_embed_unembed
 
-        # Global param dim = max over types (no longer passed in).
+        # Global param dim = max over types.
         self.global_param_dim = max(t.param_dim for t in types.values())
         self.param_dim = self.global_param_dim
 
-        # Config embedding_dim = total model dim (feature + param). Must be divisible by heads.
+        # Config embedding_dim = total model dim. Must be divisible by heads.
         self.model_dim = config.embedding_dim
         assert self.model_dim % config.attention_heads == 0, (
             f"embedding_dim {self.model_dim} must be divisible by attention_heads {config.attention_heads}"
         )
-        assert self.model_dim > self.param_dim, (
-            f"embedding_dim {self.model_dim} must be > global_param_dim {self.param_dim}"
-        )
 
-        self.feature_dim = self.model_dim - self.param_dim
+        # ── Dual-stream path parameters ───────────────────────────────────────
+        if not config.use_embed_unembed:
+            assert self.model_dim > self.param_dim, (
+                f"embedding_dim {self.model_dim} must be > global_param_dim {self.param_dim}"
+            )
+            self.feature_dim = self.model_dim - self.param_dim
 
-        # Per-type base embeddings (centroids) for both entity and variable tokens.
-        self.type_embeddings = nn.ParameterDict(
-            {
-                name: nn.Parameter(torch.empty(1, self.feature_dim))
-                for name in types.keys()
-            }
-        )
-        for p in self.type_embeddings.values():
-            _init_type_embedding(p, config.type_embedding_init, self.feature_dim)
+            self.type_embeddings = nn.ParameterDict(
+                {name: nn.Parameter(torch.empty(1, self.feature_dim)) for name in types.keys()}
+            )
+            for p in self.type_embeddings.values():
+                _init_type_embedding(p, config.type_embedding_init, self.feature_dim)
 
-        # Per-entity deviations/variations (where enabled)
-        self.deviation_tables = nn.ParameterDict()
-        for name, t in types.items():
-            if t.variation.enabled and t.variation.num_entities > 0:
-                table = nn.Parameter(torch.zeros(t.variation.num_entities, self.feature_dim))
-                self.deviation_tables[name] = table
+            self.deviation_tables = nn.ParameterDict()
+            for name, t in types.items():
+                if t.variation.enabled and t.variation.num_entities > 0:
+                    self.deviation_tables[name] = nn.Parameter(
+                        torch.zeros(t.variation.num_entities, self.feature_dim)
+                    )
 
-        self.deviation_norm = NormLayer(self.feature_dim)
-        if self.use_param_output_head:
-            self.param_output_head = nn.Sequential(
+            self.deviation_norm = NormLayer(self.feature_dim)
+
+            if self.use_param_output_head:
+                self.param_output_head = nn.Sequential(
                     nn.Linear(self.model_dim, 128),
                     nn.ReLU(),
-                    nn.Linear(128, self.param_dim)
+                    nn.Linear(128, self.param_dim),
                 )
 
-        # Transformer blocks
-        blocks: List[nn.Module] = []
-        for _ in range(config.num_layers):
-            attn = RelationalAttentionBlock(
-                model_dim=self.model_dim,
-                num_heads=config.attention_heads,
-                num_relationships=num_relationships,
-                dropout=config.dropout,
-                use_per_head_rel=config.use_per_head_rel,
-                use_pointer=config.use_pointer,
-                use_rel_value=config.use_rel_value,
-                use_addone_attn=config.use_addone_attn,
-                scale_shared_rel=config.scale_shared_rel,
-                use_graph_mask=config.use_graph_mask,
+            blocks: List[nn.Module] = []
+            for _ in range(config.num_layers):
+                blocks.append(nn.ModuleDict({
+                    "norm_1":    NormLayer(self.model_dim),
+                    "attn":      self._make_attn_block(config, num_relationships),
+                    "norm_2":    NormLayer(self.model_dim),
+                    "ff":        FeedForward(self.model_dim, d_ff=config.d_ff, dropout=config.dropout, num_layers=config.num_ffn_layers),
+                    "proj_out":  nn.Linear(self.model_dim, self.feature_dim),
+                    "W_param":   nn.Linear(self.model_dim, self.param_dim),
+                    "dropout_2": nn.Dropout(config.dropout),
+                }))
+            self.blocks = nn.ModuleList(blocks)
+
+        # ── Embedding/unembedding path parameters ─────────────────────────────
+        else:
+            self.feature_dim = self.model_dim  # whole vector is the single residual stream
+
+            # Value embedders: nn.Linear(param_dim, model_dim) for variable types.
+            # The bias of each Linear serves as the type centroid.
+            # Entity types (param_dim==0) get a plain Parameter as their type centroid.
+            self.value_embedders = nn.ModuleDict()
+            self.type_embeddings_emb = nn.ParameterDict()
+            for name, t in types.items():
+                if t.param_dim > 0:
+                    lin = nn.Linear(t.param_dim, self.model_dim, bias=True)
+                    nn.init.normal_(lin.weight.data, mean=0.0, std=0.02)
+                    _init_bias_as_type_centroid(lin.bias.data, config.type_embedding_init, self.model_dim)
+                    self.value_embedders[name] = lin
+                else:
+                    p = nn.Parameter(torch.empty(1, self.model_dim))
+                    _init_type_embedding(p, config.type_embedding_init, self.model_dim)
+                    self.type_embeddings_emb[name] = p
+
+            # Deviation tables: model_dim-wide (name embeddings for each entity).
+            self.deviation_tables_emb = nn.ParameterDict()
+            for name, t in types.items():
+                if t.variation.enabled and t.variation.num_entities > 0:
+                    self.deviation_tables_emb[name] = nn.Parameter(
+                        torch.zeros(t.variation.num_entities, self.model_dim)
+                    )
+
+            self.emb_deviation_norm = NormLayer(self.model_dim)
+
+            # Per-type unembedders: model_dim → param_dim (only for variable types).
+            self.unembedders = nn.ModuleDict()
+            for name, t in types.items():
+                if t.param_dim > 0:
+                    self.unembedders[name] = nn.Linear(self.model_dim, t.param_dim)
+
+            # Standard pre-norm blocks (no proj_out / W_param split).
+            emb_blocks: List[nn.Module] = []
+            for _ in range(config.num_layers):
+                emb_blocks.append(nn.ModuleDict({
+                    "norm_1":  NormLayer(self.model_dim),
+                    "attn":    self._make_attn_block(config, num_relationships),
+                    "norm_2":  NormLayer(self.model_dim),
+                    "ff":      FeedForward(self.model_dim, d_ff=config.d_ff, dropout=config.dropout, num_layers=config.num_ffn_layers),
+                    "dropout": nn.Dropout(config.dropout),
+                }))
+            self.emb_blocks = nn.ModuleList(emb_blocks)
+
+    def _make_attn_block(self, config: EntityMarformerConfig, num_relationships: int) -> RelationalAttentionBlock:
+        return RelationalAttentionBlock(
+            model_dim=self.model_dim,
+            num_heads=config.attention_heads,
+            num_relationships=num_relationships,
+            dropout=config.dropout,
+            use_per_head_rel=config.use_per_head_rel,
+            use_pointer=config.use_pointer,
+            use_rel_value=config.use_rel_value,
+            use_addone_attn=config.use_addone_attn,
+            scale_shared_rel=config.scale_shared_rel,
+            use_graph_mask=config.use_graph_mask,
+        )
+
+    def _get_k_aug(self, graph: EntityGraph, device: torch.device) -> "torch.Tensor | None":
+        """Build (and cache) the [L, L, 3] obs-obs shared-identity K_aug tensor."""
+        if not self.use_pointer:
+            return None
+        dev_key = str(device)
+        if dev_key not in graph._k_aug_cache:
+            L = graph.num_tokens
+            attr_ids  = torch.full((L,), -1, dtype=torch.long, device=device)
+            annot_ids = torch.full((L,), -1, dtype=torch.long, device=device)
+            item_ids  = torch.full((L,), -1, dtype=torch.long, device=device)
+            for idx, token in enumerate(graph.tokens):
+                if token.type_name in ("rating", "ranking_pairwise") and token.raw_data:
+                    attr_ids[idx]  = token.raw_data.get("attribute_id", -1)
+                    annot_ids[idx] = token.raw_data.get("annotator_id", -1)
+                    iids = token.raw_data.get("item_ids", [])
+                    item_ids[idx]  = iids[0] if iids else -1
+
+            def _same(ids: torch.Tensor) -> torch.Tensor:
+                eq = (ids.unsqueeze(0) == ids.unsqueeze(1)).float()
+                valid = (ids >= 0).float()
+                return eq * valid.unsqueeze(0) * valid.unsqueeze(1)
+
+            graph._k_aug_cache[dev_key] = torch.stack(
+                [_same(attr_ids), _same(annot_ids), _same(item_ids)], dim=-1
             )
-            ff = FeedForward(
-                self.model_dim,
-                d_ff=config.d_ff,
-                dropout=config.dropout,
-                num_layers=config.num_ffn_layers,
-            )
-            block_dict = {
-                "norm_1": NormLayer(self.model_dim),
-                "attn": attn,
-                "norm_2": NormLayer(self.model_dim),
-                "ff": ff,
-                "proj_out": nn.Linear(self.model_dim, self.feature_dim),
-                "W_param": nn.Linear(self.model_dim, self.param_dim),
-                "dropout_2": nn.Dropout(config.dropout),
-            }
-            blocks.append(nn.ModuleDict(block_dict))
-        self.blocks = nn.ModuleList(blocks)
+        return graph._k_aug_cache[dev_key]
 
     def _build_initial_streams(
         self,
@@ -316,22 +413,21 @@ class EntityMarformer(nn.Module):
         device: torch.device,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Build initial feature and param streams from the EntityGraph.
+        Build initial feature and param streams from the EntityGraph (dual-stream path).
 
         Returns:
-            features: [1, L, D_feat]
-            params: [1, L, D_param]
-            attn_mask: [1, L] (True for valid tokens)
+            features:  [1, L, feature_dim]
+            params:    [1, L, param_dim]
+            attn_mask: [1, L]
         """
         L = graph.num_tokens
         features = torch.zeros(1, L, self.feature_dim, device=device)
-        params = torch.zeros(1, L, self.param_dim, device=device)
+        params   = torch.zeros(1, L, self.param_dim,   device=device)
         attn_mask = torch.ones(1, L, dtype=torch.bool, device=device)
 
         for idx, token in enumerate(graph.tokens):
             t = self.types[token.type_name]
-            base = self.type_embeddings[token.type_name]  # [1, feature_dim]
-            feat_vec = base.expand(1, -1)
+            feat_vec = self.type_embeddings[token.type_name].expand(1, -1)
             if token.type_name in self.deviation_tables and token.entity_id >= 0:
                 dev_table = self.deviation_tables[token.type_name]
                 if 0 <= token.entity_id < dev_table.shape[0]:
@@ -343,13 +439,61 @@ class EntityMarformer(nn.Module):
                         dev = self.deviation_norm(dev)
                     feat_vec = feat_vec + dev
             features[0, idx] = feat_vec
-
-            p = t.build_param(token.raw_data or {}, device=device, global_param_dim=self.param_dim)
-            params[0, idx] = p
-
-            attn_mask[0, idx] = True
+            params[0, idx]   = t.build_param(token.raw_data or {}, device=device, global_param_dim=self.param_dim)
 
         return features, params, attn_mask
+
+    def _build_initial_emb_stream(
+        self,
+        graph: EntityGraph,
+        device: torch.device,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Build initial single residual stream (embedding/unembedding path).
+
+        Layer-0 vector for each token = value_embedding(simple_value) + name_embedding(deviation).
+        For variable types: value_embedding = Linear(param_dim → model_dim) applied to build_simple_value output.
+        For entity types:   value_embedding = type centroid bias only.
+        Name embedding = deviation from deviation_tables_emb (same dropout logic as dual-stream).
+
+        Returns:
+            x:         [1, L, model_dim]
+            attn_mask: [1, L]
+        """
+        L = graph.num_tokens
+        x         = torch.zeros(1, L, self.model_dim, device=device)
+        attn_mask = torch.ones(1, L, dtype=torch.bool, device=device)
+
+        for idx, token in enumerate(graph.tokens):
+            t = self.types[token.type_name]
+
+            # Value embedding
+            if token.type_name in self.value_embedders:
+                # Variable type: A * simple_value + b_type  (b_type is the Linear bias)
+                simple_val = t.build_simple_value(
+                    token.raw_data or {}, device=device, global_param_dim=t.param_dim
+                )
+                val_emb = self.value_embedders[token.type_name](simple_val)  # [model_dim]
+            else:
+                # Entity type: type centroid only (bias b)
+                val_emb = self.type_embeddings_emb[token.type_name].squeeze(0)  # [model_dim]
+
+            # Name embedding: per-entity deviation (same dropout as dual-stream path)
+            name_emb = torch.zeros(self.model_dim, device=device)
+            if token.type_name in self.deviation_tables_emb and token.entity_id >= 0:
+                dev_table = self.deviation_tables_emb[token.type_name]
+                if 0 <= token.entity_id < dev_table.shape[0]:
+                    dev = dev_table[token.entity_id]
+                    if self.training and t.variation.dropout_rate > 0:
+                        if torch.rand(1).item() < t.variation.dropout_rate:
+                            dev = torch.zeros_like(dev)
+                    if self.config.use_deviation_norm:
+                        dev = self.emb_deviation_norm(dev.unsqueeze(0)).squeeze(0)
+                    name_emb = dev
+
+            x[0, idx] = val_emb + name_emb
+
+        return x, attn_mask
 
     def forward(
         self,
@@ -360,61 +504,58 @@ class EntityMarformer(nn.Module):
         Forward pass over a single EntityGraph.
 
         Returns:
-            params: [1, L, D_param] final parameter stream.
+            params: [1, L, global_param_dim]
         """
         if device is None:
             device = next(self.parameters()).device
 
-        features, params, attn_mask = self._build_initial_streams(graph, device=device)
-        edge_mask = graph.build_edge_masks(device=device)  # [L, L, R]
+        if self.use_embed_unembed:
+            return self._forward_emb(graph, device)
+        return self._forward_dual(graph, device)
 
-        # Build K_aug for pointer mechanism: [L, L, 3] obs-obs shared-identity indicators
-        K_aug: torch.Tensor | None = None
-        if self.use_pointer:
-            dev_key = str(device)
-            if dev_key not in graph._k_aug_cache:
-                L = graph.num_tokens
-                attr_ids  = torch.full((L,), -1, dtype=torch.long, device=device)
-                annot_ids = torch.full((L,), -1, dtype=torch.long, device=device)
-                item_ids  = torch.full((L,), -1, dtype=torch.long, device=device)
-                for idx, token in enumerate(graph.tokens):
-                    if token.type_name in ("rating", "ranking_pairwise") and token.raw_data:
-                        attr_ids[idx]  = token.raw_data.get("attribute_id", -1)
-                        annot_ids[idx] = token.raw_data.get("annotator_id", -1)
-                        # Use first item_id (like Marformer pointer)
-                        iids = token.raw_data.get("item_ids", [])
-                        item_ids[idx]  = iids[0] if iids else -1
-                # [L, L] indicator: 1 if same id AND both valid (id >= 0)
-                def _same(ids: torch.Tensor) -> torch.Tensor:
-                    eq = (ids.unsqueeze(0) == ids.unsqueeze(1)).float()  # [L, L]
-                    valid = (ids >= 0).float()
-                    return eq * valid.unsqueeze(0) * valid.unsqueeze(1)
-                graph._k_aug_cache[dev_key] = torch.stack(
-                    [_same(attr_ids), _same(annot_ids), _same(item_ids)], dim=-1
-                )  # [L, L, 3]
-            K_aug = graph._k_aug_cache[dev_key]
+    def _forward_dual(self, graph: EntityGraph, device: torch.device) -> torch.Tensor:
+        """Dual-stream forward pass (original architecture)."""
+        features, params, attn_mask = self._build_initial_streams(graph, device=device)
+        edge_mask = graph.build_edge_masks(device=device)
+        K_aug = self._get_k_aug(graph, device)
 
         combined = torch.cat([features, params], dim=-1)  # [1, L, model_dim]
         for block in self.blocks:
             normed_attn = block["norm_1"](combined)
-            attn_out = block["attn"](
-                normed_attn,
-                edge_mask=edge_mask,
-                attn_mask=attn_mask,
-                K_aug=K_aug,
-            )  # [1, L, model_dim]
-            combined = combined + attn_out
+            attn_out    = block["attn"](normed_attn, edge_mask=edge_mask, attn_mask=attn_mask, K_aug=K_aug)
+            combined    = combined + attn_out
 
             normed_ff = block["norm_2"](combined)
-            z_ff = block["ff"](normed_ff)
-            combined = combined + z_ff
+            z_ff      = block["ff"](normed_ff)
+            combined  = combined + z_ff
 
-            back_feat = block["proj_out"](combined)   # [1, L, feature_dim or model_dim]
-            features = features + block["dropout_2"](back_feat)
-            back_param = block["W_param"](combined)   # [1, L, param_dim]
-            params = params + block["dropout_2"](back_param)
+            features = features + block["dropout_2"](block["proj_out"](combined))
+            params   = params   + block["dropout_2"](block["W_param"](combined))
             combined = torch.cat([features, params], dim=-1)
 
         if self.use_param_output_head:
             return self.param_output_head(combined)
+        return params
+
+    def _forward_emb(self, graph: EntityGraph, device: torch.device) -> torch.Tensor:
+        """Embedding/unembedding forward pass (single residual stream)."""
+        x, attn_mask = self._build_initial_emb_stream(graph, device=device)
+        edge_mask    = graph.build_edge_masks(device=device)
+        K_aug        = self._get_k_aug(graph, device)
+
+        for block in self.emb_blocks:
+            x = x + block["dropout"](block["attn"](block["norm_1"](x), edge_mask=edge_mask, attn_mask=attn_mask, K_aug=K_aug))
+            x = x + block["dropout"](block["ff"](block["norm_2"](x)))
+
+        # Unembed: apply per-type linear to each token's residual to recover param vectors.
+        L = graph.num_tokens
+        params = torch.zeros(1, L, self.global_param_dim, device=device)
+        for type_name, unembedder in self.unembedders.items():
+            type_indices = [i for i, tok in enumerate(graph.tokens) if tok.type_name == type_name]
+            if not type_indices:
+                continue
+            idx_t      = torch.tensor(type_indices, dtype=torch.long, device=device)
+            tok_params = unembedder(x[0, idx_t])                     # [N, param_dim]
+            params[0, idx_t, : self.types[type_name].param_dim] = tok_params
+
         return params

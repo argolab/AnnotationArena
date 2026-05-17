@@ -64,6 +64,7 @@ SERIES_ORDER = [
     "Unigram Pool ij",
     "Naive Bayes IJK",
     "Structured NB",
+    "Structured Log-Linear",
 ]
 
 
@@ -482,12 +483,18 @@ def _collect_baseline_payloads(cfg: DatasetConfig, cutoff: int) -> tuple[dict[st
         "Unigram Pool ij": "unigram_ij",
         "Naive Bayes IJK": "ijk",
         "Structured NB": "snb",
+        "Structured Log-Linear": "log_linear",
     }
     for size in [s for s in cfg.display_sizes if s <= cutoff]:
         bundle_path = _bundle_path(cfg, size)
         if not bundle_path.exists():
             continue
-        bundle, fitted = load_and_fit(bundle_path)
+        bundle, fitted = load_and_fit(
+            bundle_path,
+            fit_log_linear=True,
+            log_linear_epochs=200,
+            log_linear_lr=1e-4,
+        )
         calibration_payloads = calibration_probs_labels(fitted, bundle, split="test")
         if not calibration_payloads:
             continue
@@ -584,6 +591,7 @@ def _load_cache(cache_path: Path) -> dict[tuple[str, int], tuple[np.ndarray, np.
             "unigram_pool_ij": "Unigram Pool ij",
             "naive_bayes_ijk": "Naive Bayes IJK",
             "structured_nb": "Structured NB",
+            "structured_log_linear": "Structured Log-Linear",
         }.get(model_key)
         if label is None:
             continue
@@ -732,10 +740,38 @@ def _series_from_rows(cfg: DatasetConfig, rows: list[dict], metric: str) -> dict
 
 def _plot_metric(cfg: DatasetConfig, rows: list[dict], metric: str, ylabel: str, title: str, output_path: Path) -> None:
     stats = _series_from_rows(cfg, rows, metric)
-    fig = plt.figure(figsize=(17.6, 7.6))
+    present_labels = [
+        label
+        for label in SERIES_ORDER
+        if any(not math.isnan(v) for v in stats["mean"][label])
+    ]
+    has_dense_legend = len(present_labels) >= 9 or any(len(label) >= 20 for label in present_labels)
+    if cfg.slug == "annot":
+        legend_ratio = 1.75 if has_dense_legend else 1.5
+        left_ratio = 6.9 if has_dense_legend else 6.7
+        fig_width = 18.6 if has_dense_legend else 17.8
+        fig_height = 7.15
+        tick_fontsize = 9.5
+        axis_label_fontsize = 11.5
+        title_fontsize = 14.0
+        legend_fontsize = 9.5 if has_dense_legend else 10.0
+        legend_labelspacing = 0.52 if has_dense_legend else 0.62
+        legend_handlelength = 2.0 if has_dense_legend else 2.2
+    else:
+        legend_ratio = 2.15 if has_dense_legend else 1.6
+        left_ratio = 6.15 if has_dense_legend else 6.3
+        fig_width = 18.8 if has_dense_legend else 17.6
+        fig_height = 7.6
+        tick_fontsize = 10.5
+        axis_label_fontsize = 12.5
+        title_fontsize = 16.0
+        legend_fontsize = 10.0 if has_dense_legend else 11.0
+        legend_labelspacing = 0.58 if has_dense_legend else 0.7
+        legend_handlelength = 2.2 if has_dense_legend else 2.4
+    fig = plt.figure(figsize=(fig_width, fig_height))
     gs = fig.add_gridspec(
         2, 2,
-        width_ratios=[6.3, 1.6],
+        width_ratios=[left_ratio, legend_ratio],
         height_ratios=[1.0, 4.8],
         hspace=0.05,
         wspace=0.05,
@@ -802,7 +838,12 @@ def _plot_metric(cfg: DatasetConfig, rows: list[dict], metric: str, ylabel: str,
     ax_bottom.set_xticklabels([str(size) for size in display_sizes])
     ax_bottom.set_xlabel(cfg.x_label)
     ax_bottom.set_ylabel(ylabel)
-    fig.suptitle(title, fontsize=16, y=0.985)
+    fig.suptitle(title, fontsize=title_fontsize, y=0.982 if cfg.slug == "annot" else 0.985)
+
+    ax_top.tick_params(axis="y", labelsize=tick_fontsize)
+    ax_bottom.tick_params(axis="both", labelsize=tick_fontsize)
+    ax_bottom.xaxis.label.set_size(axis_label_fontsize)
+    ax_bottom.yaxis.label.set_size(axis_label_fontsize)
 
     xs_break = np.linspace(0.0, 1.0, 61)
     top_break = np.where(np.arange(xs_break.size) % 2 == 0, -0.005, 0.005)
@@ -816,17 +857,49 @@ def _plot_metric(cfg: DatasetConfig, rows: list[dict], metric: str, ylabel: str,
     for ax in (ax_top, ax_bottom):
         ax.grid(True, alpha=0.35)
 
-    shared._style_legend_right(ax_leg, ax_bottom)
+    shared._style_legend_right(
+        ax_leg,
+        ax_bottom,
+        fontsize=legend_fontsize,
+        labelspacing=legend_labelspacing,
+        handlelength=legend_handlelength,
+    )
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.subplots_adjust(left=0.06, right=0.98, top=0.89, bottom=0.11, hspace=0.05, wspace=0.04)
+    fig.subplots_adjust(
+        left=0.06,
+        right=0.985,
+        top=0.89,
+        bottom=0.11,
+        hspace=0.05,
+        wspace=0.04,
+    )
     fig.savefig(output_path)
     plt.close(fig)
     print(f"Saved -> {output_path}")
 
 
 def _plot_runtime(cfg: DatasetConfig, rows: list[dict], output_path: Path) -> None:
-    fig = plt.figure(figsize=(16.8, 5.9))
-    gs = fig.add_gridspec(1, 2, width_ratios=[6.3, 1.6], wspace=0.05)
+    runtime_labels = [
+        label
+        for label in ("Marformer", "Stan Oracle")
+        if _summary_lookup(rows, "runtime_minutes", label, cfg.display_sizes[0]) is not None
+        or any(_summary_lookup(rows, "runtime_minutes", label, size) is not None for size in cfg.display_sizes)
+    ]
+    has_dense_legend = len(runtime_labels) >= 2 and cfg.slug == "annot"
+    if cfg.slug == "annot":
+        fig = plt.figure(figsize=(17.8, 5.45))
+        gs = fig.add_gridspec(1, 2, width_ratios=[6.8, 1.55], wspace=0.05)
+        tick_fontsize = 9.5
+        axis_label_fontsize = 11.5
+        title_fontsize = 14.0
+        legend_fontsize = 9.75
+    else:
+        fig = plt.figure(figsize=(17.6 if has_dense_legend else 16.8, 5.9))
+        gs = fig.add_gridspec(1, 2, width_ratios=[6.3, 1.9 if has_dense_legend else 1.6], wspace=0.05)
+        tick_fontsize = 10.5
+        axis_label_fontsize = 12.5
+        title_fontsize = 16.0
+        legend_fontsize = 10.5 if has_dense_legend else 11.0
     ax = fig.add_subplot(gs[0, 0])
     ax_leg = fig.add_subplot(gs[0, 1])
     display_sizes = np.asarray(cfg.display_sizes, dtype=int)
@@ -856,13 +929,16 @@ def _plot_runtime(cfg: DatasetConfig, rows: list[dict], output_path: Path) -> No
     ax.set_xticklabels([str(size) for size in display_sizes])
     ax.set_xlabel(cfg.x_label)
     ax.set_ylabel("Runtime (minutes)")
-    fig.suptitle(f"{cfg.title_prefix}: Runtime by {cfg.x_label}", fontsize=16, y=0.98)
+    ax.tick_params(axis="both", labelsize=tick_fontsize)
+    ax.xaxis.label.set_size(axis_label_fontsize)
+    ax.yaxis.label.set_size(axis_label_fontsize)
+    fig.suptitle(f"{cfg.title_prefix}: Runtime by {cfg.x_label}", fontsize=title_fontsize, y=0.98)
     if cfg.slug == "item" and 1000 in cfg.display_sizes and 2000 in cfg.display_sizes:
         jump_idx = cfg.display_sizes.index(1000) + 0.5
         _plot_x_jump_marker(ax, x=float(jump_idx), y=0.0)
     ax.grid(True, alpha=0.35)
 
-    shared._style_legend_right(ax_leg, ax)
+    shared._style_legend_right(ax_leg, ax, fontsize=legend_fontsize)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     fig.subplots_adjust(left=0.06, right=0.98, top=0.88, bottom=0.13, wspace=0.04)
     fig.savefig(output_path)
@@ -884,7 +960,7 @@ def _plot_calibration(cfg: DatasetConfig, rows: list[dict], cache: dict[tuple[st
 
     cal_dir = cfg.out_dir / "calibration"
     cal_dir.mkdir(parents=True, exist_ok=True)
-    calibration_models = ["Marformer", "Stan Oracle", "Stan Both", "Stan Bin", "Stan Proj", "Unigram Pool ij", "Naive Bayes IJK", "Structured NB"]
+    calibration_models = ["Marformer", "Stan Oracle", "Stan Both", "Stan Bin", "Stan Proj", "Unigram Pool ij", "Naive Bayes IJK", "Structured NB", "Structured Log-Linear"]
 
     for size in cfg.display_sizes:
         payloads: list[tuple[str, tuple[np.ndarray, np.ndarray], str]] = []

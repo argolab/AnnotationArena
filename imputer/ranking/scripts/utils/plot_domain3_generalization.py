@@ -77,6 +77,7 @@ COLORS = {
     "Unigram Pool ij": "#14532d",
     "Naive Bayes IJK": "#1f7a4d",
     "Structured NB": "#2fa36b",
+    "Structured Log-Linear": "#73c69d",
     "Best Unigram": "#6b7280",
 }
 
@@ -89,6 +90,7 @@ MARKERS = {
     "Unigram Pool ij": "h",
     "Naive Bayes IJK": "v",
     "Structured NB": ">",
+    "Structured Log-Linear": "<",
     "Best Unigram": "D",
 }
 
@@ -109,6 +111,7 @@ STRUCTURED_BASELINE_LABELS = [
     "Unigram Pool ij",
     "Naive Bayes IJK",
     "Structured NB",
+    "Structured Log-Linear",
 ]
 
 
@@ -424,6 +427,7 @@ def _structured_baseline_probs_and_labels(spec_slug: str, size: int, method: str
         "Unigram Pool ij": "unigram_ij",
         "Naive Bayes IJK": "ijk",
         "Structured NB": "snb",
+        "Structured Log-Linear": "log_linear",
     }
     payload = payloads.get(key_map[method])
     if payload is None:
@@ -545,7 +549,14 @@ def _style_legend(ax: plt.Axes, loc: str = "best") -> None:
         leg.get_frame().set_linewidth(1.0)
 
 
-def _style_legend_right(ax_leg: plt.Axes, source_ax: plt.Axes) -> None:
+def _style_legend_right(
+    ax_leg: plt.Axes,
+    source_ax: plt.Axes,
+    *,
+    fontsize: float | None = None,
+    labelspacing: float = 0.7,
+    handlelength: float = 2.4,
+) -> None:
     handles, labels = source_ax.get_legend_handles_labels()
     if not handles:
         return
@@ -560,8 +571,9 @@ def _style_legend_right(ax_leg: plt.Axes, source_ax: plt.Axes) -> None:
         facecolor="white",
         edgecolor="0.75",
         borderpad=0.8,
-        labelspacing=0.7,
-        handlelength=2.4,
+        labelspacing=labelspacing,
+        handlelength=handlelength,
+        fontsize=fontsize,
     )
     if leg is not None:
         leg.get_frame().set_linewidth(1.0)
@@ -618,6 +630,7 @@ def _series_labels() -> list[str]:
         "Unigram Pool ij",
         "Naive Bayes IJK",
         "Structured NB",
+        "Structured Log-Linear",
         "Best Unigram",
     ]
 

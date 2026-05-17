@@ -894,6 +894,13 @@ def main():
         help="Predict final params from the last combined hidden state instead of reading them directly from the residual param stream.",
     )
     parser.add_argument(
+        "--use-embed-unembed",
+        action="store_true",
+        help="Use embedding/unembedding architecture: single residual stream, value embedded via "
+             "learned A*x+b at layer 0, unembedded via per-type linear at output. "
+             "Removes the prescribed param-stream scale (logit_high) and lets LayerNorm operate naturally.",
+    )
+    parser.add_argument(
         "--lr-schedule",
         type=str,
         default="none",
@@ -955,6 +962,7 @@ def main():
     config.scale_shared_rel      = args.scale_shared_rel
     config.use_graph_mask        = args.use_graph_mask
     config.use_param_output_head = args.use_param_output_head
+    config.use_embed_unembed     = args.use_embed_unembed
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -1016,6 +1024,7 @@ def main():
             "scale_shared_rel": config.scale_shared_rel,
             "use_graph_mask": config.use_graph_mask,
             "use_param_output_head": config.use_param_output_head,
+            "use_embed_unembed": config.use_embed_unembed,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,
