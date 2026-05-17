@@ -87,6 +87,7 @@ def _reconstruct(run_dir: Path) -> tuple:
     config.scale_shared_rel     = mcfg["scale_shared_rel"]
     config.use_graph_mask       = mcfg["use_graph_mask"]
     config.use_param_output_head = mcfg.get("use_param_output_head", False)
+    config.use_embed_unembed     = mcfg.get("use_embed_unembed", False)
 
     # ── DataConverter + bundle ────────────────────────────────────────────────
     converter = DataConverter(
@@ -235,7 +236,7 @@ def _evaluate_checkpoint(
         types=model.types,
         global_param_dim=model.global_param_dim,
         device=device,
-        max_item=200
+        max_item=100
     )
 
     metrics = _compute_metrics(result)

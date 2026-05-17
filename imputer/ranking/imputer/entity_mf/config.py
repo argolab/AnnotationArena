@@ -30,3 +30,4 @@ class EntityMarformerConfig:
     scale_shared_rel: bool = False       # In shared-bias mode: scale rel_scores by 1/sqrt(head_dim), matching per-head normalization
     use_graph_mask: bool = False         # Hard graph attention mask: allow attention only where edge_mask or K_aug pointer exists (+ self)
     use_param_output_head: bool = False  # Predict final params from the last combined hidden state instead of using the residual param stream directly
+    use_embed_unembed: bool = False      # Embedding/unembedding architecture: single residual stream; value embedded via learned A*x+b at layer 0, unembedded via per-type linear at output
