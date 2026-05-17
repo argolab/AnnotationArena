@@ -324,3 +324,5 @@ imputer/ranking/STAN/stan_models/tensor_shared_annotator_projection.an
 imputer/ranking/DATA/STAN/DOMAIN3-OLD
 imputer/ranking/CLAUDE
 imputer/ranking/scripts/DOMAIN3-OLD/MarformerEmb
+imputer/ranking/DATA/STAN/DOMAIN3-SOFTPLUS
+imputer/ranking/STAN/stan_models/tensor_generation_softplus
