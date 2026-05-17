@@ -2,7 +2,7 @@
 """
 LLM Rubric: test-missing log loss, RMSE, and calibration vs train size.
 
-Curves: CPM SharedThreshold STAN, unigram P(y|i,j), NB IJK, structured NB; optional log-linear (``--log-linear``).
+Curves: CPM SharedThreshold STAN, unigram P(y|i,j), NB IJK, structured NB (−CHANGEK); optional log-linear (``--log-linear``).
 
 Run from imputer/ranking (all three outputs by default):
 
@@ -44,7 +44,11 @@ from structured_baselines.cli_defaults import (
     DEFAULT_UNIGRAM_ALPHA,
 )
 from structured_baselines.dataset_adapter import build_test_examples, load_bundle_dict
+from structured_baselines.plate_graph_factorized import StructuredFactorMask
 from structured_baselines.runner import calibration_probs_labels, fit_baselines
+
+# Structured NB: attr-pair + CHANGEJ only (no cross-item CHANGEK)
+SNB_FACTOR_MASK = StructuredFactorMask(attr_pair=True, change_j=True, change_k=False)
 
 SIZE_RE = re.compile(r"LLMRubric_225_25_9_(\d+)_eval$")
 
@@ -59,7 +63,7 @@ PANEL_TITLES = {
     "cpm": "CPM SharedThreshold STAN",
     "unigram_ij": "Unigram (pool ij)",
     "ijk": "Naive Bayes (i,j,k)",
-    "snb": "Structured NB",
+    "snb": "Structured NB (−CHANGEK)",
     "log_linear": "Structured log-linear",
 }
 
@@ -212,7 +216,12 @@ def _plot_calibration(
 
     bundle = load_bundle_dict(bundle_path)
     fitted = fit_baselines(
-        bundle, bundle_path, snb_alpha=args.snb_alpha, unigram_alpha=args.unigram_alpha, **_log_linear_fit_kw(args)
+        bundle,
+        bundle_path,
+        snb_alpha=args.snb_alpha,
+        unigram_alpha=args.unigram_alpha,
+        snb_factor_mask=SNB_FACTOR_MASK,
+        **_log_linear_fit_kw(args),
     )
     arrays = calibration_probs_labels(fitted, bundle, split)
 
@@ -229,7 +238,7 @@ def _plot_calibration(
         return
     plot_reliability_panels(
         panels,
-        suptitle=f"LLM Rubric reliability at train size {cal_size} ({split} missing)",
+        suptitle=f"LLM Rubric reliability at train size {cal_size} ({split} missing; SNB −CHANGEK)",
         output_path=args.output_calibration,
     )
     print(f"Saved: {args.output_calibration}")
@@ -325,6 +334,7 @@ def main() -> None:
             bundle_path,
             snb_alpha=args.snb_alpha,
             unigram_alpha=args.unigram_alpha,
+            snb_factor_mask=SNB_FACTOR_MASK,
             **_log_linear_fit_kw(args),
         )
         test_ex = build_test_examples(bundle)
@@ -356,14 +366,14 @@ def main() -> None:
     _plot_curves(
         ll,
         ylabel="Test missing mean NLL",
-        title="LLM Rubric: CPM vs structured baselines (log loss)",
+        title="LLM Rubric: CPM vs structured baselines (log loss; SNB −CHANGEK)",
         output=args.output_logloss,
     )
     if any(rmse[k] for k in rmse):
         _plot_curves(
             rmse,
             ylabel="Test missing RMSE",
-            title="LLM Rubric: CPM vs structured baselines (RMSE)",
+            title="LLM Rubric: CPM vs structured baselines (RMSE; SNB −CHANGEK)",
             output=args.output_rmse,
         )
     if args.plot_calibration and sizes:

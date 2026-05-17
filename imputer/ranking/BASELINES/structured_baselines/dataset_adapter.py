@@ -2,7 +2,10 @@
 ``data_bundle.json`` → prediction examples.
 
 Fit pool: all observed ratings in train, val, and test (transductive).
-Eval: missing cells with sources = observed on the same item in that split.
+Eval: missing cells with sources = ALL transductive observed cells (train + val + test),
+excluding the target cell itself. Sources are NOT restricted to same-item or same-split
+neighbors; every observed cell in the transductive pool is a potential source. The split
+label only gates which *missing* rows are evaluated.
 """
 
 from __future__ import annotations
@@ -10,7 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Literal, Optional, Tuple
+from typing import List, Literal, Optional, Tuple
 
 from .cli_defaults import TRANSDUCTIVE_INSTANCES
 
@@ -74,19 +77,14 @@ def transductive_observed_rows(bundle: dict) -> List[dict]:
 
 
 def build_test_examples(bundle: dict) -> List[LocalExample]:
-    obs_by_item: Dict[int, List[Cell]] = {}
-    for r in bundle["observed_ratings"]:
-        if str(r["instance"]) != "test":
-            continue
-        obs_by_item.setdefault(int(r["item"]), []).append(_rating_to_cell(r))
+    all_obs = transductive_observed_cells(bundle)
 
     examples: List[LocalExample] = []
     for r in bundle["missing_ratings"]:
         if str(r["instance"]) != "test":
             continue
-        item = int(r["item"])
         ti_i, ti_j, ti_k, y = _rating_to_cell(r)
-        srcs = [c for c in obs_by_item.get(item, []) if (c[0], c[1], c[2]) != (ti_i, ti_j, ti_k)]
+        srcs = [c for c in all_obs if (c[0], c[1], c[2]) != (ti_i, ti_j, ti_k)]
         examples.append(
             LocalExample(target_i=ti_i, target_j=ti_j, target_k=ti_k, y=y, sources=tuple(srcs))
         )
@@ -97,19 +95,14 @@ def build_eval_examples(
     bundle: dict,
     split: Literal["train", "val", "test"],
 ) -> List[LocalExample]:
-    obs_by_item: Dict[int, List[Cell]] = {}
-    for r in bundle["observed_ratings"]:
-        if str(r["instance"]) != split:
-            continue
-        obs_by_item.setdefault(int(r["item"]), []).append(_rating_to_cell(r))
+    all_obs = transductive_observed_cells(bundle)
 
     examples: List[LocalExample] = []
     for r in bundle["missing_ratings"]:
         if str(r["instance"]) != split:
             continue
-        item = int(r["item"])
         ti_i, ti_j, ti_k, y = _rating_to_cell(r)
-        srcs = [c for c in obs_by_item.get(item, []) if (c[0], c[1], c[2]) != (ti_i, ti_j, ti_k)]
+        srcs = [c for c in all_obs if (c[0], c[1], c[2]) != (ti_i, ti_j, ti_k)]
         examples.append(
             LocalExample(target_i=ti_i, target_j=ti_j, target_k=ti_k, y=y, sources=tuple(srcs))
         )
@@ -118,25 +111,20 @@ def build_eval_examples(
 
 def build_train_observed_examples(bundle: dict) -> List[LocalExample]:
     """
-    One LocalExample per **observed** train rating: predict that cell from other
-    train-observed cells on the same item.
+    One LocalExample per **observed** train rating: predict that cell from all
+    other transductive observed cells (train + val + test).
 
     Used to supervise structured log-linear when there are no train-**missing** rows
     (e.g. LLM Rubric: humans only on val/test items).
     """
-    obs_by_item: Dict[int, List[Cell]] = {}
-    for r in bundle["observed_ratings"]:
-        if str(r["instance"]) != "train":
-            continue
-        obs_by_item.setdefault(int(r["item"]), []).append(_rating_to_cell(r))
+    all_obs = transductive_observed_cells(bundle)
 
     examples: List[LocalExample] = []
     for r in bundle["observed_ratings"]:
         if str(r["instance"]) != "train":
             continue
-        item = int(r["item"])
         ti_i, ti_j, ti_k, y = _rating_to_cell(r)
-        srcs = [c for c in obs_by_item.get(item, []) if (c[0], c[1], c[2]) != (ti_i, ti_j, ti_k)]
+        srcs = [c for c in all_obs if (c[0], c[1], c[2]) != (ti_i, ti_j, ti_k)]
         examples.append(
             LocalExample(target_i=ti_i, target_j=ti_j, target_k=ti_k, y=y, sources=tuple(srcs))
         )

@@ -1,21 +1,32 @@
 """
-Multiclass log-linear (softmax) model with the same structured features as the NB baseline.
+Multiclass log-linear (softmax) model matching the new structured factorization.
 
-For target attribute i* and candidate class y:
+Score for target (i*, j*, k*) and candidate class y:
 
-    score(y) = w_unigram[i*, y] + sum_{sources r} w_bigram[i_src, v_src, i*, y, rel_r]
+    score(y) =  w_y[y]
+              + w_i[i*, y]
+              + w_j[j*, y]
+              + w_k[k*, y]
+              + sum_{attr-pair sources (i', v')} w_attr[i', i*, v', y]
+              + sum_{CHANGEJ sources} count(v') * w_change_j[v', y]
+              + sum_{CHANGEK sources} count(v') * w_change_k[v', y]
 
-Indexed implementation (no sparse sklearn pipeline). Trained with PyTorch Adam + CE loss.
+Parameters:
+  w_y         : (C,)           — prior log-odds on class
+  w_i         : (I, C)         — attribute unigram
+  w_j         : (J, C)         — annotator unigram
+  w_k         : (K, C)         — item unigram
+  w_attr      : (I, I, C, C)   — per (i', i*) pair; w_attr[i', i*, v', y]
+  w_change_j  : (C, C)         — shared; w_change_j[v', y]
+  w_change_k  : (C, C)         — shared; w_change_k[v', y]
+
+Sources are all transductive observed cells except the target (see dataset_adapter).
+Training uses PyTorch Adam + CE loss. Optional val early stopping.
 
 **Early stopping:** pass ``val_examples`` from ``build_eval_examples(bundle, "val")`` and set
 ``early_stopping_patience`` (default 5). Training stops when validation mean NLL does not improve
 by ``min_delta`` for that many epochs; the best validation checkpoint is restored.
 If ``val_examples`` is empty or ``early_stopping_patience`` is 0 or ``None``, all ``epochs`` are run.
-
-Training examples are supplied by the caller (``runner.fit_baselines`` uses train-missing, or
-``build_train_observed_examples`` when train-missing is empty).
-
-Epoch tqdm is shown when ``show_progress=True`` and tqdm is installed.
 """
 
 from __future__ import annotations
@@ -34,27 +45,51 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .dataset_adapter import LocalExample
-from .feature_utils import NUM_RELATIONS, relation_label
+from .factor_routing import route_sources
 
 
 class _LogLinearModule(nn.Module):
-    def __init__(self, num_attrs: int, num_classes: int, num_rel: int = NUM_RELATIONS) -> None:
+    def __init__(self, num_attrs: int, num_classes: int, num_anns: int, num_items: int) -> None:
         super().__init__()
-        self.I = num_attrs
-        self.C = num_classes
-        self.R = num_rel
-        self.w_uni = nn.Parameter(torch.zeros(num_attrs, num_classes))
-        self.w_bi = nn.Parameter(torch.zeros(num_attrs, num_classes, num_attrs, num_classes, num_rel))
-        nn.init.normal_(self.w_uni, std=0.01)
-        nn.init.normal_(self.w_bi, std=0.01)
+        I, C, J, K = num_attrs, num_classes, num_anns, num_items
+        self.I, self.C, self.J, self.K = I, C, J, K
+
+        self.w_y = nn.Parameter(torch.zeros(C))
+        self.w_i = nn.Parameter(torch.zeros(I, C))
+        self.w_j = nn.Parameter(torch.zeros(J, C))
+        self.w_k = nn.Parameter(torch.zeros(K, C))
+        self.w_attr = nn.Parameter(torch.zeros(I, I, C, C))      # [i', i*, v', y]
+        self.w_change_j = nn.Parameter(torch.zeros(C, C))        # [v', y]
+        self.w_change_k = nn.Parameter(torch.zeros(C, C))        # [v', y]
+
+        for p in self.parameters():
+            nn.init.normal_(p, std=0.01)
 
     def forward_scores(self, ex: LocalExample, device: torch.device) -> torch.Tensor:
         """Scores over y = 0..C-1, shape (C,) on device."""
-        it = ex.target_i
-        s = self.w_uni[it].to(device)
-        for (i_s, j_s, k_s, v_s) in ex.sources:
-            rel = relation_label(i_s, j_s, k_s, it, ex.target_j, ex.target_k)
-            s = s + self.w_bi[i_s, v_s, it, :, rel].to(device)
+        it, jt, kt = ex.target_i, ex.target_j, ex.target_k
+
+        s = (
+            self.w_y.to(device)
+            + self.w_i[it].to(device)
+            + self.w_j[jt].to(device)
+            + self.w_k[kt].to(device)
+        )
+
+        routed = route_sources(ex.sources, it, jt, kt)
+
+        # ATTR_PAIR: one w_attr slice per source
+        for (i_src, v_src) in routed.attr_pairs:
+            s = s + self.w_attr[i_src, it, v_src].to(device)  # shape (C,)
+
+        # CHANGE_J: weighted by multiplicity
+        for v_src, cnt in routed.change_j.items():
+            s = s + cnt * self.w_change_j[v_src].to(device)
+
+        # CHANGE_K: weighted by multiplicity
+        for v_src, cnt in routed.change_k.items():
+            s = s + cnt * self.w_change_k[v_src].to(device)
+
         return s
 
 
@@ -82,6 +117,8 @@ class StructuredLogLinear:
 
     num_attrs: int
     num_classes: int
+    num_anns: int
+    num_items: int
     module: _LogLinearModule
     device: str
     epochs_ran: int = 0
@@ -94,6 +131,8 @@ class StructuredLogLinear:
         examples: Sequence[LocalExample],
         num_attrs: int,
         num_classes: int,
+        num_anns: int,
+        num_items: int,
         *,
         val_examples: Sequence[LocalExample] | None = None,
         epochs: int = 30,
@@ -109,14 +148,12 @@ class StructuredLogLinear:
     ) -> "StructuredLogLinear":
         """Train with Adam. Optional validation early stopping restores best weights."""
         dev = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
-        mod = _LogLinearModule(num_attrs, num_classes).to(dev)
+        mod = _LogLinearModule(num_attrs, num_classes, num_anns, num_items).to(dev)
         opt = torch.optim.Adam(mod.parameters(), lr=lr)
         ex_list = list(examples)
         n = len(ex_list)
         val_list = list(val_examples) if val_examples is not None else []
-        use_es = (
-            early_stopping_patience not in (None, 0) and len(val_list) > 0
-        )
+        use_es = early_stopping_patience not in (None, 0) and len(val_list) > 0
         use_tqdm = bool(show_progress and tqdm is not None)
         desc = tqdm_desc or "Log-linear train"
 
@@ -206,6 +243,8 @@ class StructuredLogLinear:
         return cls(
             num_attrs=num_attrs,
             num_classes=num_classes,
+            num_anns=num_anns,
+            num_items=num_items,
             module=mod,
             device=str(dev),
             epochs_ran=epochs_ran,

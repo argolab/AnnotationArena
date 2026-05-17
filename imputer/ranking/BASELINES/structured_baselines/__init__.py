@@ -9,6 +9,7 @@ from .dataset_adapter import (
     load_bundle_dict,
     transductive_observed_cells,
 )
+from .factor_routing import FactorKind, RoutedSources, route_source, route_sources
 from .log_linear_structured import StructuredLogLinear
 from .runner import (
     FittedBaselines,
@@ -32,6 +33,10 @@ __all__ = [
     "NaiveBayesIJK",
     "StructuredNaiveBayes",
     "StructuredLogLinear",
+    "FactorKind",
+    "RoutedSources",
+    "route_source",
+    "route_sources",
     "bundle_dims",
     "build_test_examples",
     "build_eval_examples",

@@ -27,6 +27,7 @@ from .dataset_adapter import (
 from .log_linear_structured import StructuredLogLinear
 from .naive_bayes_ijk import NaiveBayesIJK
 from .naive_bayes_structured import StructuredNaiveBayes
+from .plate_graph_factorized import StructuredFactorMask
 from .unigram_pooled import PooledUnigramIJ
 
 
@@ -45,6 +46,7 @@ def fit_baselines(
     unigram_alpha: float = DEFAULT_UNIGRAM_ALPHA,
     ijk_alpha: float = DEFAULT_IJK_ALPHA,
     snb_alpha: float = DEFAULT_SNB_ALPHA,
+    snb_factor_mask: StructuredFactorMask | None = None,
     fit_log_linear: bool = False,
     log_linear_epochs: int = DEFAULT_LOG_LINEAR_EPOCHS,
     log_linear_lr: float = DEFAULT_LOG_LINEAR_LR,
@@ -70,6 +72,8 @@ def fit_baselines(
                 train_ex,
                 num_attrs=I,
                 num_classes=C,
+                num_anns=J,
+                num_items=K,
                 val_examples=val_ex if val_ex else None,
                 epochs=log_linear_epochs,
                 lr=log_linear_lr,
@@ -83,7 +87,13 @@ def fit_baselines(
         unigram_ij=PooledUnigramIJ.fit(bundle, alpha=unigram_alpha),
         nb_ijk=NaiveBayesIJK.fit_from_bundle(bundle, alpha=ijk_alpha),
         snb=StructuredNaiveBayes.fit_from_bundle(
-            bundle, num_attrs=I, num_classes=C, num_anns=J, num_items=K, alpha=snb_alpha
+            bundle,
+            num_attrs=I,
+            num_classes=C,
+            num_anns=J,
+            num_items=K,
+            alpha=snb_alpha,
+            factor_mask=snb_factor_mask,
         ),
         log_linear=ll,
     )
