@@ -104,6 +104,37 @@ mkdir -p "${STAGED_STAN_DIR}"
 LOCAL_STAN_FILE="${STAGED_STAN_DIR}/$(basename "${STAN_FILE}")"
 cp "${STAN_FILE}" "${LOCAL_STAN_FILE}"
 
+write_temp_tensor_config() {
+    local src_config="$1"
+    local out_config="$2"
+    python - "$src_config" "$out_config" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+with open(src) as f:
+    raw = json.load(f)
+dg = raw.get("datagen", raw)
+merged = {
+    **dg,
+    "D": 32,
+    "T": 3,
+    "alpha_confusion": 15.0,
+    "use_dawid_skene_noise": False,
+    "derive_thresholds_from_annotator": False,
+    "stan_type": "tensor",
+}
+with open(dst, "w") as f:
+    json.dump({"datagen": merged}, f, indent=2)
+PY
+}
+
+TMP_CONFIG="$(mktemp "${TMPDIR}/llmrubric_cpm_softplus_config.XXXXXX.json")"
+trap 'rm -f "${TMP_CONFIG}"' EXIT
+write_temp_tensor_config "${CONFIGS_PATH}" "${TMP_CONFIG}"
+
 echo ""
 echo "============================================================"
 echo " LLMRubric | CPM-Softplus | ${SPLIT}"
@@ -112,6 +143,7 @@ echo " REPO_ROOT         : ${REPO_ROOT}"
 echo " DATA_DIR          : ${DATA_DIR}"
 echo " DATA_BUNDLE       : ${DATA_BUNDLE}"
 echo " CONFIGS_PATH      : ${CONFIGS_PATH}"
+echo " TMP_CONFIG        : ${TMP_CONFIG}"
 echo " OUTPUT_DIR        : ${OUTPUT_DIR}"
 echo " RUN_NAME          : ${RUN_NAME}"
 echo " STAN_FILE         : ${STAN_FILE}"
@@ -128,7 +160,7 @@ echo "============================================================"
 echo "[1/2] Running CPM-Softplus inference..."
 python STAN/stan_code/scripts/run_inference.py \
     --data-bundle        "${DATA_BUNDLE}" \
-    --configs            "${CONFIGS_PATH}" \
+    --configs            "${TMP_CONFIG}" \
     --output-dir         "${OUTPUT_DIR}" \
     --run-name           "${RUN_NAME}" \
     --stan-type          "tensor" \
