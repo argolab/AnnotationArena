@@ -96,6 +96,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
             always_observed_ids=always_observed_ids,
         )
         self.training_history: List[Dict[str, Any]] = []
+        self._save_training_history_each_epoch = False
         self._cached_chunks: list | None = (
             None if self.random_item_chunks else self._build_training_chunks()
         )
@@ -479,6 +480,11 @@ class EntityMarformerLightningModule(pl.LightningModule):
                 print("No val variables to evaluate on")
 
         self.training_history.append(epoch_metrics)
+        if self._save_training_history_each_epoch and self.run_dir is not None:
+            try:
+                save_json(self.training_history, Path(self.run_dir) / "training_history.json")
+            except Exception as e:
+                print(f"Warning: failed to save training history to {self.run_dir}: {e}")
 
     def on_train_end(self) -> None:
         if self.run_dir is not None and self.training_history:

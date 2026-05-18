@@ -37,6 +37,7 @@ _DEFAULT_SWEEPS = (
 )
 
 _TEST_LOG_LOSS_YLIM = (0.3, 0.8)
+_COMBINED_MISSING_LOG_LOSS_YLIM = (0.4, 0.8)
 
 mpl.rcParams.update({
     "font.family": "serif",
@@ -168,7 +169,7 @@ def plot_combined_missing_log_loss(
             ax_one.set_xlabel("Epoch")
             ax_one.set_ylabel("Combined missing log loss (xent, nats)")
             ax_one.set_title(f"{label} — training combined_eval missing rating xent")
-            ax_one.set_ylim(bottom=0)
+            ax_one.set_ylim(*_COMBINED_MISSING_LOG_LOSS_YLIM)
             per_path = run_dir / "combined_missing_log_loss.png"
             _save(fig_one, per_path)
 
@@ -179,7 +180,7 @@ def plot_combined_missing_log_loss(
     ax.set_xlabel("Epoch")
     ax.set_ylabel("Combined missing log loss (xent, nats)")
     ax.set_title(title)
-    ax.set_ylim(bottom=0)
+    ax.set_ylim(*_COMBINED_MISSING_LOG_LOSS_YLIM)
     ax.legend(loc="upper left", bbox_to_anchor=(1.02, 1), fontsize=8)
     fig.tight_layout()
     _save(fig, out_path)

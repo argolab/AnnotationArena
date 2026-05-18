@@ -8,6 +8,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import torch
@@ -58,6 +59,34 @@ def add_recurrent_training_args(parser: argparse.ArgumentParser) -> None:
         default=None,
         help="Unique transformer blocks after the recurrent core.",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Resume training in an existing run directory from a checkpoint.",
+    )
+    parser.add_argument(
+        "--resume-checkpoint",
+        default="last",
+        help="Checkpoint for --resume: 'last', 'best', or a filename under checkpoints/.",
+    )
+
+
+def _resolve_resume_checkpoint(run_dir: Path, which: str) -> Path:
+    ckpt_dir = run_dir / "checkpoints"
+    if which == "last":
+        path = ckpt_dir / "last.ckpt"
+        if not path.exists():
+            raise FileNotFoundError(f"last.ckpt not found in {ckpt_dir}")
+        return path
+    if which == "best":
+        candidates = sorted(ckpt_dir.glob("best-*.ckpt"))
+        if not candidates:
+            raise FileNotFoundError(f"No best-*.ckpt found in {ckpt_dir}")
+        return candidates[0]
+    path = ckpt_dir / which
+    if not path.exists():
+        raise FileNotFoundError(f"{which} not found in {ckpt_dir}")
+    return path
 
 
 def main():
@@ -115,7 +144,22 @@ def main():
 
     output_root = Path(args.output_root)
     output_root.mkdir(parents=True, exist_ok=True)
-    if args.overwrite_existing_data and args.run_name:
+    resume_ckpt: Path | None = None
+    prior_history: list = []
+
+    if args.resume:
+        if not args.run_name:
+            raise ValueError("--run-name is required when using --resume")
+        run_dir = output_root / args.run_name
+        if not run_dir.is_dir():
+            raise FileNotFoundError(f"Resume run directory not found: {run_dir}")
+        resume_ckpt = _resolve_resume_checkpoint(run_dir, args.resume_checkpoint)
+        history_path = run_dir / "training_history.json"
+        if history_path.exists():
+            with open(history_path) as f:
+                prior_history = json.load(f)
+        print(f"Resuming {run_dir.name} from {resume_ckpt.name} ({len(prior_history)} history rows)")
+    elif args.overwrite_existing_data and args.run_name:
         run_dir = output_root / args.run_name
         run_dir.mkdir(parents=True, exist_ok=True)
     else:
@@ -170,6 +214,9 @@ def main():
         random_item_chunks=bool(args.random_item_chunks),
         log_prefix="RecurrentMarformer",
     )
+    if prior_history:
+        lightning_module.training_history = list(prior_history)
+        lightning_module._save_training_history_each_epoch = True
 
     accelerator = "gpu" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
     logger = TensorBoardLogger(save_dir=str(run_dir), name="lightning_logs")
@@ -195,7 +242,10 @@ def main():
         callbacks=[checkpoint_best, checkpoint_periodic],
         plugins=[LightningEnvironment()],
     )
-    trainer.fit(lightning_module)
+    if resume_ckpt is not None:
+        trainer.fit(lightning_module, ckpt_path=str(resume_ckpt))
+    else:
+        trainer.fit(lightning_module)
 
 
 if __name__ == "__main__":

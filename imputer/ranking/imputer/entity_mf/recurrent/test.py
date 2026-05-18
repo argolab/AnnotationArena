@@ -212,20 +212,49 @@ def main() -> None:
         default=None,
         help="Chunk eval by item count (default: train_config training.max_item).",
     )
+    parser.add_argument(
+        "--full-graph",
+        action="store_true",
+        help="Evaluate on the full transductive graph (max_item=None), matching recurrence_scaling_eval.",
+    )
+    parser.add_argument(
+        "--num-recurrence",
+        type=int,
+        default=None,
+        help="Override num_recurrence at eval time (default: trained value from train_config.json).",
+    )
+    parser.add_argument(
+        "--out-dir",
+        default=None,
+        help="Directory for JSON outputs (default: <run-dir>/TEST_RESULTS).",
+    )
     args = parser.parse_args()
 
     run_dir = Path(args.run_dir)
     device = torch.device(
         "cuda" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
     )
-    out_dir = run_dir / "TEST_RESULTS"
-    out_dir.mkdir(exist_ok=True)
+    out_dir = Path(args.out_dir) if args.out_dir else run_dir / "TEST_RESULTS"
+    out_dir.mkdir(parents=True, exist_ok=True)
 
     print(f"Run dir  : {run_dir}")
+    print(f"Out dir  : {out_dir}")
     print(f"Device   : {device}")
 
     model, eval_vars, train_cfg = _reconstruct(run_dir)
-    max_item = args.max_item if args.max_item is not None else train_cfg.get("max_item")
+    trained_r = int(model.recurrent_config.num_recurrence)
+    if args.num_recurrence is not None:
+        model.recurrent_config.num_recurrence = int(args.num_recurrence)
+        print(
+            f"num_recurrence: {args.num_recurrence} at eval "
+            f"(trained={trained_r}, actual_depth={model.effective_depth})"
+        )
+    if args.full_graph:
+        max_item = None
+    elif args.max_item is not None:
+        max_item = args.max_item
+    else:
+        max_item = train_cfg.get("max_item")
     print(f"Eval vars: {len(eval_vars)}")
     print(f"max_item : {max_item}")
 
@@ -250,6 +279,10 @@ def main() -> None:
                 device=device,
                 max_item=max_item,
             )
+            if args.num_recurrence is not None:
+                result_dict["num_recurrence_at_eval"] = int(args.num_recurrence)
+                result_dict["trained_num_recurrence"] = trained_r
+                result_dict["actual_depth_at_eval"] = int(model.effective_depth)
             stem = Path(which).stem if which.endswith(".ckpt") else which
             out_path = out_dir / f"{stem}.json"
             with open(out_path, "w") as f:
