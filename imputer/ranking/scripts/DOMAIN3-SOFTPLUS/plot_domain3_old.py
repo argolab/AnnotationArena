@@ -48,11 +48,8 @@ from imputer.entity_mf.test import _load_checkpoint, _reconstruct
 from scripts.utils import plot_domain3_generalization as shared
 
 
-ITEM_DISPLAY_SIZES = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 2000, 3000, 4000]
+ITEM_DISPLAY_SIZES = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
 ITEM_STAN_CUTOFF = 500
-ITEM_MARFORMER_MAX_ITEM = 100
-ITEM_X_LEFT = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
-ITEM_X_RIGHT = [2000, 3000, 4000]
 PROB_PREFIX = "prob_cat_"
 
 SERIES_ORDER = [
@@ -106,9 +103,7 @@ ITEM_CFG = DatasetConfig(
     stan_oracle_root=ROOT / "RESULTS/STAN/DOMAIN3-SOFTPLUS/ORACLE/ITEM",
     stan_oracle_eval_suffix="TENSOR_eval",
     misspec_root=ROOT / "RESULTS/STAN/DOMAIN3-SOFTPLUS/MISSPEC/ITEM",
-    x_break_enabled=True,
-    x_left_sizes=ITEM_X_LEFT,
-    x_right_sizes=ITEM_X_RIGHT,
+    x_break_enabled=False,
     stan_cutoff=ITEM_STAN_CUTOFF,
     baseline_cutoff=1000,
 )
@@ -488,24 +483,33 @@ def _collect_baseline_payloads(cfg: DatasetConfig, cutoff: int) -> tuple[dict[st
     for size in [s for s in cfg.display_sizes if s <= cutoff]:
         bundle_path = _bundle_path(cfg, size)
         if not bundle_path.exists():
+            print(f"[Baselines] size={size} missing bundle: {bundle_path}")
             continue
+        print(f"[Baselines] size={size} bundle={bundle_path}")
         bundle, fitted = load_and_fit(
             bundle_path,
             fit_log_linear=True,
-            log_linear_epochs=200,
-            log_linear_lr=1e-4,
+            log_linear_epochs=100,
+            log_linear_l2_lambda=2.0,
         )
         calibration_payloads = calibration_probs_labels(fitted, bundle, split="test")
         if not calibration_payloads:
+            print(f"[Baselines] size={size} no test calibration payloads")
             continue
         for label in shared.STRUCTURED_BASELINE_LABELS:
             start = time.perf_counter()
             payload = calibration_payloads.get(key_map[label])
             if payload is None:
+                print(f"[Baselines] size={size} {label}: no payload")
                 continue
             probs, labels = payload
             runtime_minutes[label][size] = (time.perf_counter() - start) / 60.0
             payloads[label][size] = (probs.astype(np.float64), labels.astype(np.int64))
+            print(
+                f"[Baselines] size={size} {label}: n={labels.shape[0]} "
+                f"log_loss={float(np.mean(_per_example_nll(probs, labels))):.6f} "
+                f"mbr_l2={float(np.mean(_per_example_mse(probs, labels))):.6f}"
+            )
     return payloads, runtime_minutes
 
 

@@ -492,8 +492,8 @@ def _collect_baseline_payloads(cfg: DatasetConfig, cutoff: int) -> tuple[dict[st
         bundle, fitted = load_and_fit(
             bundle_path,
             fit_log_linear=True,
-            log_linear_epochs=200,
-            log_linear_lr=1e-4,
+            log_linear_epochs=100,
+            log_linear_l2_lambda=2.0,
         )
         calibration_payloads = calibration_probs_labels(fitted, bundle, split="test")
         if not calibration_payloads:
