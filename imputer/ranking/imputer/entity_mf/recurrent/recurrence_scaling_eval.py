@@ -101,22 +101,34 @@ def plot_recurrence_scaling(summary: Dict[str, Any], out_dir: Path) -> Path:
     rows = summary["results"]
     rs = [row["num_recurrence"] for row in rows]
     lls = [row["missing"]["log_loss"] for row in rows]
+    rmses = [row["missing"]["rmse"] for row in rows]
     trained_r = rows[0]["trained_num_recurrence"] if rows else None
+    cfg = summary.get("trained_config", "")
+    ckpt = summary.get("checkpoint", "")
 
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.plot(rs, lls, "o-", color="#1f77b4", linewidth=2, markersize=8, alpha=0.85)
-    if trained_r is not None and trained_r in rs:
-        i = rs.index(trained_r)
-        ax.scatter([trained_r], [lls[i]], color="#d62728", s=120, zorder=5, label=f"trained r={trained_r}")
-    ax.set_xlabel("num_recurrence at eval")
-    ax.set_ylabel("Test missing log loss (nats)")
-    ax.set_title(
-        f"Recurrence scaling — {summary.get('trained_config', '')} "
-        f"({summary.get('checkpoint', '')} weights)"
-    )
-    ax.grid(True, alpha=0.3)
-    if trained_r is not None:
-        ax.legend(loc="best")
+    fig, axes = plt.subplots(1, 2, figsize=(11, 4.5))
+    for ax, ys, ylab, is_log_loss in zip(
+        axes, (lls, rmses), ("log loss (nats)", "RMSE"), (True, False)
+    ):
+        ax.plot(rs, ys, "o-", color="#1f77b4", linewidth=2, markersize=8, alpha=0.85)
+        if trained_r is not None and trained_r in rs:
+            i = rs.index(trained_r)
+            ax.scatter(
+                [trained_r],
+                [ys[i]],
+                color="#d62728",
+                s=120,
+                zorder=5,
+                label=f"trained r={trained_r}",
+            )
+        ax.set_xlabel("num_recurrence at eval")
+        ax.set_ylabel(f"Test missing {ylab}")
+        if is_log_loss:
+            ax.set_ylim(0.3, 0.8)
+        ax.grid(True, alpha=0.3)
+        if trained_r is not None:
+            ax.legend(loc="best")
+    fig.suptitle(f"Recurrence scaling — {cfg} ({ckpt} weights)")
     fig.tight_layout()
     png = out_dir / "recurrence_scaling.png"
     fig.savefig(png, dpi=150)
