@@ -57,6 +57,7 @@ PROB_PREFIX = "prob_cat_"
 
 SERIES_ORDER = [
     "Marformer",
+    "Marformer NT",
     "Stan Oracle",
     "Stan Both",
     "Stan Bin",
@@ -81,6 +82,9 @@ class DatasetConfig:
     summary_path: Path
     cache_path: Path
     runtime_cache_path: Path
+    marformer_nt_root: Path | None = None
+    marformer_nt_run_stem: str | None = None
+    nt_data_root: Path | None = None
     stan_oracle_root: Path | None = None
     stan_oracle_eval_suffix: str | None = None
     misspec_root: Path | None = None
@@ -99,6 +103,9 @@ ITEM_CFG = DatasetConfig(
     data_root=ROOT / "DATA/STAN/DOMAIN3-OLD/ItemSplits/Transductive",
     marformer_root=ROOT / "RESULTS/MARFORMER/DOMAIN3-OLD/ITEM",
     marformer_run_stem="DOMAIN3-OLD_Item_T_{size}_MARFORMER",
+    marformer_nt_root=ROOT / "RESULTS/MARFORMER-NT/ITEM",
+    marformer_nt_run_stem="DOMAIN3-OLD_Item_NT_{size}_MARFORMER",
+    nt_data_root=ROOT / "DATA/STAN/DOMAIN3-OLD/ItemSplits/NonTransductive",
     out_dir=ROOT / "PLOTS/DOMAIN3-OLD/ITEM_GENERALIZATION",
     summary_path=ROOT / "PLOTS/DOMAIN3-OLD/ITEM_GENERALIZATION/item_generalization_summary.json",
     cache_path=ROOT / "PLOTS/DOMAIN3-OLD/ITEM_GENERALIZATION/item_generalization_cache.npz",
@@ -223,8 +230,20 @@ def _marformer_run_dir(cfg: DatasetConfig, size: int) -> Path:
     return cfg.marformer_root / cfg.marformer_run_stem.format(size=size)
 
 
+def _marformer_nt_run_dir(cfg: DatasetConfig, size: int) -> Path | None:
+    if cfg.marformer_nt_root is None or cfg.marformer_nt_run_stem is None:
+        return None
+    return cfg.marformer_nt_root / cfg.marformer_nt_run_stem.format(size=size)
+
+
 def _bundle_path(cfg: DatasetConfig, size: int) -> Path:
     return cfg.data_root / f"DOMAIN3-OLD_{'Item' if cfg.slug == 'item' else 'Annot'}_T_{size}" / "data_bundle.json"
+
+
+def _nt_bundle_path(cfg: DatasetConfig, size: int) -> Path | None:
+    if cfg.nt_data_root is None:
+        return None
+    return cfg.nt_data_root / f"DOMAIN3-OLD_{'Item' if cfg.slug == 'item' else 'Annot'}_NT_{size}" / "data_bundle.json"
 
 
 def _test_missing_indices_and_labels(bundle: dict) -> tuple[list[int], np.ndarray]:
@@ -249,6 +268,18 @@ def _available_marformer_sizes(cfg: DatasetConfig) -> set[int]:
     available: set[int] = set()
     for size in cfg.display_sizes:
         if _marformer_run_dir(cfg, size).exists():
+            available.add(size)
+    return available
+
+
+def _available_marformer_nt_sizes(cfg: DatasetConfig) -> set[int]:
+    available: set[int] = set()
+    if cfg.marformer_nt_root is None or cfg.marformer_nt_run_stem is None or cfg.nt_data_root is None:
+        return available
+    for size in cfg.display_sizes:
+        run_dir = _marformer_nt_run_dir(cfg, size)
+        bundle_path = _nt_bundle_path(cfg, size)
+        if run_dir is not None and run_dir.exists() and bundle_path is not None and bundle_path.exists():
             available.add(size)
     return available
 
@@ -420,6 +451,41 @@ def _collect_marformer_payloads(cfg: DatasetConfig, device_name: str) -> tuple[d
     return payloads, runtime_minutes, mean_log_loss_override
 
 
+def _collect_marformer_nt_payloads(cfg: DatasetConfig, device_name: str) -> tuple[dict[int, tuple[str, np.ndarray, np.ndarray]], dict[int, float], dict[int, float]]:
+    payloads: dict[int, tuple[str, np.ndarray, np.ndarray]] = {}
+    runtime_minutes: dict[int, float] = {}
+    mean_log_loss_override: dict[int, float] = {}
+
+    for size in sorted(_available_marformer_nt_sizes(cfg)):
+        run_dir = _marformer_nt_run_dir(cfg, size)
+        bundle_path = _nt_bundle_path(cfg, size)
+        if run_dir is None or bundle_path is None:
+            continue
+        best_json = _ensure_marformer_best_json(run_dir, device_name)
+        best_payload = _read_json(best_json)
+        checkpoint_name = best_payload.get("checkpoint")
+        if not checkpoint_name:
+            continue
+        probs, labels = _marformer_probs_all_missing(
+            run_dir,
+            checkpoint_name,
+            _marformer_eval_max_item(cfg, size),
+            device_name,
+        )
+        payloads[size] = (checkpoint_name, probs, labels)
+        missing_metrics = best_payload.get("missing", {})
+        if missing_metrics.get("log_loss") is not None:
+            mean_log_loss_override[size] = float(missing_metrics["log_loss"])
+
+        total_seconds = _runtime_from_launcher(run_dir / "launcher_metadata.json", "elapsed_seconds")
+        total_epochs = int(_read_json(run_dir / "train_config.json").get("training", {}).get("epochs", 300))
+        if total_seconds is not None:
+            epoch_count = _parse_best_epoch(checkpoint_name, total_epochs)
+            runtime_minutes[size] = float(total_seconds) * (epoch_count / total_epochs) / 60.0
+
+    return payloads, runtime_minutes, mean_log_loss_override
+
+
 def _stan_probs_from_eval_dir(bundle_path: Path, eval_dir: Path) -> tuple[np.ndarray, np.ndarray] | None:
     probs_path = eval_dir / "rating_probabilities.csv"
     if not probs_path.exists():
@@ -450,9 +516,18 @@ def _collect_oracle_payloads(cfg: DatasetConfig) -> tuple[dict[int, tuple[np.nda
 
     for size in sorted(_available_oracle_sizes(cfg)):
         eval_dir = cfg.stan_oracle_root / f"DOMAIN3-OLD_{'Item' if cfg.slug == 'item' else 'Annot'}_T_{size}_{cfg.stan_oracle_eval_suffix}"
+        print(f"[Stan Oracle] size={size} eval_dir={eval_dir}")
         payload = _stan_probs_from_eval_dir(_bundle_path(cfg, size), eval_dir)
         if payload is not None:
             payloads[size] = payload
+            probs, labels = payload
+            print(
+                f"[Stan Oracle] size={size} n={labels.shape[0]} "
+                f"log_loss={float(np.mean(_per_example_nll(probs, labels))):.6f} "
+                f"mbr_l2={float(np.mean(_per_example_mse(probs, labels))):.6f}"
+            )
+        else:
+            print(f"[Stan Oracle] size={size} no payload")
         runtime = _runtime_from_launcher(cfg.stan_oracle_root / f"DOMAIN3-OLD_{'Item' if cfg.slug == 'item' else 'Annot'}_T_{size}_TENSOR" / "launcher_metadata.json", "fit_elapsed_seconds")
         if runtime is not None:
             runtime_minutes[size] = runtime / 60.0
@@ -467,9 +542,18 @@ def _collect_misspec_payloads(cfg: DatasetConfig, suffix: str) -> tuple[dict[int
 
     for size in sorted(_available_misspec_sizes(cfg, suffix)):
         eval_dir = cfg.misspec_root / f"DOMAIN3-OLD_{'Item' if cfg.slug == 'item' else 'Annot'}_T_{size}_{suffix}_eval"
+        print(f"[Stan {suffix}] size={size} eval_dir={eval_dir}")
         payload = _stan_probs_from_eval_dir(_bundle_path(cfg, size), eval_dir)
         if payload is not None:
             payloads[size] = payload
+            probs, labels = payload
+            print(
+                f"[Stan {suffix}] size={size} n={labels.shape[0]} "
+                f"log_loss={float(np.mean(_per_example_nll(probs, labels))):.6f} "
+                f"mbr_l2={float(np.mean(_per_example_mse(probs, labels))):.6f}"
+            )
+        else:
+            print(f"[Stan {suffix}] size={size} no payload")
         runtime = _runtime_from_launcher(cfg.misspec_root / f"DOMAIN3-OLD_{'Item' if cfg.slug == 'item' else 'Annot'}_T_{size}_{suffix}" / "launcher_metadata.json", "fit_elapsed_seconds")
         if runtime is not None:
             runtime_minutes[size] = runtime / 60.0
@@ -488,7 +572,9 @@ def _collect_baseline_payloads(cfg: DatasetConfig, cutoff: int) -> tuple[dict[st
     for size in [s for s in cfg.display_sizes if s <= cutoff]:
         bundle_path = _bundle_path(cfg, size)
         if not bundle_path.exists():
+            print(f"[Baselines] size={size} missing bundle: {bundle_path}")
             continue
+        print(f"[Baselines] size={size} bundle={bundle_path}")
         bundle, fitted = load_and_fit(
             bundle_path,
             fit_log_linear=True,
@@ -497,15 +583,22 @@ def _collect_baseline_payloads(cfg: DatasetConfig, cutoff: int) -> tuple[dict[st
         )
         calibration_payloads = calibration_probs_labels(fitted, bundle, split="test")
         if not calibration_payloads:
+            print(f"[Baselines] size={size} no test calibration payloads")
             continue
         for label in shared.STRUCTURED_BASELINE_LABELS:
             start = time.perf_counter()
             payload = calibration_payloads.get(key_map[label])
             if payload is None:
+                print(f"[Baselines] size={size} {label}: no payload")
                 continue
             probs, labels = payload
             runtime_minutes[label][size] = (time.perf_counter() - start) / 60.0
             payloads[label][size] = (probs.astype(np.float64), labels.astype(np.int64))
+            print(
+                f"[Baselines] size={size} {label}: n={labels.shape[0]} "
+                f"log_loss={float(np.mean(_per_example_nll(probs, labels))):.6f} "
+                f"mbr_l2={float(np.mean(_per_example_mse(probs, labels))):.6f}"
+            )
     return payloads, runtime_minutes
 
 
@@ -546,6 +639,7 @@ def _runtime_row(model: str, display_size: int, source_size: int, minutes: float
 def _save_cache(
     cache_path: Path,
     marformer_payloads: dict[int, tuple[str, np.ndarray, np.ndarray]],
+    marformer_nt_payloads: dict[int, tuple[str, np.ndarray, np.ndarray]],
     oracle_payloads: dict[int, tuple[np.ndarray, np.ndarray]],
     misspec_payloads: dict[str, dict[int, tuple[np.ndarray, np.ndarray]]],
     baseline_payloads: dict[str, dict[int, tuple[np.ndarray, np.ndarray]]],
@@ -555,6 +649,10 @@ def _save_cache(
         arrays[f"ckpt__marformer__{size}"] = np.asarray([checkpoint_name])
         arrays[f"probs__marformer__{size}"] = probs
         arrays[f"labels__marformer__{size}"] = labels
+    for size, (checkpoint_name, probs, labels) in marformer_nt_payloads.items():
+        arrays[f"ckpt__marformer_nt__{size}"] = np.asarray([checkpoint_name])
+        arrays[f"probs__marformer_nt__{size}"] = probs
+        arrays[f"labels__marformer_nt__{size}"] = labels
     for size, (probs, labels) in oracle_payloads.items():
         arrays[f"probs__stan_oracle__{size}"] = probs
         arrays[f"labels__stan_oracle__{size}"] = labels
@@ -584,6 +682,7 @@ def _load_cache(cache_path: Path) -> dict[tuple[str, int], tuple[np.ndarray, np.
         size = int(size_s)
         label = {
             "marformer": "Marformer",
+            "marformer_nt": "Marformer NT",
             "stan_oracle": "Stan Oracle",
             "stan_both": "Stan Both",
             "stan_bin": "Stan Bin",
@@ -608,7 +707,14 @@ def _load_cache(cache_path: Path) -> dict[tuple[str, int], tuple[np.ndarray, np.
 
 def _load_marformer_from_summary_cache(
     cfg: DatasetConfig,
-) -> tuple[dict[int, tuple[str, np.ndarray, np.ndarray]], dict[int, float], dict[int, float]]:
+) -> tuple[
+    dict[int, tuple[str, np.ndarray, np.ndarray]],
+    dict[int, tuple[str, np.ndarray, np.ndarray]],
+    dict[int, float],
+    dict[int, float],
+    dict[int, float],
+    dict[int, float],
+]:
     if not cfg.summary_path.exists():
         raise FileNotFoundError(f"Missing summary for {cfg.slug}: {cfg.summary_path}")
     if not cfg.cache_path.exists():
@@ -621,8 +727,11 @@ def _load_marformer_from_summary_cache(
         raise RuntimeError(f"Failed to load cache: {cfg.cache_path}")
 
     marformer_payloads: dict[int, tuple[str, np.ndarray, np.ndarray]] = {}
+    marformer_nt_payloads: dict[int, tuple[str, np.ndarray, np.ndarray]] = {}
     marformer_runtimes: dict[int, float] = {}
+    marformer_nt_runtimes: dict[int, float] = {}
     marformer_logloss_override: dict[int, float] = {}
+    marformer_nt_logloss_override: dict[int, float] = {}
 
     for size in cfg.display_sizes:
         cached = cache.get(("Marformer", size))
@@ -638,8 +747,83 @@ def _load_marformer_from_summary_cache(
         if logloss_row is not None:
             marformer_logloss_override[size] = float(logloss_row["mean"])
 
+        cached_nt = cache.get(("Marformer NT", size))
+        if cached_nt is not None:
+            probs, labels, checkpoint_name = cached_nt
+            marformer_nt_payloads[size] = (checkpoint_name or "unknown.ckpt", probs, labels)
+
+        runtime_row_nt = _summary_lookup(rows, "runtime_minutes", "Marformer NT", size)
+        if runtime_row_nt is not None:
+            marformer_nt_runtimes[size] = float(runtime_row_nt["mean"])
+
+        logloss_row_nt = _summary_lookup(rows, "log_loss", "Marformer NT", size)
+        if logloss_row_nt is not None:
+            marformer_nt_logloss_override[size] = float(logloss_row_nt["mean"])
+
     print(f"Used cached Marformer summary/cache -> {cfg.summary_path}")
-    return marformer_payloads, marformer_runtimes, marformer_logloss_override
+    return (
+        marformer_payloads,
+        marformer_nt_payloads,
+        marformer_runtimes,
+        marformer_nt_runtimes,
+        marformer_logloss_override,
+        marformer_nt_logloss_override,
+    )
+
+
+def _load_marformer_if_cached(
+    cfg: DatasetConfig,
+    device_name: str,
+) -> tuple[
+    dict[int, tuple[str, np.ndarray, np.ndarray]],
+    dict[int, tuple[str, np.ndarray, np.ndarray]],
+    dict[int, float],
+    dict[int, float],
+    dict[int, float],
+    dict[int, float],
+]:
+    if cfg.summary_path.exists() and cfg.cache_path.exists():
+        (
+            marformer_payloads,
+            marformer_nt_payloads,
+            marformer_runtimes,
+            marformer_nt_runtimes,
+            marformer_logloss_override,
+            marformer_nt_logloss_override,
+        ) = _load_marformer_from_summary_cache(cfg)
+
+        available_nt_sizes = _available_marformer_nt_sizes(cfg)
+        missing_nt_sizes = sorted(size for size in available_nt_sizes if size not in marformer_nt_payloads)
+        if missing_nt_sizes:
+            print(f"Backfilling Marformer NT from runs for sizes: {missing_nt_sizes}")
+            nt_payloads_fresh, nt_runtimes_fresh, nt_logloss_fresh = _collect_marformer_nt_payloads(cfg, device_name)
+            for size in missing_nt_sizes:
+                if size in nt_payloads_fresh:
+                    marformer_nt_payloads[size] = nt_payloads_fresh[size]
+                if size in nt_runtimes_fresh:
+                    marformer_nt_runtimes[size] = nt_runtimes_fresh[size]
+                if size in nt_logloss_fresh:
+                    marformer_nt_logloss_override[size] = nt_logloss_fresh[size]
+
+        return (
+            marformer_payloads,
+            marformer_nt_payloads,
+            marformer_runtimes,
+            marformer_nt_runtimes,
+            marformer_logloss_override,
+            marformer_nt_logloss_override,
+        )
+
+    marformer_payloads, marformer_runtimes, marformer_logloss_override = _collect_marformer_payloads(cfg, device_name)
+    marformer_nt_payloads, marformer_nt_runtimes, marformer_nt_logloss_override = _collect_marformer_nt_payloads(cfg, device_name)
+    return (
+        marformer_payloads,
+        marformer_nt_payloads,
+        marformer_runtimes,
+        marformer_nt_runtimes,
+        marformer_logloss_override,
+        marformer_nt_logloss_override,
+    )
 
 
 def _summary_rows_by_metric(rows: list[dict], metric: str) -> list[dict]:
@@ -708,7 +892,6 @@ def _plot_series_with_stan_extension(
             ys_v[post_mask],
             linestyle=":",
             color=color,
-            marker=marker,
             linewidth=shared._series_linewidth(label),
             alpha=shared._series_alpha(label),
             label="_nolegend_",
@@ -1002,9 +1185,23 @@ def _build_rows_and_cache(
     rows: list[dict] = []
 
     if use_marformer_summary_only:
-        marformer_payloads, marformer_runtimes, marformer_logloss_override = _load_marformer_from_summary_cache(cfg)
+        (
+            marformer_payloads,
+            marformer_nt_payloads,
+            marformer_runtimes,
+            marformer_nt_runtimes,
+            marformer_logloss_override,
+            marformer_nt_logloss_override,
+        ) = _load_marformer_from_summary_cache(cfg)
     else:
-        marformer_payloads, marformer_runtimes, marformer_logloss_override = _collect_marformer_payloads(cfg, device_name)
+        (
+            marformer_payloads,
+            marformer_nt_payloads,
+            marformer_runtimes,
+            marformer_nt_runtimes,
+            marformer_logloss_override,
+            marformer_nt_logloss_override,
+        ) = _load_marformer_if_cached(cfg, device_name)
     oracle_payloads, oracle_runtimes = _collect_oracle_payloads(cfg)
     misspec_specs = [
         ("Stan Both", "BOTH"),
@@ -1038,6 +1235,17 @@ def _build_rows_and_cache(
             runtime = marformer_runtimes.get(size)
             if runtime is not None:
                 rows.append(_runtime_row("Marformer", size, size, runtime))
+
+        if size in marformer_nt_payloads:
+            checkpoint_name, probs, labels = marformer_nt_payloads[size]
+            rows.append(_metric_row(
+                "Marformer NT", size, size, "log_loss", _per_example_nll(probs, labels),
+                mean_override=marformer_nt_logloss_override.get(size),
+            ))
+            rows.append(_metric_row("Marformer NT", size, size, "mbr_l2", _per_example_mse(probs, labels)))
+            runtime = marformer_nt_runtimes.get(size)
+            if runtime is not None:
+                rows.append(_runtime_row("Marformer NT", size, size, runtime))
 
         oracle_source = _source_size_for_cfg(cfg, size, available_oracle_sizes)
         if oracle_source is not None:
@@ -1078,8 +1286,12 @@ def _build_rows_and_cache(
             str(size): {"checkpoint": checkpoint_name}
             for size, (checkpoint_name, _probs, _labels) in marformer_payloads.items()
         },
+        "marformer_nt_selection": {
+            str(size): {"checkpoint": checkpoint_name}
+            for size, (checkpoint_name, _probs, _labels) in marformer_nt_payloads.items()
+        },
     })
-    _save_cache(cfg.cache_path, marformer_payloads, oracle_payloads, misspec_payloads, baseline_payloads)
+    _save_cache(cfg.cache_path, marformer_payloads, marformer_nt_payloads, oracle_payloads, misspec_payloads, baseline_payloads)
     cache = _load_cache(cfg.cache_path)
     return rows, {} if cache is None else cache
 
