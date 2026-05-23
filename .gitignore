@@ -328,3 +328,4 @@ imputer/ranking/DATA/STAN/DOMAIN3-SOFTPLUS
 imputer/ranking/STAN/stan_models/tensor_generation_softplus
 
 Marformer-Paper
+imputer/ranking/STAN/stan_models/LEGACY
