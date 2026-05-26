@@ -35,6 +35,11 @@ imputer/ranking/SLURM
 imputer/ranking/scripts/LLM_RUBRIC/BASELINE_MLP
 imputer/ranking/imputer/baseline_mlp
 imputer/ranking/scripts/stan/BASELINE_MLP
+imputer/ranking/scripts/DOMAIN3-OLD/analyze_stan_diagnostics.py
+imputer/ranking/DATA/LLM_RUBRIC/*.DS_Store
+imputer/ranking/DATA/SUMMEVAL/*.DS_Store
+imputer/ranking/DATA/STAN/*.DS_Store
+
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
