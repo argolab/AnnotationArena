@@ -202,6 +202,29 @@ def prepare_stan_data_for_inference(
     return stan_data
 
 
+def create_init_from_ground_truth_tensor(bundle: GroundTruthBundle) -> Dict[str, Any]:
+    """
+    Build oracle init dict for the tensor model from available bundle fields.
+
+    Initialises: embeddings, rating_probs, confusion_matrix,
+    threshold_transform_W, threshold_attr_bias.
+    Parameters not saved at generation time (u_attr, v_proto, u_inter,
+    alpha_jt, sigma_*) are left at Stan's defaults.
+
+    Note: all chains receive the same init; R-hat is not a meaningful
+    convergence diagnostic when this strategy is used.
+    """
+    init_values: Dict[str, Any] = {
+        "embeddings":  np.asarray(bundle.embeddings),
+        "rating_probs": np.asarray(bundle.rating_probs),
+    }
+    if bundle.extra_ground_truth:
+        for key in ("confusion_matrix", "threshold_transform_W", "threshold_attr_bias"):
+            if key in bundle.extra_ground_truth:
+                init_values[key] = np.asarray(bundle.extra_ground_truth[key])
+    return init_values
+
+
 def create_init_from_ground_truth(
     bundle: GroundTruthBundle,
     config: DataGenConfig,
