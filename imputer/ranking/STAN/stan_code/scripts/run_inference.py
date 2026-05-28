@@ -49,7 +49,7 @@ import cmdstanpy
 
 from STAN.stan_code.pipeline.bundle import GroundTruthBundle
 from STAN.stan_code.pipeline.configs import DataGenConfig, AnnotatorSplitConfig
-from STAN.stan_code.pipeline.inference import InferenceConfig, compile_domain_model
+from STAN.stan_code.pipeline.inference import InferenceConfig, compile_domain_model, create_init_from_ground_truth_tensor
 from STAN.stan_code.pipeline.io import new_run_dir, save_configs
 from STAN.stan_code.scripts.generate_data import _parse_stan_arg
 
@@ -370,6 +370,7 @@ def _run_sample(
     stan_data: dict,
     args: argparse.Namespace,
     label: str,
+    inits=1.0,
 ) -> cmdstanpy.CmdStanMCMC:
     """Run model.sample with shared MCMC settings from parsed args."""
     print(f"\n{'=' * 60}")
@@ -383,7 +384,7 @@ def _run_sample(
         seed=args.seed,
         adapt_delta=args.adapt_delta,
         max_treedepth=args.max_treedepth,
-        inits=1.0,
+        inits=inits,
         show_progress=not args.no_progress,
         show_console=False,
     )
@@ -485,6 +486,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-treedepth", type=int, default=12)
     parser.add_argument("--no-progress", action="store_true",
                         help="Disable progress bar")
+    parser.add_argument("--init-strategy", default="random",
+                        choices=["random", "ground_truth"],
+                        help="Initialisation strategy: 'random' (default, inits=1.0) or "
+                             "'ground_truth' (oracle init from bundle; tensor model only)")
 
     # ── Model parameter overrides ─────────────────────────────────────────────
     parser.add_argument("--override-D", type=int, default=None,
@@ -635,6 +640,7 @@ def main():
         "n_missing":     len(missing),
         "n_llm":         n_llm,
         "n_human":       n_human,
+        "init_strategy":  args.init_strategy,
         "transductive_use_test_observed": args.transductive_use_test_observed,
         "observed_train": observed_train,
         "observed_val": observed_val,
@@ -657,11 +663,25 @@ def main():
     stan_data.update(stan_arg)
     stan_data = _augment_fixed_tensor_hyperparams(stan_data, data_config, stan_file)
 
+    # ── Resolve init values ────────────────────────────────────────────────────
+    if args.init_strategy == "ground_truth":
+        if stan_type != "tensor":
+            print("WARNING: --init-strategy ground_truth is only supported for "
+                  "stan_type=tensor; falling back to inits=1.0")
+            computed_inits = 1.0
+        else:
+            init_dict = create_init_from_ground_truth_tensor(bundle)
+            computed_inits = [init_dict] * args.chains
+            print(f"Using oracle (ground-truth) init for {args.chains} chain(s)")
+            print(f"  Initialised params: {list(init_dict.keys())}")
+    else:
+        computed_inits = 1.0
+
     # ── Run inference ──────────────────────────────────────────────────────────
     try:
         print(f"\nCompiling Stan model: {stan_file}")
         model = compile_domain_model(stan_file)
-        fit = _run_sample(model, stan_data, args, label="MCMC inference")
+        fit = _run_sample(model, stan_data, args, label="MCMC inference", inits=computed_inits)
 
     except Exception as e:
         logger.error(f"MCMC failed: {e}")
