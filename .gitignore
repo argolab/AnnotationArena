@@ -30,6 +30,7 @@ share/python-wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+imputer/ranking/DATA/STAN/DOMAIN3-OLD-SMALL
 MANIFEST
 imputer/ranking/SLURM
 imputer/ranking/scripts/LLM_RUBRIC/BASELINE_MLP
