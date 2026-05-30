@@ -17,11 +17,11 @@
  *   u_attr[I, D]              ~ N(0, sigma_u)
  *   v_proto[T, D]             ~ N(0, sigma_v)
  *   u_inter[I][T, D]          ~ N(0, sigma_uit)
- *   sigma_u                   ~ Gamma(2, 2)          [mean 1.0]
- *   sigma_v                   ~ Gamma(2, 2)          [mean 1.0]
- *   sigma_uit                 ~ Gamma(2, 20)         [mean 0.1]
- *   sigma_measurement         ~ Gamma(2, 20)         [mean 0.1]
- *   kappa                     ~ Gamma(2, 2/15)       [mean 15.0]
+ *   sigma_u                   ~ Gamma(2, 2/2.127)    [mean ≈ 2.13]
+ *   sigma_v                   ~ Gamma(2, 2/11.588)   [mean ≈ 11.59]
+ *   sigma_uit                 ~ Gamma(2, 2/1.242)    [mean ≈ 1.24]
+ *   sigma_measurement         ~ Gamma(2, 2/0.383)    [mean ≈ 0.38]
+ *   kappa                     ~ Gamma(2, 2/5.201)    [mean ≈ 5.20]
  *   alpha_jt[J][T]            ~ Dirichlet(alpha_dirichlet_jt, ...)
  *   embeddings[K, D]          ~ N(0, 1)
  *   rating_probs[I*J][C]      ~ Dirichlet(kappa / C, ...)
@@ -160,11 +160,12 @@ model {
     for (k in 1:K)
         embeddings[k] ~ normal(0, 1);
 
-    sigma_u           ~ gamma(2, 2);
-    sigma_v           ~ gamma(2, 2);
-    sigma_uit         ~ gamma(2, 4);
-    sigma_measurement ~ gamma(2, 20);
-    kappa             ~ gamma(2, 2.0 / 15.0);
+    // Priors calibrated to LLMRubric posterior means.
+    sigma_u           ~ gamma(2, 2.0/2.127);
+    sigma_v           ~ gamma(2, 2.0/11.588);
+    sigma_uit         ~ gamma(2, 2.0/1.242);
+    sigma_measurement ~ gamma(2, 2.0/0.383);
+    kappa             ~ gamma(2, 2.0/5.201);
 
     to_vector(u_attr)  ~ normal(0, sigma_u);
     to_vector(v_proto) ~ normal(0, sigma_v);
