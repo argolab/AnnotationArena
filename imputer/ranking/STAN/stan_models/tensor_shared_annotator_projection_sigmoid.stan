@@ -1,6 +1,6 @@
 /*
  * Tensor model HMC inference with shared annotator projection weights.
- * Sigmoid (inv_logit) gate variant with priors at 3x generation means.
+ * Sigmoid (inv_logit) gate variant with misspecified priors at mean 1.
  *
  * Misspecification:
  *   All annotators share one prototype mixture alpha_shared.
@@ -119,13 +119,12 @@ model {
     for (k in 1:K)
         embeddings[k] ~ normal(0, 1);
 
-    // Priors at 3x DOMAIN3-SIGMOID generation values (sigma_u=1, sigma_v=1,
-    // sigma_uit=0.5, sigma_measurement=0.1, kappa=15).
-    sigma_u           ~ gamma(2, 2.0/3.0);
-    sigma_v           ~ gamma(2, 2.0/3.0);
-    sigma_uit         ~ gamma(2, 4.0/3.0);
-    sigma_measurement ~ gamma(2, 20.0/3.0);
-    kappa             ~ gamma(2, 2.0/45.0);
+    // Misspecified priors: all parameters centred at mean 1.
+    sigma_u           ~ gamma(2, 2);
+    sigma_v           ~ gamma(2, 2);
+    sigma_uit         ~ gamma(2, 2);
+    sigma_measurement ~ gamma(2, 2);
+    kappa             ~ gamma(2, 2);
 
     to_vector(u_attr)  ~ normal(0, sigma_u);
     to_vector(v_proto) ~ normal(0, sigma_v);
