@@ -20,6 +20,64 @@ Example matching flat `num_layers=8` (DOMAIN3-FINAL scripts use this):
 
 - `prelude_depth=1`, `num_core_layers=2`, `num_recurrence=3`, `coda_depth=1` → effective depth 8
 
+## Dynamic recurrence during training
+
+Optional Huginn-style sampling: one `num_recurrence` per optimizer step (shared across item chunks in that step). Validation and test always use fixed `num_recurrence` from config unless you override at eval.
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--randomize-recurrence` | off | Enable per-step sampling |
+| `--recurrence-min` | 1 | Lower bound |
+| `--recurrence-max` | `num_recurrence` | Upper bound (use e.g. 8 to train for test-time scaling above eval depth) |
+| `--recurrence-distribution` | `lognormal_poisson` | `lognormal_poisson` or `uniform` |
+| `--recurrence-sigma` | 0.5 | σ for log-normal rate (Huginn) |
+
+`--num-recurrence` remains the **eval anchor** and run tag when randomizing.
+
+```bash
+python -u -m imputer.entity_mf.recurrent.train ... \
+  --num-recurrence 3 --randomize-recurrence \
+  --recurrence-min 1 --recurrence-max 8
+# ablation: add --recurrence-distribution uniform
+```
+
+TensorBoard: `train/num_recurrence` when randomizing. Use `recurrence_scaling_eval.py` after training to sweep eval depth.
+
+### UNIQUE12 DYNR sweep (3× GPU)
+
+Nine models (`prelude + core + coda = 12` unique params), results under `RESULTS/RECURRENT_MARFORMER/DOMAIN3-OLD-UNIQUE12-DYNR/`:
+
+```bash
+cd imputer/ranking && export PYTHONPATH=.
+CUDA_VISIBLE_DEVICES=0 bash scripts/DOMAIN3-FINAL/RecurrentMarformer/ItemExpansion/run_dynr_unique12_group1_gpu0.sh
+CUDA_VISIBLE_DEVICES=1 bash scripts/DOMAIN3-FINAL/RecurrentMarformer/ItemExpansion/run_dynr_unique12_group2_gpu1.sh
+CUDA_VISIBLE_DEVICES=2 bash scripts/DOMAIN3-FINAL/RecurrentMarformer/ItemExpansion/run_dynr_unique12_group3_gpu2.sh
+```
+
+| Group | Models | Notes |
+|-------|--------|-------|
+| 1 | `p6c2r3c4`, `p4c4r2c4`, `p0c4r3c8` | Balanced / wide-core |
+| 2 | `p0c6r2c6`, `p3c3r4c6`, `p2c2r4c8` | Medium depth |
+| 3 | `p2c2r6c8`, `p1c2r3c7`, `p0c12r1c0` | Deep unroll + thin core + flat control |
+
+`r` in the tag is the **eval anchor**; training samples `r ∈ [1, R_MAX]` per step (`lognormal_poisson` by default). Run names end with `_DYNR`.
+
+Group 1 with **`--max-item 300`** (separate folder, does not overwrite max_item=100 runs):
+
+```bash
+CUDA_VISIBLE_DEVICES=0 bash scripts/DOMAIN3-FINAL/RecurrentMarformer/ItemExpansion/run_dynr_unique12_group1_gpu0_maxitem300.sh
+```
+
+Writes to `RESULTS/RECURRENT_MARFORMER/DOMAIN3-OLD-UNIQUE12-DYNR-MAXITEM300/` with run suffix `_DYNR_M300`.
+
+**Evaluate + plot DYNR sweep** (from `imputer/ranking`, GPU for eval steps):
+
+```bash
+bash scripts/DOMAIN3-FINAL/RecurrentMarformer/ItemExpansion/run_eval_sweep_dynr_unique12.sh
+bash scripts/DOMAIN3-FINAL/RecurrentMarformer/ItemExpansion/run_recurrence_scaling_sweep_dynr_unique12.sh
+bash scripts/DOMAIN3-FINAL/RecurrentMarformer/ItemExpansion/run_plot_dynr_unique12.sh
+```
+
 ## Commands
 
 From `imputer/ranking` with `export PYTHONPATH=.`:

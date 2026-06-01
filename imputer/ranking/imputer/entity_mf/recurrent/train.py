@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import torch
@@ -60,32 +61,127 @@ def add_recurrent_training_args(parser: argparse.ArgumentParser) -> None:
         help="Unique transformer blocks after the recurrent core.",
     )
     parser.add_argument(
+        "--randomize-recurrence",
+        action="store_true",
+        help="Sample num_recurrence once per training step (eval still uses --num-recurrence).",
+    )
+    parser.add_argument(
+        "--recurrence-min",
+        type=int,
+        default=None,
+        help="Lower bound for sampled recurrence (default 1).",
+    )
+    parser.add_argument(
+        "--recurrence-max",
+        type=int,
+        default=None,
+        help="Upper bound for sampled recurrence (default: --num-recurrence).",
+    )
+    parser.add_argument(
+        "--recurrence-distribution",
+        choices=("lognormal_poisson", "uniform"),
+        default=None,
+        help="Distribution for sampled recurrence (default lognormal_poisson, Huginn-style).",
+    )
+    parser.add_argument(
+        "--recurrence-sigma",
+        type=float,
+        default=None,
+        help="Log-normal sigma for lognormal_poisson (default 0.5).",
+    )
+    parser.add_argument(
+        "--deep-supervision",
+        action="store_true",
+        help=(
+            "Deep supervision: always unroll to --num-recurrence and apply "
+            "auxiliary CE on each core exit (weaker weight on shallower exits)."
+        ),
+    )
+    parser.add_argument(
+        "--deep-supervision-schedule",
+        choices=("exp_decay", "linear", "uniform"),
+        default=None,
+        help="Weight schedule across auxiliary heads (default exp_decay).",
+    )
+    parser.add_argument(
+        "--deep-supervision-exp-base",
+        type=float,
+        default=None,
+        help="Base for exp_decay schedule; must be >1 (default 1.12, gentle).",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Resume training in an existing run directory from a checkpoint.",
     )
     parser.add_argument(
         "--resume-checkpoint",
-        default="last",
-        help="Checkpoint for --resume: 'last', 'best', or a filename under checkpoints/.",
+        default="latest",
+        help=(
+            "Checkpoint for --resume: 'latest' (highest epoch periodic/best; default), "
+            "'best' (lowest val/missing_ce), or a filename under checkpoints/. "
+            "'last' is treated as 'latest' (last.ckpt is not used)."
+        ),
     )
+
+
+_EPOCH_CKPT_RE = re.compile(r"epoch=(\d+)", re.IGNORECASE)
+
+
+def _epoch_from_ckpt_filename(name: str) -> int | None:
+    m = _EPOCH_CKPT_RE.search(name)
+    if m:
+        return int(m.group(1))
+    m = re.search(r"best-(\d+)", name, re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    return None
+
+
+def _find_latest_numbered_checkpoint(ckpt_dir: Path) -> Path:
+    """Pick the numbered checkpoint with the highest epoch (ignores last.ckpt)."""
+    if not ckpt_dir.is_dir():
+        raise FileNotFoundError(f"Checkpoint directory not found: {ckpt_dir}")
+
+    best_path: Path | None = None
+    best_epoch = -1
+    for path in sorted(ckpt_dir.glob("*.ckpt")):
+        if path.name.startswith("last"):
+            continue
+        epoch = _epoch_from_ckpt_filename(path.name)
+        if epoch is None:
+            continue
+        if epoch > best_epoch:
+            best_epoch = epoch
+            best_path = path
+
+    if best_path is None:
+        raise FileNotFoundError(
+            f"No numbered checkpoints (periodic-epoch=*.ckpt / best-*.ckpt) in {ckpt_dir}"
+        )
+    return best_path
 
 
 def _resolve_resume_checkpoint(run_dir: Path, which: str) -> Path:
     ckpt_dir = run_dir / "checkpoints"
-    if which == "last":
-        path = ckpt_dir / "last.ckpt"
-        if not path.exists():
-            raise FileNotFoundError(f"last.ckpt not found in {ckpt_dir}")
+    if which in ("latest", "last"):
+        if which == "last":
+            print(
+                "Note: --resume-checkpoint last is deprecated; using latest numbered checkpoint."
+            )
+        path = _find_latest_numbered_checkpoint(ckpt_dir)
+        epoch = _epoch_from_ckpt_filename(path.name)
+        print(f"Resume from latest numbered checkpoint: {path.name} (epoch {epoch})")
         return path
     if which == "best":
         candidates = sorted(ckpt_dir.glob("best-*.ckpt"))
         if not candidates:
             raise FileNotFoundError(f"No best-*.ckpt found in {ckpt_dir}")
         return candidates[0]
-    path = ckpt_dir / which
+    name = which if which.endswith(".ckpt") else f"{which}.ckpt"
+    path = ckpt_dir / name
     if not path.exists():
-        raise FileNotFoundError(f"{which} not found in {ckpt_dir}")
+        raise FileNotFoundError(f"{name} not found in {ckpt_dir}")
     return path
 
 
@@ -112,6 +208,22 @@ def main():
         config.num_recurrence = args.num_recurrence
     if args.coda_depth is not None:
         config.coda_depth = args.coda_depth
+    if args.randomize_recurrence:
+        config.randomize_recurrence = True
+    if args.recurrence_min is not None:
+        config.recurrence_min = args.recurrence_min
+    if args.recurrence_max is not None:
+        config.recurrence_max = args.recurrence_max
+    if args.recurrence_distribution is not None:
+        config.recurrence_distribution = args.recurrence_distribution
+    if args.recurrence_sigma is not None:
+        config.recurrence_sigma = args.recurrence_sigma
+    if args.deep_supervision:
+        config.deep_supervision = True
+    if args.deep_supervision_schedule is not None:
+        config.deep_supervision_schedule = args.deep_supervision_schedule
+    if args.deep_supervision_exp_base is not None:
+        config.deep_supervision_exp_base = args.deep_supervision_exp_base
     config.validate()
 
     types = build_default_domain3_types(
@@ -178,6 +290,14 @@ def main():
             "num_recurrence": config.num_recurrence,
             "coda_depth": config.coda_depth,
             "effective_depth": config.effective_depth,
+            "randomize_recurrence": config.randomize_recurrence,
+            "recurrence_min": config.recurrence_min,
+            "recurrence_max": config.recurrence_max,
+            "recurrence_distribution": config.recurrence_distribution,
+            "recurrence_sigma": config.recurrence_sigma,
+            "deep_supervision": config.deep_supervision,
+            "deep_supervision_schedule": config.deep_supervision_schedule,
+            "deep_supervision_exp_base": config.deep_supervision_exp_base,
         }
     )
     train_config = {

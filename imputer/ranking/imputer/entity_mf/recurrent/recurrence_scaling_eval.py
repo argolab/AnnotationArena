@@ -34,6 +34,7 @@ def evaluate_recurrence_sweep(
     recurrences: List[int],
     device: torch.device,
     out_dir: Path | None = None,
+    max_item: int | None = None,
 ) -> Dict[str, Any]:
     out_dir = out_dir or (run_dir / "RECURRENCE_SCALING")
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -47,6 +48,7 @@ def evaluate_recurrence_sweep(
     prelude = int(model.recurrent_config.prelude_depth)
     core = int(model.recurrent_config.num_core_layers)
     coda = int(model.recurrent_config.coda_depth)
+    print(f"max_item={max_item}")
 
     rows: List[Dict[str, Any]] = []
     for r in recurrences:
@@ -60,7 +62,7 @@ def evaluate_recurrence_sweep(
             types=model.types,
             global_param_dim=model.global_param_dim,
             device=device,
-            max_item=None,
+            max_item=max_item,
         )
         metrics = _compute_metrics(result)
         miss = metrics.get("missing", {})
@@ -89,6 +91,10 @@ def evaluate_recurrence_sweep(
         "checkpoint": checkpoint,
         "trained_config": f"p{prelude}c{core}r{trained_r}c{coda}",
         "recurrences": recurrences,
+        "max_item": max_item,
+        "eval_max_item": max_item,
+        "train_max_item": train_cfg.get("max_item"),
+        "eval_out_dir": str(out_dir),
         "results": rows,
     }
     json_path = out_dir / "recurrence_scaling.json"
@@ -128,9 +134,16 @@ def plot_recurrence_scaling(summary: Dict[str, Any], out_dir: Path) -> Path:
         ax.grid(True, alpha=0.3)
         if trained_r is not None:
             ax.legend(loc="best")
-    fig.suptitle(f"Recurrence scaling — {cfg} ({ckpt} weights)")
+    max_item = summary.get("max_item")
+    if max_item is None:
+        mi_label = "full graph (max_item=None)"
+        mi_tag = "fullgraph"
+    else:
+        mi_label = f"max_item={max_item}"
+        mi_tag = f"maxitem{max_item}"
+    fig.suptitle(f"Recurrence scaling — {cfg} ({ckpt} weights, {mi_label})")
     fig.tight_layout()
-    png = out_dir / "recurrence_scaling.png"
+    png = out_dir / f"recurrence_scaling_{mi_tag}.png"
     fig.savefig(png, dpi=150)
     plt.close(fig)
     print(f"Wrote {png}")
@@ -142,7 +155,11 @@ def main() -> None:
         description="Sweep num_recurrence at eval time for a trained Recurrent Marformer."
     )
     parser.add_argument("--run-dir", required=True)
-    parser.add_argument("--checkpoint", default="last")
+    parser.add_argument(
+        "--checkpoint",
+        default="latest",
+        help="Weights checkpoint: latest (highest epoch periodic/best), best, or filename.",
+    )
     parser.add_argument(
         "--recurrences",
         default="1,2,3,4,5,6,7,8",
@@ -150,6 +167,17 @@ def main() -> None:
     )
     parser.add_argument("--out-dir", default=None, help="Default: <run-dir>/RECURRENCE_SCALING")
     parser.add_argument("--device", default="cuda")
+    parser.add_argument(
+        "--max-item",
+        type=int,
+        default=None,
+        help="Chunk eval by item count (default: train_config training.max_item).",
+    )
+    parser.add_argument(
+        "--full-graph",
+        action="store_true",
+        help="Evaluate on full transductive graph (max_item=None).",
+    )
     parser.add_argument("--no-plot", action="store_true")
     args = parser.parse_args()
 
@@ -160,12 +188,22 @@ def main() -> None:
     recurrences = _parse_recurrences(args.recurrences)
     out_dir = Path(args.out_dir) if args.out_dir else None
 
+    with open(run_dir / "train_config.json") as f:
+        train_cfg = json.load(f).get("training", {})
+    if args.full_graph:
+        max_item: int | None = None
+    elif args.max_item is not None:
+        max_item = args.max_item
+    else:
+        max_item = train_cfg.get("max_item")
+
     summary = evaluate_recurrence_sweep(
         run_dir,
         checkpoint=args.checkpoint,
         recurrences=recurrences,
         device=device,
         out_dir=out_dir,
+        max_item=max_item,
     )
     if not args.no_plot:
         plot_dir = out_dir or (run_dir / "RECURRENCE_SCALING")

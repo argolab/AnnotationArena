@@ -269,6 +269,37 @@ class EntityMarformerLightningModule(pl.LightningModule):
         observed_ce_accum = 0.0
         observed_ce_count = 0
 
+        r_step: int | None = None
+        rc = getattr(self.model, "recurrent_config", None)
+        use_deep_supervision = bool(rc is not None and rc.deep_supervision)
+        ds_weights: List[float] | None = None
+        if use_deep_supervision:
+            from .recurrent.deep_supervision import deep_supervision_weights
+
+            ds_weights = deep_supervision_weights(
+                int(rc.num_recurrence),
+                schedule=str(rc.deep_supervision_schedule),
+                exp_base=float(rc.deep_supervision_exp_base),
+            )
+        elif rc is not None and rc.randomize_recurrence:
+            from .recurrent.recurrence_schedule import sample_recurrence
+
+            r_step = sample_recurrence(
+                None,
+                mean_r=int(rc.num_recurrence),
+                min_r=int(rc.recurrence_min),
+                max_r=int(rc.recurrence_max),
+                distribution=str(rc.recurrence_distribution),
+                sigma=float(rc.recurrence_sigma),
+            )
+            self.log(
+                "train/num_recurrence",
+                float(r_step),
+                prog_bar=False,
+                on_step=True,
+                on_epoch=False,
+            )
+
         for chunk_data in active_chunks:
             chunk_observed = chunk_data["chunk_observed"]
             chunk_fixed = chunk_data.get("chunk_fixed", [])
@@ -287,16 +318,58 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     graph, masked_or_observed, chunk_missing, chunk_fixed=chunk_fixed
                 )
 
-            params = self.model(graph, device=device)
-            trainable_loss, chunk_masked_ce, chunk_observed_ce = compute_trainable_loss(
-                params,
-                graph,
-                self.model.types,
-                self.model.global_param_dim,
-                device,
-                masked_loss_weight=self.masked_loss_weight,
-                observed_loss_weight=self.observed_loss_weight,
-            )
+            if use_deep_supervision:
+                assert ds_weights is not None
+                param_heads = self.model(
+                    graph, device=device, deep_supervision=True
+                )
+                if not isinstance(param_heads, list):
+                    raise TypeError("deep_supervision forward must return a list of heads")
+                trainable_loss = torch.zeros((), device=device)
+                chunk_masked_ce = 0.0
+                chunk_observed_ce = 0.0
+                for head_idx, (params, head_w) in enumerate(zip(param_heads, ds_weights)):
+                    head_loss, head_masked_ce, head_observed_ce = compute_trainable_loss(
+                        params,
+                        graph,
+                        self.model.types,
+                        self.model.global_param_dim,
+                        device,
+                        masked_loss_weight=self.masked_loss_weight,
+                        observed_loss_weight=self.observed_loss_weight,
+                    )
+                    trainable_loss = trainable_loss + float(head_w) * head_loss
+                    chunk_masked_ce += head_w * head_masked_ce
+                    chunk_observed_ce += head_w * head_observed_ce
+                    self.log(
+                        f"train/ds_loss_r{head_idx + 1}",
+                        head_loss.detach(),
+                        prog_bar=False,
+                        on_step=True,
+                        on_epoch=False,
+                    )
+            elif r_step is not None:
+                params = self.model(graph, device=device, num_recurrence=r_step)
+                trainable_loss, chunk_masked_ce, chunk_observed_ce = compute_trainable_loss(
+                    params,
+                    graph,
+                    self.model.types,
+                    self.model.global_param_dim,
+                    device,
+                    masked_loss_weight=self.masked_loss_weight,
+                    observed_loss_weight=self.observed_loss_weight,
+                )
+            else:
+                params = self.model(graph, device=device)
+                trainable_loss, chunk_masked_ce, chunk_observed_ce = compute_trainable_loss(
+                    params,
+                    graph,
+                    self.model.types,
+                    self.model.global_param_dim,
+                    device,
+                    masked_loss_weight=self.masked_loss_weight,
+                    observed_loss_weight=self.observed_loss_weight,
+                )
 
             reg_loss = torch.zeros((), device=device)
             for type_name, t in self.model.types.items():

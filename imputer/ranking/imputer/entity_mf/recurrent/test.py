@@ -107,11 +107,12 @@ def _reconstruct(run_dir: Path) -> tuple[RecurrentEntityMarformer, List[RankingD
 
 
 def _find_checkpoint(ckpt_dir: Path, which: str) -> Path:
-    if which == "last":
-        p = ckpt_dir / "last.ckpt"
-        if not p.exists():
-            raise FileNotFoundError(f"last.ckpt not found in {ckpt_dir}")
-        return p
+    if which in ("last", "latest"):
+        from imputer.entity_mf.recurrent.train import _find_latest_numbered_checkpoint
+
+        if which == "last":
+            print("Note: checkpoint 'last' uses latest numbered periodic/best save.")
+        return _find_latest_numbered_checkpoint(ckpt_dir)
     if which == "best":
         candidates = sorted(ckpt_dir.glob("best-*.ckpt"))
         if not candidates:
@@ -193,6 +194,7 @@ def _evaluate_checkpoint(
         "checkpoint_type": which,
         "split": "test",
         "max_item": max_item,
+        "eval_max_item": max_item,
         **metrics,
     }
 
@@ -283,6 +285,8 @@ def main() -> None:
                 result_dict["num_recurrence_at_eval"] = int(args.num_recurrence)
                 result_dict["trained_num_recurrence"] = trained_r
                 result_dict["actual_depth_at_eval"] = int(model.effective_depth)
+            result_dict["train_max_item"] = train_cfg.get("max_item")
+            result_dict["eval_out_dir"] = str(out_dir)
             stem = Path(which).stem if which.endswith(".ckpt") else which
             out_path = out_dir / f"{stem}.json"
             with open(out_path, "w") as f:
