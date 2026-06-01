@@ -18,8 +18,10 @@ export PYTHONUNBUFFERED=1
 : "${RUN_DIR:?Set RUN_DIR to a trained run (contains train_config.json and checkpoints/)}"
 
 RECURRENCES="${RECURRENCES:-1,2,3,4,5,6,7,8}"
-CHECKPOINT="${CHECKPOINT:-last}"
+CHECKPOINT="${CHECKPOINT:-latest}"
 DEVICE="${DEVICE:-cuda}"
+MAX_ITEM="${MAX_ITEM:-}"
+FULL_GRAPH="${FULL_GRAPH:-}"
 OUT_DIR="${OUT_DIR:-}"
 NO_PLOT="${NO_PLOT:-}"
 
@@ -33,6 +35,8 @@ ARGS=(
   --device "$DEVICE"
 )
 [ -n "$OUT_DIR" ] && ARGS+=(--out-dir "$OUT_DIR")
+[ -n "$MAX_ITEM" ] && ARGS+=(--max-item "$MAX_ITEM")
+[ -n "$FULL_GRAPH" ] && ARGS+=(--full-graph)
 [ -n "$NO_PLOT" ] && ARGS+=(--no-plot)
 
 python -u -m imputer.entity_mf.recurrent.recurrence_scaling_eval "${ARGS[@]}"

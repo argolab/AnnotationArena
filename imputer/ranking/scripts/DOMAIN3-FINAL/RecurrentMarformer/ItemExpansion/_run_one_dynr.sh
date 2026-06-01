@@ -1,12 +1,16 @@
 #!/bin/bash
-# Train one Recurrent Marformer run. Set before sourcing/calling:
-#   RUN_TAG, PRELUDE_DEPTH, NUM_CORE_LAYERS, NUM_RECURRENCE, CODA_DEPTH
-# Optional overrides: DATA_DIR, OUTPUT_ROOT, EPOCHS, DEVICE, ...
+# Train one Recurrent Marformer run with dynamic recurrence (Huginn-style sampling).
+#
+# Required: RUN_TAG, PRELUDE_DEPTH, NUM_CORE_LAYERS, NUM_RECURRENCE (eval anchor), CODA_DEPTH
+# Recommended: RECURRENCE_MAX (train-time upper bound; default max(8, 2*NUM_RECURRENCE))
+#
+# Optional: RECURRENCE_MIN (default 1), RECURRENCE_DISTRIBUTION, RECURRENCE_SIGMA
+# Plus all overrides from _run_one.sh (DATA_DIR, OUTPUT_ROOT, EPOCHS, ...)
 
-: "${RUN_TAG:?RUN_TAG required (e.g. p1c2r3c1)}"
+: "${RUN_TAG:?RUN_TAG required}"
 : "${PRELUDE_DEPTH:?PRELUDE_DEPTH required}"
 : "${NUM_CORE_LAYERS:?NUM_CORE_LAYERS required}"
-: "${NUM_RECURRENCE:?NUM_RECURRENCE required}"
+: "${NUM_RECURRENCE:?NUM_RECURRENCE required (eval anchor)}"
 : "${CODA_DEPTH:?CODA_DEPTH required}"
 
 export PYTHONPATH=.
@@ -14,8 +18,19 @@ export CUDA_LAUNCH_BLOCKING=1
 export PYTHONUNBUFFERED=1
 
 DATA_DIR="${DATA_DIR:-DATA/DOMAIN3-OLD_Item_T_1000}"
-OUTPUT_ROOT="${OUTPUT_ROOT:-RESULTS/RECURRENT_MARFORMER/DOMAIN3-OLD}"
-RUN_NAME="DOMAIN3-OLD_Item_T_1000_RECURRENT_MF_${RUN_TAG}"
+OUTPUT_ROOT="${OUTPUT_ROOT:-RESULTS/RECURRENT_MARFORMER/DOMAIN3-OLD-UNIQUE12-DYNR}"
+# Always derive from RUN_TAG (do not use ${RUN_NAME:-...}; that reuses the first run's name in a sweep loop).
+RUN_NAME="DOMAIN3-OLD_Item_T_1000_RECURRENT_MF_${RUN_TAG}_DYNR"
+
+RECURRENCE_MIN="${RECURRENCE_MIN:-1}"
+if [ -z "${RECURRENCE_MAX:-}" ]; then
+    RECURRENCE_MAX=$(( NUM_RECURRENCE * 2 ))
+    if [ "$RECURRENCE_MAX" -lt 8 ]; then
+        RECURRENCE_MAX=8
+    fi
+fi
+RECURRENCE_DISTRIBUTION="${RECURRENCE_DISTRIBUTION:-lognormal_poisson}"
+RECURRENCE_SIGMA="${RECURRENCE_SIGMA:-0.5}"
 
 SEED="${SEED:-42}"
 TYPE_EMBEDDING_INIT="${TYPE_EMBEDDING_INIT:-kaiming}"
@@ -34,7 +49,7 @@ MASK_AUGMENTATIONS="${MASK_AUGMENTATIONS:-5}"
 MASKED_LOSS_WEIGHT="${MASKED_LOSS_WEIGHT:-15.0}"
 OBSERVED_LOSS_WEIGHT="${OBSERVED_LOSS_WEIGHT:-1.0}"
 DEVICE="${DEVICE:-cuda}"
-MAX_ITEM="${MAX_ITEM:-100}"   # Matches DOMAIN3-OLD run_marformer_group.sh (DOMAIN3_MAX_ITEM=100)
+MAX_ITEM="${MAX_ITEM:-100}"
 ANNOTATOR_REG_WEIGHT="${ANNOTATOR_REG_WEIGHT:-0.0}"
 ITEM_DROPOUT_RATE="${ITEM_DROPOUT_RATE:-1.0}"
 ANNOTATOR_DROPOUT_RATE="${ANNOTATOR_DROPOUT_RATE:-0.0}"
@@ -60,15 +75,22 @@ GRAPHMASK_FLAG="";     [ "$USE_GRAPH_MASK"     = "true"  ] && GRAPHMASK_FLAG="--
 LLM_DIST_FLAG="";      [ "$LLM_INPUT_DIST"     = "true"  ] && LLM_DIST_FLAG="--llm-input-dist"
 OVERWRITE_FLAG="";     [ "$OVERWRITE_EXISTING" = "true"  ] && OVERWRITE_FLAG="--overwrite-existing-data"
 
+UNIQUE=$(( PRELUDE_DEPTH + NUM_CORE_LAYERS + CODA_DEPTH ))
 EFF_DEPTH=$(( PRELUDE_DEPTH + NUM_CORE_LAYERS * NUM_RECURRENCE + CODA_DEPTH ))
+MAX_ACTUAL=$(( PRELUDE_DEPTH + NUM_CORE_LAYERS * RECURRENCE_MAX + CODA_DEPTH ))
 
 echo ""
 echo "============================================================"
-echo " RecurrentMarformer | ${RUN_TAG} | effective_depth=${EFF_DEPTH}"
-echo " DATA_DIR    : ${DATA_DIR}"
-echo " RUN_NAME    : ${RUN_NAME}"
-echo " Tuple       : prelude=${PRELUDE_DEPTH} core=${NUM_CORE_LAYERS} x${NUM_RECURRENCE} coda=${CODA_DEPTH}"
+echo " RecurrentMarformer DYNR | ${RUN_TAG}"
+echo " unique=${UNIQUE} eval_depth=${EFF_DEPTH} max_train_depth=${MAX_ACTUAL}"
+echo " eval r=${NUM_RECURRENCE}  train r in [${RECURRENCE_MIN}, ${RECURRENCE_MAX}] (${RECURRENCE_DISTRIBUTION})"
+echo " DATA_DIR=${DATA_DIR}  RUN_NAME=${RUN_NAME}"
+echo " RUN_DIR=${OUTPUT_ROOT}/${RUN_NAME}"
 echo "============================================================"
+
+if [ "${DRY_RUN:-0}" = "1" ]; then
+    exit 0
+fi
 
 python -u -m imputer.entity_mf.recurrent.train \
     --data-dir               "${DATA_DIR}"             \
@@ -80,6 +102,11 @@ python -u -m imputer.entity_mf.recurrent.train \
     --num-core-layers        "$NUM_CORE_LAYERS"        \
     --num-recurrence         "$NUM_RECURRENCE"         \
     --coda-depth             "$CODA_DEPTH"             \
+    --randomize-recurrence                             \
+    --recurrence-min         "$RECURRENCE_MIN"         \
+    --recurrence-max         "$RECURRENCE_MAX"         \
+    --recurrence-distribution "$RECURRENCE_DISTRIBUTION" \
+    --recurrence-sigma       "$RECURRENCE_SIGMA"       \
     --attention-heads        "$ATTENTION_HEADS"        \
     --d-ff                   "$D_FF"                   \
     --num-ffn-layers         "$NUM_FFN_LAYERS"         \
@@ -111,10 +138,5 @@ python -u -m imputer.entity_mf.recurrent.train \
     $GRAPHMASK_FLAG                                    \
     $LLM_DIST_FLAG                                     \
     $OVERWRITE_FLAG
-status=$?
-if [ "$status" -ne 0 ]; then
-    echo "ERROR: training failed for ${OUTPUT_ROOT}/${RUN_NAME} (exit ${status})" >&2
-    return "$status" 2>/dev/null || exit "$status"
-fi
 
 echo " Finished: ${OUTPUT_ROOT}/${RUN_NAME}"

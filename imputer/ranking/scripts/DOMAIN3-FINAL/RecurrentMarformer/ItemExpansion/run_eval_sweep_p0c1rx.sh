@@ -7,6 +7,13 @@ export PYTHONUNBUFFERED=1
 
 RESULTS_ROOT="${RESULTS_ROOT:-RESULTS/RECURRENT_MARFORMER/DOMAIN3-OLD-P0C1RX}"
 GLOB="DOMAIN3-OLD_Item_T_1000_RECURRENT_MF_*"
+MAX_ITEM="${MAX_ITEM:-}"
+DEVICE="${DEVICE:-cuda}"
+
+MAX_ITEM_ARGS=()
+if [ -n "$MAX_ITEM" ]; then
+    MAX_ITEM_ARGS=(--max-item "$MAX_ITEM")
+fi
 
 shopt -s nullglob
 RUN_DIRS=( "${RESULTS_ROOT}"/${GLOB} )
@@ -23,9 +30,9 @@ for RUN_DIR in "${RUN_DIRS[@]}"; do
     rm -rf "${RUN_DIR}/TEST_RESULTS"
 
     python -u -m imputer.entity_mf.recurrent.test \
-        --run-dir "$RUN_DIR" --checkpoint all --device cuda || true
+        --run-dir "$RUN_DIR" --checkpoint all --device "$DEVICE" "${MAX_ITEM_ARGS[@]}" || true
     python -u -m imputer.entity_mf.recurrent.test \
-        --run-dir "$RUN_DIR" --checkpoint last --device cuda || true
+        --run-dir "$RUN_DIR" --checkpoint last --device "$DEVICE" "${MAX_ITEM_ARGS[@]}" || true
 
     python - "$RUN_DIR" <<'PY'
 import json, math, sys

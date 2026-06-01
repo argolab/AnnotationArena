@@ -2,7 +2,7 @@
 # Resume one Recurrent Marformer run to a higher epoch count.
 # Set before sourcing: RUN_TAG, PRELUDE_DEPTH, NUM_CORE_LAYERS, NUM_RECURRENCE, CODA_DEPTH
 #
-# Optional: OUTPUT_ROOT, EPOCHS (default 600), DEVICE, RESUME_CHECKPOINT (default last)
+# Optional: OUTPUT_ROOT, EPOCHS, DEVICE, RESUME_CHECKPOINT (default latest = highest epoch periodic/best)
 
 : "${RUN_TAG:?RUN_TAG required}"
 : "${PRELUDE_DEPTH:?PRELUDE_DEPTH required}"
@@ -18,7 +18,7 @@ DATA_DIR="${DATA_DIR:-DATA/DOMAIN3-OLD_Item_T_1000}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-RESULTS/RECURRENT_MARFORMER/DOMAIN3-OLD-UNIQUE12}"
 RUN_NAME="DOMAIN3-OLD_Item_T_1000_RECURRENT_MF_${RUN_TAG}"
 RUN_DIR="${OUTPUT_ROOT}/${RUN_NAME}"
-RESUME_CHECKPOINT="${RESUME_CHECKPOINT:-last}"
+RESUME_CHECKPOINT="${RESUME_CHECKPOINT:-latest}"
 
 SEED="${SEED:-42}"
 TYPE_EMBEDDING_INIT="${TYPE_EMBEDDING_INIT:-kaiming}"
@@ -56,11 +56,23 @@ if [ ! -d "$RUN_DIR" ]; then
     echo "ERROR: run dir not found: $RUN_DIR" >&2
     exit 1
 fi
-if [ ! -f "${RUN_DIR}/checkpoints/${RESUME_CHECKPOINT}.ckpt" ] && [ "$RESUME_CHECKPOINT" = "last" ]; then
-    if [ ! -f "${RUN_DIR}/checkpoints/last.ckpt" ]; then
-        echo "ERROR: no checkpoint to resume: ${RUN_DIR}/checkpoints/last.ckpt" >&2
+CKPT_DIR="${RUN_DIR}/checkpoints"
+if [ ! -d "$CKPT_DIR" ]; then
+    echo "ERROR: no checkpoints dir: $CKPT_DIR" >&2
+    exit 1
+fi
+if [ "$RESUME_CHECKPOINT" = "latest" ] || [ "$RESUME_CHECKPOINT" = "last" ]; then
+    shopt -s nullglob
+    _periodic=( "${CKPT_DIR}"/periodic-epoch=*.ckpt )
+    _best=( "${CKPT_DIR}"/best-*.ckpt )
+    shopt -u nullglob
+    if [ "${#_periodic[@]}" -eq 0 ] && [ "${#_best[@]}" -eq 0 ]; then
+        echo "ERROR: no numbered checkpoints under $CKPT_DIR" >&2
         exit 1
     fi
+elif [ ! -f "${CKPT_DIR}/${RESUME_CHECKPOINT}" ] && [ ! -f "${CKPT_DIR}/${RESUME_CHECKPOINT}.ckpt" ]; then
+    echo "ERROR: checkpoint not found: ${RESUME_CHECKPOINT} in $CKPT_DIR" >&2
+    exit 1
 fi
 
 PER_HEAD_FLAG="";      [ "$USE_PER_HEAD_REL"  = "false" ] && PER_HEAD_FLAG="--no-per-head-rel"
