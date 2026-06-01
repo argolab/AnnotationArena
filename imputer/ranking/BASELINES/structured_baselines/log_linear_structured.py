@@ -9,7 +9,6 @@ Score for target (i*, j*, k*) and candidate class y:
               + w_k[k*, y]
               + sum_{attr-pair sources (i', v')} w_attr[i', i*, v', y]
               + sum_{CHANGEJ sources} count(v') * w_change_j[v', y]
-              + sum_{CHANGEK sources} count(v') * w_change_k[v', y]
 
 Parameters:
   w_y         : (C,)           — prior log-odds on class
@@ -18,7 +17,6 @@ Parameters:
   w_k         : (K, C)         — item unigram
   w_attr      : (I, I, C, C)   — per (i', i*) pair; w_attr[i', i*, v', y]
   w_change_j  : (C, C)         — shared; w_change_j[v', y]
-  w_change_k  : (C, C)         — shared; w_change_k[v', y]
 
 Sources are all transductive observed cells except the target (see dataset_adapter).
 Training uses PyTorch Adam + CE loss. Optional val early stopping.
@@ -60,7 +58,6 @@ class _LogLinearModule(nn.Module):
         self.w_k = nn.Parameter(torch.zeros(K, C))
         self.w_attr = nn.Parameter(torch.zeros(I, I, C, C))      # [i', i*, v', y]
         self.w_change_j = nn.Parameter(torch.zeros(C, C))        # [v', y]
-        self.w_change_k = nn.Parameter(torch.zeros(C, C))        # [v', y]
 
         for p in self.parameters():
             nn.init.normal_(p, std=0.01)
@@ -85,10 +82,6 @@ class _LogLinearModule(nn.Module):
         # CHANGE_J: weighted by multiplicity
         for v_src, cnt in routed.change_j.items():
             s = s + cnt * self.w_change_j[v_src].to(device)
-
-        # CHANGE_K: weighted by multiplicity
-        for v_src, cnt in routed.change_k.items():
-            s = s + cnt * self.w_change_k[v_src].to(device)
 
         return s
 

@@ -7,14 +7,10 @@ Evaluates test-missing mean NLL and RMSE for each bundle under DATA/LLM_RUBRIC
 plot_llm_rubric_cpm_with_structured_baselines.py.
 
 Structured variants (IJK slots always on; pairwise factors toggled):
-  - snb_full          : attr_pair + change_j + change_k  (original structured NB)
-  - snb_no_change_k   : without CHANGEK
+  - snb_full          : attr_pair + CHANGEJ (default structured NB)
   - snb_no_change_j   : without CHANGEJ
   - snb_no_attr       : without attr-pair P_{i',i}
-  - snb_no_j_k        : without CHANGEJ and CHANGEK
-  - snb_no_attr_k     : without attr-pair and CHANGEK
-  - snb_no_attr_j     : without attr-pair and CHANGEJ
-  - snb_ijk_only      : without all three pairwise factors (= IJK slots only)
+  - snb_ijk_only      : without both pairwise factors (= IJK slots only)
   - unigram_ij        : pooled P(y|i,j)
   - ijk               : naive Bayes IJK
 
@@ -74,49 +70,25 @@ def _all_variants() -> list[ModelSpec]:
             "snb_full",
             "Structured NB (full)",
             "structured",
-            StructuredFactorMask(attr_pair=T, change_j=T, change_k=T),
-        ),
-        ModelSpec(
-            "snb_no_change_k",
-            "Structured NB (−CHANGEK)",
-            "structured",
-            StructuredFactorMask(attr_pair=T, change_j=T, change_k=F),
+            StructuredFactorMask(attr_pair=T, change_j=T),
         ),
         ModelSpec(
             "snb_no_change_j",
             "Structured NB (−CHANGEJ)",
             "structured",
-            StructuredFactorMask(attr_pair=T, change_j=F, change_k=T),
+            StructuredFactorMask(attr_pair=T, change_j=F),
         ),
         ModelSpec(
             "snb_no_attr",
             "Structured NB (−attr-pair)",
             "structured",
-            StructuredFactorMask(attr_pair=F, change_j=T, change_k=T),
-        ),
-        ModelSpec(
-            "snb_no_j_k",
-            "Structured NB (−CHANGEJ, −CHANGEK)",
-            "structured",
-            StructuredFactorMask(attr_pair=T, change_j=F, change_k=F),
-        ),
-        ModelSpec(
-            "snb_no_attr_k",
-            "Structured NB (−attr, −CHANGEK)",
-            "structured",
-            StructuredFactorMask(attr_pair=F, change_j=T, change_k=F),
-        ),
-        ModelSpec(
-            "snb_no_attr_j",
-            "Structured NB (−attr, −CHANGEJ)",
-            "structured",
-            StructuredFactorMask(attr_pair=F, change_j=F, change_k=T),
+            StructuredFactorMask(attr_pair=F, change_j=T),
         ),
         ModelSpec(
             "snb_ijk_only",
             "Structured NB (IJK slots only)",
             "structured",
-            StructuredFactorMask(attr_pair=F, change_j=F, change_k=F),
+            StructuredFactorMask(attr_pair=F, change_j=F),
         ),
     ]
 
@@ -193,7 +165,6 @@ def _evaluate_variant(
         "factor_mask": {
             "attr_pair": spec.factor_mask.attr_pair,
             "change_j": spec.factor_mask.change_j,
-            "change_k": spec.factor_mask.change_k,
         },
     }
 
@@ -257,54 +228,30 @@ def plot_from_json(
         )
 
 
-# Marker / linestyle per variant; color = green if CHANGEK off, red if CHANGEK on.
 _PLOT_MARKERS: dict[str, dict[str, str]] = {
     "unigram_ij": {"marker": "o", "linestyle": "-"},
     "ijk": {"marker": "s", "linestyle": "-"},
     "snb_full": {"marker": "D", "linestyle": "-"},
-    "snb_no_change_k": {"marker": "^", "linestyle": "-"},
     "snb_no_change_j": {"marker": "v", "linestyle": "--"},
     "snb_no_attr": {"marker": "P", "linestyle": "-."},
-    "snb_no_j_k": {"marker": "X", "linestyle": ":"},
-    "snb_no_attr_k": {"marker": "h", "linestyle": "--"},
-    "snb_no_attr_j": {"marker": "<", "linestyle": "-."},
     "snb_ijk_only": {"marker": ">", "linestyle": ":"},
 }
-# Variants that exclude CHANGEK (label contains "−CHANGEK" or no cross-item k factor).
-_SNB_NO_CHANGEK = frozenset(
-    {"snb_no_change_k", "snb_no_j_k", "snb_no_attr_k", "snb_ijk_only"}
-)
-_GREEN_COLORS = ("#1b9e77", "#41ab5d", "#238b45", "#74c476", "#006d2c")
-_RED_COLORS = ("#e7298a", "#fc8d62", "#d73027", "#cb181d", "#f46d43")
+_SNB_COLORS = {
+    "snb_full": "#e7298a",
+    "snb_no_change_j": "#fc8d62",
+    "snb_no_attr": "#7570b3",
+    "snb_ijk_only": "#666666",
+}
 _BASELINE_COLORS = {"unigram_ij": "#0b7285", "ijk": "#333333"}
 _FALLBACK_MARKERS = ("o", "s", "^", "D", "v", "P", "X", "h", "<", ">", "*")
 _LINE_ALPHA = 0.52
 _MARKER_ALPHA = 0.62
-_green_idx = 0
-_red_idx = 0
-
-
-def _uses_change_k(key: str) -> bool | None:
-    """True = reddish (CHANGEK on), False = greenish (CHANGEK off), None = baseline."""
-    if not key.startswith("snb_"):
-        return None
-    return key not in _SNB_NO_CHANGEK
 
 
 def _color_for_key(key: str) -> str:
-    global _green_idx, _red_idx
     if key in _BASELINE_COLORS:
         return _BASELINE_COLORS[key]
-    use_k = _uses_change_k(key)
-    if use_k is False:
-        c = _GREEN_COLORS[_green_idx % len(_GREEN_COLORS)]
-        _green_idx += 1
-        return c
-    if use_k is True:
-        c = _RED_COLORS[_red_idx % len(_RED_COLORS)]
-        _red_idx += 1
-        return c
-    return "#666666"
+    return _SNB_COLORS.get(key, "#666666")
 
 
 def _style_for_key(key: str, idx: int) -> dict[str, str]:
@@ -324,19 +271,11 @@ def _plot_curves(
     output: Path,
     label_map: dict[str, str],
 ) -> None:
-    global _green_idx, _red_idx
-    _green_idx = 0
-    _red_idx = 0
-
-    # Draw baselines first, full SNB last so it sits on top when overlapping.
+    # Draw ablated variants first, full SNB last so it sits on top when overlapping.
     draw_order = [
         "snb_ijk_only",
-        "snb_no_j_k",
-        "snb_no_attr_k",
-        "snb_no_attr_j",
         "snb_no_attr",
         "snb_no_change_j",
-        "snb_no_change_k",
         "snb_full",
     ]
     keys_sorted = [k for k in draw_order if k in series and series[k]]

@@ -5,7 +5,7 @@ Evaluate structured baselines on data_bundle.json missing-cell prediction.
 Models (always transductive: train+val+test observed):
   - Pooled unigram P(y | i, j)
   - Naive Bayes IJK
-  - Structured NB (global plate, 7-way relation pairs)
+  - Structured NB (attr-pair + CHANGEJ factors)
   - Optional: structured log-linear (softmax over same features; PyTorch; val early stopping when val missing exists; train-missing supervision or train-observed fallback for LLM Rubric–style splits)
 
 Run from imputer/ranking:

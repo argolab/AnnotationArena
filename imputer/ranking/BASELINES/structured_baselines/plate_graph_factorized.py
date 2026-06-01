@@ -7,7 +7,6 @@ ordered distinct (target, source) pair in the pool, routed by factor_routing:
 
   n_attr[i', i, y_target, y_source]  — per attribute-pair factor
   n_change_j[y_target, y_source]     — shared CHANGEJ factor
-  n_change_k[y_target, y_source]     — shared CHANGEK factor
 
 At prediction time, sources are ALL transductive observed cells except the
 target cell (see dataset_adapter). Split only gates which missing rows are
@@ -31,15 +30,14 @@ class StructuredFactorMask:
 
     attr_pair: bool = True
     change_j: bool = True
-    change_k: bool = True
 
     @classmethod
     def all_on(cls) -> "StructuredFactorMask":
-        return cls(True, True, True)
+        return cls(True, True)
 
     @classmethod
     def all_off(cls) -> "StructuredFactorMask":
-        return cls(False, False, False)
+        return cls(False, False)
 
 
 @dataclass
@@ -57,7 +55,6 @@ class FactorizedPlateCounts:
     n_k: np.ndarray       # (C, K)
     n_attr: np.ndarray    # (I, I, C, C)  [i', i, y_target, y_source]
     n_change_j: np.ndarray  # (C, C)  [y_target, y_source]
-    n_change_k: np.ndarray  # (C, C)  [y_target, y_source]
 
 
 def _infer_dims_from_cells(
@@ -107,7 +104,6 @@ def accumulate_transductive_counts(
     n_k = np.zeros((c, k_dim), dtype=np.float64)
     n_attr = np.zeros((i_dim, i_dim, c, c), dtype=np.float64)
     n_change_j = np.zeros((c, c), dtype=np.float64)
-    n_change_k = np.zeros((c, c), dtype=np.float64)
 
     for (ii, jj, kk, y) in cells:
         n_y[y] += 1.0
@@ -128,10 +124,7 @@ def accumulate_transductive_counts(
             # CHANGE_J: same (i, k), different j
             elif mask.change_j and i_s == i_t and k_s == k_t and j_s != j_t:
                 n_change_j[y_t, y_s] += 1.0
-            # CHANGE_K: same (i, j), different k
-            elif mask.change_k and i_s == i_t and j_s == j_t and k_s != k_t:
-                n_change_k[y_t, y_s] += 1.0
-            # else: IGNORED
+            # else: IGNORED (includes same (i, j), different k)
 
     return FactorizedPlateCounts(
         num_classes=c,
@@ -144,7 +137,6 @@ def accumulate_transductive_counts(
         n_k=n_k,
         n_attr=n_attr,
         n_change_j=n_change_j,
-        n_change_k=n_change_k,
     )
 
 
@@ -191,11 +183,6 @@ def log_posterior_unnorm(
     if mask.change_j:
         for y_src, cnt in routed.change_j.items():
             scores += cnt * _log_conditional(counts.n_change_j, y_src, a, c)
-
-    # CHANGE_K: shared table, weighted by multiplicity
-    if mask.change_k:
-        for y_src, cnt in routed.change_k.items():
-            scores += cnt * _log_conditional(counts.n_change_k, y_src, a, c)
 
     return scores
 

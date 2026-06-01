@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-LLM Rubric: sweep Laplace α for full structured NB (attr + CHANGEJ + CHANGEK).
+LLM Rubric: sweep Laplace α for structured NB (attr-pair + CHANGEJ).
 
 For each train size under DATA/LLM_RUBRIC, fits count tables once, then evaluates
 test-missing NLL / RMSE / accuracy for each α. Writes JSON and optional curves
@@ -182,7 +182,6 @@ def run_sweep(
         "factor_mask": {
             "attr_pair": factor_mask.attr_pair,
             "change_j": factor_mask.change_j,
-            "change_k": factor_mask.change_k,
         },
         "by_size": {},
     }

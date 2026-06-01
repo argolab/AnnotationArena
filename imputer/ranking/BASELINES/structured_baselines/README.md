@@ -2,7 +2,7 @@
 
 Fast categorical baselines for **missing rating imputation** on `data_bundle.json` (same task as Marformer / CPM STAN: predict held-out cells on each item).
 
-**Three closed-form models:** pooled unigram, naive Bayes IJK, structured naive Bayes (factorized per-attr-pair + shared CHANGEJ/CHANGEK).  
+**Three closed-form models:** pooled unigram, naive Bayes IJK, structured naive Bayes (factorized per-attr-pair + shared CHANGEJ).  
 **Optional:** **structured log-linear** (`StructuredLogLinear` in `log_linear_structured.py`) — softmax linear model over the same factorized features as SNB, trained with PyTorch (Adam); supervision on train-missing rows when present, otherwise on train-observed all-source examples; **validation early stopping** on val-missing mean NLL when val splits exist (`--log-linear` on the CLI).
 
 ---
@@ -143,7 +143,7 @@ No source cells at predict time.
 
 ### 3. Structured naive Bayes — `StructuredNaiveBayes`
 
-IJK slot factors plus three classes of pairwise source factors:
+IJK slot factors plus two classes of pairwise source factors:
 
 \[
 P(y \mid i^*, j^*, k^*, \text{sources})
@@ -151,7 +151,6 @@ P(y \mid i^*, j^*, k^*, \text{sources})
 P(y)\, P(i^* \mid y)\, P(j^* \mid y)\, P(k^* \mid y)
 \prod_{i' \neq i^*} P_{i',i^*}(y_{i'j^*k^*} \mid y)
 \prod_{j' \neq j^*} P_{\text{CHANGEJ}}(y_{i^*j'k^*} \mid y)
-\prod_{k' \neq k^*} P_{\text{CHANGEK}}(y_{i^*j^*k'} \mid y)
 \]
 
 **Source routing** (each source cell fires at most one factor):
@@ -160,10 +159,9 @@ P(y)\, P(i^* \mid y)\, P(j^* \mid y)\, P(k^* \mid y)
 |--------|-------------------------------------|------------|
 | **ATTR_PAIR** | `j'=j*`, `k'=k*`, `i'≠i*` | Per `(i', i*)` pair: `n_attr[i', i*, y_target, y_source]` |
 | **CHANGEJ** | `i'=i*`, `k'=k*`, `j'≠j*` | Shared: `n_change_j[y_target, y_source]` |
-| **CHANGEK** | `i'=i*`, `j'=j*`, `k'≠k*` | Shared: `n_change_k[y_target, y_source]` |
-| *ignored* | all other cases | — |
+| *ignored* | all other cases (including same `(i*, j*)`, different `k`) | — |
 
-**Multiplicity:** multiple source cells mapping to the same CHANGEJ/CHANGEK entry multiply the factor (log domain: add log-prob for each occurrence). Example: CHANGEJ sources with ratings `[3, 3, 4, 5]` vs target `y=4` contributes `2·log P(3|4) + log P(4|4) + log P(5|4)`.
+**Multiplicity:** multiple source cells mapping to the same CHANGEJ entry multiply the factor (log domain: add log-prob for each occurrence). Example: CHANGEJ sources with ratings `[3, 3, 4, 5]` vs target `y=4` contributes `2·log P(3|4) + log P(4|4) + log P(5|4)`.
 
 **Fit (global pool):**
 
@@ -186,7 +184,6 @@ Same **feature structure** as SNB but with **free parameters** fit by minimizing
 | `w_k` | `(K, C)` | item unigram |
 | `w_attr` | `(I, I, C, C)` | per `(i', i*)` attr-pair; `w_attr[i', i*, v', y]` |
 | `w_change_j` | `(C, C)` | shared CHANGEJ; `count × w_change_j[v', y]` |
-| `w_change_k` | `(C, C)` | shared CHANGEK; `count × w_change_k[v', y]` |
 
 Supervision: **train-missing** cells when present, else **train-observed** pseudo-tasks (see `build_train_observed_examples`). With val-missing data, training uses **early stopping** on val NLL and restores the best checkpoint.
 
@@ -222,7 +219,7 @@ bundle, fitted = load_and_fit(
 | `naive_bayes_ijk.py` | IJK naive Bayes |
 | `naive_bayes_structured.py` | Structured NB wrapper |
 | `plate_graph_factorized.py` | Counts + log-posterior for SNB |
-| `factor_routing.py` | Route source cells to ATTR_PAIR / CHANGEJ / CHANGEK factors |
+| `factor_routing.py` | Route source cells to ATTR_PAIR / CHANGEJ factors |
 | `log_linear_structured.py` | Optional softmax log-linear (train missing; val early stopping) |
 | `feature_utils.py` | Legacy relation labels (not used by SNB/log-linear) |
 | `cli_defaults.py` | Default α values |
