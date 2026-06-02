@@ -51,8 +51,11 @@ from imputer.entity_mf.test import _load_checkpoint, _reconstruct
 from scripts.utils import plot_domain3_generalization as shared
 
 
-ITEM_DISPLAY_SIZES = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000]
+ITEM_DISPLAY_SIZES = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 2000, 3000, 4000]
 ITEM_STAN_CUTOFF = 500
+ITEM_MARFORMER_NT_MAX = 500
+ITEM_X_BREAK_AFTER = 1000
+ITEM_EXCLUDED_SERIES: frozenset[str] = frozenset({"Naive Bayes IJK"})
 SPLIT_PREFIX = "DOMAIN3-SIGMOID"
 PROB_PREFIX = "prob_cat_"
 
@@ -68,6 +71,24 @@ SERIES_ORDER = [
     "Structured NB",
     "Structured Log-Linear",
 ]
+
+STAN_SERIES = ["Stan Oracle", "Stan Both", "Stan Bin", "Stan Proj"]
+CLEAN_SERIES = ["Marformer", *STAN_SERIES]
+CLEAN_NT_SERIES = ["Marformer", "Marformer NT", *STAN_SERIES]
+
+# Local color overrides: Marformer→crimson, Stan→shades of blue, Baselines→greys
+COLORS: dict[str, str] = {
+    "Marformer":             "#7a1f3d",
+    "Marformer NT":          "#c47088",  # lighter crimson, same hue
+    "Stan Oracle":           "#0d47a1",  # darkest blue
+    "Stan Both":             "#1565c0",
+    "Stan Bin":              "#1976d2",
+    "Stan Proj":             "#42a5f5",  # lightest blue
+    "Unigram Pool ij":       "#616161",
+    "Naive Bayes IJK":       "#757575",
+    "Structured NB":         "#9e9e9e",
+    "Structured Log-Linear": "#424242",
+}
 
 
 @dataclass(frozen=True)
@@ -123,6 +144,9 @@ ANNOT_CFG = DatasetConfig(
     data_root=ROOT / "DATA/STAN/DOMAIN3-SIGMOID/AnnotSplits/Transductive",
     marformer_root=ROOT / "RESULTS/MARFORMER/DOMAIN3-SIGMOID/ANNOT",
     marformer_run_stem="DOMAIN3-SIGMOID_Annot_T_{size}_MARFORMER",
+    marformer_nt_root=ROOT / "RESULTS/MARFORMER-NT/DOMAIN3-SIGMOID/ANNOT",
+    marformer_nt_run_stem="DOMAIN3-SIGMOID_Annot_NT_{size}_MARFORMER",
+    nt_data_root=ROOT / "DATA/STAN/DOMAIN3-SIGMOID/AnnotSplits/NonTransductive",
     out_dir=ROOT / "PLOTS/DOMAIN3-SIGMOID/ANNOT_GENERALIZATION",
     summary_path=ROOT / "PLOTS/DOMAIN3-SIGMOID/ANNOT_GENERALIZATION/annot_generalization_summary.json",
     cache_path=ROOT / "PLOTS/DOMAIN3-SIGMOID/ANNOT_GENERALIZATION/annot_marformer_cache.npz",
@@ -257,8 +281,11 @@ def _available_marformer_sizes(cfg: DatasetConfig) -> set[int]:
 def _available_marformer_nt_sizes(cfg: DatasetConfig) -> set[int]:
     if cfg.marformer_nt_root is None or cfg.marformer_nt_run_stem is None or cfg.nt_data_root is None:
         return set()
+    nt_max = ITEM_MARFORMER_NT_MAX if cfg.slug == "item" else None
     available: set[int] = set()
     for size in cfg.display_sizes:
+        if nt_max is not None and size > nt_max:
+            continue
         run_dir = _marformer_nt_run_dir(cfg, size)
         bundle = _nt_bundle_path(cfg, size)
         if run_dir is not None and run_dir.exists() and bundle is not None and bundle.exists():
@@ -348,7 +375,7 @@ def _chunk_variables_by_item_limit(variables: list, max_item: int) -> list[list]
 
 def _marformer_eval_max_item(cfg: DatasetConfig, size: int) -> int | None:
     if cfg.slug == "item":
-        return None if size <= 500 else 500
+        return 500
     return None
 
 
@@ -419,22 +446,62 @@ def _collect_marformer_nt_payloads(
         run_dir = _marformer_nt_run_dir(cfg, size)
         if run_dir is None:
             continue
-        best_json = _ensure_marformer_best_json(run_dir, device_name)
-        best = _read_json(best_json)
-        ckpt = best.get("checkpoint")
-        if not ckpt:
+        payload, runtime, logloss = _collect_one_marformer_nt_payload(cfg, size, run_dir, device_name)
+        if payload is None:
             continue
-        probs, labels = _marformer_probs_all_missing(
-            run_dir, ckpt, _marformer_eval_max_item(cfg, size), device_name
-        )
-        payloads[size] = (ckpt, probs, labels)
-        if best.get("missing", {}).get("log_loss") is not None:
-            logloss_override[size] = float(best["missing"]["log_loss"])
-        total_s = _runtime_from_launcher(run_dir / "launcher_metadata.json", "elapsed_seconds")
-        total_epochs = int(_read_json(run_dir / "train_config.json").get("training", {}).get("epochs", 300))
-        if total_s is not None:
-            runtime_epochs = _parse_best_epoch(ckpt, total_epochs)
-            runtimes[size] = float(total_s) * (runtime_epochs / total_epochs) / 60.0
+        payloads[size] = payload
+        if logloss is not None:
+            logloss_override[size] = logloss
+        if runtime is not None:
+            runtimes[size] = runtime
+    return payloads, runtimes, logloss_override
+
+
+def _collect_one_marformer_nt_payload(
+    cfg: DatasetConfig, size: int, run_dir: Path, device_name: str
+) -> tuple[tuple[str, np.ndarray, np.ndarray] | None, float | None, float | None]:
+    best_json = _ensure_marformer_best_json(run_dir, device_name)
+    best = _read_json(best_json)
+    ckpt = best.get("checkpoint")
+    if not ckpt:
+        return None, None, None
+    probs, labels = _marformer_probs_all_missing(
+        run_dir, ckpt, _marformer_eval_max_item(cfg, size), device_name
+    )
+    logloss = None
+    if best.get("missing", {}).get("log_loss") is not None:
+        logloss = float(best["missing"]["log_loss"])
+    runtime = None
+    total_s = _runtime_from_launcher(run_dir / "launcher_metadata.json", "elapsed_seconds")
+    total_epochs = int(_read_json(run_dir / "train_config.json").get("training", {}).get("epochs", 300))
+    if total_s is not None:
+        runtime_epochs = _parse_best_epoch(ckpt, total_epochs)
+        runtime = float(total_s) * (runtime_epochs / total_epochs) / 60.0
+    return (ckpt, probs, labels), runtime, logloss
+
+
+def _collect_missing_marformer_nt_payloads(
+    cfg: DatasetConfig,
+    cached_nt_sizes: set[int],
+    device_name: str,
+) -> tuple[dict[int, tuple[str, np.ndarray, np.ndarray]], dict[int, float], dict[int, float]]:
+    payloads: dict[int, tuple[str, np.ndarray, np.ndarray]] = {}
+    runtimes: dict[int, float] = {}
+    logloss_override: dict[int, float] = {}
+    missing_sizes = sorted(_available_marformer_nt_sizes(cfg) - cached_nt_sizes)
+    for size in missing_sizes:
+        run_dir = _marformer_nt_run_dir(cfg, size)
+        if run_dir is None:
+            continue
+        print(f"[Marformer NT cache refresh] size={size} missing from cache; collecting...")
+        payload, runtime, logloss = _collect_one_marformer_nt_payload(cfg, size, run_dir, device_name)
+        if payload is None:
+            continue
+        payloads[size] = payload
+        if logloss is not None:
+            logloss_override[size] = logloss
+        if runtime is not None:
+            runtimes[size] = runtime
     return payloads, runtimes, logloss_override
 
 
@@ -529,7 +596,7 @@ def _collect_baseline_payloads(
             continue
         print(f"[Baselines] size={size} fitting...")
         bundle, fitted = load_and_fit(
-            bundle_path, fit_log_linear=True, log_linear_epochs=100, log_linear_l2_lambda=2.0
+            bundle_path, fit_log_linear=True, log_linear_epochs=100
         )
         cal_payloads = calibration_probs_labels(fitted, bundle, split="test")
         if not cal_payloads:
@@ -721,6 +788,14 @@ def _build_rows_and_payloads(
         marformer_runtimes, nt_runtimes, logloss_override, nt_logloss = _marformer_runtime_from_json(
             cfg, marformer_payloads, nt_payloads
         )
+        new_nt_payloads, new_nt_runtimes, new_nt_logloss = _collect_missing_marformer_nt_payloads(
+            cfg, set(nt_payloads), device_name
+        )
+        if new_nt_payloads:
+            nt_payloads.update(new_nt_payloads)
+            nt_runtimes.update(new_nt_runtimes)
+            nt_logloss.update(new_nt_logloss)
+            _save_marformer_cache(cfg.cache_path, marformer_payloads, nt_payloads)
     else:
         marformer_payloads, marformer_runtimes, logloss_override = _collect_marformer_payloads(cfg, device_name)
         nt_payloads, nt_runtimes, nt_logloss = _collect_marformer_nt_payloads(cfg, device_name)
@@ -761,7 +836,7 @@ def _build_rows_and_payloads(
             if size in marformer_runtimes:
                 rows.append(_runtime_row("Marformer", size, size, marformer_runtimes[size]))
 
-        if size in nt_payloads:
+        if size in nt_payloads and not (cfg.slug == "item" and size > ITEM_MARFORMER_NT_MAX):
             ckpt, probs, labels = nt_payloads[size]
             rows.append(_metric_row("Marformer NT", size, size, "log_loss",
                                     _per_example_nll(probs, labels), nt_logloss.get(size)))
@@ -788,6 +863,8 @@ def _build_rows_and_payloads(
                 rows.append(_runtime_row(label, size, size, misspec_runtimes[label][size]))
 
         for label in shared.STRUCTURED_BASELINE_LABELS:
+            if cfg.slug == "item" and label in ITEM_EXCLUDED_SERIES:
+                continue
             src = _source_size_for_baseline(cfg, size, avail_baseline[label])
             if src is None:
                 continue
@@ -823,6 +900,8 @@ def _build_rows_and_payloads(
         for size, (probs, labels) in p.items():
             all_payloads[(label, size)] = (probs, labels, None)
     for label, p in baseline_payloads.items():
+        if cfg.slug == "item" and label in ITEM_EXCLUDED_SERIES:
+            continue
         for size, (probs, labels) in p.items():
             all_payloads[(label, size)] = (probs, labels, None)
 
@@ -830,6 +909,126 @@ def _build_rows_and_payloads(
 
 
 # ── Plotting ──────────────────────────────────────────────────────────────────
+
+def _local_series_style(label: str) -> tuple[str, str, str]:
+    """Return (linestyle, color, marker) using local COLORS override."""
+    linestyle, _orig_color, marker = shared._series_style(label)
+    color = COLORS.get(label, "#888888")
+    if label == "Marformer NT":
+        linestyle = ":"
+    return linestyle, color, marker
+
+
+def _draw_xaxis_break_marks(ax: plt.Axes, display_sizes: np.ndarray, break_after_size: int) -> None:
+    """Draw '//' x-axis jump marker between break_after_size and the next size."""
+    sizes = list(display_sizes)
+    if break_after_size not in sizes:
+        return
+    idx = sizes.index(break_after_size)
+    if idx + 1 >= len(sizes):
+        return
+    x = float(idx) + 0.5
+    trans = ax.get_xaxis_transform()
+    dx, dy = 0.12, 0.02
+    kw = dict(transform=trans, color="0.25", linewidth=1.0, clip_on=False)
+    ax.plot([x - dx, x - dx / 4], [-dy, dy], **kw)
+    ax.plot([x + dx / 4, x + dx], [-dy, dy], **kw)
+
+
+def _metric_y_ticks(cfg: DatasetConfig, metric: str) -> tuple[list[float], tuple[float, float]]:
+    """Return y tick anchors for a single-axis compressed scale."""
+    if cfg.slug == "item":
+        if metric == "log_loss":
+            return (
+                [0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.30, 1.60],
+                (0.67, 1.68),
+            )
+        return (
+            [0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 1.00, 1.50],
+            (0.22, 1.65),
+        )
+
+    if metric == "log_loss":
+        return (
+            [0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.20, 1.40],
+            (0.67, 1.50),
+        )
+    return (
+        [0.30, 0.35, 0.40, 0.45, 0.50, 0.55, 0.60, 1.00, 1.40],
+        (0.27, 1.50),
+    )
+
+
+def _linear_metric_y_ticks(
+    cfg: DatasetConfig,
+    stats: dict[str, dict[str, list[float]]],
+    series_labels: list[str],
+    metric: str,
+) -> tuple[list[float], tuple[float, float]]:
+    values: list[float] = []
+    for label in series_labels:
+        values.extend(float(v) for v in stats["mean"][label] if not math.isnan(v))
+    if not values:
+        return [0.0, 0.5, 1.0], (0.0, 1.0)
+
+    data_min, data_max = min(values), max(values)
+    if metric == "log_loss":
+        lower = 0.65 if data_min < 0.75 else 0.70
+        upper = 1.05 if data_max <= 1.05 else math.ceil((data_max + 0.03) / 0.05) * 0.05
+        ticks = list(np.round(np.arange(lower, upper + 0.001, 0.05), 2))
+        return ticks, (lower - 0.02, upper)
+
+    lower = 0.20 if cfg.slug == "item" else 0.25
+    tick_step = 0.05
+    upper = math.ceil((data_max + 0.03) / tick_step) * tick_step
+    upper = min(max(upper, 0.55 if cfg.slug == "item" else 0.65), 1.05)
+    ticks = list(np.round(np.arange(lower + 0.05, upper + 0.001, tick_step), 2))
+    return ticks, (lower, upper)
+
+
+def _compressed_y_transform(ticks: list[float]):
+    """Map numeric y values onto equal-spaced tick positions."""
+    tick_values = np.asarray(ticks, dtype=float)
+    tick_positions = np.arange(len(tick_values), dtype=float)
+
+    def transform(values):
+        arr = np.asarray(values, dtype=float)
+        out = np.interp(arr, tick_values, tick_positions)
+        finite = np.isfinite(arr)
+        if len(tick_values) >= 2:
+            lo = finite & (arr < tick_values[0])
+            hi = finite & (arr > tick_values[-1])
+            lo_scale = (tick_positions[1] - tick_positions[0]) / (tick_values[1] - tick_values[0])
+            hi_scale = (tick_positions[-1] - tick_positions[-2]) / (tick_values[-1] - tick_values[-2])
+            out[lo] = tick_positions[0] + (arr[lo] - tick_values[0]) * lo_scale
+            out[hi] = tick_positions[-1] + (arr[hi] - tick_values[-1]) * hi_scale
+        out[~finite] = np.nan
+        return out
+
+    return transform
+
+
+def _compressed_y_break_position(ticks: list[float]) -> float | None:
+    diffs = np.diff(np.asarray(ticks, dtype=float))
+    if len(diffs) == 0:
+        return None
+    small_step = float(np.min(diffs))
+    large_gaps = np.flatnonzero(diffs > small_step * 2.5)
+    if len(large_gaps) == 0:
+        return None
+    return float(large_gaps[0]) + 0.5
+
+
+def _draw_yaxis_break_marks(ax: plt.Axes, y: float) -> None:
+    """Draw a small '//' marker on the y-axis where the scale compresses."""
+    trans = ax.get_yaxis_transform()
+    x = 0.0
+    dx, dy = 0.012, 0.12
+    gap = 0.05
+    kw = dict(transform=trans, color="0.25", linewidth=1.0, clip_on=False)
+    ax.plot([x - dx, x + dx], [y - dy - gap, y + dy - gap], **kw)
+    ax.plot([x - dx, x + dx], [y - dy + gap, y + dy + gap], **kw)
+
 
 def _series_from_rows(cfg: DatasetConfig, rows: list[dict], metric: str) -> dict[str, dict[str, list[float]]]:
     stats = {
@@ -850,7 +1049,7 @@ def _series_from_rows(cfg: DatasetConfig, rows: list[dict], metric: str) -> dict
     return stats
 
 
-def _plot_series_with_stan_extension(
+def _plot_series_on_item_axis(
     ax: plt.Axes,
     xs: np.ndarray,
     display_sizes: np.ndarray,
@@ -859,11 +1058,17 @@ def _plot_series_with_stan_extension(
     hi: np.ndarray,
     label: str,
 ) -> None:
+    """Plot one series on the item generalization axis.
+
+    Marformer/NT: solid line only where data exists (NaN gaps handled naturally).
+    Stan Oracle/Misspecs: solid to ITEM_STAN_CUTOFF, flat dotted extension beyond.
+    Baselines: solid where present (capped at baseline_cutoff upstream).
+    """
     valid = ~np.isnan(ys)
     if not np.any(valid):
         return
     xs_v, ys_v, lo_v, hi_v = xs[valid], ys[valid], lo[valid], hi[valid]
-    linestyle, color, marker = shared._series_style(label)
+    linestyle, color, marker = _local_series_style(label)
     line_kw = dict(color=color, marker=marker,
                    linewidth=shared._series_linewidth(label),
                    alpha=shared._series_alpha(label), label=label)
@@ -872,7 +1077,7 @@ def _plot_series_with_stan_extension(
         ax.plot(xs_v, ys_v, linestyle=linestyle, **line_kw)
         ax.fill_between(xs_v, lo_v, hi_v, color=color, alpha=shared._series_fill_alpha(label), linewidth=0)
         return
-    # Split at cutoff: solid up to 500, dotted beyond
+    # Stan: solid to ITEM_STAN_CUTOFF, flat dotted extension beyond
     sizes_v = display_sizes[valid]
     pre = sizes_v <= ITEM_STAN_CUTOFF
     post = sizes_v >= ITEM_STAN_CUTOFF
@@ -884,123 +1089,126 @@ def _plot_series_with_stan_extension(
         ax.plot(xs_v[post], ys_v[post], linestyle=":", color=color,
                 linewidth=shared._series_linewidth(label),
                 alpha=shared._series_alpha(label), label="_nolegend_")
-        ax.fill_between(xs_v[post], lo_v[post], hi_v[post], color=color,
-                        alpha=shared._series_fill_alpha(label), linewidth=0)
 
 
 def _plot_metric(
-    cfg: DatasetConfig, rows: list[dict], metric: str, ylabel: str, title: str, output_path: Path
+    cfg: DatasetConfig,
+    rows: list[dict],
+    metric: str,
+    ylabel: str,
+    title: str,
+    output_path: Path,
+    *,
+    series_labels: list[str] | None = None,
+    compressed_y: bool = True,
 ) -> None:
     stats = _series_from_rows(cfg, rows, metric)
-    present_labels = [l for l in SERIES_ORDER if any(not math.isnan(v) for v in stats["mean"][l])]
+    excluded = ITEM_EXCLUDED_SERIES if cfg.slug == "item" else frozenset()
+    label_order = SERIES_ORDER if series_labels is None else series_labels
+    active_series = [l for l in label_order if l in SERIES_ORDER and l not in excluded]
+    present_labels = [l for l in active_series if any(not math.isnan(v) for v in stats["mean"][l])]
     has_dense = len(present_labels) >= 9 or any(len(l) >= 20 for l in present_labels)
 
     if cfg.slug == "annot":
-        legend_ratio = 1.75 if has_dense else 1.5
+        legend_ratio = 1.5 if has_dense else 1.3
         left_ratio = 6.9 if has_dense else 6.7
-        fig_w, fig_h = (18.6 if has_dense else 17.8), 7.15
+        fig_w, fig_h = (18.2 if has_dense else 17.4), 7.15
         tick_fs, axis_fs, title_fs = 9.5, 11.5, 14.0
         legend_fs = 9.5 if has_dense else 10.0
         legend_ls, legend_hl = (0.52 if has_dense else 0.62), (2.0 if has_dense else 2.2)
     else:
-        legend_ratio = 2.15 if has_dense else 1.6
-        left_ratio = 6.15 if has_dense else 6.3
-        fig_w, fig_h = (18.8 if has_dense else 17.6), 7.6
+        legend_ratio = 1.7 if has_dense else 1.4
+        left_ratio = 6.3 if has_dense else 6.5
+        fig_w, fig_h = (17.8 if has_dense else 17.0), 7.6
         tick_fs, axis_fs, title_fs = 10.5, 12.5, 16.0
         legend_fs = 10.0 if has_dense else 11.0
         legend_ls, legend_hl = (0.58 if has_dense else 0.7), (2.2 if has_dense else 2.4)
 
+    if compressed_y:
+        y_ticks, y_limits = _metric_y_ticks(cfg, metric)
+        y_transform = _compressed_y_transform(y_ticks)
+    else:
+        y_ticks, y_limits = _linear_metric_y_ticks(cfg, stats, active_series, metric)
+
+        def y_transform(values):
+            return np.asarray(values, dtype=float)
+
     fig = plt.figure(figsize=(fig_w, fig_h))
-    gs = fig.add_gridspec(2, 2, width_ratios=[left_ratio, legend_ratio],
-                          height_ratios=[1.0, 4.8], hspace=0.05, wspace=0.05)
-    ax_top = fig.add_subplot(gs[0, 0])
-    ax_bottom = fig.add_subplot(gs[1, 0], sharex=ax_top)
-    ax_leg = fig.add_subplot(gs[:, 1])
+    gs = fig.add_gridspec(1, 2, width_ratios=[left_ratio, legend_ratio], wspace=0.05)
+    ax = fig.add_subplot(gs[0, 0])
+    ax_leg = fig.add_subplot(gs[0, 1])
     display_sizes = np.asarray(cfg.display_sizes, dtype=int)
     xs_all = np.arange(len(display_sizes), dtype=float)
 
-    for label in SERIES_ORDER:
+    for label in active_series:
         ys = np.asarray(stats["mean"][label], dtype=float)
         stds = np.asarray(stats["std"][label], dtype=float)
         lo = ys - 0.05 * stds
         hi = ys + 0.05 * stds
+        ys_plot = y_transform(ys)
+        lo_plot = y_transform(lo)
+        hi_plot = y_transform(hi)
         if cfg.slug == "item":
-            _plot_series_with_stan_extension(ax_top, xs_all, display_sizes, ys, lo, hi, label)
-            _plot_series_with_stan_extension(ax_bottom, xs_all, display_sizes, ys, lo, hi, label)
+            _plot_series_on_item_axis(ax, xs_all, display_sizes, ys_plot, lo_plot, hi_plot, label)
         else:
             valid = ~np.isnan(ys)
             if not np.any(valid):
                 continue
-            linestyle, color, marker = shared._series_style(label)
+            linestyle, color, marker = _local_series_style(label)
             lkw = dict(color=color, marker=marker,
                        linewidth=shared._series_linewidth(label),
                        alpha=shared._series_alpha(label), label=label)
-            ax_top.plot(xs_all[valid], ys[valid], linestyle=linestyle, **lkw)
-            ax_bottom.plot(xs_all[valid], ys[valid], linestyle=linestyle, **lkw)
-            ax_top.fill_between(xs_all[valid], lo[valid], hi[valid], color=color,
-                                alpha=shared._series_fill_alpha(label), linewidth=0)
-            ax_bottom.fill_between(xs_all[valid], lo[valid], hi[valid], color=color,
-                                   alpha=shared._series_fill_alpha(label), linewidth=0)
+            ax.plot(xs_all[valid], ys_plot[valid], linestyle=linestyle, **lkw)
+            ax.fill_between(xs_all[valid], lo_plot[valid], hi_plot[valid], color=color,
+                            alpha=shared._series_fill_alpha(label), linewidth=0)
 
-    if metric == "log_loss":
-        ax_bottom.set_ylim(0.58, 1.02)
-        ax_bottom.set_yticks([0.6, 0.7, 0.8, 0.9, 1.0])
-        ax_top.set_ylim(1.15, 1.65)
-        ax_top.set_yticks([1.2, 1.4, 1.6])
-    else:
-        ax_bottom.set_ylim(0.0, 0.52)
-        ax_bottom.set_yticks([0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
-        ax_top.set_ylim(0.85, 2.55)
-        ax_top.set_yticks([1.0, 1.5, 2.0, 2.5])
-
-    # Double spine line at the scale break — visible spines on both sides of the gap
-    ax_top.spines["bottom"].set_visible(True)
-    ax_bottom.spines["top"].set_visible(True)
-    ax_top.tick_params(labeltop=False, bottom=False, labelbottom=False)
-    ax_bottom.tick_params(top=False)
-    ax_bottom.set_xlim(-0.4, len(display_sizes) - 0.6)
-    ax_bottom.set_xticks(xs_all)
-    ax_bottom.set_xticklabels([str(s) for s in display_sizes])
-    ax_bottom.set_xlabel(cfg.x_label)
-    ax_bottom.set_ylabel(ylabel)
+    ax.set_ylim(*y_transform(y_limits))
+    ax.set_yticks(y_transform(y_ticks))
+    ax.set_yticklabels([f"{tick:.2f}" for tick in y_ticks])
+    ax.set_xlim(-0.4, len(display_sizes) - 0.6)
+    ax.set_xticks(xs_all)
+    ax.set_xticklabels([str(s) for s in display_sizes])
+    ax.set_xlabel(cfg.x_label)
+    ax.set_ylabel(ylabel)
     fig.suptitle(title, fontsize=title_fs, y=0.982 if cfg.slug == "annot" else 0.985)
-    ax_top.tick_params(axis="y", labelsize=tick_fs)
-    ax_bottom.tick_params(axis="both", labelsize=tick_fs)
-    ax_bottom.xaxis.label.set_size(axis_fs)
-    ax_bottom.yaxis.label.set_size(axis_fs)
-    for ax in (ax_top, ax_bottom):
-        ax.grid(True, alpha=0.35)
+    ax.tick_params(axis="both", labelsize=tick_fs)
+    ax.xaxis.label.set_size(axis_fs)
+    ax.yaxis.label.set_size(axis_fs)
+    ax.grid(True, alpha=0.35)
 
-    shared._style_legend_right(ax_leg, ax_bottom, fontsize=legend_fs,
+    y_break = _compressed_y_break_position(y_ticks) if compressed_y else None
+    if y_break is not None:
+        _draw_yaxis_break_marks(ax, y_break)
+
+    if cfg.slug == "item":
+        _draw_xaxis_break_marks(ax, display_sizes, ITEM_X_BREAK_AFTER)
+
+    shared._style_legend_right(ax_leg, ax, fontsize=legend_fs,
                                 labelspacing=legend_ls, handlelength=legend_hl)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.subplots_adjust(left=0.06, right=0.985, top=0.89, bottom=0.11, hspace=0.05, wspace=0.04)
+    fig.subplots_adjust(left=0.06, right=0.985, top=0.89, bottom=0.11, wspace=0.04)
     fig.savefig(output_path)
     plt.close(fig)
     print(f"Saved → {output_path}")
 
 
 def _plot_runtime(cfg: DatasetConfig, rows: list[dict], output_path: Path) -> None:
-    runtime_labels = [
-        l for l in ("Marformer", "Stan Oracle")
-        if any(_summary_lookup(rows, "runtime_minutes", l, s) is not None for s in cfg.display_sizes)
-    ]
-    fig_w = 17.6 if len(runtime_labels) >= 2 else 16.8
+    # For item axis cap display at 1000 (runtime beyond 1000 not collected)
+    runtime_max = 1000 if cfg.slug == "item" else None
+    plot_sizes = [s for s in cfg.display_sizes if runtime_max is None or s <= runtime_max]
+    xs_pos = {size: idx for idx, size in enumerate(plot_sizes)}
+
     if cfg.slug == "annot":
-        fig = plt.figure(figsize=(17.8, 5.45))
-        gs = fig.add_gridspec(1, 2, width_ratios=[6.8, 1.55], wspace=0.05)
+        fig, ax = plt.subplots(figsize=(14.0, 5.45))
         tick_fs, axis_fs, title_fs, legend_fs = 9.5, 11.5, 14.0, 9.75
     else:
-        fig = plt.figure(figsize=(fig_w, 5.9))
-        gs = fig.add_gridspec(1, 2, width_ratios=[6.3, 1.9], wspace=0.05)
+        fig, ax = plt.subplots(figsize=(13.0, 5.9))
         tick_fs, axis_fs, title_fs, legend_fs = 10.5, 12.5, 16.0, 10.5
-    ax = fig.add_subplot(gs[0, 0])
-    ax_leg = fig.add_subplot(gs[0, 1])
-    xs_pos = {size: idx for idx, size in enumerate(cfg.display_sizes)}
+
     for label in ("Marformer", "Stan Oracle"):
         xs: list[float] = []
         ys: list[float] = []
-        for size in cfg.display_sizes:
+        for size in plot_sizes:
             row = _summary_lookup(rows, "runtime_minutes", label, size)
             if row is None:
                 continue
@@ -1010,10 +1218,11 @@ def _plot_runtime(cfg: DatasetConfig, rows: list[dict], output_path: Path) -> No
             ys.append(float(row["mean"]))
         if not xs:
             continue
-        linestyle, color, marker = shared._series_style(label)
+        linestyle, color, marker = _local_series_style(label)
         ax.plot(xs, ys, color=color, marker=marker, linestyle=linestyle,
                 linewidth=shared._series_linewidth(label), alpha=shared._series_alpha(label), label=label)
-    display_sizes = np.asarray(cfg.display_sizes, dtype=int)
+
+    display_sizes = np.asarray(plot_sizes, dtype=int)
     ax.set_xlim(-0.4, len(display_sizes) - 0.6)
     ax.set_xticks(np.arange(len(display_sizes), dtype=float))
     ax.set_xticklabels([str(s) for s in display_sizes])
@@ -1024,9 +1233,9 @@ def _plot_runtime(cfg: DatasetConfig, rows: list[dict], output_path: Path) -> No
     ax.yaxis.label.set_size(axis_fs)
     fig.suptitle(f"{cfg.title_prefix}: Runtime by {cfg.x_label}", fontsize=title_fs, y=0.98)
     ax.grid(True, alpha=0.35)
-    shared._style_legend_right(ax_leg, ax, fontsize=legend_fs)
+    ax.legend(loc="best", fontsize=legend_fs, frameon=True, framealpha=0.9)
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.subplots_adjust(left=0.06, right=0.98, top=0.88, bottom=0.13, wspace=0.04)
+    fig.subplots_adjust(left=0.07, right=0.97, top=0.88, bottom=0.13)
     fig.savefig(output_path)
     plt.close(fig)
     print(f"Saved → {output_path}")
@@ -1036,10 +1245,13 @@ def _plot_calibration(
     cfg: DatasetConfig,
     rows: list[dict],
     all_payloads: dict[tuple[str, int], tuple[np.ndarray, np.ndarray, str | None]],
+    subdir: str,
+    model_labels: list[str],
 ) -> None:
-    cal_dir = cfg.out_dir / "calibration"
+    cal_dir = cfg.out_dir / subdir
     cal_dir.mkdir(parents=True, exist_ok=True)
-    cal_models = [l for l in SERIES_ORDER if l != "Marformer NT"]
+    cal_excluded = ITEM_EXCLUDED_SERIES if cfg.slug == "item" else frozenset()
+    cal_models = [l for l in model_labels if l not in cal_excluded]
     for size in cfg.display_sizes:
         payloads_for_size: list[tuple[str, tuple[np.ndarray, np.ndarray], str]] = []
         for label in cal_models:
@@ -1056,17 +1268,17 @@ def _plot_calibration(
             continue
         ncols = 4 if len(payloads_for_size) > 6 else 3
         nrows = math.ceil(len(payloads_for_size) / ncols)
-        fig, axes = plt.subplots(nrows, ncols, figsize=(5.1 * ncols, 4.7 * nrows))
+        fig, axes = plt.subplots(nrows, ncols, figsize=(3.65 * ncols, 3.35 * nrows))
         axes = np.atleast_1d(axes).flatten()
         for ax, (title, payload, color_key) in zip(axes, payloads_for_size):
             probs, labels = payload
-            shared._plot_ece(ax, probs, labels, title, shared.COLORS.get(color_key, "#888888"))
+            shared._plot_ece(ax, probs, labels, title, COLORS.get(color_key, "#888888"))
+            ax.set_title(ax.get_title(), fontsize=12, fontweight="normal", pad=8)
         for ax in axes[len(payloads_for_size):]:
             ax.axis("off")
-        fig.suptitle(f"{cfg.title_prefix}: Calibration at {size} {cfg.x_label}", fontsize=18, y=0.98)
-        fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.92], pad=1.0, w_pad=1.8, h_pad=2.0)
+        fig.tight_layout(pad=0.45, w_pad=0.55, h_pad=0.8)
         out_path = cal_dir / f"{cfg.slug}_calibration_size{size}.png"
-        fig.savefig(out_path)
+        fig.savefig(out_path, dpi=300)
         plt.close(fig)
         print(f"Saved → {out_path}")
 
@@ -1078,15 +1290,35 @@ def _plot_dataset(cfg: DatasetConfig, args: argparse.Namespace, device_name: str
         cfg, device_name, use_cache=args.cache, use_cache_baselines=args.cache_baselines
     )
     print(f"Saved summary → {cfg.summary_path}")
+
+    _plot_metric(cfg, rows, "log_loss", "Test Log Loss",
+                 f"{cfg.title_prefix}: Test Log Loss (mean ± 0.05 SD)",
+                 cfg.out_dir / f"{cfg.slug}_generalization_log_loss_clean.png",
+                 series_labels=CLEAN_SERIES, compressed_y=False)
+    _plot_metric(cfg, rows, "log_loss", "Test Log Loss",
+                 f"{cfg.title_prefix}: Test Log Loss (mean ± 0.05 SD)",
+                 cfg.out_dir / f"{cfg.slug}_generalization_log_loss_clean_nt.png",
+                 series_labels=CLEAN_NT_SERIES, compressed_y=False)
     _plot_metric(cfg, rows, "log_loss", "Test Log Loss",
                  f"{cfg.title_prefix}: Test Log Loss (mean ± 0.05 SD)",
                  cfg.out_dir / f"{cfg.slug}_generalization_log_loss.png")
+
+    _plot_metric(cfg, rows, "mbr_l2", "MBR L2 (MSE)",
+                 f"{cfg.title_prefix}: MBR L2 (mean ± 0.05 SD)",
+                 cfg.out_dir / f"{cfg.slug}_generalization_mbr_l2_clean.png",
+                 series_labels=CLEAN_SERIES, compressed_y=False)
+    _plot_metric(cfg, rows, "mbr_l2", "MBR L2 (MSE)",
+                 f"{cfg.title_prefix}: MBR L2 (mean ± 0.05 SD)",
+                 cfg.out_dir / f"{cfg.slug}_generalization_mbr_l2_clean_nt.png",
+                 series_labels=CLEAN_NT_SERIES, compressed_y=False)
     _plot_metric(cfg, rows, "mbr_l2", "MBR L2 (MSE)",
                  f"{cfg.title_prefix}: MBR L2 (mean ± 0.05 SD)",
                  cfg.out_dir / f"{cfg.slug}_generalization_mbr_l2.png")
     _plot_runtime(cfg, rows, cfg.out_dir / f"{cfg.slug}_generalization_runtime.png")
     if args.calibration:
-        _plot_calibration(cfg, rows, all_payloads)
+        cal_all_models = [l for l in SERIES_ORDER if l not in {"Marformer NT", "Unigram Pool ij"}]
+        _plot_calibration(cfg, rows, all_payloads, "calibration_all", cal_all_models)
+        _plot_calibration(cfg, rows, all_payloads, "calibration_clean", CLEAN_NT_SERIES)
 
 
 def main() -> None:
