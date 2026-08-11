@@ -1,23 +1,12 @@
 #!/usr/bin/env python3
-"""Create DOMAIN3 expansion splits from one full tensor bundle.
-
-DOMAIN3 fixes a lower-right held-out block as the evaluation block:
-- test items:      last ``test_items`` items
-- test annotators: last ``test_annotators`` annotators
-
-We then create two families of bundles:
-1. Item expansion:
-   - Transductive: use only the held-out annotator slice and expand left over items.
-   - Non-transductive: train on items immediately left of the test block, evaluate on
-     the fixed test block, still using only the held-out annotator slice.
-2. Annotator expansion:
-   - Transductive: use only the held-out item slice and expand upward over annotators.
-   - Non-transductive: train on annotators immediately above the test block,
-     evaluate on the fixed test block, still using only the held-out item slice.
-
-The output bundles are written in formats already supported by the codebase:
-- item expansion bundles use item-split style configs (K_train/K_test/K_val).
-- annotator expansion bundles use annotator-split style configs (K/J_train/J_test).
+"""
+Splits one full tensor bundle into the DOMAIN3 expansion splits used by
+scripts/DOMAIN3-SIGMOID/generate_data.sh. Fixes a lower-right held-out block
+(last `test_items` items x last `test_annotators` annotators) as evaluation,
+then builds item-expansion and annotator-expansion training sets that grow
+toward that block, each in transductive and non-transductive variants. Item
+expansion bundles are written as item-split configs (K_train/K_test/K_val);
+annotator expansion bundles as annotator-split configs (K/J_train/J_test).
 """
 
 from __future__ import annotations

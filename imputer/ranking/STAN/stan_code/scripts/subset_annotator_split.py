@@ -1,29 +1,12 @@
 #!/usr/bin/env python3
 """
-Subset an annotator-split generated data directory by J_train.
+Shrinks a generate_data_annotator.py output directory to the first `train_num`
+training annotators, keeping val/test unchanged. Items are shared (IDs 1..K,
+no remapping needed); val/test annotator IDs are shifted down to stay
+contiguous after train shrinks.
 
-Given a directory produced by generate_data_annotator_split.py (train/val/test
-split by annotator group, shared items), creates a new directory containing only
-the first `train_num` training annotators while keeping all val and test data
-unchanged.
-
-Items are shared (IDs 1..K), so no item remapping is needed.
-Val and test annotator IDs are shifted down by (J_train_orig - train_num) to
-remain contiguous after train annotators shrink:
-
-  original train annotators: 1..J_train
-  original val annotators:   J_train+1..J_train+J_val
-  original test annotators:  J_train+J_val+1..J
-
-  subset train annotators: 1..train_num
-  subset val annotators:   train_num+1..train_num+J_val   (shifted)
-  subset test annotators:  train_num+J_val+1..train_num+J_val+J_test
-
-Usage:
-    python subset_annotator_split.py \\
-        --input-dir DATA/STAN/annotator_run_001 \\
-        --output-dir DATA/STAN/annotator_run_001_subset \\
-        --train-num 10
+    python subset_annotator_split.py --input-dir DATA/STAN/annotator_run_001 \\
+        --output-dir DATA/STAN/annotator_run_001_subset --train-num 10
 """
 
 import argparse

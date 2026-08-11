@@ -275,7 +275,7 @@ def main() -> None:
     parser.add_argument("--output-dir", type=str, default="OUTPUT/generated_data")
     parser.add_argument("--run-name", type=str, default=None)
     parser.add_argument("--stan-type", type=str, default="tensor",
-                        choices=["normal-noise-dot-product", "factored-dot-product", "discrete", "tensor", "dawid-skene"])
+                        choices=["tensor"])
     parser.add_argument("--stan-file", type=str, default=None)
     parser.add_argument("--overwrite-existing-data", action="store_true")
     parser.add_argument("--K-train", type=int, required=True)
@@ -296,19 +296,16 @@ def main() -> None:
                         choices=["tie_breaking", "mcar", "extended_rankings"])
     parser.add_argument("--mcar-missing-rate", type=float, default=0.5)
     parser.add_argument("--pairwise-observation-rate", type=float, default=1.0)
-    parser.add_argument("--sigma-annotator", type=float, default=0.5)
     parser.add_argument("--sigma-measurement", type=float, default=0.1)
     parser.add_argument("--kappa", "--alpha-dirichlet", dest="kappa", type=float, default=2.0)
     parser.add_argument("--temperature", type=float, default=0.5)
     parser.add_argument("--stan-arg", action="append", default=None, metavar="KEY=VALUE")
-    parser.add_argument("--d-annotator", type=int, default=None)
     parser.add_argument("--derive-thresholds-from-annotator", action="store_true", default=False)
     parser.add_argument("--T", type=int, default=3)
     parser.add_argument("--sigma-u", type=float, default=1.0)
     parser.add_argument("--sigma-v", type=float, default=1.0)
     parser.add_argument("--sigma-uit", type=float, default=0.5)
     parser.add_argument("--use-dawid-skene-noise", type=int, default=0, choices=[0, 1])
-    parser.add_argument("--factor-decay", type=float, default=None)
     parser.add_argument("--alpha-confusion", type=float, default=10.0)
     args = parser.parse_args()
 
@@ -323,33 +320,17 @@ def main() -> None:
 
     defaults = {
         "D": args.D,
-        "d_annotator": args.d_annotator if args.d_annotator is not None else args.D,
-        "sigma_annotator": args.sigma_annotator,
         "sigma_measurement": args.sigma_measurement,
         "kappa": args.kappa,
         "temperature": args.temperature,
-        "factor_decay": args.factor_decay,
-        "use_log_scores": 0,
-        "use_logistic_link": 0,
-        "use_normal_loadings": 0,
         "alpha_confusion": args.alpha_confusion,
         "T": args.T,
         "sigma_u": args.sigma_u,
         "sigma_v": args.sigma_v,
         "sigma_uit": args.sigma_uit,
         "use_dawid_skene_noise": args.use_dawid_skene_noise,
+        "derive_thresholds_from_annotator": 1 if args.derive_thresholds_from_annotator else 0,
     }
-    if args.stan_type == "normal-noise-dot-product":
-        defaults["use_factored_annotator"] = 0
-        defaults["derive_thresholds_from_annotator"] = 0
-    elif args.stan_type == "factored-dot-product":
-        defaults["use_factored_annotator"] = 1
-        defaults["derive_thresholds_from_annotator"] = 1 if args.derive_thresholds_from_annotator else 0
-    elif args.stan_type == "dawid-skene":
-        defaults["use_factored_annotator"] = 1
-        defaults["derive_thresholds_from_annotator"] = 1 if args.derive_thresholds_from_annotator else 0
-    elif args.stan_type == "tensor":
-        defaults["derive_thresholds_from_annotator"] = 1 if args.derive_thresholds_from_annotator else 0
 
     required = STAN_TYPE_REQUIRED[args.stan_type]
     type_kwargs = {k: stan_arg.get(k, defaults.get(k)) for k in required}

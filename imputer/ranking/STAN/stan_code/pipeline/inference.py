@@ -45,11 +45,8 @@ class InferenceConfig:
         self.show_progress = show_progress
 
 
-def compile_domain_model(stan_file: Optional[str] = None) -> cmdstanpy.CmdStanModel:
-    """Compile the domain model for inference."""
-    if stan_file is None:
-        stan_file = str(Path(__file__).parent.parent.parent / "models" / "domain_model.stan")
-    
+def compile_domain_model(stan_file: str) -> cmdstanpy.CmdStanModel:
+    """Compile the given Stan model. No default — callers must resolve stan_file."""
     logger.info(f"Compiling Stan model from: {stan_file}")
     model = cmdstanpy.CmdStanModel(stan_file=stan_file)
     logger.info("Stan model compiled successfully")
@@ -65,18 +62,9 @@ def prepare_stan_data_for_inference(
     use_dist: bool = False,
 ) -> Dict[str, Any]:
     """
-    Prepare Stan data for inference.
-
-    - When use_dist=False (default), builds Stan data for the standard domain
-      model (hard-label ratings + pairwise rankings).
-    - When use_dist=True, builds Stan data for the distributional labels model
-      (`stan_dist_model.stan`), using `rating_dists` instead of `rating_values`
-      and omitting pairwise rankings.
-
-    Hyperparameters always come from `config.to_stan_data()`. Any extra keys
-    (e.g. `M`, `S` for the discrete model when fitting on non-discrete data) are
-    passed in via `stan_arg` and merged last so the caller controls model-specific
-    data.
+    Build the Stan data dict for inference. use_dist=True builds rating_dists
+    (distributional labels) instead of hard rating_values, and omits pairwise
+    rankings. stan_arg is merged in last for model-specific overrides.
     """
     if use_train_only and use_test_only:
         raise ValueError("Cannot use both train_only and test_only")
@@ -195,7 +183,7 @@ def prepare_stan_data_for_inference(
         "missing_pairwise_ranking_items": [[item - item_offset for item in p["items"]] for p in missing_pairwise],
     }
 
-    # Hyperparameters from config; then any --stan-arg overrides/adds (e.g. M, S for discrete model)
+    # Hyperparameters from config; then any --stan-arg overrides/adds (e.g. DEBUG_INIT for tensor)
     stan_data = {**config.to_stan_data(), **observed_part}
     if stan_arg:
         stan_data.update(stan_arg)
@@ -276,27 +264,9 @@ def run_mcmc_inference(
     use_test_only: bool = False,
     use_dist: bool = False,
 ) -> cmdstanpy.CmdStanMCMC:
-    """
-    Run MCMC inference using either the standard domain model or the
-    distributional-labels model.
-
-    Hyperparameters come from config.to_stan_data(); stan_arg (e.g. from
-    --stan-arg) is merged so the caller can supply model-specific data (e.g.
-    M, S for discrete, DEBUG_INIT for tensor, etc.).
-    
-    Args:
-        bundle: Generated data bundle
-        config: Data generation configuration (from the run that produced the bundle)
-        inference_config: MCMC configuration
-        stan_file: Path to the Stan model file (domain or dist)
-        stan_arg: Optional Stan data to merge (e.g. {"M": 6, "S": 3} for discrete model)
-        use_train_only: If True, only use training instance data
-        use_test_only: If True, only use test instance data
-        use_dist: If True, build Stan data for the dist model (rating_dists)
-    
-    Returns:
-        CmdStanMCMC fit object
-    """
+    """Compile and run MCMC inference for the domain model (or the dist model
+    if use_dist=True). Not currently used by run_inference.py, which has its
+    own inline Stan-data builder — kept for standalone/notebook use."""
     # Compile model
     model = compile_domain_model(stan_file)
     
