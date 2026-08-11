@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
 """
-CLI script for evaluating posterior predictions against ground truth.
+CLI for scoring MCMC posterior predictions against ground truth.
 
-Usage:
-    python stan/scripts/evaluate_predictions.py \\
-        --mcmc-dir   OUTPUT/domain_model/runs/my_run \\
+    python STAN/stan_code/scripts/evaluate_predictions.py \\
+        --mcmc-dir OUTPUT/domain_model/runs/my_run \\
         --data-bundle OUTPUT/generated_data/my_run/data_bundle.json \\
         --output-dir OUTPUT/domain_model/eval
 """

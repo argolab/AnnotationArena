@@ -1,27 +1,15 @@
 #!/usr/bin/env python3
 """
-Post-hoc temperature scaling for Stan rating probability outputs.
-
-For each *_eval directory under --results-root:
-  1. Loads rating_probabilities.csv  [n_samples * n_missing, C]
-  2. Loads data_bundle.json to get ground-truth labels for test missing ratings
-  3. Calibrates a scalar temperature T by minimising mean NLL on those ratings
-  4. Applies T to all samples:  p_smooth = softmax(log(p) / T)
-  5. Saves everything to *_eval_smoothed  (identical structure, csv replaced)
-
-Temperature T > 1 flattens (smooths) overconfident one-hot predictions.
-T is found via bounded 1-D optimisation — single scalar, negligible overfitting.
-
-Usage:
-    python STAN/stan_code/scripts/smooth_predictions.py \\
-        --results-root RESULTS/STAN/DOMAIN3-OLD/ORACLE/ITEM \\
-        --data-root    DATA/STAN/DOMAIN3-OLD \\
-        --split-prefix DOMAIN3-OLD
+Post-hoc temperature scaling for Stan rating probability outputs. For each
+*_eval directory under --results-root, fits a scalar temperature T (bounded
+1-D optimisation minimising mean NLL against ground truth) and applies
+p_smooth = softmax(log(p) / T) to flatten overconfident predictions, saving
+results to a parallel *_eval_smoothed directory.
 
     python STAN/stan_code/scripts/smooth_predictions.py \\
-        --results-root RESULTS/STAN/DOMAIN3-OLD/ORACLE/ANNOT \\
-        --data-root    DATA/STAN/DOMAIN3-OLD \\
-        --split-prefix DOMAIN3-OLD
+        --results-root RESULTS/STAN/DOMAIN3-SIGMOID/ORACLE/ITEM \\
+        --data-root    DATA/STAN/DOMAIN3-SIGMOID \\
+        --split-prefix DOMAIN3-SIGMOID
 """
 
 from __future__ import annotations
@@ -209,11 +197,11 @@ def main() -> None:
     parser.add_argument(
         "--results-root", required=True,
         help="Directory containing *_eval subdirs "
-             "(e.g. RESULTS/STAN/DOMAIN3-OLD/ORACLE/ITEM)",
+             "(e.g. RESULTS/STAN/DOMAIN3-SIGMOID/ORACLE/ITEM)",
     )
     parser.add_argument(
         "--data-root", required=True,
-        help="Root for data bundles (e.g. DATA/STAN/DOMAIN3-OLD)",
+        help="Root for data bundles (e.g. DATA/STAN/DOMAIN3-SIGMOID)",
     )
     parser.add_argument("--verbose", action="store_true")
     args = parser.parse_args()

@@ -1,8 +1,6 @@
 """
-Python wrapper for Stan data generation.
-
-Interfaces with iclr_data_generation.stan to generate synthetic datasets
-and convert Stan output into GroundTruthBundle format.
+Runs the tensor-prototype Stan generator and converts its output into a
+GroundTruthBundle. Used by generate_data*.py.
 """
 
 import json
@@ -37,26 +35,12 @@ def generate_data(
     """
     stan_type = config.stan_type
     if stan_file is None:
-        if stan_type == "discrete":
-            stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "discrete_type_data_generation.stan")
-        elif stan_type == "tensor":
-            stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "tensor_generation.stan")
-        elif stan_type in ("normal-noise-dot-product", "factored-dot-product"):
-            stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "normal_noise_dot_product_generation.stan")
-        elif stan_type == "dawid-skene":
-            stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "dawid_skene_generation.stan")
-        elif stan_type == "dawid-skene-true":
-            stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "true_dawid_skene_generation.stan")
-        elif getattr(config, "observation_protocol", None) == "extended_rankings":
-            import warnings
-            warnings.warn(
-                "observation_protocol='extended_rankings' is deprecated; using iclr_data_generation.stan",
-                UserWarning,
-                stacklevel=2,
+        if stan_type != "tensor":
+            raise ValueError(
+                f"Unsupported stan_type: {stan_type!r}. Only 'tensor' is supported; "
+                "pass stan_file explicitly to use a different .stan model."
             )
-            stan_file = str(Path(__file__).parent.parent.parent / "models" / "iclr_data_generation.stan")
-        else:
-            stan_file = str(Path(__file__).parent.parent.parent / "models" / "iclr_data_generation.stan")
+        stan_file = str(Path(__file__).parent.parent.parent / "stan_models" / "tensor_generation_sigmoid.stan")
 
     model = compile_data_generation_model(stan_file)
     stan_data = config.to_stan_data()  # Core + type-specific fields dump to json and passed to Stan
@@ -789,31 +773,17 @@ def generate_data_annotator_split(
     stan_file: Optional[str] = None,
 ) -> GroundTruthBundle:
     """
-    Generate synthetic data using the annotator-split Stan model.
+    Generate annotator-split synthetic data: items shared across all instances,
+    annotators partitioned into train/val/test groups that each rate every item.
 
-    Items are shared across all instances. Annotators are partitioned into
-    train/val/test groups; each group rates every item.
-
-    Args:
-        config: AnnotatorSplitConfig specifying K, J_train, J_val, J_test, etc.
-        stan_file: Path to .stan file (defaults to annotator_split_generation.stan)
-
-    Returns:
-        GroundTruthBundle with train/val/test ratings labelled by annotator group.
+    No default stan_file — no annotator-split generator model exists in
+    stan_models/ yet, so it must be passed explicitly.
     """
     if stan_file is None:
-        if getattr(config, "stan_type", None) == "tensor":
-            stan_file = str(
-                Path(__file__).parent.parent.parent
-                / "stan_models"
-                / "tensor_generation_annotator.stan"
-            )
-        else:
-            stan_file = str(
-                Path(__file__).parent.parent.parent
-                / "stan_models"
-                / "normal_noise_dot_product_annotator_gen.stan"
-            )
+        raise ValueError(
+            "generate_data_annotator_split requires an explicit stan_file: no "
+            "annotator-split generator .stan model exists in stan_models/."
+        )
 
     model = compile_data_generation_model(stan_file)
     stan_data = config.to_stan_data()

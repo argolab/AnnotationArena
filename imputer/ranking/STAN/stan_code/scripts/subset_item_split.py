@@ -1,25 +1,11 @@
 #!/usr/bin/env python3
 """
-Subset an item-split generated data directory by K_train.
+Shrinks a generate_data.py output directory to the first `train_num` training
+items, keeping val/test unchanged. Val/test item IDs are shifted down to stay
+contiguous (val: train_num+1..+K_val, test: right after that).
 
-Given a directory produced by generate_data.py (train/val/test split by items),
-creates a new directory containing only the first `train_num` training items
-while keeping all val and test data unchanged.
-
-Val and test item IDs are shifted down to remain contiguous after train shrinks:
-  original train: 1..K_train
-  original val:   K_train+1..K_train+K_val
-  original test:  K_train+K_val+1..K_train+K_val+K_test
-
-  subset train: 1..train_num
-  subset val:   train_num+1..train_num+K_val       (shifted down by K_train-train_num)
-  subset test:  train_num+K_val+1..train_num+K_val+K_test
-
-Usage:
-    python subset_item_split.py \\
-        --input-dir DATA/STAN/run_001 \\
-        --output-dir DATA/STAN/run_001_subset \\
-        --train-num 100
+    python subset_item_split.py --input-dir DATA/STAN/run_001 \\
+        --output-dir DATA/STAN/run_001_subset --train-num 100
 """
 
 import argparse

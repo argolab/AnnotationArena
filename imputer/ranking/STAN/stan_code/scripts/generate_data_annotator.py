@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """
-CLI script for generating synthetic data using the annotator-split Stan model.
-
-In this setting all annotators share the same K items, but are partitioned into
-train / val / test groups. Every annotator in each group rates every item.
+CLI for generating annotator-split synthetic data: a shared K items, with
+annotators partitioned into train/val/test groups that each rate every item.
 Pairwise rankings are always disabled.
 
-Usage:
-    PYTHONPATH=. python stan/scripts/generate_data_annotator_split.py \\
-        --output-dir runs/annot_split \\
+No annotator-split generator .stan file exists in stan_models/ yet, so
+--stan-file must be passed explicitly.
+
+    python STAN/stan_code/scripts/generate_data_annotator.py \\
+        --output-dir runs/annot_split --stan-file <annotator_generator.stan> \\
         --K 20 --J-train 6 --J-val 3 --J-test 3 --I 3 --C 5
 """
 
@@ -34,9 +34,9 @@ def main():
                         help="Output directory for generated data")
     parser.add_argument("--run-name", type=str, default=None,
                         help="Custom run name (default: auto-generated)")
-    parser.add_argument("--stan-type", type=str, default="factored-dot-product",
-                        choices=["normal-noise-dot-product", "factored-dot-product", "tensor"],
-                        help="Stan model type (default: factored-dot-product)")
+    parser.add_argument("--stan-type", type=str, default="tensor",
+                        choices=["tensor"],
+                        help="Stan model type. Only 'tensor' is supported.")
     parser.add_argument("--stan-file", type=str, default=None,
                         help="Path to .stan file (overrides --stan-type default)")
     parser.add_argument("--overwrite-existing-data", action="store_true",
@@ -57,25 +57,16 @@ def main():
                         help="Number of rating categories")
     parser.add_argument("--D", type=int, default=64,
                         help="Item/attribute embedding dimension")
-    parser.add_argument("--d-annotator", type=int, default=None,
-                        help="Annotator embedding dimension (default: same as D)")
     parser.add_argument("--seed", type=int, default=42,
                         help="Random seed")
 
     # ---------- Generative model ----------
-    parser.add_argument("--sigma-annotator", type=float, default=0.5,
-                        help="Annotator preference noise")
     parser.add_argument("--sigma-measurement", type=float, default=0.1,
                         help="Measurement noise standard deviation")
     parser.add_argument("--kappa", type=float, default=2.0,
                         help="Dirichlet concentration for rating thresholds")
     parser.add_argument("--temperature", type=float, default=0.5,
                         help="Temperature (unused without pairwise, kept for config parity)")
-    parser.add_argument("--use-factored-annotator", action="store_true", default=True,
-                        help="Use factored annotator model (default: on)")
-    parser.add_argument("--no-factored-annotator", dest="use_factored_annotator",
-                        action="store_false",
-                        help="Use spherical annotator model instead")
     parser.add_argument("--derive-thresholds-from-annotator", action="store_true", default=False,
                         help="Derive rating thresholds from annotator embedding")
 
@@ -105,54 +96,29 @@ def main():
     args = parser.parse_args()
 
     # ========== 2. Build AnnotatorSplitConfig ==========
-    stan_type = args.stan_type
-
-    if stan_type == "tensor":
-        config = AnnotatorSplitConfig(
-            K=args.K,
-            J_train=args.J_train,
-            J_val=args.J_val,
-            J_test=args.J_test,
-            I=args.I,
-            C=args.C,
-            D=args.D,
-            T=args.T,
-            sigma_u=args.sigma_u,
-            sigma_v=args.sigma_v,
-            sigma_uit=args.sigma_uit,
-            sigma_measurement=args.sigma_measurement,
-            kappa=args.kappa,
-            alpha_confusion=args.alpha_confusion,
-            temperature=args.temperature,
-            use_dawid_skene_noise=args.use_dawid_skene_noise,
-            derive_thresholds_from_annotator=1 if args.derive_thresholds_from_annotator else 0,
-            observation_protocol=args.observation_protocol,
-            mcar_missing_rate=args.mcar_missing_rate,
-            seed=args.seed,
-            stan_type="tensor",
-        )
-    else:
-        d_annotator = args.d_annotator if args.d_annotator is not None else args.D
-        config = AnnotatorSplitConfig(
-            K=args.K,
-            J_train=args.J_train,
-            J_val=args.J_val,
-            J_test=args.J_test,
-            I=args.I,
-            C=args.C,
-            D=args.D,
-            d_annotator=d_annotator,
-            sigma_annotator=args.sigma_annotator,
-            sigma_measurement=args.sigma_measurement,
-            kappa=args.kappa,
-            temperature=args.temperature,
-            use_factored_annotator=1 if args.use_factored_annotator else 0,
-            derive_thresholds_from_annotator=1 if args.derive_thresholds_from_annotator else 0,
-            observation_protocol=args.observation_protocol,
-            mcar_missing_rate=args.mcar_missing_rate,
-            seed=args.seed,
-            stan_type=stan_type,
-        )
+    config = AnnotatorSplitConfig(
+        K=args.K,
+        J_train=args.J_train,
+        J_val=args.J_val,
+        J_test=args.J_test,
+        I=args.I,
+        C=args.C,
+        D=args.D,
+        T=args.T,
+        sigma_u=args.sigma_u,
+        sigma_v=args.sigma_v,
+        sigma_uit=args.sigma_uit,
+        sigma_measurement=args.sigma_measurement,
+        kappa=args.kappa,
+        alpha_confusion=args.alpha_confusion,
+        temperature=args.temperature,
+        use_dawid_skene_noise=args.use_dawid_skene_noise,
+        derive_thresholds_from_annotator=1 if args.derive_thresholds_from_annotator else 0,
+        observation_protocol=args.observation_protocol,
+        mcar_missing_rate=args.mcar_missing_rate,
+        seed=args.seed,
+        stan_type="tensor",
+    )
 
     # ========== 3. Output directory ==========
     output_path = Path(args.output_dir)

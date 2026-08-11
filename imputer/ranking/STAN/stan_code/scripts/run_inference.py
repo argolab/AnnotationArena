@@ -1,35 +1,15 @@
 #!/usr/bin/env python3
 """
-CLI script for running MCMC inference with the domain model.
+CLI for MCMC inference with the tensor-prototype model, for item-split and
+annotator-split data bundles. Called by scripts/DOMAIN3/run_stan_group.sh and
+scripts/LLMRubric/CPMSigmoid/*.sh.
 
-Supports all Stan model types (normal-noise-dot-product, factored-dot-product,
-discrete, tensor) and both item-split and annotator-split data bundles.
+Use --model-variant (oracle / misspec-bin / misspec-proj / misspec-both) to
+pick one of the 4 tensor inference models in stan_models/ by name, or pass
+--stan-file directly.
 
-Instance handling:
-  - Observed ratings passed to Stan: instance in ("train", "val")
-  - Missing ratings passed to Stan (for prediction): instance == "test" only
-
-Data format: every observed rating must have a 'rating_dist' field.
-  - Human ratings  → one-hot distribution
-  - LLM ratings    → soft probability vector (max < 1)
-The Dirichlet observation model is always used for LLM ratings.
-
-Usage:
-    # Item-split bundle
-    python run_inference.py \\
-        --data-bundle OUTPUT/generated_data/my_run/data_bundle.json \\
-        --configs     OUTPUT/generated_data/my_run/configs.json \\
-        --output-dir  OUTPUT/domain_model/runs \\
-        --stan-type   factored-dot-product \\
-        --alpha-llm   5.0
-
-    # Annotator-split bundle
-    python run_inference.py \\
-        --data-bundle OUTPUT/generated_data/annot_run/data_bundle.json \\
-        --configs     OUTPUT/generated_data/annot_run/configs.json \\
-        --output-dir  OUTPUT/domain_model/runs \\
-        --stan-type   factored-dot-product \\
-        --alpha-llm   5.0
+    python run_inference.py --data-bundle <bundle.json> --configs <configs.json> \\
+        --output-dir OUTPUT/domain_model/runs --model-variant oracle
 """
 
 import argparse
@@ -67,12 +47,15 @@ logger = logging.getLogger(__name__)
 _MODELS_DIR = Path(__file__).resolve().parents[2] / "stan_models"
 
 _DEFAULT_STAN_FILES = {
-    "discrete":                  str(_MODELS_DIR / "discrete_model.stan"),
-    "normal-noise-dot-product":  str(_MODELS_DIR / "normal_noise_dot_product_model.stan"),
-    "factored-dot-product":      str(_MODELS_DIR / "normal_noise_dot_product_model.stan"),
-    "tensor":                    str(_MODELS_DIR / "tensor_model.stan"),
-    "dawid-skene":               str(_MODELS_DIR / "dawid_skene_model.stan"),
-    "dawid-skene-true":          str(_MODELS_DIR / "true_dawid_skene_model.stan"),
+    "tensor": str(_MODELS_DIR / "tensor_model_sigmoid.stan"),
+}
+
+# Named tensor model variants, selected via --model-variant (--stan-file overrides).
+_TENSOR_MODEL_VARIANTS = {
+    "oracle":        str(_MODELS_DIR / "tensor_model_sigmoid.stan"),
+    "misspec-bin":   str(_MODELS_DIR / "tensor_shared_annotator_binning_raw_z_sigmoid.stan"),
+    "misspec-proj":  str(_MODELS_DIR / "tensor_shared_annotator_projection_sigmoid.stan"),
+    "misspec-both":  str(_MODELS_DIR / "tensor_shared_annotator_projection_binning_raw_z_sigmoid.stan"),
 }
 
 
@@ -125,27 +108,6 @@ def _is_llm(r: dict) -> int:
     return 1 if max(dist) < 1.0 - 1e-6 else 0
 
 
-def _to_dist(r: dict, C: int, eps: float = 1e-6) -> list:
-    """Return a C-simplex for this rating with no exact zeros.
-
-    LLM ratings:   use rating_dist (renormalised for safety).
-    Human ratings: construct one-hot from value.
-
-    eps is added to every entry before renormalising so that distributions
-    passed to dirichlet_lpdf never contain exact zeros.
-    """
-    if "rating_dist" in r:
-        d = list(r["rating_dist"])
-        s = sum(d)
-        d = [x / s for x in d]
-    else:
-        d = [0.0] * C
-        d[r["value"] - 1] = 1.0
-    d = [x + eps for x in d]
-    s = sum(d)
-    return [x / s for x in d]
-
-
 # ── Stan data builder ──────────────────────────────────────────────────────────
 
 def build_stan_data(
@@ -155,29 +117,13 @@ def build_stan_data(
     mode: str,
     K: int,
     J: int,
-    alpha_llm: float,
     stan_type: str = None,
 ) -> dict:
     """
-    Build the Stan data dict for inference.
-
-    Works for both item-split (DataGenConfig) and annotator-split
-    (AnnotatorSplitConfig). Item and annotator IDs in the bundle are already
-    in the correct 1-indexed space for Stan — no remapping needed since:
-      - item-split:      train=1..K_train, val=K_train+1..K_train+K_val,
-                         test=K_train+K_val+1..K  (all contiguous)
-      - annotator-split: all items share IDs 1..K;
-                         annotator IDs remapped at subset time to be contiguous
-
-    Args:
-        observed:  Observed ratings (train + val instances).
-        missing:   Missing ratings (test instance only).
-        config:    DataGenConfig or AnnotatorSplitConfig.
-        mode:      "item_split" or "annotator_split".
-        K:         Total number of items passed to Stan.
-        J:         Total number of annotators passed to Stan.
-        alpha_llm: Dirichlet concentration for LLM observations.
-        stan_type: Stan model type (determines which fields to include).
+    Build the Stan data dict for inference. Works for both item-split
+    (DataGenConfig) and annotator-split (AnnotatorSplitConfig) bundles — item
+    and annotator IDs are already 1-indexed and contiguous in both, so no
+    remapping is needed here.
     """
     C = config.C
 
@@ -194,147 +140,26 @@ def build_stan_data(
         "missing_rating_items":      [r["item"]        for r in missing],
     }
 
-    if stan_type == "dawid-skene-true":
-        # True Dawid-Skene: no embeddings, no dot-product, no ordinal probit.
-        # Ratings are grouped into (attribute, item) cells so annotators are
-        # coupled through the shared latent true class T_ik.
-        # Hyperparameters can either be anchored (legacy mode) or learned
-        # under broad proper priors when use_flat_priors=1.
-        from collections import defaultdict
+    if stan_type != "tensor":
+        raise ValueError(
+            f"Unsupported stan_type: {stan_type!r}. Only 'tensor' is supported "
+            "(oracle and misspecified models all share this data schema)."
+        )
 
-        # Build cell map: (attribute, item) -> 0-indexed cell_id.
-        # Covers all cells in observed AND missing so every missing rating
-        # has a valid cell reference.
-        cell_map: dict = {}
-        for r in observed:
-            key = (r["attribute"], r["item"])
-            if key not in cell_map:
-                cell_map[key] = len(cell_map)
-        for r in missing:
-            key = (r["attribute"], r["item"])
-            if key not in cell_map:
-                cell_map[key] = len(cell_map)
-
-        N_cells = len(cell_map)
-        cell_attr_arr = [0] * N_cells
-        cell_item_arr = [0] * N_cells
-        for (attr, item), idx in cell_map.items():
-            cell_attr_arr[idx] = attr
-            cell_item_arr[idx] = item
-
-        # Group observed ratings by cell.
-        cell_ratings: dict = defaultdict(list)
-        for r in observed:
-            key = (r["attribute"], r["item"])
-            cell_ratings[cell_map[key]].append((r["annotator"], r["value"]))
-
-        # Build contiguous sorted obs arrays with per-cell start/count (1-indexed).
-        obs_annotator_arr: list = []
-        obs_value_arr: list = []
-        cell_obs_start_arr: list = []
-        cell_obs_count_arr: list = []
-        pos = 1  # Stan is 1-indexed
-        for cell_idx in range(N_cells):
-            ratings = cell_ratings.get(cell_idx, [])
-            cell_obs_start_arr.append(pos)
-            cell_obs_count_arr.append(len(ratings))
-            for ann, val in ratings:
-                obs_annotator_arr.append(ann)
-                obs_value_arr.append(val)
-            pos += len(ratings)
-
-        # Missing rating arrays — cell index is 1-indexed for Stan.
-        missing_cell_arr: list = []
-        missing_annotator_arr: list = []
-        for r in missing:
-            key = (r["attribute"], r["item"])
-            missing_cell_arr.append(cell_map[key] + 1)  # 1-indexed
-            missing_annotator_arr.append(r["annotator"])
-
-        return {
-            "K":                  K,
-            "I":                  config.I,
-            "J":                  J,
-            "C":                  C,
-            # Cell structure
-            "N_cells":            N_cells,
-            "cell_attr":          cell_attr_arr,
-            "cell_item":          cell_item_arr,
-            "cell_obs_start":     cell_obs_start_arr,
-            "cell_obs_count":     cell_obs_count_arr,
-            # Observed ratings (sorted by cell)
-            "N_ratings":          len(obs_annotator_arr),
-            "obs_annotator":      obs_annotator_arr,
-            "obs_value":          obs_value_arr,
-            # Missing ratings
-            "N_missing_ratings":  len(missing),
-            "missing_cell":       missing_cell_arr,
-            "missing_annotator":  missing_annotator_arr,
-            # Hyperparameter defaults — overridable via --stan-arg
-            "alpha_pi_anchor":                 1.0,
-            "alpha_confusion_diag_anchor":     15.0,
-            "alpha_confusion_offdiag_anchor":  1.0,
-            "use_flat_priors":                 0,
-        }
-
-    if stan_type == "tensor":
-        # Tensor-prototype model: different parameter set, no LLM fields.
-        return {
-            "K":                          K,
-            "I":                          config.I,
-            "J":                          J,
-            "D":                          config.D,
-            "C":                          C,
-            "T":                          config.T,
-            "use_dawid_skene_noise":      int(config.use_dawid_skene_noise),
-            "derive_thresholds_from_annotator":
-                                          int(config.derive_thresholds_from_annotator),
-            "alpha_dirichlet_jt":         1.0,   # uniform Dirichlet over T prototypes
-            "alpha_confusion":            config.alpha_confusion,
-            **ratings_base,
-        }
-
-    if stan_type == "discrete":
-        return {
-            "K":                         K,
-            "I":                         config.I,
-            "J":                         J,
-            "D":                         getattr(config, "D", 1) or 1,
-            "C":                         C,
-            "M":                         config.M,
-            "S":                         config.S,
-            "sigma_annotator":           config.sigma_annotator if config.sigma_annotator is not None else 0.0,
-            "sigma_measurement_anchor":  config.sigma_measurement if config.sigma_measurement is not None else 0.0,
-            "alpha_dirichlet_anchor":    config.kappa,
-            "temperature":               config.temperature,
-            "use_flat_priors":           0,
-            **ratings_base,
-        }
-
-    # Default: all other types (normal-noise-dot-product, factored-dot-product, dawid-skene)
+    # Tensor-prototype model: different parameter set, no LLM fields.
     return {
-        "K":                         K,
-        "I":                         config.I,
-        "J":                         J,
-        "D":                         config.D,
-        "C":                         C,
-        "d_annotator":               config.d_annotator,
-        "use_factored_annotator":    int(config.use_factored_annotator)
-                                     if config.use_factored_annotator is not None else 1,
-        "kappa":                     config.kappa if hasattr(config, "kappa")
-                                     else config.kappa,
-        "sigma_annotator":           config.sigma_annotator,
-        "sigma_measurement":         config.sigma_measurement if config.sigma_measurement is not None else 0.0,
-        "alpha_dirichlet":           config.kappa,
-        "temperature":               config.temperature,
-        "alpha_llm":                 alpha_llm,
-        **({
-            "alpha_confusion": config.alpha_confusion,
-        } if getattr(config, "alpha_confusion", None) is not None else {}),
-        # Observed ratings (with LLM soft-dist support)
+        "K":                          K,
+        "I":                          config.I,
+        "J":                          J,
+        "D":                          config.D,
+        "C":                          C,
+        "T":                          config.T,
+        "use_dawid_skene_noise":      int(config.use_dawid_skene_noise),
+        "derive_thresholds_from_annotator":
+                                      int(config.derive_thresholds_from_annotator),
+        "alpha_dirichlet_jt":         1.0,   # uniform Dirichlet over T prototypes
+        "alpha_confusion":            config.alpha_confusion,
         **ratings_base,
-        "rating_dists":              [_to_dist(r, C)   for r in observed],
-        "is_llm_rating":             [_is_llm(r)       for r in observed],
     }
 
 
@@ -451,7 +276,7 @@ def _save_tensor_hyperparameter_posterior(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run MCMC inference with domain model (item-split and annotator-split)"
+        description="Run MCMC inference with the tensor domain model (item-split and annotator-split)"
     )
 
     # ── Input / output ────────────────────────────────────────────────────────
@@ -470,12 +295,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stan-type", default=None,
                         choices=list(_DEFAULT_STAN_FILES),
                         help="Stan model type. Default: read from configs.json.")
+    parser.add_argument("--model-variant", default="oracle",
+                        choices=list(_TENSOR_MODEL_VARIANTS),
+                        help="Named tensor model variant (default: oracle, the "
+                             "correctly-specified model). Ignored if --stan-file is set.")
     parser.add_argument("--stan-file", default=None,
-                        help="Override path to Stan model file.")
+                        help="Override path to Stan model file (overrides --model-variant).")
     parser.add_argument("--stan-arg", action="append", metavar="KEY=VALUE",
                         help="Extra Stan data fields (repeatable). "
                              "E.g. --stan-arg DEBUG_INIT=1 for tensor.")
-    parser.add_argument("--real-data", type=bool, default=False)
 
     # ── MCMC ──────────────────────────────────────────────────────────────────
     parser.add_argument("--chains", type=int, default=4)
@@ -494,15 +322,18 @@ def parse_args() -> argparse.Namespace:
     # ── Model parameter overrides ─────────────────────────────────────────────
     parser.add_argument("--override-D", type=int, default=None,
                         help="Override embedding dimension D")
-    parser.add_argument("--override-sigma-annotator", type=float, default=None)
     parser.add_argument("--override-sigma-measurement", type=float, default=None)
     parser.add_argument("--override-alpha-dirichlet", type=float, default=None,
                         help="Override kappa / alpha_dirichlet")
     parser.add_argument("--override-temperature", type=float, default=None)
 
     # ── Dirichlet-specific ────────────────────────────────────────────────────
+    # Accepted for backward compatibility with LLMRubric/CPMSigmoid callers;
+    # unused by the tensor model's Stan data schema (no LLM soft-label fields).
     parser.add_argument("--alpha-llm", type=float, default=5.0,
-                        help="Dirichlet concentration for LLM observations (default: 5.0)")
+                        help="Unused by stan_type=tensor; kept for caller compatibility.")
+
+    # ── Transductive inference ────────────────────────────────────────────────
     parser.add_argument("--transductive-use-test-observed", dest="transductive_use_test_observed",
                         action="store_true", default=True,
                         help="Include observed test rows during Stan inference (default: on)")
@@ -534,18 +365,7 @@ def main():
     if not configs_path.exists():
         raise FileNotFoundError(f"configs.json not found at {configs_path}")
 
-    if not args.real_data:
-        data_config, mode = load_config(configs_path)
-    else:
-        data_config, mode = load_config(f"STAN/stan_code/configs/{args.stan_type}.json")
-        with open(configs_path, "r") as file:
-            data = json.load(file)
-        data_config.K_train = data["datagen"]["K_train"]
-        data_config.K_val = data["datagen"]["K_val"]
-        data_config.K_test = data["datagen"]["K_test"]
-        data_config.I = data["datagen"]["I"]
-        data_config.J = data["datagen"]["J"]
-        data_config.C = data["datagen"]["C"]
+    data_config, mode = load_config(configs_path)
     print(f"Bundle mode: {mode}")
 
     # Stan type: CLI override > configs.json
@@ -556,8 +376,6 @@ def main():
     if args.override_D is not None:
         print(f"  Overriding D: {data_config.D} → {args.override_D}")
         data_config.D = args.override_D
-    if args.override_sigma_annotator is not None:
-        data_config.sigma_annotator = args.override_sigma_annotator
     if args.override_sigma_measurement is not None:
         data_config.sigma_measurement = args.override_sigma_measurement
     if args.override_alpha_dirichlet is not None:
@@ -603,10 +421,9 @@ def main():
     print(f"Missing total: {len(missing)}")
     print(f"Missing test:  {missing_test}")
     print(f"transductive_use_test_observed={args.transductive_use_test_observed}")
-    print(f"alpha_llm={args.alpha_llm}")
 
     # ── Resolve Stan file ──────────────────────────────────────────────────────
-    stan_file = args.stan_file or _DEFAULT_STAN_FILES[stan_type]
+    stan_file = args.stan_file or _TENSOR_MODEL_VARIANTS[args.model_variant]
 
     # ── Output directory ───────────────────────────────────────────────────────
     output_root = Path(args.output_dir)
@@ -635,7 +452,6 @@ def main():
         "seed":          args.seed,
         "adapt_delta":   args.adapt_delta,
         "max_treedepth": args.max_treedepth,
-        "alpha_llm":     args.alpha_llm,
         "n_observed":    len(observed),
         "n_missing":     len(missing),
         "n_llm":         n_llm,
@@ -657,7 +473,6 @@ def main():
         mode=mode,
         K=K,
         J=J,
-        alpha_llm=args.alpha_llm,
         stan_type=stan_type,
     )
     stan_data.update(stan_arg)

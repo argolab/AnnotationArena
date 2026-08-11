@@ -1,7 +1,7 @@
 /*
  * Tensor model HMC inference.
  *
- * Generative model (matched exactly to tensor_generation.stan):
+ * Generative model (matched exactly to tensor_generation_sigmoid.stan):
  *   z_ijk = sum_t alpha_jt * sigmoid(u_i + v_t + u_it) . e_k
  *
  * Noise model (use_dawid_skene_noise):

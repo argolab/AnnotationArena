@@ -1,9 +1,8 @@
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Set
 
-# -----------------------------------------------------------------------------
-# Stan data: all fields on DataGenConfig (see stan/docs/STAN_DATA_EXTRA.md)
-# -----------------------------------------------------------------------------
+# Config dataclasses for the tensor-prototype Stan model (see ../../README.md).
+# Only stan_type="tensor" is supported.
 
 # Core keys always present in Stan data (from config; not type-specific).
 CORE_STAN_KEYS: frozenset = frozenset({
@@ -15,22 +14,6 @@ CORE_STAN_KEYS: frozenset = frozenset({
 # set on the config (non-None). No other Stan-data field may be set for that type.
 # All values are passed from config into Stan data; there is no separate "extra" dict.
 STAN_TYPE_REQUIRED: Dict[str, Set[str]] = {
-    "discrete": {"M", "S", "sigma_measurement", "kappa", "temperature"},
-    "normal-noise-dot-product": {
-        "D", "d_annotator", "sigma_annotator", "sigma_measurement", "kappa", "temperature",
-        "use_factored_annotator", "derive_thresholds_from_annotator",
-    },
-    "factored-dot-product": {
-        "D", "d_annotator", "sigma_annotator", "sigma_measurement", "kappa", "temperature",
-        "use_factored_annotator", "derive_thresholds_from_annotator",
-    },
-    "dawid-skene": {
-        "D", "d_annotator", "sigma_annotator", "kappa", "temperature",
-        "use_factored_annotator", "derive_thresholds_from_annotator", "alpha_confusion",
-    },
-    "dawid-skene-true": {
-        "alpha_pi", "alpha_confusion_diag", "alpha_confusion_offdiag",
-    },
     "tensor": {
         "D",
         "T",
@@ -48,14 +31,9 @@ STAN_TYPE_REQUIRED: Dict[str, Set[str]] = {
 
 # All Stan-data field names that are type-specific (used for validation: only required set may be non-None).
 STAN_DATA_FIELDS: frozenset = frozenset({
-    "D", "M", "S", "sigma_annotator", "sigma_measurement", "kappa", "temperature",
-    "use_factored_annotator", "derive_thresholds_from_annotator", "d_annotator", "factor_decay",
-    # Tensor-only misspecification flags / loading distribution (old CP model; kept for compat).
-    "use_log_scores", "use_logistic_link", "use_normal_loadings",
-    # Dawid-Skene / tensor-prototype confusion prior.
+    "D", "sigma_measurement", "kappa", "temperature", "derive_thresholds_from_annotator",
+    # Tensor-prototype confusion prior.
     "alpha_confusion",
-    # True Dawid-Skene generation hyperparameters.
-    "alpha_pi", "alpha_confusion_diag", "alpha_confusion_offdiag",
     # Tensor-prototype model fields.
     "T", "sigma_u", "sigma_v", "sigma_uit", "use_dawid_skene_noise",
 })
@@ -117,25 +95,11 @@ class DataGenConfig:
 
     # --- Stan-data fields (all optional; exactly the set for stan_type must be set) ---
     D: Optional[int] = None
-    M: Optional[int] = None
-    S: Optional[int] = None
-    sigma_annotator: Optional[float] = None
     sigma_measurement: Optional[float] = None
     kappa: Optional[float] = None
     temperature: Optional[float] = None
-    use_factored_annotator: Optional[int] = None  # 0 or 1
     derive_thresholds_from_annotator: Optional[int] = None  # 0 or 1
-    d_annotator: Optional[int] = None
-    factor_decay: Optional[float] = None
-    alpha_confusion: Optional[float] = None  # Dawid-Skene / tensor-prototype confusion prior
-    alpha_pi: Optional[float] = None
-    alpha_confusion_diag: Optional[float] = None
-    alpha_confusion_offdiag: Optional[float] = None
-
-    # Old CP tensor misspecification flags (no longer required by any type; kept for compat).
-    use_log_scores: Optional[int] = None
-    use_logistic_link: Optional[int] = None
-    use_normal_loadings: Optional[int] = None
+    alpha_confusion: Optional[float] = None  # tensor-prototype confusion prior
 
     # Tensor-prototype model fields.
     T: Optional[int] = None                    # number of annotator prototypes (default 3)
@@ -151,7 +115,7 @@ class DataGenConfig:
 
     seed: Optional[int] = None
 
-    stan_type: str = "factored-dot-product"
+    stan_type: str = "tensor"
 
     def __post_init__(self) -> None:
         pass
@@ -180,23 +144,10 @@ class DataGenConfig:
         required = STAN_TYPE_REQUIRED[self.stan_type]
         for key in sorted(required):
             val = getattr(self, key)
-            if key in (
-                "use_factored_annotator",
-                "derive_thresholds_from_annotator",
-                "use_log_scores",
-                "use_logistic_link",
-                "use_normal_loadings",
-                "use_dawid_skene_noise",
-            ):
+            if key in ("derive_thresholds_from_annotator", "use_dawid_skene_noise"):
                 base[key] = int(val) if isinstance(val, (bool, int)) else val
             else:
                 base[key] = val
-
-        # Discrete Stan file still expects D and sigma_annotator for compatibility (not used in generation).
-        if self.stan_type == "discrete":
-            base.setdefault("D", 1)
-            base.setdefault("sigma_annotator", 0.1)
-        # (Old CP tensor set d_annotator=D here; tensor-prototype model has no d_annotator field.)
 
         return base
 
@@ -253,24 +204,18 @@ class AnnotatorSplitConfig:
 
     # --- Stan-data fields (same generative model as DataGenConfig) ---
     D: Optional[int] = None
-    d_annotator: Optional[int] = None
-    sigma_annotator: Optional[float] = None
     sigma_measurement: Optional[float] = None
     kappa: Optional[float] = None
     temperature: Optional[float] = None
-    use_factored_annotator: Optional[int] = None
     derive_thresholds_from_annotator: Optional[int] = None
 
-    # Tensor-prototype fields (used when stan_type="tensor")
+    # Tensor-prototype fields
     T: Optional[int] = None
     sigma_u: Optional[float] = None
     sigma_v: Optional[float] = None
     sigma_uit: Optional[float] = None
     use_dawid_skene_noise: Optional[int] = None
     alpha_confusion: Optional[float] = None
-    alpha_pi: Optional[float] = None
-    alpha_confusion_diag: Optional[float] = None
-    alpha_confusion_offdiag: Optional[float] = None
 
     # Observation protocol
     observation_protocol: str = "mcar"     # "mcar" is the only supported protocol
@@ -279,7 +224,7 @@ class AnnotatorSplitConfig:
     pairwise_cap_per_item: int = 10
 
     seed: Optional[int] = None
-    stan_type: str = "factored-dot-product"
+    stan_type: str = "tensor"
 
     @property
     def J(self) -> int:
@@ -297,51 +242,24 @@ class AnnotatorSplitConfig:
             "I": self.I,
             "C": self.C,
         }
-        if self.stan_type == "tensor":
-            for field in ("D", "T", "sigma_u", "sigma_v", "sigma_uit",
-                          "sigma_measurement", "kappa", "alpha_confusion",
-                          "temperature", "use_dawid_skene_noise",
-                          "derive_thresholds_from_annotator"):
-                if getattr(self, field) is None:
-                    raise ValueError(f"AnnotatorSplitConfig (tensor): {field!r} must be set")
-            base.update({
-                "D": self.D,
-                "T": self.T,
-                "sigma_u": self.sigma_u,
-                "sigma_v": self.sigma_v,
-                "sigma_uit": self.sigma_uit,
-                "sigma_measurement": self.sigma_measurement,
-                "kappa": self.kappa,
-                "alpha_confusion": self.alpha_confusion,
-                "temperature": self.temperature,
-                "use_dawid_skene_noise": int(self.use_dawid_skene_noise),
-                "derive_thresholds_from_annotator": int(self.derive_thresholds_from_annotator),
-                "num_annotate_annotator": 4,
-            })
-        elif self.stan_type == "dawid-skene-true":
-            for field in ("alpha_pi", "alpha_confusion_diag", "alpha_confusion_offdiag"):
-                if getattr(self, field) is None:
-                    raise ValueError(f"AnnotatorSplitConfig (dawid-skene-true): {field!r} must be set")
-            base.update({
-                "alpha_pi": self.alpha_pi,
-                "alpha_confusion_diag": self.alpha_confusion_diag,
-                "alpha_confusion_offdiag": self.alpha_confusion_offdiag,
-                "num_annotate_annotator": 4,
-            })
-        else:
-            for field in ("D", "d_annotator", "sigma_annotator", "sigma_measurement",
-                          "kappa", "temperature", "use_factored_annotator",
-                          "derive_thresholds_from_annotator"):
-                if getattr(self, field) is None:
-                    raise ValueError(f"AnnotatorSplitConfig: {field!r} must be set")
-            base.update({
-                "D": self.D,
-                "d_annotator": self.d_annotator,
-                "sigma_annotator": self.sigma_annotator,
-                "sigma_measurement": self.sigma_measurement,
-                "kappa": self.kappa,
-                "temperature": self.temperature,
-                "use_factored_annotator": int(self.use_factored_annotator),
-                "derive_thresholds_from_annotator": int(self.derive_thresholds_from_annotator),
-            })
+        for field in ("D", "T", "sigma_u", "sigma_v", "sigma_uit",
+                      "sigma_measurement", "kappa", "alpha_confusion",
+                      "temperature", "use_dawid_skene_noise",
+                      "derive_thresholds_from_annotator"):
+            if getattr(self, field) is None:
+                raise ValueError(f"AnnotatorSplitConfig (tensor): {field!r} must be set")
+        base.update({
+            "D": self.D,
+            "T": self.T,
+            "sigma_u": self.sigma_u,
+            "sigma_v": self.sigma_v,
+            "sigma_uit": self.sigma_uit,
+            "sigma_measurement": self.sigma_measurement,
+            "kappa": self.kappa,
+            "alpha_confusion": self.alpha_confusion,
+            "temperature": self.temperature,
+            "use_dawid_skene_noise": int(self.use_dawid_skene_noise),
+            "derive_thresholds_from_annotator": int(self.derive_thresholds_from_annotator),
+            "num_annotate_annotator": 4,
+        })
         return base

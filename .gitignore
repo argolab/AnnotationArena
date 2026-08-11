@@ -322,18 +322,10 @@ imputer/ranking/scripts/TESTING_SCRIPTS/
 imputer/ranking/BASELINES
 imputer/ranking/scripts/DATA-COVERTERS
 
-imputer/ranking/STAN/stan_models/shared_threshold_tensor_generation
-imputer/ranking/STAN/stan_models/shared_threshold_tensor_model
-imputer/ranking/STAN/stan_models/tensor_generation
-imputer/ranking/STAN/stan_models/tensor_shared_annotator_binning_raw_z
-imputer/ranking/STAN/stan_models/tensor_shared_annotator_projection_binning_raw_z
-imputer/ranking/STAN/stan_models/tensor_shared_annotator_projection.an
-
 imputer/ranking/DATA/STAN/DOMAIN3-OLD
 imputer/ranking/CLAUDE
 imputer/ranking/scripts/DOMAIN3-OLD/MarformerEmb
 imputer/ranking/DATA/STAN/DOMAIN3-SOFTPLUS
-imputer/ranking/STAN/stan_models/tensor_generation_softplus
+imputer/ranking/scripts/DOMAIN3-SIGMOID-PAPER
 
 Marformer-Paper
-imputer/ranking/STAN/stan_models/LEGACY
