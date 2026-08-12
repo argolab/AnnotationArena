@@ -6,7 +6,7 @@ import types
 
 @dataclass
 class RankingData:
-    """Enhanced structured representation with clear status tracking.
+    """A single rating or ranking observation, with explicit status tracking.
 
     All indices are 0-indexed for model consumption.
     Status encoding:
