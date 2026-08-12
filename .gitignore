@@ -4,6 +4,9 @@ imputer/ranking/test_data/
 # Claude orientation notes
 imputer/ranking/CLAUDE/
 
+# Superseded by imputer/ranking/imputer/README.md
+imputer/ranking/imputer/entity_mf/docs/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
