@@ -7,6 +7,26 @@ imputer/ranking/CLAUDE/
 # Superseded by imputer/ranking/imputer/README.md
 imputer/ranking/imputer/entity_mf/docs/
 
+# Paper plotting scripts, not used by scripts/DOMAIN3-SIGMOID or scripts/LLMRubric.
+# plot_domain3_generalization.py is excluded: DOMAIN3-SIGMOID/plot_domain3_sigmoid.py
+# and LLMRubric/plot_llmrubric_cpm_sigmoid.py both import it directly.
+imputer/ranking/scripts/utils/plot_ablations.py
+imputer/ranking/scripts/utils/plot_domain3_annot_generalization.py
+imputer/ranking/scripts/utils/plot_domain3_annot_results.py
+imputer/ranking/scripts/utils/plot_domain3_item_generalization.py
+imputer/ranking/scripts/utils/plot_domain3_item_results.py
+imputer/ranking/scripts/utils/plot_llmrubric_generalization.py
+imputer/ranking/scripts/utils/plot_marformer_test_loss_by_size.py
+imputer/ranking/scripts/utils/plot_realdata_calibration.py
+imputer/ranking/scripts/utils/plot_realdata_test_loss.py
+imputer/ranking/scripts/utils/plot_results.py
+imputer/ranking/scripts/utils/plot_sparse_factor_test_loss.py
+imputer/ranking/scripts/utils/plot_sparse_tensor_itemannot_test_loss.py
+imputer/ranking/scripts/utils/plot_sparse_tensor_test_loss.py
+imputer/ranking/scripts/utils/plot_stan_tensor_zscore_distributions.py
+imputer/ranking/scripts/utils/plot_talk_summeval.py
+imputer/ranking/scripts/utils/plot_talk.py
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
