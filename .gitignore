@@ -342,7 +342,9 @@ imputer/ranking/ARCHITECTURE
 imputer/ranking/RESULTS/
 imputer/ranking/scripts/TESTING_SCRIPTS/
 
-imputer/ranking/BASELINES
+# imputer/ranking/BASELINES -- un-ignored on branch 'patches': plot_domain3_sigmoid.py
+# imports BASELINES.structured_baselines, so ignoring it made the Domain 3
+# figures unreproducible from a fresh clone.
 imputer/ranking/scripts/DATA-COVERTERS
 
 imputer/ranking/DATA/STAN/DOMAIN3-OLD
@@ -352,3 +354,5 @@ imputer/ranking/DATA/STAN/DOMAIN3-SOFTPLUS
 imputer/ranking/scripts/DOMAIN3-SIGMOID-PAPER
 
 Marformer-Paper
+# RERUN experiment outputs (data, results, plots, logs are all per-run)
+RERUN/runs/
