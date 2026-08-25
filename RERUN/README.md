@@ -21,6 +21,7 @@ RERUN/
     stan_fit.sbatch
     marformer_eval.sbatch
     make_llmrubric_data.sh   (not a batch job; runs in seconds)
+  shared/DATA/          staged real input data, shared across runs (gitignored)
   submit_all.sh        submits the paper's full matrix, with dependencies
   make_figures.sh      the driver: results -> figures -> Overleaf names
   runs/<RUN_ID>/       one directory per rerun (DATA, RESULTS, PLOTS, logs,
@@ -120,6 +121,10 @@ exists only for Marformer, and it is what the `_clean_nt` figures show.
   directory is now tracked.
 - `imputer/ranking/scripts/convert-llm-rubric/` — the raw TSVs and converters
   that rebuild the LLM-Rubric bundles, also brought over on branch `patches`.
+- `RERUN/shared/DATA/LLM_RUBRIC/` (gitignored, 18 MB) — the original bundles
+  recovered from the old cluster, all ten sizes.
+  `jobs/make_llmrubric_data.sh --run-id ID` links them into a run; add
+  `--rebuild` to regenerate from the TSVs instead.
 
 ## Not covered here
 

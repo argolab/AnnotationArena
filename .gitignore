@@ -356,3 +356,5 @@ imputer/ranking/scripts/DOMAIN3-SIGMOID-PAPER
 Marformer-Paper
 # RERUN experiment outputs (data, results, plots, logs are all per-run)
 RERUN/runs/
+# Staged input data (LLM-Rubric bundles, 18M) -- real data, not generated here
+RERUN/shared/
