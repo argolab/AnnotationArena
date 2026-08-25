@@ -15,19 +15,33 @@ set -euo pipefail
 source "$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")/config/cluster.sh"
 
 RUN_ID=""
+REBUILD=false
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --run-id) RUN_ID="$2"; shift 2 ;;
-        -h|--help) echo "usage: $0 --run-id ID"; exit 0 ;;
+        --rebuild) REBUILD=true; shift ;;
+        -h|--help) echo "usage: $0 --run-id ID [--rebuild]"; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 1 ;;
     esac
 done
 [[ -n "${RUN_ID}" ]] || { echo "--run-id is required" >&2; exit 1; }
 
+# Prefer the real bundles if they have been staged. They came from the old
+# cluster and cover sizes 10/20/30/40/50/75/100/125/150/175; the converter
+# below only produces 10/50/100/150/175. Pass --rebuild to convert anyway.
+SHARED="${RERUN_DIR}/shared/DATA/LLM_RUBRIC"
+DEST="$(rerun_run_dir "${RUN_ID}")/DATA/LLM_RUBRIC"
+if [[ "${REBUILD}" != true && -d "${SHARED}" ]]; then
+    mkdir -p "$(dirname "${DEST}")"
+    ln -sfn "${SHARED}" "${DEST}"
+    echo "linked staged LLM-Rubric bundles -> ${DEST}"
+    ls "${DEST}" | sed 's/^/  /'
+    exit 0
+fi
+
 rerun_activate_env
 
 STAGING="${RANKING_ROOT}/DATA"
-DEST="$(rerun_run_dir "${RUN_ID}")/DATA/LLM_RUBRIC"
 
 if [[ -e "${STAGING}" && ! -L "${STAGING}" ]] && [[ -n "$(ls -A "${STAGING}" 2>/dev/null)" ]]; then
     echo "REFUSING: ${STAGING} already exists and is non-empty." >&2

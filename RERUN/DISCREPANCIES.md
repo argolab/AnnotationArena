@@ -135,10 +135,14 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
   `DATA/LLM_RUBRIC/LLMRubric_225_25_9_{10,50,100,150,175}/` deterministically
   (seed 42). Verified working. Wrapped as
   `RERUN/jobs/make_llmrubric_data.sh --run-id <ID>`.
-- **Remaining:** the old README lists sizes 20, 30, 40, 75 and 125 as available;
-  the converter's `TRAIN_SIZES` produces only 10/50/100/150/175. Extend that
-  list if the paper's curves need the intermediate points. Both sizes used by
-  the calibration figures (10 and 175) are covered.
+- **Update (2026-08-25, after the Globus re-transfer):** the original bundles
+  came back in `AA_new` — all ten sizes (10/20/30/40/50/75/100/125/150/175),
+  18 MB — and are now staged at `RERUN/shared/DATA/LLM_RUBRIC/`.
+  `make_llmrubric_data.sh` links those by default and only converts with
+  `--rebuild`. So the converter is a reproducibility path, not the only source.
+- **Remaining:** the converter's `TRAIN_SIZES` produces only 10/50/100/150/175,
+  so a from-scratch rebuild is missing 20/30/40/75/125. If the paper's real-data
+  curves use those points, extend that list so the two sources agree.
 
 ## D10 — LLM-Rubric Stan results path mismatch
 
