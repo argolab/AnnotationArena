@@ -126,11 +126,16 @@ class RelationalAttentionBlock(nn.Module):
             if self.use_pointer:
                 Q_ptr = Q_proj[..., D:]                            # [B, L, 3]
             K_full = self.K(x).view(B, L, H, kc).transpose(1, 2) # [B, H, L, kc]
-            Q_content = Q_full[..., :kc]                          # [B, H, L, kc]
-            Q_rel     = Q_full[..., kc:]                          # [B, H, L, R]
+            # Scale Q rather than the scores: the scores are [B, H, L, L]
+            # (135 MiB at B=5, L=1298), so dividing them is a full extra pass
+            # over the largest tensor in the block for a factor that is linear
+            # in Q anyway.
+            inv_scale = 1.0 / math.sqrt(hd)
+            Q_content = Q_full[..., :kc] * inv_scale              # [B, H, L, kc]
+            Q_rel     = Q_full[..., kc:] * inv_scale              # [B, H, L, R]
             content_scores = torch.matmul(Q_content, K_full.transpose(-2, -1))       # [B, H, L, L]
             rel_scores     = torch.einsum("bhir,ijr->bhij", Q_rel, edge_mask_f)      # [B, H, L, L]
-            scores = (content_scores + rel_scores) / math.sqrt(hd)
+            scores = content_scores + rel_scores
         else:
             # ── Shared-bias relational attention (old design) ───────────────────
             # Q: D -> D+R (+ 3 for pointer); K: D -> D; rel bias shared across heads
@@ -140,16 +145,18 @@ class RelationalAttentionBlock(nn.Module):
             if self.use_pointer:
                 Q_ptr = Q_proj[..., D+R:]                          # [B, L, 3]
             K_content = self.K(x)                                  # [B, L, D]
-            Qh = Q_content.view(B, L, H, hd).transpose(1, 2)     # [B, H, L, hd]
-            Kh = K_content.view(B, L, H, hd).transpose(1, 2)     # [B, H, L, hd]
-            content_scores = torch.matmul(Qh, Kh.transpose(-2, -1)) / math.sqrt(hd) # [B, H, L, L]
+            # Same reason as the per-head branch: fold the score scale into Q.
+            inv_scale = 1.0 / math.sqrt(hd)
+            Qh = Q_content.view(B, L, H, hd).transpose(1, 2) * inv_scale   # [B, H, L, hd]
+            Kh = K_content.view(B, L, H, hd).transpose(1, 2)               # [B, H, L, hd]
+            if self.scale_shared_rel:
+                Q_rel_shared = Q_rel_shared * inv_scale
+            content_scores = torch.matmul(Qh, Kh.transpose(-2, -1))        # [B, H, L, L]
             # Relational bias: [B, L, L] -> broadcast over heads [B, 1, L, L].
             # einsum rather than broadcast-multiply-then-sum: the latter
             # materialises a [B, L, L, R] intermediate (and its gradient), which
             # at L=1300, R=6 is 40 MiB per layer for a result that is 6.5 MiB.
             rel_scores = torch.einsum("bir,ijr->bij", Q_rel_shared, edge_mask_f).unsqueeze(1)
-            if self.scale_shared_rel:
-                rel_scores = rel_scores / math.sqrt(hd)
             scores = content_scores + rel_scores
 
         # ── Pointer bias (shared across heads) ─────────────────────────────────
@@ -483,8 +490,9 @@ class EntityMarformer(nn.Module):
             features = features.index_add(0, pos, dev)
 
         params = torch.where(gt.hidden.unsqueeze(-1), gt.mask_row, gt.param_obs)       # [L, P]
-        attn_mask = torch.ones(1, gt.num_tokens, dtype=torch.bool, device=device)
-        return features.unsqueeze(0), params.unsqueeze(0), attn_mask
+        # No padding: every token is real. Returning None instead of an all-true
+        # mask skips a masked_fill over the [B, H, L, L] score tensor per layer.
+        return features.unsqueeze(0), params.unsqueeze(0), None
 
     def _build_initial_streams_ref(
         self,
@@ -651,8 +659,7 @@ class EntityMarformer(nn.Module):
 
         hidden = gt.is_variable.unsqueeze(0) & (status != 2)                           # [B, L]
         params = torch.where(hidden.unsqueeze(-1), gt.mask_row, gt.param_obs)          # [B, L, P]
-        attn_mask = torch.ones(B, L, dtype=torch.bool, device=device)
-        return features, params, attn_mask
+        return features, params, None                                                  # no padding
 
     def _outer_residual_mode(self, layer_idx: int, num_blocks: int) -> str:
         """How this layer combines its projection with the outer stream.
@@ -690,7 +697,7 @@ class EntityMarformer(nn.Module):
         features: torch.Tensor,
         params: torch.Tensor,
         edge_mask: torch.Tensor,
-        attn_mask: torch.Tensor,
+        attn_mask: torch.Tensor | None,
         K_aug: torch.Tensor | None,
     ) -> torch.Tensor:
         """
