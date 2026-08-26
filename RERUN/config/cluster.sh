@@ -35,7 +35,14 @@ SBATCH_ACCEPT_COST="--comment=accept_cost"
 # Keep this a SINGLE partition. A comma-separated list makes most array tasks
 # come back "user env retrieval failed requeued held" on this cluster and they
 # have to be released by hand; one partition submits cleanly.
-GPU_PARTITION="${GPU_PARTITION:-l40s}"
+# h100, despite the benchmark below putting l40s marginally ahead. Two of the
+# l40s nodes threw "uncorrectable ECC error" mid-training on 2026-08-26 (gl110
+# killed a run outright, gl105 killed a smoke test), which matches the bad-ECC
+# l40s node the lingua-2 scripts already exclude. Since the job is CPU-bound the
+# GPU-class difference is ~13% and mostly node contention anyway, so stability
+# is the better trade. Keep this a SINGLE partition -- a comma-separated list
+# makes most array tasks come back held.
+GPU_PARTITION="${GPU_PARTITION:-h100}"
 CPU_PARTITION="${CPU_PARTITION:-med}"
 
 # Prefer plain --mem= : --mem-per-cpu is capped per partition on skipjack.
