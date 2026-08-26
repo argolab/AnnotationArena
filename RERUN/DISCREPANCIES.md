@@ -331,8 +331,21 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
   | 50 | 1.2231 | 0.4550 |
   | 225 / 500 | 1.3020 | 0.4444 |
 
-  So it is worth ~0.065 nats here — not catastrophic, but it is free accuracy
-  being thrown away, and it makes `best.json` not comparable to the figure.
+  At K=40 that is only ~0.065 nats, but **the error grows sharply with training
+  size**, because a larger training set means a larger single graph and so a
+  bigger departure from the 10-item graphs the model was trained on:
+
+  | K_train | eval @10 (trained) | eval @50 | eval @500 (`test.py`) | paper |
+  |---|---|---|---|---|
+  | 50  | **1.0494** | 1.0336 | 1.2798 | 1.050 |
+  | 175 | **0.9775** | 1.0751 | 1.7828 | 0.998 |
+
+  So `best.json` for LLM-Rubric is wrong by up to **0.8 nats** at K=175, and
+  wrong in a size-dependent way that would invert the trend if anyone plotted
+  it. The published figures are unaffected only because the plot script
+  re-scores at `max_item=10` — at which point the numbers match the paper
+  closely (1.0494 vs 1.050; 0.9775 vs 0.998). Checkpoint *selection*, however,
+  still uses the `max_item=500` numbers.
 - **To resolve:** read `max_item` from `train_config.json` in `test.py` instead
   of hardcoding, and use the same value on both sides. Related to D1, which is
   the same class of bug on the training side.
