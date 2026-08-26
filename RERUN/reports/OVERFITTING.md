@@ -235,17 +235,24 @@ directly — if we stop early, we are *not* stopping while the mean is still in
 error; we are stopping while the mean is still improving and the variance has
 already collapsed. The two are trading off against each other.
 
-The effect decays monotonically with training size, exactly as Jason
-predicted:
+The effect decays with training size, exactly as Jason predicted. All ten
+sizes, 300 epochs each:
 
-| K_train | min val log-loss | final val log-loss | inflation |
-|---|---|---|---|
-| 10 | 1.350 | 3.693 | **+2.343** |
-| 20 | 1.069 | 1.608 | +0.539 |
-| 30 | 1.002 | 1.536 | +0.534 |
-| 40 | 1.009 | 1.388 | +0.379 |
-| 50 | 1.064 | 1.250 | +0.186 |
-| 75 | 1.012 | 1.084 | +0.072 |
+| K_train | min val log-loss | epoch of min | final val log-loss | inflation |
+|---|---|---|---|---|
+| 10 | 1.350 | 71 | 3.693 | **+2.343** |
+| 20 | 1.069 | 83 | 1.608 | +0.539 |
+| 30 | 1.002 | 115 | 1.536 | +0.533 |
+| 40 | 1.009 | 121 | 1.388 | +0.379 |
+| 50 | 1.064 | 125 | 1.287 | +0.223 |
+| 75 | 1.012 | 99 | 1.236 | +0.224 |
+| 100 | 0.992 | 120 | 1.182 | +0.190 |
+| 125 | 1.022 | 155 | 1.114 | +0.093 |
+| 150 | 1.005 | 153 | 1.193 | +0.188 |
+| 175 | 1.052 | 174 | 1.190 | +0.138 |
+
+Note that the minimum sits around epoch 70-175 out of 300 at every size, so the
+last third of training is actively harmful on this dataset regardless of K.
 
 So the honest overall picture is:
 
@@ -259,6 +266,12 @@ So the honest overall picture is:
   comes from the validation-selected checkpoint, so the paper's 1.52 at
   K_train = 10 is roughly the epoch-71 minimum, not the epoch-300 value of 3.69
   the model actually ends at.
+
+This is not a replication artefact: the LLM-Rubric arm reproduces the paper's
+reported numbers closely once evaluated correctly (see the note on D20 below) --
+1.4743 vs 1.52 at K=10, 1.0494 vs 1.050 at K=50, 0.9775 vs 0.998 at K=175, with
+the Unigram baseline matching to three decimals. So the overfitting above is a
+property of the published setup, not of my rerun.
 
 That is worth stating plainly in the paper. As written, the methods section
 implies early stopping is a minor detail; on the real-data arm it is the
