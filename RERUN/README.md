@@ -36,7 +36,7 @@ cd RERUN
 # see what would be submitted, without submitting
 ./submit_all.sh --run-id baseline --dry-run
 
-# submit everything: data -> 35 Marformer tasks -> eval, plus 54 Stan tasks
+# submit everything: data -> 38 Marformer tasks -> eval, plus 54 Stan tasks
 ./submit_all.sh --run-id baseline
 
 # watch
@@ -64,7 +64,7 @@ reuses the generated data rather than regenerating it:
 
 | Model | Axis | Protocol | Sizes | Tasks |
 |---|---|---|---|---|
-| Marformer | item | transductive | 100…1000 by 100 | 10 |
+| Marformer | item | transductive | 100…1000 by 100, + 2000/3000/4000 | 13 |
 | Marformer | annot | transductive | 10…50 by 5 | 9 |
 | Marformer NT | item | non-transductive | 100…900 by 100 | 9 |
 | Marformer NT | annot | non-transductive | 10…40 by 5 | 7 |
@@ -73,7 +73,7 @@ reuses the generated data rather than regenerating it:
 | Stan Bin / Proj / Both | item | transductive | 100…500 by 100 | 5 each |
 | Stan Bin / Proj / Both | annot | transductive | 10…50 by 5 | 9 each |
 
-35 GPU tasks, 54 CPU tasks. Stan has no non-transductive arm — that comparison
+38 GPU tasks, 54 CPU tasks. Stan has no non-transductive arm — that comparison
 exists only for Marformer, and it is what the `_clean_nt` figures show.
 
 ## Where the knobs are
@@ -89,11 +89,56 @@ exists only for Marformer, and it is what the `_clean_nt` figures show.
 - **Which sizes to run**: the `MARFORMER_MATRIX` / `STAN_MATRIX` arrays at the
   top of `submit_all.sh`.
 
+## Reports
+
+- [reports/OVERFITTING.md](reports/OVERFITTING.md) — answer to Jason's thread:
+  where Marformer overfits, why it mostly does not on synthetic Domain 3, and
+  which split the reported numbers are actually selected on.
+- [reports/RESIDUAL_ABLATION.md](reports/RESIDUAL_ABLATION.md) — removing the
+  duplicated residual stream: `all` vs `not_last` vs `none`, 27 runs.
+
+## Analysis
+
+`analysis/` holds the post-hoc tooling, all of which reads a finished run:
+
+| script | what it answers |
+|---|---|
+| `overfitting_curves.py` | train / validation / test curves per run, plus a summary CSV |
+| `checkpoint_selection.py` | how much choosing the checkpoint on test flatters the numbers (D14) |
+| `ablation_summary.py` | residual-stream ablation, mean ± sd over seeds |
+
+## Extra stages and scripts
+
+Beyond the synthetic matrix:
+
+```bash
+./jobs/make_llmrubric_data.sh --run-id ID     # link the staged real bundles
+./submit_all.sh --run-id ID --stage llmrubric        # 10 sizes, real data
+./submit_all.sh --run-id ID --stage llmrubric-eval
+./submit_ablation.sh --run-id resid-01 --data-from replicate-01
+```
+
+`SUBSPLIT_ONLY=1` on `generate_data.sbatch` re-derives the splits from an
+existing base bundle without re-running HMC — useful for adding sizes.
+
 ## What changed versus the old scripts
 
 - `--comment=accept_cost` on every submission (skipjack rejects sbatch without it).
-- `h100` / `med` instead of `a100` / `cpu`; `--mem=` instead of `--mem-per-cpu=`
-  (which is capped per-partition here); `--exclude=c001` dropped.
+- `l40s` / `med` instead of `a100` / `cpu`; `--mem=` instead of `--mem-per-cpu=`
+  (which is capped per-partition here); `--exclude=c001` dropped in favour of
+  `--exclude=gh104`, whose GPUs torch cannot initialise.
+- **`l40s`, not `h100`.** Training is CPU-bound: measured over 20 epochs on
+  `Item_T_200`, l40s 23s / h100 26s / a100 30s, with the GPU ~90% idle
+  throughout. GPU class barely matters, so the default is whichever partition
+  is least contended. Multi-GPU would not help either — there is no batch
+  dimension to shard.
+- **`RERUN_CONF` travels in the environment, not in `--export`.** Any
+  `--export=ALL,VAR=value` is rejected by this cluster's slurmd with
+  `user env retrieval failed requeued held`, and `scontrol release` only makes
+  the job fail again. Plain `--export=ALL` works and carries exported vars.
+- **A GPU job that cannot see a GPU now fails.** The upstream runners silently
+  fall back to `--device cpu`, so a job that lost its GPU "succeeded" ~100x
+  slower with nothing in the results to say so. `REQUIRE_GPU=1` makes it fatal.
 - Logs and results go to this run's directory, not to a hardcoded
   `/home/psingh54/...` path.
 - The conda environment is activated **and verified**. The upstream
