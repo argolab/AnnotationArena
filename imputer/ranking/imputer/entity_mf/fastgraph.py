@@ -96,6 +96,13 @@ class GraphTensors:
         self.is_variable = is_variable.to(device)
 
         # Deviation lookups, one index tensor per type that has a table.
+        # Annotator id per token (-1 for entity tokens), for structured masking.
+        annot = torch.full((L,), -1, dtype=torch.long)
+        for i, tok in enumerate(tokens):
+            if tok.raw_data is not None:
+                annot[i] = int(tok.raw_data.get("annotator_id", -1))
+        self.annot_ids = annot.to(device)
+
         self.dev_positions: Dict[str, torch.Tensor] = {}
         self.dev_entity_ids: Dict[str, torch.Tensor] = {}
         for name in self.type_names:
@@ -197,6 +204,39 @@ class GraphTensors:
         rows = torch.arange(batch, device=self.device).unsqueeze(1).expand(batch, k)
         head = status[:, :n_maskable]
         head[rows.reshape(-1), pick.reshape(-1)] = 1
+        return status
+
+    def sample_status_structured(self, n_maskable: int, always_observed_ids,
+                                 human_observed_rate: float, batch: int) -> torch.Tensor:
+        """
+        Batched counterpart of StructuredMasking.mask.
+
+        Annotators in `always_observed_ids` stay observed; of the rest, exactly
+        floor(n_human * human_observed_rate) are kept observed per draw and the
+        remainder are masked. At human_observed_rate=0 -- the LLM-Rubric setting
+        -- there is nothing random left, so all `batch` rows are identical and
+        only the dropout differs between them.
+        """
+        L = self.num_tokens
+        status = self.base_status.unsqueeze(0).expand(batch, L).clone()
+        if n_maskable <= 0:
+            return status
+        always = torch.tensor(sorted(always_observed_ids), dtype=torch.long,
+                              device=self.device)
+        head_annot = self.annot_ids[:n_maskable]
+        is_human = ~torch.isin(head_annot, always)
+        hpos = is_human.nonzero(as_tuple=False).squeeze(-1)          # [n_human]
+        n_human = int(hpos.numel())
+        if n_human == 0:
+            return status
+        head = status[:, :n_maskable]
+        head[:, hpos] = 1
+        k_obs = int(n_human * human_observed_rate)
+        k_obs = max(0, min(n_human, k_obs))
+        if k_obs:
+            pick = torch.rand(batch, n_human, device=self.device).argsort(dim=1)[:, :k_obs]
+            rows = torch.arange(batch, device=self.device).unsqueeze(1).expand(batch, k_obs)
+            head[rows.reshape(-1), hpos[pick.reshape(-1)]] = 2
         return status
 
     @property
