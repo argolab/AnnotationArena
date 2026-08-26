@@ -189,8 +189,9 @@ fi
 # The real-data arm. Its bundles come from jobs/make_llmrubric_data.sh, not from
 # the synthetic generator, so this stage is deliberately not part of "all".
 #
-# Throttled with %3: submitting all ten at once reliably comes back
-# "user env retrieval failed requeued held" on this cluster.
+# No throttle needed: the "user env retrieval failed requeued held" state that
+# looked like an array-size problem was actually --export=ALL,VAR=value (see
+# submit()); with that fixed, all ten start concurrently.
 LLMRUBRIC_SIZES="10,20,30,40,50,75,100,125,150,175"
 
 if [[ "${STAGE}" == "llmrubric" ]]; then
@@ -198,7 +199,7 @@ if [[ "${STAGE}" == "llmrubric" ]]; then
     conf="$(write_conf "LLMR-Marformer" "RUN_ID=${RUN_ID}" "SIZES=${LLMRUBRIC_SIZES}")"
     jid="$(submit "LLMR-Marformer" "${conf}" -p "${GPU_PARTITION}" -c "${GPU_CPUS}" \
                   --mem="${GPU_MEM}" -t "${GPU_TIME}" ${EXCLUDE_ARG} \
-                  --array="0-$((n-1))%3" \
+                  --array="0-$((n-1))" \
                   "${RERUN_DIR}/jobs/llmrubric_train.sbatch")"
     echo "llmrubric : Marformer (${n} tasks) job ${jid}"
     LLMR_TRAIN_JOB="${jid}"
@@ -209,7 +210,7 @@ if [[ "${STAGE}" == "llmrubric-eval" ]]; then
     conf="$(write_conf "LLMR-EVAL" "RUN_ID=${RUN_ID}" "SIZES=${LLMRUBRIC_SIZES}")"
     jid="$(submit "LLMR-EVAL" "${conf}" -p "${GPU_PARTITION}" -c "${GPU_CPUS}" \
                   --mem="${GPU_MEM}" -t "${GPU_TIME}" ${EXCLUDE_ARG} \
-                  --array="0-$((n-1))%3" \
+                  --array="0-$((n-1))" \
                   "${RERUN_DIR}/jobs/llmrubric_eval.sbatch")"
     echo "llmr-eval : ${n} tasks job ${jid}"
 fi
