@@ -95,26 +95,52 @@ class RelationalAttentionBlock(nn.Module):
 
         self.dropout = nn.Dropout(dropout)
 
+    def _rel_bias(self, Q_rel: torch.Tensor, edge_flat: torch.Tensor,
+                  edge_rel: torch.Tensor, L: int) -> torch.Tensor:
+        """
+        Relational score bias from the sparse edge list.
+
+        bias[..., i, j] = sum_r Q_rel[..., i, r] * edge_mask[i, j, r], computed
+        by gathering one value per edge and scattering it into a [..., L*L]
+        accumulator. Duplicate (i, j) pairs under different relations
+        accumulate, which is what the dense contraction did too.
+
+        Q_rel is [B, L, R] (shared bias) or [B, H, L, R] (per-head); the leading
+        dimensions are flattened so one code path covers both.
+        """
+        lead = Q_rel.shape[:-2]
+        q = Q_rel.reshape(-1, L, Q_rel.shape[-1])                  # [N, L, R]
+        src = edge_flat // L
+        vals = q[:, src, edge_rel]                                 # [N, nnz]
+        out = torch.zeros(q.shape[0], L * L, device=q.device, dtype=q.dtype)
+        out = out.index_add(1, edge_flat, vals)
+        return out.view(*lead, L, L)
+
     def forward(
         self,
         x: torch.Tensor,
-        edge_mask: torch.Tensor,
+        edge_flat: torch.Tensor,
+        edge_rel: torch.Tensor,
         attn_mask: torch.Tensor | None = None,
         K_aug: torch.Tensor | None = None,
+        edge_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Args:
             x:         [B, L, D] combined feature+param representation.
-            edge_mask: [L, L, R] binary edge indicators.
-            attn_mask: [B, L] bool mask for valid tokens.
-            K_aug:     [L, L, 3] obs-obs shared-identity indicators (optional, for pointer).
+            edge_flat: [nnz] long, src * L + tgt for each edge.
+            edge_rel:  [nnz] long, relation index for each edge.
+            attn_mask: [B, L] bool mask for valid tokens, or None if nothing is padded.
+            K_aug:     [3, L, L] obs-obs shared-identity indicators (optional, for pointer).
+            edge_mask: dense [L, L, R], only needed by use_rel_value / use_graph_mask.
         """
         B, L, D = x.shape
         H = self.num_heads
         R = self.num_relationships
         hd = self.head_dim
         kc = self.k_content_dim
-        edge_mask_f = edge_mask.to(x.dtype)                        # [L, L, R]
+        if edge_mask is not None:
+            edge_mask_f = edge_mask.to(x.dtype)                    # [L, L, R]
 
         V_base = self.V(x).view(B, L, H, hd).transpose(1, 2)     # [B, H, L, hd]
 
@@ -134,7 +160,7 @@ class RelationalAttentionBlock(nn.Module):
             Q_content = Q_full[..., :kc] * inv_scale              # [B, H, L, kc]
             Q_rel     = Q_full[..., kc:] * inv_scale              # [B, H, L, R]
             content_scores = torch.matmul(Q_content, K_full.transpose(-2, -1))       # [B, H, L, L]
-            rel_scores     = torch.einsum("bhir,ijr->bhij", Q_rel, edge_mask_f)      # [B, H, L, L]
+            rel_scores     = self._rel_bias(Q_rel, edge_flat, edge_rel, L)           # [B, H, L, L]
             scores = content_scores + rel_scores
         else:
             # ── Shared-bias relational attention (old design) ───────────────────
@@ -156,21 +182,25 @@ class RelationalAttentionBlock(nn.Module):
             # einsum rather than broadcast-multiply-then-sum: the latter
             # materialises a [B, L, L, R] intermediate (and its gradient), which
             # at L=1300, R=6 is 40 MiB per layer for a result that is 6.5 MiB.
-            rel_scores = torch.einsum("bir,ijr->bij", Q_rel_shared, edge_mask_f).unsqueeze(1)
+            rel_scores = self._rel_bias(Q_rel_shared, edge_flat, edge_rel, L).unsqueeze(1)
             scores = content_scores + rel_scores
 
         # ── Pointer bias (shared across heads) ─────────────────────────────────
         if self.use_pointer and K_aug is not None:
             # Q_ptr: [B, L, 3], K_aug: [L, L, 3]
-            # Same [B, L, L, 3] intermediate to avoid as in the relational bias.
-            ptr_bias = torch.einsum("bip,ijp->bij", Q_ptr, K_aug.to(Q_ptr.dtype))  # [B, L, L]
+            # Three scaled planes rather than a contraction: Q_ptr[..., p] is
+            # [B, L, 1] and broadcasts against K_aug[p], which is [L, L].
+            K = K_aug.to(Q_ptr.dtype)
+            ptr_bias = (Q_ptr[..., 0:1] * K[0]
+                        + Q_ptr[..., 1:2] * K[1]
+                        + Q_ptr[..., 2:3] * K[2])                  # [B, L, L]
             scores = scores + ptr_bias.unsqueeze(1)                        # broadcast over H
 
         # ── Graph mask (hard): allow only edge_mask + K_aug + self ─────────────
         if self.use_graph_mask:
             graph_mask = edge_mask.any(dim=-1)                                   # [L, L]
             if K_aug is not None:
-                graph_mask = graph_mask | K_aug.any(dim=-1)                      # [L, L]
+                graph_mask = graph_mask | K_aug.any(dim=0).bool()                # [L, L]
             graph_mask = graph_mask | torch.eye(L, dtype=torch.bool, device=x.device)
             scores = scores.masked_fill(~graph_mask[None, None], torch.finfo(scores.dtype).min)
 
@@ -445,8 +475,21 @@ class EntityMarformer(nn.Module):
             use_graph_mask=config.use_graph_mask,
         )
 
+    def _dense_edge_mask(self, graph: EntityGraph, device: torch.device) -> "torch.Tensor | None":
+        """
+        The [L, L, R] mask, built only for the features that still need it.
+
+        The relational bias now reads the sparse edge list, so with rel_value
+        and graph_mask off -- the shipped Domain 3 and LLM-Rubric settings --
+        this tensor is never touched, and it is 365 MiB per cached graph at
+        L=3900, R=6.
+        """
+        if self.use_rel_value or self.config.use_graph_mask:
+            return graph.build_edge_masks(device=device)
+        return None
+
     def _get_k_aug(self, graph: EntityGraph, device: torch.device) -> "torch.Tensor | None":
-        """Build (and cache) the [L, L, 3] obs-obs shared-identity K_aug tensor."""
+        """Build (and cache) the [3, L, L] obs-obs shared-identity K_aug tensor."""
         if not self.use_pointer:
             return None
         dev_key = str(device)
@@ -467,8 +510,12 @@ class EntityMarformer(nn.Module):
                 valid = (ids >= 0).float()
                 return eq * valid.unsqueeze(0) * valid.unsqueeze(1)
 
+            # [3, L, L], not [L, L, 3]. Contracting the trailing 3 against
+            # Q_ptr's trailing 3 lands in cuBLAS gemvx at ~0.9 ms a call (18% of
+            # GPU time at L=3900) because the reduction axis has stride 3. With
+            # the planes separated it is three broadcast multiplies instead.
             graph._k_aug_cache[dev_key] = torch.stack(
-                [_same(attr_ids), _same(annot_ids), _same(item_ids)], dim=-1
+                [_same(attr_ids), _same(annot_ids), _same(item_ids)], dim=0
             )
         return graph._k_aug_cache[dev_key]
 
@@ -646,9 +693,10 @@ class EntityMarformer(nn.Module):
             raise NotImplementedError("forward_batched only covers the dual-stream path")
 
         features, params, attn_mask = self._build_initial_streams_batched(graph, status, device)
-        edge_mask = graph.build_edge_masks(device=device)
+        edge_flat, edge_rel = graph.build_edge_index(device)
+        edge_mask = self._dense_edge_mask(graph, device)
         K_aug = self._get_k_aug(graph, device)
-        return self._run_blocks(features, params, edge_mask, attn_mask, K_aug)
+        return self._run_blocks(features, params, edge_flat, edge_rel, attn_mask, K_aug, edge_mask)
 
     def _build_initial_streams_batched(
         self,
@@ -708,17 +756,20 @@ class EntityMarformer(nn.Module):
     def _forward_dual(self, graph: EntityGraph, device: torch.device) -> torch.Tensor:
         """Dual-stream forward pass (original architecture)."""
         features, params, attn_mask = self._build_initial_streams(graph, device=device)
-        edge_mask = graph.build_edge_masks(device=device)
+        edge_flat, edge_rel = graph.build_edge_index(device)
+        edge_mask = self._dense_edge_mask(graph, device)
         K_aug = self._get_k_aug(graph, device)
-        return self._run_blocks(features, params, edge_mask, attn_mask, K_aug)
+        return self._run_blocks(features, params, edge_flat, edge_rel, attn_mask, K_aug, edge_mask)
 
     def _dual_blocks(
         self,
         features: torch.Tensor,
         params: torch.Tensor,
-        edge_mask: torch.Tensor,
+        edge_flat: torch.Tensor,
+        edge_rel: torch.Tensor,
         attn_mask: torch.Tensor | None,
         K_aug: torch.Tensor | None,
+        edge_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         The block stack, as a pure tensor -> tensor function.
@@ -735,7 +786,8 @@ class EntityMarformer(nn.Module):
             # a serial attention -> FFN composition, leaving the outer add as the
             # only skip connection.
             normed_attn = block["norm_1"](combined)
-            attn_out    = block["attn"](normed_attn, edge_mask=edge_mask, attn_mask=attn_mask, K_aug=K_aug)
+            attn_out    = block["attn"](normed_attn, edge_flat=edge_flat, edge_rel=edge_rel,
+                                        attn_mask=attn_mask, K_aug=K_aug, edge_mask=edge_mask)
             combined    = combined + attn_out if self.inner_residual == "both" else attn_out
 
             normed_ff = block["norm_2"](combined)
@@ -774,11 +826,14 @@ class EntityMarformer(nn.Module):
     def _forward_emb(self, graph: EntityGraph, device: torch.device) -> torch.Tensor:
         """Embedding/unembedding forward pass (single residual stream)."""
         x, attn_mask = self._build_initial_emb_stream(graph, device=device)
-        edge_mask    = graph.build_edge_masks(device=device)
+        edge_flat, edge_rel = graph.build_edge_index(device)
+        edge_mask    = self._dense_edge_mask(graph, device)
         K_aug        = self._get_k_aug(graph, device)
 
         for block in self.emb_blocks:
-            x = x + block["dropout"](block["attn"](block["norm_1"](x), edge_mask=edge_mask, attn_mask=attn_mask, K_aug=K_aug))
+            x = x + block["dropout"](block["attn"](
+                block["norm_1"](x), edge_flat=edge_flat, edge_rel=edge_rel,
+                attn_mask=attn_mask, K_aug=K_aug, edge_mask=edge_mask))
             x = x + block["dropout"](block["ff"](block["norm_2"](x)))
 
         # Unembed: apply per-type linear to each token's residual to recover param vectors.
