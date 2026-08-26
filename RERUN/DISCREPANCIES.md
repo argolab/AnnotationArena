@@ -308,6 +308,35 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
   items, so the large sizes are subsets of it — `SUBSPLIT_ONLY=1` re-derives
   the splits from an existing base without re-running HMC.
 
+## D20 — `test.py` evaluates at a hardcoded `max_item=500`, ignoring the trained value
+
+- **Status:** open
+- **Affects:** every reported Marformer number, and LLM-Rubric especially
+- **Detail:** `imputer/entity_mf/test.py:238` passes `max_item=500` literally,
+  regardless of what the run trained with (`train_config.json ->
+  training.max_item`). Domain 3 synthetic trains at 300; LLM-Rubric trains at
+  **10**. So a model trained on 10-item graphs is scored on a 225-item graph.
+- **And the two sides of the pipeline disagree.**
+  `plot_llmrubric_cpm_sigmoid.py::_marformer_probs_and_labels` re-scores with
+  `max_item=10`, matching training. So the *checkpoint* is selected using
+  `max_item=500` metrics from `test.py`, and the *number that gets plotted* is
+  then recomputed at `max_item=10`. Selection and reporting use different graph
+  constructions.
+- **Measured** (LLM-Rubric K=40, `periodic-epoch=0024.ckpt`):
+
+  | eval `max_item` | test log-loss | accuracy |
+  |---|---|---|
+  | 10 (trained value) | 1.2373 | 0.4099 |
+  | 25 | 1.2268 | 0.4099 |
+  | 50 | 1.2231 | 0.4550 |
+  | 225 / 500 | 1.3020 | 0.4444 |
+
+  So it is worth ~0.065 nats here — not catastrophic, but it is free accuracy
+  being thrown away, and it makes `best.json` not comparable to the figure.
+- **To resolve:** read `max_item` from `train_config.json` in `test.py` instead
+  of hardcoding, and use the same value on both sides. Related to D1, which is
+  the same class of bug on the training side.
+
 ---
 
 ## How to add an entry
