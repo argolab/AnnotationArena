@@ -48,6 +48,17 @@ SPLIT="LLMRubric_225_25_9_${SIZE}"
     exit 1
 }
 
+# Lightning versions rather than overwrites existing checkpoints, so a
+# resubmission into a directory that already holds a (possibly cancelled) run
+# leaves best-*.ckpt / last-v1.ckpt from both. test.py then picks
+# sorted(glob("best-*.ckpt"))[0] -- the earliest, which may be from the dead
+# run. Start from a clean directory instead.
+TARGET="${OUTPUT_ROOT}/${SPLIT}"
+if [[ -d "${TARGET}" ]]; then
+    echo "removing previous run at ${TARGET}"
+    rm -rf "${TARGET}"
+fi
+
 echo "=============================================================="
 echo " LLM-Rubric | Marformer | size=${SIZE}"
 echo " DATA   : ${DATA_ROOT}/${SPLIT}"
