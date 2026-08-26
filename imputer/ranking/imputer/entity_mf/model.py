@@ -266,6 +266,17 @@ class EntityMarformer(nn.Module):
         self.use_param_output_head = config.use_param_output_head
         self.use_embed_unembed = config.use_embed_unembed
         self.dual_outer_residual = getattr(config, "dual_outer_residual", "all")
+        self.inner_residual = getattr(config, "inner_residual", "both")
+        if self.inner_residual not in ("both", "ff_only", "none"):
+            raise ValueError(
+                f"Unknown inner_residual: {self.inner_residual!r}. "
+                "Choose 'both', 'ff_only', or 'none'."
+            )
+        if self.inner_residual == "none" and self.dual_outer_residual == "none":
+            raise ValueError(
+                "inner_residual='none' with dual_outer_residual='none' leaves the "
+                "block with no skip connection at all."
+            )
 
         # Global param dim = max over types.
         self.global_param_dim = max(t.param_dim for t in types.values())
@@ -514,17 +525,27 @@ class EntityMarformer(nn.Module):
             return self._forward_emb(graph, device)
         return self._forward_dual(graph, device)
 
-    def _skip_outer_residual(self, layer_idx: int, num_blocks: int) -> bool:
-        """Whether this layer emits only the rotated part, with no outer residual add."""
+    def _outer_residual_mode(self, layer_idx: int, num_blocks: int) -> str:
+        """How this layer combines its projection with the outer stream.
+
+        Returns "add_h" (baseline outer residual), "replace" (rotated part only),
+        or "add_c" (identity folded into the projection).
+        """
         mode = self.dual_outer_residual
+        is_last = layer_idx == num_blocks - 1
         if mode == "all":
-            return False
+            return "add_h"
         if mode == "none":
-            return True
+            return "replace"
         if mode == "not_last":
-            return layer_idx == num_blocks - 1
+            return "replace" if is_last else "add_h"
+        if mode == "none_id":
+            return "add_c"
+        if mode == "not_last_id":
+            return "add_c" if is_last else "add_h"
         raise ValueError(
-            f"Unknown dual_outer_residual: {mode!r}. Choose 'all', 'not_last', or 'none'."
+            f"Unknown dual_outer_residual: {mode!r}. Choose 'all', 'not_last', "
+            "'none', 'none_id', or 'not_last_id'."
         )
 
     def _forward_dual(self, graph: EntityGraph, device: torch.device) -> torch.Tensor:
@@ -536,13 +557,17 @@ class EntityMarformer(nn.Module):
         combined = torch.cat([features, params], dim=-1)  # [1, L, model_dim]
         num_blocks = len(self.blocks)
         for layer_idx, block in enumerate(self.blocks):
+            # Inner residual stream. "both" is the shipped architecture; dropping
+            # these adds turns the block into a single residual unit whose body is
+            # a serial attention -> FFN composition, leaving the outer add as the
+            # only skip connection.
             normed_attn = block["norm_1"](combined)
             attn_out    = block["attn"](normed_attn, edge_mask=edge_mask, attn_mask=attn_mask, K_aug=K_aug)
-            combined    = combined + attn_out
+            combined    = combined + attn_out if self.inner_residual == "both" else attn_out
 
             normed_ff = block["norm_2"](combined)
             z_ff      = block["ff"](normed_ff)
-            combined  = combined + z_ff
+            combined  = combined + z_ff if self.inner_residual in ("both", "ff_only") else z_ff
 
             # Outer residual. `combined` already carries an inner residual stream, so
             # adding proj_out/W_param back onto features/params gives a second, parallel
@@ -550,11 +575,23 @@ class EntityMarformer(nn.Module):
             # layers keep that outer add; dropping it leaves only the rotated part.
             feat_update  = block["dropout_2"](block["proj_out"](combined))
             param_update = block["dropout_2"](block["W_param"](combined))
-            if self._skip_outer_residual(layer_idx, num_blocks):
-                features, params = feat_update, param_update
-            else:
+            mode = self._outer_residual_mode(layer_idx, num_blocks)
+            if mode == "add_h":
+                # Baseline: add onto the stream as it entered the layer.
                 features = features + feat_update
                 params   = params   + param_update
+            elif mode == "replace":
+                # Only the rotated part survives; no identity path across layers.
+                features, params = feat_update, param_update
+            else:  # "add_c" -- identity folded into [W1; W2]
+                # h' = c + [W1; W2] c, i.e. the stacked projection is (I + M')
+                # rather than M'. Same single-stream shape as "replace", but the
+                # identity path is restored -- and unlike "add_h" the attention
+                # and FFN output reaches the next layer unmultiplied. Weight
+                # decay now pulls M' toward 0, which means toward the identity
+                # layer, instead of toward the zero map.
+                features = combined[..., : self.feature_dim] + feat_update
+                params   = combined[..., self.feature_dim :] + param_update
             combined = torch.cat([features, params], dim=-1)
 
         if self.use_param_output_head:

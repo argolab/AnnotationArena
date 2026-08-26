@@ -114,6 +114,9 @@ MAX_ITEM="${DOMAIN3_MAX_ITEM:-100}"
 # "all" is the shipped architecture; "not_last" / "none" are the residual-stream
 # ablation. Overridable so the ablation does not need its own runner.
 DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
+# Residual adds inside the block: both | ff_only | none. "none" leaves the outer
+# add as the only skip connection.
+INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
 ITEM_DROPOUT_RATE=1.0
 ANNOTATOR_DROPOUT_RATE=0.0
 ITEM_REG_WEIGHT=0.0
@@ -253,6 +256,7 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
         --attribute-reg-weight   "${ATTRIBUTE_REG_WEIGHT}" \
         --annotator-reg-weight   "${ANNOTATOR_REG_WEIGHT}" \
         --dual-outer-residual    "${DUAL_OUTER_RESIDUAL}"    \
+        --inner-residual         "${INNER_RESIDUAL}"        \
         ${TRANSDUCTIVE_FLAG}                               \
         ${PER_HEAD_FLAG}                                   \
         ${SCALE_FLAG}                                      \
@@ -279,6 +283,7 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
   "elapsed_seconds": ${RUN_ELAPSED},
   "hyperparameters": {
     "dual_outer_residual": "${DUAL_OUTER_RESIDUAL}",
+    "inner_residual": "${INNER_RESIDUAL}",
     "seed": ${SEED},
     "embedding_dim": ${EMBEDDING_DIM},
     "num_layers": ${NUM_LAYERS},

@@ -70,6 +70,7 @@ export DOMAIN3_EXP_PREFIX="domain3_sigmoid"
 export DOMAIN3_MAX_ITEM="${DOMAIN3_MAX_ITEM:-300}"   # see FIGURES.md discrepancy #1
 # Architecture / optimisation knobs the ablations vary; defaults reproduce the paper.
 export DOMAIN3_DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
+export DOMAIN3_INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
 export DOMAIN3_SEED="${DOMAIN3_SEED:-42}"
 mkdir -p "${OUTPUT_ROOT}"
 
@@ -84,6 +85,7 @@ echo " OUTPUT_ROOT : ${OUTPUT_ROOT}"
 echo " DATA_ROOT   : ${DOMAIN3_DATA_ROOT}"
 echo " MAX_ITEM    : ${DOMAIN3_MAX_ITEM}"
 echo " RESIDUAL    : ${DOMAIN3_DUAL_OUTER_RESIDUAL}"
+echo " INNER RESID : ${DOMAIN3_INNER_RESIDUAL}"
 echo " SEED        : ${DOMAIN3_SEED}"
 echo "=============================================================="
 

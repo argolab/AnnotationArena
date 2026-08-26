@@ -79,6 +79,7 @@ def _reconstruct(run_dir: Path) -> tuple:
     config.num_ffn_layers       = mcfg["num_ffn_layers"]
     config.dropout              = mcfg["dropout"]
     config.dual_outer_residual  = mcfg.get("dual_outer_residual", "all")
+    config.inner_residual       = mcfg.get("inner_residual", "both")
     config.use_per_head_rel     = mcfg["use_per_head_rel"]
     config.use_pointer          = mcfg["use_pointer"]
     config.use_rel_value        = mcfg["use_rel_value"]

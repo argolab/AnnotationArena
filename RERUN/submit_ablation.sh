@@ -26,6 +26,9 @@ EXCLUDE_ARG=""
 RUN_ID=""
 DATA_FROM=""
 VARIANTS="all,not_last,none"
+# Residual adds inside the block, swept alongside the outer variants. A cell is
+# named <outer>+<inner>; INNER_RESIDUAL="both" reproduces the shipped block.
+INNER_RESIDUALS="both"
 SIZES="100,300,500"
 SEEDS="42,43,44"
 AXIS="item"
@@ -35,7 +38,9 @@ DRY_RUN=false
 usage() {
     cat <<EOF
 usage: $0 --run-id ID --data-from ID [options]
-  --variants   comma list of all|not_last|none   (default: ${VARIANTS})
+  --variants   comma list of all|not_last|none|none_id|not_last_id
+                                                 (default: ${VARIANTS})
+  --inner      comma list of both|ff_only|none   (default: ${INNER_RESIDUALS})
   --sizes      comma list of training sizes      (default: ${SIZES})
   --seeds      comma list of seeds               (default: ${SEEDS})
   --axis       item | annot                      (default: ${AXIS})
@@ -49,6 +54,7 @@ while [[ $# -gt 0 ]]; do
         --run-id)    RUN_ID="$2"; shift 2 ;;
         --data-from) DATA_FROM="$2"; shift 2 ;;
         --variants)  VARIANTS="$2"; shift 2 ;;
+        --inner)     INNER_RESIDUALS="$2"; shift 2 ;;
         --sizes)     SIZES="$2"; shift 2 ;;
         --seeds)     SEEDS="$2"; shift 2 ;;
         --axis)      AXIS="$2"; shift 2 ;;
@@ -72,14 +78,23 @@ mkdir -p "${LOG_DIR}" "${CONF_DIR}"
 IFS=',' read -r -a SIZE_LIST    <<< "${SIZES}"
 IFS=',' read -r -a SEED_LIST    <<< "${SEEDS}"
 IFS=',' read -r -a VARIANT_LIST <<< "${VARIANTS}"
+IFS=',' read -r -a INNER_LIST   <<< "${INNER_RESIDUALS}"
 
-echo "ablation  : ${#VARIANT_LIST[@]} variants x ${#SIZE_LIST[@]} sizes x ${#SEED_LIST[@]} seeds"
+echo "ablation  : ${#VARIANT_LIST[@]} outer x ${#INNER_LIST[@]} inner x ${#SIZE_LIST[@]} sizes x ${#SEED_LIST[@]} seeds"
 echo "data from : ${DATA_DIR}"
 echo
 
 for variant in "${VARIANT_LIST[@]}"; do
+  for inner in "${INNER_LIST[@]}"; do
     for seed in "${SEED_LIST[@]}"; do
-        name="ABL-${variant}-s${seed}"
+        # "both" is the shipped inner block, so leave those cells named by the
+        # outer variant alone -- that keeps resid-01's paths valid.
+        if [[ "${inner}" == "both" ]]; then
+            cell="${variant}"
+        else
+            cell="${variant}+inner_${inner}"
+        fi
+        name="ABL-${cell}-s${seed}"
         conf="${CONF_DIR}/${name}.env"
         {
             printf '%s=%q\n' RUN_ID "${RUN_ID}"
@@ -88,8 +103,9 @@ for variant in "${VARIANT_LIST[@]}"; do
             printf '%s=%q\n' AXIS "${AXIS}"
             printf '%s=%q\n' PROTOCOL "${PROTOCOL}"
             printf '%s=%q\n' SIZES "${SIZES}"
-            printf '%s=%q\n' VARIANT_TAG "${variant}/seed${seed}"
+            printf '%s=%q\n' VARIANT_TAG "${cell}/seed${seed}"
             printf '%s=%q\n' DOMAIN3_DUAL_OUTER_RESIDUAL "${variant}"
+            printf '%s=%q\n' DOMAIN3_INNER_RESIDUAL "${inner}"
             printf '%s=%q\n' DOMAIN3_SEED "${seed}"
         } > "${conf}"
 
@@ -111,6 +127,7 @@ for variant in "${VARIANT_LIST[@]}"; do
             echo "  ${name}: ${#SIZE_LIST[@]} tasks -> job ${jid}"
         fi
     done
+  done
 done
 
 echo
