@@ -11,6 +11,7 @@ from imputer.transformer import NormLayer, FeedForward
 
 from .config import EntityMarformerConfig
 from .data import EntityGraph
+from .fastgraph import graph_tensors
 from .types import EntityType
 
 
@@ -427,11 +428,47 @@ class EntityMarformer(nn.Module):
         """
         Build initial feature and param streams from the EntityGraph (dual-stream path).
 
+        Everything here except `status` is fixed by the graph topology, so it is
+        precomputed once per graph by GraphTensors and this becomes a handful of
+        gathers. See _build_initial_streams_ref for the original per-token loop;
+        test_equiv.py asserts the two agree.
+
         Returns:
             features:  [1, L, feature_dim]
             params:    [1, L, param_dim]
             attn_mask: [1, L]
         """
+        gt = graph_tensors(graph, self.types, self.param_dim, device)
+        gt.refresh(graph)
+
+        type_mat = torch.cat([self.type_embeddings[n] for n in gt.type_names], dim=0)  # [T, F]
+        features = type_mat.index_select(0, gt.type_ids)                               # [L, F]
+
+        for name, pos in gt.dev_positions.items():
+            table = self.deviation_tables.get(name, None)
+            if table is None:
+                continue
+            variation = self.types[name].variation
+            dev = table.index_select(0, gt.dev_entity_ids[name])                       # [M, F]
+            if self.training and variation.dropout_rate > 0:
+                # One independent Bernoulli draw per token, as in the reference
+                # loop -- but as a single kernel instead of M `.item()` syncs.
+                keep = (torch.rand(dev.shape[0], 1, device=device) >= variation.dropout_rate)
+                dev = dev * keep.to(dev.dtype)
+            if self.config.use_deviation_norm:
+                dev = self.deviation_norm(dev)
+            features = features.index_add(0, pos, dev)
+
+        params = torch.where(gt.hidden.unsqueeze(-1), gt.mask_row, gt.param_obs)       # [L, P]
+        attn_mask = torch.ones(1, gt.num_tokens, dtype=torch.bool, device=device)
+        return features.unsqueeze(0), params.unsqueeze(0), attn_mask
+
+    def _build_initial_streams_ref(
+        self,
+        graph: EntityGraph,
+        device: torch.device,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Original per-token implementation. Kept as the equivalence reference."""
         L = graph.num_tokens
         features = torch.zeros(1, L, self.feature_dim, device=device)
         params   = torch.zeros(1, L, self.param_dim,   device=device)

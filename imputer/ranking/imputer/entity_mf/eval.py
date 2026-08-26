@@ -4,11 +4,73 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
 import torch
+import torch.nn.functional as F
 
 from imputer.data import RankingData
 
 from .data import variable_list_to_entity_graph
+from .fastgraph import GraphTensors, TypeSlice, graph_tensors
 from .types import LossBreakdown, EntityType
+
+
+def _rating_breakdown_fast(
+    params: torch.Tensor,
+    gt: GraphTensors,
+    sl: TypeSlice,
+    t: Any,
+) -> LossBreakdown:
+    """
+    Vectorised replacement for RatingVariableType.compute_loss_breakdown.
+
+    The reference implementation loops over every token of the type to collect
+    targets and statuses, allocating a tensor per token, and then makes three
+    separate `.item()` calls. Targets are fixed by the graph, so GraphTensors
+    already has them; status comes from one gathered tensor; and the six scalars
+    we need are read back in a single device->host transfer.
+    """
+    device = params.device
+    C = t.num_classes
+    logits = params[0].index_select(0, sl.positions)[:, 1 : 1 + C]     # [M, C]
+
+    if sl.soft_targets is not None:
+        losses = -(sl.soft_targets * F.log_softmax(logits, dim=-1)).sum(dim=-1)
+    else:
+        losses = F.cross_entropy(logits, sl.targets, reduction="none")  # [M]
+
+    status = gt.status.index_select(0, sl.positions)                    # [M]
+    is_masked   = (status == 1).to(losses.dtype)
+    is_observed = (status == 2).to(losses.dtype)
+    is_missing  = (status == 0).to(losses.dtype)
+
+    masked_sum, observed_sum = (losses * is_masked).sum(), (losses * is_observed).sum()
+    missing_sum = (losses * is_missing).sum()
+    n_masked_t, n_observed_t, n_missing_t = is_masked.sum(), is_observed.sum(), is_missing.sum()
+
+    # One sync for everything the caller needs as a Python float.
+    n_masked, n_observed, n_missing, missing_f = torch.stack(
+        [n_masked_t, n_observed_t, n_missing_t, missing_sum]
+    ).tolist()
+    n_masked, n_observed, n_missing = int(n_masked), int(n_observed), int(n_missing)
+
+    z = torch.zeros((), device=device)
+    trainable_loss = masked_sum / n_masked_t if n_masked else z
+    observed_loss  = observed_sum / n_observed_t if n_observed else z
+    # These two are only read as floats, and both numerators are already on the
+    # device; detach so no graph is kept for the reporting path.
+    loss_masked_f, loss_observed_f = torch.stack(
+        [trainable_loss.detach(), observed_loss.detach()]
+    ).tolist()
+
+    return LossBreakdown(
+        trainable_loss=trainable_loss,
+        observed_loss_tensor=observed_loss,
+        loss_observed=loss_observed_f if n_observed else 0.0,
+        loss_masked=loss_masked_f if n_masked else 0.0,
+        loss_missing=missing_f / n_missing if n_missing else 0.0,
+        n_observed=n_observed,
+        n_masked=n_masked,
+        n_missing=n_missing,
+    )
 
 
 def _aggregate_loss_from_breakdowns(
@@ -21,7 +83,11 @@ def _aggregate_loss_from_breakdowns(
     """
     Aggregate per-type LossBreakdown into global observed/masked/missing losses
     and counts, and optionally a per-(status, type_name) breakdown.
+
+    Entity types contribute nothing but used to cost a full L-length Python list
+    comprehension each, to build a type mask that GraphTensors now caches.
     """
+    gt = graph_tensors(graph, types, global_param_dim, device)
     weighted_masked_sum = torch.zeros((), device=device)
     weighted_observed_sum = torch.zeros((), device=device)
     sum_observed = 0.0
@@ -36,21 +102,24 @@ def _aggregate_loss_from_breakdowns(
         "masked": {},
         "missing": {},
     }
-    
+
     for type_name, t in types.items():
-        type_mask = torch.tensor(
-            [tok.type_name == type_name for tok in graph.tokens],
-            device=device,
-            dtype=torch.bool,
-        ).unsqueeze(0)  # [1, L]
-        
-        b: LossBreakdown = t.compute_loss_breakdown(
-            predicted_params=params,
-            tokens=graph.tokens,
-            type_mask=type_mask,
-            global_param_dim=global_param_dim,
-        )
-        
+        if not getattr(t, "is_variable", False):
+            continue                      # entity types return a zero breakdown
+        sl = gt.slices[type_name]
+        if sl.positions.numel() == 0:
+            continue
+
+        if sl.vectorised and getattr(t, "num_classes", None) is not None:
+            b: LossBreakdown = _rating_breakdown_fast(params, gt, sl, t)
+        else:
+            b = t.compute_loss_breakdown(
+                predicted_params=params,
+                tokens=graph.tokens,
+                type_mask=sl.mask.unsqueeze(0),
+                global_param_dim=global_param_dim,
+            )
+
         if b.n_masked > 0:
             weighted_masked_sum = weighted_masked_sum + b.trainable_loss * b.n_masked
         if b.n_observed > 0:
@@ -75,11 +144,11 @@ def _aggregate_loss_from_breakdowns(
                 "xent": float(b.loss_missing),
                 "n": float(b.n_missing),
             }
-    
+
     loss_observed = sum_observed / n_observed if n_observed else 0.0
     loss_masked = sum_masked / n_masked if n_masked else 0.0
     loss_missing = sum_missing / n_missing if n_missing else 0.0
-    
+
     out = {
         "loss_observed": loss_observed,
         "loss_masked": loss_masked,
@@ -243,52 +312,44 @@ def evaluate_entity_marformer_split(
     loss_info = _aggregate_loss_from_breakdowns(params, graph, types, global_param_dim, device)
 
     # Rating accuracy, CE, and expected-value predictions for missing + observed.
+    # Vectorised: the reference loop called `.item()` twice per rating token,
+    # i.e. ~2 device syncs per token, which was most of the evaluation cost.
+    gt = graph_tensors(graph, types, global_param_dim, device)
     rating_type = types["rating"]
     num_classes = rating_type.num_classes
-
-    ce_loss = torch.nn.CrossEntropyLoss(reduction="mean")
-    logits_list: List[torch.Tensor] = []
-    targets_list: List[int] = []
-    correct = 0
-    total = 0
+    sl = gt.slices["rating"]
 
     missing_preds: List[float] = []
     missing_true:  List[int]   = []
     observed_preds: List[float] = []
     observed_true:  List[int]   = []
-    arange = torch.arange(num_classes, device=device, dtype=torch.float32)
+    total = 0
+    acc = 0.0
 
-    # Variable tokens are first in the graph, in the same order as `variables`.
-    for idx, var in enumerate(variables):
-        tok = graph.tokens[idx]
-        if tok.type_name != "rating" or tok.status not in (0, 2):
-            continue
-
-        raw = tok.raw_data or {}
-        rating_value = raw.get("rating_value", None)
-        if rating_value is None:
-            continue
-
-        # Slice out logits for classes 0..C-1 (skip the first mask bit dimension).
-        logits = params[0, idx, 1 : 1 + num_classes]
+    if sl.positions.numel() and sl.targets is not None:
+        logits = params[0].index_select(0, sl.positions)[:, 1 : 1 + num_classes]  # [M, C]
         probs = torch.softmax(logits, dim=-1)
-        expected = float((probs * arange).sum().item())
+        arange = torch.arange(num_classes, device=device, dtype=probs.dtype)
+        expected = probs @ arange                                                 # [M]
+        pred = logits.argmax(dim=-1)                                              # [M]
+        targets = sl.targets
+        status = gt.status.index_select(0, sl.positions)
+        is_missing = status == 0
+        is_observed = status == 2
 
-        if tok.status == 0:  # missing
-            logits_list.append(logits)
-            targets_list.append(int(rating_value))
-            pred_class = int(torch.argmax(logits).item())
-            if pred_class == int(rating_value):
-                correct += 1
-            total += 1
-            missing_preds.append(expected)
-            missing_true.append(int(rating_value))
-        else:  # status == 2, observed
-            observed_preds.append(expected)
-            observed_true.append(int(rating_value))
+        n_missing_t = is_missing.sum()
+        correct_t = ((pred == targets) & is_missing).sum()
+        total, correct = (int(v) for v in torch.stack([n_missing_t, correct_t]).tolist())
+
+        missing_preds = expected[is_missing].tolist()
+        missing_true = targets[is_missing].tolist()
+        observed_preds = expected[is_observed].tolist()
+        observed_true = targets[is_observed].tolist()
+        if total:
+            acc = float(correct) / float(total)
 
     # If there are no missing rating tokens, return without accuracy fields.
-    if total == 0 or not logits_list:
+    if total == 0:
         return EntityEvalResults(
             split=split,
             metrics=loss_info["per_type"],
@@ -297,10 +358,6 @@ def evaluate_entity_marformer_split(
             observed_preds=observed_preds,
             observed_true=observed_true,
         )
-
-    logits_tensor = torch.stack(logits_list, dim=0)   # [N, C]
-    targets_tensor = torch.tensor(targets_list, device=device, dtype=torch.long)
-    acc = float(correct) / float(total)
 
     per_type_metrics = loss_info["per_type"]
     per_type_metrics.setdefault("missing", {}).setdefault("rating", {})["acc"] = acc
@@ -313,4 +370,3 @@ def evaluate_entity_marformer_split(
         observed_preds=observed_preds,
         observed_true=observed_true,
     )
-
