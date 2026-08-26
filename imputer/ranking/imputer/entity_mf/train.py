@@ -118,13 +118,18 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.random_item_chunks = bool(random_item_chunks)
         self.batch_augmentations = bool(batch_augmentations)
         self.eval_every = max(1, int(eval_every))
-        if self.batch_augmentations:
-            if random_item_chunks:
-                raise ValueError("--batch-augmentations needs fixed chunk graphs; "
-                                 "it is incompatible with --random-item-chunks")
-            if llm_annotator_id is not None or always_observed_ids is not None:
-                raise ValueError("--batch-augmentations only implements MCAR masking; "
-                                 "structured masking must use the sequential path")
+        # Which always-observed annotators the batched sampler must honour.
+        # None means MCAR.
+        self._always_obs: List[int] | None = None
+        if always_observed_ids is not None:
+            self._always_obs = list(always_observed_ids)
+        elif llm_annotator_id is not None:
+            self._always_obs = [llm_annotator_id]
+        self._human_observed_rate = float(human_observed_rate)
+        if self.batch_augmentations and random_item_chunks:
+            raise ValueError("--batch-augmentations needs fixed chunk graphs; "
+                             "it is incompatible with --random-item-chunks")
+
         self._last_logged_lr = float(learning_rate)
 
         # Build persistent splits from the bundle. Training-time graphs may merge
@@ -420,8 +425,13 @@ class EntityMarformerLightningModule(pl.LightningModule):
                 # EntityMarformer.forward_batched.
                 graph = chunk_data["graph"]
                 gt = graph_tensors(graph, self.types, self.model.global_param_dim, device)
-                status = gt.sample_status(len(chunk_observed), self.masking_rate,
-                                          self.mask_augmentations)
+                if self._always_obs is None:
+                    status = gt.sample_status(len(chunk_observed), self.masking_rate,
+                                              self.mask_augmentations)
+                else:
+                    status = gt.sample_status_structured(
+                        len(chunk_observed), self._always_obs,
+                        self._human_observed_rate, self.mask_augmentations)
                 params = self.model.forward_batched(graph, status, device=device)
                 trainable_loss, chunk_masked_ce, chunk_observed_ce, n_masked, n_observed_chunk = (
                     compute_trainable_loss(
