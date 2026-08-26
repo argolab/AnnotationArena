@@ -10,10 +10,13 @@ trained on newly generated synthetic data rather than any cached results.
 
 Jason asked four questions. Taking them in order:
 
-0. **Do we overfit in the same way?** On Domain 3 synthetic, no. **On real
-   LLM-Rubric data at small training sizes, yes — badly** (validation log-loss
-   1.35 at its minimum, 3.69 by epoch 300, while accuracy keeps improving).
-   See §4b. The two arms of the paper behave completely differently here.
+0. **Do we overfit in the same way?** **Yes, at small training sizes — in both
+   arms.** On Domain 3 synthetic at K = 100 the test curve rises 0.21 nats past
+   its minimum (§4a). On LLM-Rubric at K = 10 it is far worse: validation
+   log-loss 1.35 at its minimum, 3.69 by epoch 300, while accuracy keeps
+   improving (§4b). The reason this is not visible in the paper is that the
+   reported checkpoint is chosen after the fact — on test for the synthetic
+   arm, on validation for the real one.
 1. **Is it the masking procedure inflating the training sample?** Partly, but
    that is not the main thing.
 2. **Is it weight decay?** Marginally.
@@ -25,8 +28,8 @@ Jason asked four questions. Taking them in order:
    figures the *checkpoint was also chosen on test*, so the reported calibration
    is optimistic. The real-data (LLM-Rubric) figures do not have this problem.
 
-The reason the failure mode does not appear *in Domain 3 synthetic* is more
-structural than any of the first three: **in the item-generalization setting
+The reason the failure mode is *weaker* in Domain 3 synthetic than on real data
+is more structural than any of the first three: **in the item-generalization setting
 the model has no per-item parameters to overfit with.** It cannot put mass on
 the training $y_i$ because it has no way to represent "item $i$" — the item
 deviation table is dropped on every training step and ends at exactly zero.
@@ -158,18 +161,51 @@ missing log-loss (both in nats, 4-way Likert, chance = 1.386):
 Three things to note.
 
 - **Training CE never collapses.** It plateaus around 0.7-0.87 and *rises* with
-  training-set size, which is what you expect from a model that is fitting a
-  conditional distribution rather than memorising targets. The overfitting
-  signature would be train CE heading toward 0 while test log-loss turns back
-  up; neither happens.
+  training-set size, which is what you expect from a model fitting a
+  conditional distribution rather than memorising targets. There is no
+  train-CE-to-zero behaviour anywhere.
 - **The gap shrinks with data and goes negative** past ~700 items. Part of that
   is a genuine generalisation gain and part is an artefact: training CE is
   measured in `model.train()` mode, so attention dropout (0.1) and entity
   dropout are active, while test is measured in `eval()` mode. So the training
   number is slightly pessimistic and these gaps are, if anything, upper bounds.
-- **The small-sample end is where the gap lives** (~0.24 nats at 100 items /
-  10 annotators), which is the regime Jason expected to be worst. It is real
-  but it is a fifth of the distance to chance, not a collapse.
+- **These test numbers are the test-argmin over 16 checkpoints**, which is what
+  the pipeline reports (§7). That hides the shape of the curve — see §4a, which
+  is the more important table.
+
+### 4a. But the test curve *does* turn back up at small K
+
+The table above uses `best.json`, i.e. the best checkpoint as scored on test.
+Looking at the full per-checkpoint test curve instead (from the 27 fully
+evaluated ablation runs, variant `all`, seed 42):
+
+| K_train | test log-loss by epoch (24 → 399) | min | final | acc at min → final |
+|---|---|---|---|---|
+| 100 | 1.298, 0.966, 0.933, 0.958, 0.972, 1.012, 1.054, 1.171 | **0.933** @124 | **1.138** | 0.560 → **0.488** |
+| 300 | 1.360, 0.927, 0.901, 0.868, 0.879, 0.895, 0.895, 0.883 | 0.868 @174 | 0.884 | 0.585 → 0.597 |
+| 500 | 1.389, 0.880, 0.846, 0.840, 0.836, 0.844, 0.846, 0.863 | 0.833 @149 | 0.844 | 0.623 → 0.615 |
+
+**So Domain 3 synthetic does overfit at K = 100** — test log-loss rises 0.21
+nats past its minimum, and accuracy *falls* from 0.560 to 0.488. That is plain
+overfitting, degrading both the distribution and the point prediction. I had
+this wrong initially: selecting on test flattens the curve to its minimum and
+makes the problem invisible in the reported numbers.
+
+At K = 300 and 500 the rise is small (+0.016, +0.011) and accuracy is flat or
+improving, so those are close to converged rather than overfit.
+
+Averaged over all 27 ablation runs, choosing the checkpoint on test rather than
+taking the last one is worth:
+
+| K_train | last | test-argmin | what selection buys |
+|---|---|---|---|
+| 100 | 1.1598 | 0.9641 | **+0.1957** |
+| 300 | 0.9060 | 0.8778 | +0.0281 |
+| 500 | 0.8643 | 0.8432 | +0.0211 |
+
+At K = 100 that 0.196 nats is comparable to the entire reported margin between
+Marformer and its baselines. This is D14 quantified, and it is the strongest
+argument for fixing it.
 
 ## 4b. On real data at small K, we overfit *exactly* the way Jason describes
 
@@ -213,9 +249,11 @@ predicted:
 
 So the honest overall picture is:
 
-- **Domain 3 synthetic**: no overfitting, because §3 removes the parameters
-  that would be needed for it, and there is no validation set — but none is
-  needed.
+- **Domain 3 synthetic**: mild at K >= 300, but real at K = 100 (§4a), where
+  the test curve rises 0.21 nats past its minimum and accuracy falls. §3 makes
+  it *harder* than it would otherwise be, not impossible. There is no
+  validation set to stop on, so the run just trains through it and the reported
+  number is rescued by test-set selection instead.
 - **LLM-Rubric**: strong overfitting at small K, and the reported numbers are
   saved *entirely* by validation-based checkpoint selection. `best.json` there
   comes from the validation-selected checkpoint, so the paper's 1.52 at

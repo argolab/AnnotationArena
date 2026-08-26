@@ -226,6 +226,13 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
   Domain 3 numbers are a min over ~18 checkpoints. The two sets of figures in
   the paper are therefore not selected the same way, and are not directly
   comparable as evidence.
+- **Magnitude, measured** (27 fully-evaluated runs, `RERUN/runs/resid-01`):
+  choosing the checkpoint on test rather than taking the last one is worth
+  **+0.196 nats at K=100**, +0.028 at K=300, +0.021 at K=500. At K=100 that is
+  comparable to the entire reported margin between Marformer and its baselines.
+  The reason it is so large at K=100 is that the model genuinely overfits there
+  — the test curve bottoms at 0.933 (epoch 124) and rises to 1.138 by epoch 399,
+  with accuracy falling 0.560 → 0.488. Test-set selection hides that entirely.
 - **To resolve:** select on validation (the `best-*.ckpt` already exists) and
   report test metrics for that one checkpoint, in both pipelines. Re-running
   eval is cheap — the checkpoints are already on disk — so this can be
