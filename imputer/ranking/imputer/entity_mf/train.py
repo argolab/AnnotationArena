@@ -148,6 +148,10 @@ class EntityMarformerLightningModule(pl.LightningModule):
             always_observed_ids=always_observed_ids,
         )
         self.training_history: List[Dict[str, Any]] = []
+        # Per-split evaluation graph cache. The evaluated variable lists and
+        # their statuses never change, so the chunk partition, the graphs, and
+        # the tensors cached on them are built once instead of every epoch.
+        self._eval_graph_cache: Dict[str, Any] = {}
         # Pre-build per-chunk EntityGraphs for non-transductive mode.
         # Graphs are reused every step; only variable token statuses are updated in-place.
         # edge_mask and K_aug are cached on each graph object after the first forward pass.
@@ -307,7 +311,15 @@ class EntityMarformerLightningModule(pl.LightningModule):
             tok.raw_data["is_masked"] = var.is_masked
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        # fused: the model is ~100 small parameter tensors, so an unfused AdamW
+        # launches hundreds of tiny kernels and shows up as ~15% of GPU time.
+        fused = torch.cuda.is_available() and all(
+            p.is_cuda and p.dtype.is_floating_point for p in self.parameters()
+        )
+        optimizer = torch.optim.AdamW(
+            self.parameters(), lr=self.learning_rate,
+            weight_decay=self.weight_decay, fused=fused,
+        )
         if self.lr_schedule == "cosine":
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer, T_max=self.trainer.max_epochs, eta_min=self.lr_min
@@ -498,6 +510,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
                     max_item=self.max_item,
+                    cache=self._eval_graph_cache,
                 )
                 rating_missing = (
                     combined_eval.metrics.get("missing", {}).get("rating", {})
@@ -526,6 +539,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
                     max_item=self.max_item,
+                    cache=self._eval_graph_cache,
                 )
                 rating_missing = (
                     val_eval.metrics.get("missing", {}).get("rating", {})
@@ -556,6 +570,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
                     max_item=self.max_item,
+                    cache=self._eval_graph_cache,
                 )
                 rating_missing = (
                     train_eval.metrics.get("missing", {}).get("rating", {})
@@ -583,6 +598,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
                     max_item=self.max_item,
+                    cache=self._eval_graph_cache,
                 )
                 rating_missing = (
                     val_eval.metrics.get("missing", {}).get("rating", {})
@@ -957,6 +973,11 @@ def main():
         help="Epoch at which to apply one LR drop when --lr-schedule step.",
     )
     parser.add_argument(
+        "--compile", dest="compile_mode", default="none",
+        choices=["none", "default", "reduce-overhead", "max-autotune"],
+        help="torch.compile mode for the block stack (the step is launch-bound).",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=42,
@@ -1094,6 +1115,7 @@ def main():
             "item_dropout_rate": args.item_dropout_rate,
             "annotator_dropout_rate": args.annotator_dropout_rate,
             "device": args.device,
+            "compile_mode": args.compile_mode,
         },
         "run": {
             "run_dir": str(run_dir),
@@ -1125,6 +1147,9 @@ def main():
         lr_step_epoch=args.lr_step_epoch,
         random_item_chunks=bool(args.random_item_chunks),
     )
+
+    if args.compile_mode != "none":
+        model.enable_compile(args.compile_mode)
 
     accelerator = "gpu" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
     logger = TensorBoardLogger(save_dir=str(run_dir), name="lightning_logs")

@@ -270,6 +270,7 @@ def evaluate_entity_marformer_split(
     global_param_dim: int,
     device: torch.device,
     max_item: int | None = None,
+    cache: Dict[str, Any] | None = None,
 ) -> EntityEvalResults:
     """
     Evaluate Entity Marformer on a list of RankingData variables.
@@ -283,29 +284,53 @@ def evaluate_entity_marformer_split(
         raise ValueError("No variables to evaluate on")
 
     # Chunked evaluation path: mirrors training chunking so graph sizes match.
+    #
+    # `cache` (optional, keyed by split) holds the item-chunk partition across
+    # calls. The variable list and its statuses are the same every epoch, so
+    # without it each evaluation re-derives the chunks, rebuilds every chunk
+    # graph, and rebuilds the [L, L, R] edge mask and [L, L, 3] K_aug that are
+    # cached *on the graph object* -- and then throws all of it away.
     if max_item is not None:
-        all_item_ids = sorted({iid for v in variables for iid in v.item_ids})
-        if len(all_item_ids) > max_item:
-            item_chunks = [
-                set(all_item_ids[i : i + max_item])
-                for i in range(0, len(all_item_ids), max_item)
-            ]
+        entry = cache.get(split) if cache is not None else None
+        if entry is None:
+            all_item_ids = sorted({iid for v in variables for iid in v.item_ids})
+            if len(all_item_ids) > max_item:
+                chunks: List[List[RankingData]] = []
+                for i in range(0, len(all_item_ids), max_item):
+                    item_set = set(all_item_ids[i : i + max_item])
+                    chunk_vars = [v for v in variables if all(iid in item_set for iid in v.item_ids)]
+                    if chunk_vars:
+                        chunks.append(chunk_vars)
+                entry = {"chunks": chunks}
+            else:
+                entry = {"chunks": None}          # single graph, no chunking
+            if cache is not None:
+                cache[split] = entry
+
+        if entry["chunks"] is not None:
             chunk_results: List[EntityEvalResults] = []
-            for item_set in item_chunks:
-                chunk_vars = [v for v in variables if all(iid in item_set for iid in v.item_ids)]
-                if not chunk_vars:
-                    continue
+            for ci, chunk_vars in enumerate(entry["chunks"]):
                 chunk_results.append(
                     evaluate_entity_marformer_split(
-                        model, split, chunk_vars, types, global_param_dim, device, max_item=None
+                        model, split, chunk_vars, types, global_param_dim, device,
+                        max_item=None,
+                        cache=entry.setdefault("sub", {}).setdefault(ci, {}),
                     )
                 )
             if not chunk_results:
                 return EntityEvalResults(split=split, metrics={})
             return _merge_chunk_results(split, chunk_results)
 
+        # Unchunked: keep this split's graph under its own entry, not under the
+        # shared cache dict, which several splits pass in.
+        cache = entry
+
     # Build graph and run model to get parameter stream.
-    graph = variable_list_to_entity_graph(variables, types)
+    graph = cache.get("graph") if cache is not None else None
+    if graph is None:
+        graph = variable_list_to_entity_graph(variables, types)
+        if cache is not None:
+            cache["graph"] = graph
     params = model(graph, device=device)  # [1, L, P]
 
     # Aggregate loss breakdown over observed/masked/missing (with per-type details).

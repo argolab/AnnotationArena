@@ -143,8 +143,11 @@ class RelationalAttentionBlock(nn.Module):
             Qh = Q_content.view(B, L, H, hd).transpose(1, 2)     # [B, H, L, hd]
             Kh = K_content.view(B, L, H, hd).transpose(1, 2)     # [B, H, L, hd]
             content_scores = torch.matmul(Qh, Kh.transpose(-2, -1)) / math.sqrt(hd) # [B, H, L, L]
-            # Relational bias: [B, L, L] -> broadcast over heads [B, 1, L, L]
-            rel_scores = (Q_rel_shared.unsqueeze(2) * edge_mask_f.unsqueeze(0)).sum(-1).unsqueeze(1)
+            # Relational bias: [B, L, L] -> broadcast over heads [B, 1, L, L].
+            # einsum rather than broadcast-multiply-then-sum: the latter
+            # materialises a [B, L, L, R] intermediate (and its gradient), which
+            # at L=1300, R=6 is 40 MiB per layer for a result that is 6.5 MiB.
+            rel_scores = torch.einsum("bir,ijr->bij", Q_rel_shared, edge_mask_f).unsqueeze(1)
             if self.scale_shared_rel:
                 rel_scores = rel_scores / math.sqrt(hd)
             scores = content_scores + rel_scores
@@ -152,7 +155,8 @@ class RelationalAttentionBlock(nn.Module):
         # ── Pointer bias (shared across heads) ─────────────────────────────────
         if self.use_pointer and K_aug is not None:
             # Q_ptr: [B, L, 3], K_aug: [L, L, 3]
-            ptr_bias = (Q_ptr.unsqueeze(2) * K_aug.unsqueeze(0)).sum(-1)  # [B, L, L]
+            # Same [B, L, L, 3] intermediate to avoid as in the relational bias.
+            ptr_bias = torch.einsum("bip,ijp->bij", Q_ptr, K_aug.to(Q_ptr.dtype))  # [B, L, L]
             scores = scores + ptr_bias.unsqueeze(1)                        # broadcast over H
 
         # ── Graph mask (hard): allow only edge_mask + K_aug + self ─────────────
@@ -266,6 +270,8 @@ class EntityMarformer(nn.Module):
         self.use_addone_attn = config.use_addone_attn
         self.use_param_output_head = config.use_param_output_head
         self.use_embed_unembed = config.use_embed_unembed
+        # Set by enable_compile(); None means run the eager block stack.
+        self._compiled_blocks = None
         self.dual_outer_residual = getattr(config, "dual_outer_residual", "all")
         self.inner_residual = getattr(config, "inner_residual", "both")
         if self.inner_residual not in ("both", "ff_only", "none"):
@@ -378,6 +384,23 @@ class EntityMarformer(nn.Module):
                     "dropout": nn.Dropout(config.dropout),
                 }))
             self.emb_blocks = nn.ModuleList(emb_blocks)
+
+    def enable_compile(self, mode: str = "default") -> None:
+        """
+        Compile the block stack.
+
+        Worth doing because the step is launch-bound, not math-bound: at L~1300
+        the GPU does ~11 ms of work per step while the CPU spends ~27 ms queueing
+        it. Chunks have different token counts, so the graph is compiled once per
+        distinct L (a handful) -- dynamic=False keeps each specialisation fast
+        rather than tracing one dynamic kernel for all of them.
+        """
+        if mode in ("", "none"):
+            self._compiled_blocks = None
+            return
+        if self.use_embed_unembed:
+            raise ValueError("enable_compile only covers the dual-stream path")
+        self._compiled_blocks = torch.compile(self._dual_blocks, mode=mode, dynamic=False)
 
     def _make_attn_block(self, config: EntityMarformerConfig, num_relationships: int) -> RelationalAttentionBlock:
         return RelationalAttentionBlock(
@@ -590,7 +613,24 @@ class EntityMarformer(nn.Module):
         features, params, attn_mask = self._build_initial_streams(graph, device=device)
         edge_mask = graph.build_edge_masks(device=device)
         K_aug = self._get_k_aug(graph, device)
+        core = self._compiled_blocks if self._compiled_blocks is not None else self._dual_blocks
+        return core(features, params, edge_mask, attn_mask, K_aug)
 
+    def _dual_blocks(
+        self,
+        features: torch.Tensor,
+        params: torch.Tensor,
+        edge_mask: torch.Tensor,
+        attn_mask: torch.Tensor,
+        K_aug: torch.Tensor | None,
+    ) -> torch.Tensor:
+        """
+        The block stack, as a pure tensor -> tensor function.
+
+        Split out of _forward_dual so it can be handed to torch.compile: the
+        graph-dependent work (which is Python, and cannot be traced) all happens
+        before this point, and everything from here is fixed-shape tensor code.
+        """
         combined = torch.cat([features, params], dim=-1)  # [1, L, model_dim]
         num_blocks = len(self.blocks)
         for layer_idx, block in enumerate(self.blocks):
