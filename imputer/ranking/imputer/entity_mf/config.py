@@ -35,3 +35,9 @@ class EntityMarformerConfig:
                                          #   "all"      -> baseline: every layer adds (double residual stream: inner on `combined`, outer on features/params)
                                          #   "not_last" -> every layer but the last adds; the last layer emits only [proj_out; W_param](combined)
                                          #   "none"     -> no layer adds; the stream is carried purely by `combined`'s inner residual, rotated each layer
+                                         #   "none_id" / "not_last_id" -> identity folded into the projection: h' = c + [W1;W2]c
+
+    inner_residual: str = "both"          # Dual-stream only. The residual adds INSIDE the block.
+                                         #   "both"    -> c = h + attn; c = c + ff   (shipped)
+                                         #   "ff_only" -> c = attn;     c = c + ff
+                                         #   "none"    -> c = attn;     c = ff        (outer add is the only skip)

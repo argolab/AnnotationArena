@@ -52,7 +52,10 @@ CPU_TIME="${CPU_TIME:-2-00:00:00}"   # MaxTime is 3 days everywhere
 # torch.cuda.is_available() is False. Jobs that land there either die in
 # Lightning's RNG setup or -- worse -- silently fall back to CPU. Same node the
 # lingua-2 scripts exclude for the same reason.
-EXCLUDE_NODES="${EXCLUDE_NODES:-gh104}"
+# gl110 threw "CUDA error: uncorrectable ECC error encountered" mid-training on
+# 2026-08-26 -- same failure class as the l40s node the lingua-2 scripts call
+# out as bad-ECC. Excluded until it is verified healthy.
+EXCLUDE_NODES="${EXCLUDE_NODES:-gh104,gl110}"
 
 export SBATCH_ACCEPT_COST GPU_PARTITION CPU_PARTITION \
        GPU_CPUS GPU_MEM GPU_TIME CPU_CPUS CPU_MEM CPU_TIME EXCLUDE_NODES

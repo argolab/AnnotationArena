@@ -790,14 +790,27 @@ def main():
         help="Override EntityMarformerConfig.dropout.",
     )
     parser.add_argument(
+        "--inner-residual",
+        choices=["both", "ff_only", "none"],
+        default="both",
+        help=(
+            "Dual-stream only. Which residual adds inside the block are kept. "
+            "'both' is the current architecture; 'none' removes both, leaving the "
+            "outer add as the only skip connection (a single residual stream whose "
+            "block body is a serial attention -> FFN composition)."
+        ),
+    )
+    parser.add_argument(
         "--dual-outer-residual",
-        choices=["all", "not_last", "none"],
+        choices=["all", "not_last", "none", "none_id", "not_last_id"],
         default="all",
         help=(
             "Dual-stream only. Which layers keep the outer residual add "
             "(features/params += proj(combined)). 'all' is the current architecture "
             "(double residual stream); 'not_last' drops it in the final layer; "
-            "'none' drops it everywhere, leaving a single inner residual stream."
+            "'none' drops it everywhere. The *_id variants fold an identity into "
+            "the projection instead of deleting the add: h' = c + [W1;W2]c, so "
+            "weight decay pulls toward an identity layer rather than the zero map."
         ),
     )
     parser.add_argument(
@@ -977,6 +990,7 @@ def main():
     if args.dropout is not None:
         config.dropout = args.dropout
     config.dual_outer_residual   = args.dual_outer_residual
+    config.inner_residual        = args.inner_residual
     config.use_per_head_rel      = args.use_per_head_rel
     config.use_pointer           = args.use_pointer
     config.use_rel_value         = args.use_rel_value
@@ -1040,6 +1054,7 @@ def main():
             "num_ffn_layers": config.num_ffn_layers,
             "dropout": config.dropout,
             "dual_outer_residual": config.dual_outer_residual,
+            "inner_residual": config.inner_residual,
             "use_per_head_rel": config.use_per_head_rel,
             "use_pointer": config.use_pointer,
             "use_rel_value": config.use_rel_value,
