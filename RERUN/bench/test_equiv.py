@@ -226,6 +226,22 @@ def main() -> None:
     check("batched masked CE == mean of rows", mce_b, sum(mces) / len(mces), tol=1e-5)
     check("batched n_masked == sum of rows", nm_b, sum(nms), tol=0)
 
+    print("\n5. sparse relational bias == dense einsum over the [L, L, R] mask")
+    L = graph.num_tokens
+    edge_flat, edge_rel = graph.build_edge_index(device)
+    dense = graph.build_edge_masks(device)                       # [L, L, R]
+    R = graph.num_relationships
+    blk = model.blocks[0]["attn"]
+    torch.manual_seed(11)
+    q_shared = torch.randn(2, L, R, device=device)
+    check("shared bias",
+          blk._rel_bias(q_shared, edge_flat, edge_rel, L),
+          torch.einsum("bir,ijr->bij", q_shared, dense), tol=1e-5)
+    q_head = torch.randn(2, 4, L, R, device=device)
+    check("per-head bias",
+          blk._rel_bias(q_head, edge_flat, edge_rel, L),
+          torch.einsum("bhir,ijr->bhij", q_head, dense), tol=1e-5)
+
     print()
     if FAILURES:
         raise SystemExit(f"FAILED: {', '.join(FAILURES)}")
