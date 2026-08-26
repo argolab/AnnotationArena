@@ -69,5 +69,8 @@ def ce(e):
 last = ce(h[-1])
 print(f"BENCH_FINAL epochs={len(h)} train_masked_ce={h[-1].get('train_masked_ce'):.4f} "
       f"combined_missing_ce={last.get('xent', float('nan')):.4f} acc={last.get('acc', float('nan')):.4f}")
+xs = [(ce(e).get("xent", float("inf")), e["epoch"]) for e in h]
+best, best_ep = min(xs)
+print(f"BENCH_BEST combined_missing_ce={best:.4f} at_epoch={best_ep}")
 print("BENCH_CURVE " + " ".join(f"{e['epoch']}:{ce(e).get('xent', float('nan')):.4f}" for e in h))
 PY

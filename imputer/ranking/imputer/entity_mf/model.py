@@ -585,6 +585,75 @@ class EntityMarformer(nn.Module):
             return self._forward_emb(graph, device)
         return self._forward_dual(graph, device)
 
+    def forward_batched(
+        self,
+        graph: EntityGraph,
+        status: torch.Tensor,
+        device: torch.device | None = None,
+    ) -> torch.Tensor:
+        """
+        Forward pass over one EntityGraph under B different masks at once.
+
+        The graph topology -- and therefore the edge mask, K_aug and every
+        attention shape but the leading dimension -- is identical across the
+        mask augmentations of a training epoch. Running them as a batch turns
+        B forward/backward passes into one, which matters because the step is
+        launch-bound: at L~1300 the GPU does ~11 ms of work per pass while the
+        CPU spends ~27 ms queueing it.
+
+        Args:
+            graph:  the chunk graph.
+            status: [B, L] long, per-augmentation token statuses
+                    (0=missing, 1=masked, 2=observed), from
+                    GraphTensors.sample_status.
+
+        Returns:
+            params: [B, L, global_param_dim]
+        """
+        if device is None:
+            device = next(self.parameters()).device
+        if self.use_embed_unembed:
+            raise NotImplementedError("forward_batched only covers the dual-stream path")
+
+        features, params, attn_mask = self._build_initial_streams_batched(graph, status, device)
+        edge_mask = graph.build_edge_masks(device=device)
+        K_aug = self._get_k_aug(graph, device)
+        core = self._compiled_blocks if self._compiled_blocks is not None else self._dual_blocks
+        return core(features, params, edge_mask, attn_mask, K_aug)
+
+    def _build_initial_streams_batched(
+        self,
+        graph: EntityGraph,
+        status: torch.Tensor,
+        device: torch.device,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Batched counterpart of _build_initial_streams; see forward_batched."""
+        gt = graph_tensors(graph, self.types, self.param_dim, device)
+        B, L = status.shape
+
+        type_mat = torch.cat([self.type_embeddings[n] for n in gt.type_names], dim=0)  # [T, F]
+        features = type_mat.index_select(0, gt.type_ids).unsqueeze(0).expand(B, -1, -1)
+
+        for name, pos in gt.dev_positions.items():
+            table = self.deviation_tables.get(name, None)
+            if table is None:
+                continue
+            variation = self.types[name].variation
+            dev = table.index_select(0, gt.dev_entity_ids[name])                       # [M, F]
+            dev = dev.unsqueeze(0).expand(B, -1, -1)
+            if self.training and variation.dropout_rate > 0:
+                # Independent draws per augmentation as well as per token.
+                keep = (torch.rand(B, dev.shape[1], 1, device=device) >= variation.dropout_rate)
+                dev = dev * keep.to(dev.dtype)
+            if self.config.use_deviation_norm:
+                dev = self.deviation_norm(dev)
+            features = features.index_add(1, pos, dev)
+
+        hidden = gt.is_variable.unsqueeze(0) & (status != 2)                           # [B, L]
+        params = torch.where(hidden.unsqueeze(-1), gt.mask_row, gt.param_obs)          # [B, L, P]
+        attn_mask = torch.ones(B, L, dtype=torch.bool, device=device)
+        return features, params, attn_mask
+
     def _outer_residual_mode(self, layer_idx: int, num_blocks: int) -> str:
         """How this layer combines its projection with the outer stream.
 

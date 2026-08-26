@@ -172,6 +172,57 @@ def main() -> None:
     check("observed_preds", torch.tensor(res.observed_preds), torch.tensor(o_p), tol=1e-4)
     check("acc", res.metrics["missing"]["rating"]["acc"], acc)
 
+    print("\n4. batched-augmentation path (B rows must equal B separate passes)")
+    from imputer.entity_mf.eval import compute_trainable_loss
+    from imputer.entity_mf.fastgraph import graph_tensors
+
+    # sample_status's contract is the training chunk layout: the first
+    # n_maskable tokens are exactly the maskable observed variables. Rebuild the
+    # graph that way rather than reusing the one section 2 mutated.
+    for v in variables:
+        if v.status == 1:
+            v.status = 2
+    maskable = [v for v in variables if v.status == 2]
+    rest = [v for v in variables if v.status != 2]
+    graph4 = variable_list_to_entity_graph(maskable + rest, types)
+    gt = graph_tensors(graph4, types, model.global_param_dim, device)
+    graph = graph4
+    B = 3
+    torch.manual_seed(7)
+    status = gt.sample_status(n_maskable=len(maskable), masking_rate=0.15, batch=B)
+    with torch.no_grad():
+        batched = model.forward_batched(graph, status, device=device)
+        # Same statuses, one row at a time through the unbatched path.
+        rows = []
+        for b in range(B):
+            for i, tok in enumerate(graph.tokens):
+                tok.status = int(status[b, i].item())
+                if tok.raw_data is not None:
+                    tok.raw_data["is_masked"] = tok.status == 1
+            rows.append(model(graph, device=device)[0])
+        stacked = torch.stack(rows, dim=0)
+    check("forward_batched params", batched, stacked)
+    check("per-row mask counts", int((status == 1).sum(dim=1).unique().numel()), 1, tol=0)
+
+    with torch.no_grad():
+        loss_b, mce_b, oce_b, nm_b, no_b = compute_trainable_loss(
+            batched, graph, types, model.global_param_dim, device,
+            masked_loss_weight=15.0, observed_loss_weight=1.0, status=status)
+        mces, nms = [], []
+        for b in range(B):
+            for i, tok in enumerate(graph.tokens):
+                tok.status = int(status[b, i].item())
+                if tok.raw_data is not None:
+                    tok.raw_data["is_masked"] = tok.status == 1
+            gt.refresh(graph)
+            _, mce, _, nm, _ = compute_trainable_loss(
+                stacked[b : b + 1], graph, types, model.global_param_dim, device,
+                masked_loss_weight=15.0, observed_loss_weight=1.0)
+            mces.append(mce)
+            nms.append(nm)
+    check("batched masked CE == mean of rows", mce_b, sum(mces) / len(mces), tol=1e-5)
+    check("batched n_masked == sum of rows", nm_b, sum(nms), tol=0)
+
     print()
     if FAILURES:
         raise SystemExit(f"FAILED: {', '.join(FAILURES)}")
