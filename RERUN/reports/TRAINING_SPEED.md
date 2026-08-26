@@ -119,41 +119,42 @@ of five. The learning rate has to rise with it.
 
 ### 3.1 Domain 3, item axis — the production setting (`max_item=300`)
 
-`Item_T_500`, transductive, 400 epochs:
+`Item_T_500`, transductive, 400 epochs. Per-epoch cost is the slope between
+20- and 60-epoch runs, alternated on the same node to cancel contention:
 
 | | s/epoch | 400 epochs | best combined-missing CE |
 |---|---|---|---|
 | baseline | 2.155 | 873 s | — |
-| **optimised, same semantics** | **0.235** | **111 s** | 0.8462 |
+| **optimised, same semantics** | **0.217** | **94 s** | 0.8444 |
 | + `--batch-augmentations --tf32 --lr 1e-3` | 0.171 | 72 s | 0.8629 |
 
-Checked against the replication run with the real `test.py`:
+Checked against the replication run with the real `test.py`, last checkpoint:
 
 | | test-missing log-loss | accuracy |
 |---|---|---|
 | `replicate-01` reference | 0.8454 | 0.6251 |
-| optimised, same semantics | 0.8509 | 0.6216 |
+| optimised, same semantics | 0.8515 | 0.6210 |
 
-**7.9× faster, same numbers.** The residual difference is the entity-dropout RNG
+**9.3x faster, same numbers.** The residual difference is the entity-dropout RNG
 stream, which no longer matches the reference draw for draw.
 
 At this operating point batching does *not* pay. Given equal wall clock (111 s),
-sequential-400 reaches 0.8462 and batched-600 reaches 0.8558. The chunks here
-are L≈3900, big enough to keep the GPU busy on their own, so multiplying the
+sequential-400 reached 0.8462 and batched-600 reached 0.8558. The chunks here
+are L~3900, big enough to keep the GPU busy on their own, so multiplying the
 work by five buys nothing.
 
 ### 3.2 Domain 3, item axis at `max_item=100`
 
-Same split, smaller chunks (L≈1300) — launch-bound, so batching does pay:
+Same split, smaller chunks (L~1300) -- launch-bound, so batching does pay:
 
 | | s/epoch | 400 epochs | best combined-missing CE |
 |---|---|---|---|
 | baseline | 2.274 | 920 s | — |
 | optimised, same semantics | 0.365 | 156 s | 0.8895 |
-| **+ `--batch-augmentations --lr 1e-3`** | **0.120** | **56 s** | **0.8880** |
+| **+ `--batch-augmentations --lr 1e-3`** | **0.124** | **55 s** | **0.8880** |
 
-**16.5×, at equal loss.** The LR sweep at 400 epochs: 2e-4 → 0.9065,
-5e-4 → 0.8964, **1e-3 → 0.8890**, 2e-3 → 0.8901.
+**17x, at equal loss.** The LR sweep at 400 epochs: 2e-4 -> 0.9065,
+5e-4 -> 0.8964, **1e-3 -> 0.8890**, 2e-3 -> 0.8901.
 
 ### 3.3 Domain 3, annotator axis
 
@@ -165,24 +166,23 @@ actually active:
 | baseline | 1.224 | 0.9279 |
 | optimised | 0.134 | 0.9138 |
 
-**9.1×**, curves overlaying throughout.
+**9.1x**, curves overlaying throughout.
 
 ### 3.4 LLM-Rubric
 
-`LLMRubric_225_25_9_50`, `max_item=10` — a 225-item bundle is ~23 chunks of a
+`LLMRubric_225_25_9_50`, `max_item=10` -- a 225-item bundle is ~23 chunks of a
 few hundred tokens, the most launch-bound configuration in the repo. 300 epochs:
 
 | | wall | best val-missing CE | final |
 |---|---|---|---|
-| baseline | LLMRUBRIC_BASE_WALL | — | — |
-| optimised, same semantics | 186.8 s | 1.0744 | 1.3568 |
-| **+ `--batch-augmentations --tf32 --lr 1e-3`** | **71.2 s** | **1.0201** | **1.0487** |
+| baseline | 784.0 s | 1.0625 | 1.2882 |
+| optimised, same semantics | 202.9 s | 1.0734 | 1.3697 |
+| **+ `--batch-augmentations --tf32 --lr 1e-3`** | **74.2 s** | **1.0185** | **1.0268** |
 
-Batching is *better* as well as faster here, because LLM-Rubric overfits badly
-at this size (see `OVERFITTING.md`) and five times fewer optimizer steps means
-less of it — the sequential run ends 0.28 nats above its own best.
-
----
+**10.6x, and a better model.** Batching helps the loss here because LLM-Rubric
+overfits badly at this size (see `OVERFITTING.md`) and five times fewer
+optimizer steps means less of it -- the sequential runs end ~0.3 nats above
+their own best, the batched one ends at its best.
 
 ## 4. What did not work
 
