@@ -21,6 +21,10 @@ set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/config/cluster.sh"
 
+# Nodes whose GPUs torch cannot initialise (see EXCLUDE_NODES in cluster.sh).
+EXCLUDE_ARG=""
+[[ -n "${EXCLUDE_NODES:-}" ]] && EXCLUDE_ARG="--exclude=${EXCLUDE_NODES}"
+
 RUN_ID=""
 STAGE="all"
 DATA_FROM=""
@@ -33,6 +37,7 @@ usage() {
 Options:
   --run-id ID      required; results land in RERUN/runs/ID/
   --stage S        all (default) | data | marformer | stan | eval
+                   | llmrubric | llmrubric-eval   (real LLM-Rubric arm)
   --data-from ID   reuse another run's generated data instead of regenerating
   --dry-run        print the sbatch commands without submitting
 EOF
@@ -51,7 +56,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 [[ -n "${RUN_ID}" ]] || { echo "--run-id is required" >&2; usage 1; }
-case "${STAGE}" in all|data|marformer|stan|eval) ;; *) echo "bad --stage: ${STAGE}" >&2; exit 1 ;; esac
+case "${STAGE}" in all|data|marformer|stan|eval|llmrubric|llmrubric-eval) ;; *) echo "bad --stage: ${STAGE}" >&2; exit 1 ;; esac
 
 RUN_DIR="$(rerun_run_dir "${RUN_ID}")"
 LOG_DIR="$(rerun_log_root "${RUN_ID}")"
@@ -59,8 +64,10 @@ mkdir -p "${RUN_DIR}" "${LOG_DIR}" "$(rerun_results_root "${RUN_ID}")"
 
 # ---------------------------------------------------------------- the matrix
 # family | axis | protocol | sizes
+# The paper sweeps item generalization to K_train=4000 for Marformer; Stan stops
+# at 500 (HMC cost). The NT arm and both annotator arms follow the paper too.
 MARFORMER_MATRIX=(
-  "Marformer|item|transductive|100,200,300,400,500,600,700,800,900,1000"
+  "Marformer|item|transductive|100,200,300,400,500,600,700,800,900,1000,2000,3000,4000"
   "Marformer|annot|transductive|10,15,20,25,30,35,40,45,50"
   "MarformerNT|item|nontransductive|100,200,300,400,500,600,700,800,900"
   "MarformerNT|annot|nontransductive|10,15,20,25,30,35,40"
@@ -106,10 +113,16 @@ write_conf() {
 submit() {
     # submit <job-name> <conf-path> <extra-sbatch-args...> ; echoes the job id
     local name="$1" conf="$2"; shift 2
+    # Pass RERUN_CONF through the submitting environment rather than as
+    # --export=ALL,RERUN_CONF=...  Any "ALL,VAR=value" export spec is currently
+    # rejected by this cluster's slurmd with "user env retrieval failed
+    # requeued held", and releasing such a job just makes it fail again; plain
+    # --export=ALL works, and ALL already carries whatever we export here.
+    export RERUN_CONF="${conf}"
     local -a args=( "${SBATCH_ACCEPT_COST}" -J "${name}"
                     -o "${LOG_DIR}/${name}_%A_%a.out"
                     -e "${LOG_DIR}/${name}_%A_%a.err"
-                    --export="ALL,RERUN_CONF=${conf}" "$@" )
+                    --export=ALL "$@" )
     if [[ "${DRY_RUN}" == true ]]; then
         echo "sbatch ${args[*]}" >&2
         echo "DRYRUN"
@@ -146,7 +159,7 @@ if [[ "${STAGE}" == "all" || "${STAGE}" == "marformer" ]]; then
         conf="$(write_conf "${name}" "RUN_ID=${RUN_ID}" "FAMILY=${family}" \
                            "AXIS=${axis}" "PROTOCOL=${protocol}" "SIZES=${sizes}")"
         jid="$(submit "${name}" "${conf}" -p "${GPU_PARTITION}" -c "${GPU_CPUS}" \
-                      --mem="${GPU_MEM}" -t "${GPU_TIME}" \
+                      --mem="${GPU_MEM}" -t "${GPU_TIME}" ${EXCLUDE_ARG} \
                       --array="0-$((n-1))" $(dep "${GEN_JOB}") \
                       "${RERUN_DIR}/jobs/marformer_train.sbatch")"
         echo "marformer : ${name} (${n} tasks) job ${jid}"
@@ -172,6 +185,35 @@ if [[ "${STAGE}" == "all" || "${STAGE}" == "stan" ]]; then
 fi
 
 # ------------------------------------------------------------------ 4. eval
+# ---------------------------------------------------------------- LLM-Rubric
+# The real-data arm. Its bundles come from jobs/make_llmrubric_data.sh, not from
+# the synthetic generator, so this stage is deliberately not part of "all".
+#
+# Throttled with %3: submitting all ten at once reliably comes back
+# "user env retrieval failed requeued held" on this cluster.
+LLMRUBRIC_SIZES="10,20,30,40,50,75,100,125,150,175"
+
+if [[ "${STAGE}" == "llmrubric" ]]; then
+    n="$(count_sizes "${LLMRUBRIC_SIZES}")"
+    conf="$(write_conf "LLMR-Marformer" "RUN_ID=${RUN_ID}" "SIZES=${LLMRUBRIC_SIZES}")"
+    jid="$(submit "LLMR-Marformer" "${conf}" -p "${GPU_PARTITION}" -c "${GPU_CPUS}" \
+                  --mem="${GPU_MEM}" -t "${GPU_TIME}" ${EXCLUDE_ARG} \
+                  --array="0-$((n-1))%3" \
+                  "${RERUN_DIR}/jobs/llmrubric_train.sbatch")"
+    echo "llmrubric : Marformer (${n} tasks) job ${jid}"
+    LLMR_TRAIN_JOB="${jid}"
+fi
+
+if [[ "${STAGE}" == "llmrubric-eval" ]]; then
+    n="$(count_sizes "${LLMRUBRIC_SIZES}")"
+    conf="$(write_conf "LLMR-EVAL" "RUN_ID=${RUN_ID}" "SIZES=${LLMRUBRIC_SIZES}")"
+    jid="$(submit "LLMR-EVAL" "${conf}" -p "${GPU_PARTITION}" -c "${GPU_CPUS}" \
+                  --mem="${GPU_MEM}" -t "${GPU_TIME}" ${EXCLUDE_ARG} \
+                  --array="0-$((n-1))%3" \
+                  "${RERUN_DIR}/jobs/llmrubric_eval.sbatch")"
+    echo "llmr-eval : ${n} tasks job ${jid}"
+fi
+
 if [[ "${STAGE}" == "all" || "${STAGE}" == "eval" ]]; then
     for family in Marformer MarformerNT; do
         d=""
@@ -179,7 +221,7 @@ if [[ "${STAGE}" == "all" || "${STAGE}" == "eval" ]]; then
             && d="--dependency=afterok:${EVAL_DEPS[${family}]}"
         conf="$(write_conf "D3SIG-EVAL-${family}" "RUN_ID=${RUN_ID}" "FAMILY=${family}")"
         jid="$(submit "D3SIG-EVAL-${family}" "${conf}" -p "${GPU_PARTITION}" -c "${GPU_CPUS}" \
-                      --mem="${GPU_MEM}" -t "${GPU_TIME}" ${d} \
+                      --mem="${GPU_MEM}" -t "${GPU_TIME}" ${EXCLUDE_ARG} ${d} \
                       "${RERUN_DIR}/jobs/marformer_eval.sbatch")"
         echo "eval      : ${family} job ${jid}"
     done

@@ -25,9 +25,16 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
 - **Why it matters:** the footnote also claims *"empirically the gap is small"*
   between chunked and full passes. If the runs were actually done at 300, that
   claim was measured at a different chunk size than the one stated.
-- **To resolve:** decide which is correct, then either change the constant and
-  rerun the item axis, or fix the footnote. `RERUN` exposes this as
-  `DOMAIN3_MAX_ITEM`, so a comparison run is
+- **Update (2026-08-25):** both numbers are in the code, on different sides of
+  the pipeline. *Training* chunks at 300 (`DOMAIN3-SIGMOID/run_marformer_group.sh:22`
+  → `--max-item`). *Evaluation* chunks at 500 — `imputer/entity_mf/test.py:238`
+  hardcodes `max_item=500`, ignoring the trained value. So a model trained on
+  300-item graphs is tested on 500-item graphs: the paper's "500" describes the
+  eval path, and train/test see different graph sizes. That is a train/test
+  mismatch, not just a documentation error.
+- **To resolve:** make eval inherit `max_item` from `train_config.json` rather
+  than hardcoding, then decide on a single value and rerun the item axis.
+  `RERUN` exposes the training side as `DOMAIN3_MAX_ITEM`, so a comparison is
   `DOMAIN3_MAX_ITEM=500 ./submit_all.sh --run-id chunk500 --data-from baseline --stage marformer`.
 
 ## D2 — Early stopping: described but not implemented
@@ -39,10 +46,16 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
   *"why validation loss here and training loss before?"* and a response that
   *"Prabhav thinks there's no early stopping actually"*.
 - **Code:** the runner passes `--epochs 400` and no patience/early-stopping
-  flag. Every run trains the full 400 epochs.
-- **To resolve:** if there is no early stopping, delete the clause and say so
-  explicitly (reviewers will ask about regularisation). If there should be,
-  it needs implementing and a full rerun.
+  flag. Every run trains the full 400 epochs — Prabhav is right that nothing
+  stops early.
+- **But there is model selection**, which is the thing the paper's clause was
+  probably reaching for. `train.py:1092` registers a `ModelCheckpoint` with
+  `monitor="val/missing_ce", mode="min", save_top_k=1` alongside a periodic
+  checkpoint every 25 epochs. So a validation-selected checkpoint *is* written
+  (`best-*.ckpt`). See D14 for what the eval pipeline then does with it.
+- **To resolve:** describe what actually happens — 400 epochs, no early
+  stopping, checkpoint selection after the fact — and fix D14 first, since the
+  two together decide what "the model" even means in the reported numbers.
 
 ## D3 — Early stopping is described inconsistently across domains
 
@@ -182,6 +195,111 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
   Domain 1/2 x-axis the way Domain 3 was extended, since the Marformer curves
   are still improving at 2000; renaming baseline legends to `MAP (EM)` /
   `MAP (SGD)` / `MAP (SGD -- true init)`. All blocked on D7.
+
+## D14 — Reported checkpoints are selected on the **test** set
+
+- **Status:** open
+- **Affects:** numbers, in every Domain 3 figure; and a methodological claim
+- **Detail:** training writes ~18 checkpoints per run (`best-*` selected on
+  validation, `last`, and `periodic-*` every 25 epochs). Evaluation then
+  ignores the validation-selected one and re-ranks *all* of them on test:
+  - `imputer/entity_mf/test.py:229` evaluates each checkpoint with
+    `split="test"`;
+  - `scripts/DOMAIN3/run_marformer_eval.sh:97` passes `--checkpoint all`, then
+    sorts by `missing.log_loss` and writes the winner as `best.json` with
+    `"selection_metric": "missing.log_loss"`;
+  - `plot_domain3_sigmoid.py:322` (`_write_best_json_from_test_results`)
+    does the same thing again if `best.json` is absent.
+  Every plotted Marformer point is therefore a **min over ~18 checkpoints of
+  test log-loss**, not a fixed model evaluated once.
+- **Why it matters:** this is test-set leakage through model selection. It
+  biases Marformer's log-loss and calibration favourably relative to the Stan
+  baselines, which get no such per-size selection. It also directly answers
+  Jason's question about which split calibration is measured on: the *metrics*
+  are computed on test, but the *checkpoint* was chosen using the same test
+  split, so the calibration numbers are optimistic.
+- **The real-data pipeline differs**, which makes the inconsistency worse.
+  `plot_llmrubric_cpm_sigmoid.py` reads `TEST_RESULTS/best.json` and
+  `last.json`, which `test.py --checkpoint both` writes from the
+  *validation*-selected `best-*.ckpt` and the final epoch. So the LLM-Rubric
+  numbers are nearly honest — a 2-way min over best/last — while the synthetic
+  Domain 3 numbers are a min over ~18 checkpoints. The two sets of figures in
+  the paper are therefore not selected the same way, and are not directly
+  comparable as evidence.
+- **To resolve:** select on validation (the `best-*.ckpt` already exists) and
+  report test metrics for that one checkpoint, in both pipelines. Re-running
+  eval is cheap — the checkpoints are already on disk — so this can be
+  quantified as "test-selected vs validation-selected" without retraining.
+  `RERUN/analysis/checkpoint_selection.py` does exactly that.
+
+## D15 — Masking is exactly-k, not an i.i.d. coin flip (Domain 3 training)
+
+- **Status:** decided (2026-08-25), prose fix
+- **Affects:** prose
+- **Detail:** `imputer/entity_mf/masking.py` (`MCARMasking.mask`) draws
+  `num_to_mask = int(len(observed_vars) * masking_rate)` without replacement,
+  so exactly 15% of observed variables are masked per step, not each
+  independently with probability 0.15. Same distinction Jason flags for data
+  generation in D6, but this one is about the *training* mask.
+
+## D16 — Observed tokens carry a loss term too
+
+- **Status:** open
+- **Affects:** how the objective is described; relevant to the overfitting thread
+- **Detail:** the paper describes masked auto-encoding. The code optimises
+  `masked_loss_weight * masked_loss + observed_loss_weight * observed_loss`
+  with weights 15.0 and 1.0 (`eval.py:121`, `run_marformer_group.sh`). The
+  observed term asks the model to predict tokens whose values are visible in
+  its own input — a copy task, achievable at near-zero entropy.
+- **Why it matters:** it is a standing pressure toward low predictive entropy,
+  which is exactly the mechanism Jason worries about. It needs either a mention
+  in the paper or an ablation showing it does not affect calibration.
+
+## D17 — Entity-deviation dropout is not rescaled at eval
+
+- **Status:** open
+- **Affects:** numbers on the annotator axis; a train/test mismatch
+- **Detail:** `model.py::_build_initial_streams` zeroes an entity's deviation
+  with probability `dropout_rate` while `self.training`, and uses the full
+  deviation at eval. There is no `1/(1-p)` inverted-dropout rescaling, so the
+  expected contribution of the deviation is `(1-p)x` during training and `1x`
+  at evaluation. On the annotator axis `p = 0.8`, a 5x scale change between
+  train and test.
+- **Why it does not blow up:** the learned deviations end up tiny anyway
+  (`|w|max = 0.0015` for annotators after 400 epochs), so 5x of nearly nothing
+  is still nearly nothing. But that is a consequence, not a design — and it
+  partly explains why the deviations stay small.
+- **On the item axis `p = 1.0`**, so the deviations receive no gradient at all
+  and remain exactly zero. That is load-bearing for the overfitting argument
+  (see `reports/OVERFITTING.md` §3) and should be stated in the paper rather
+  than left implicit in a runner script.
+- **To resolve:** either rescale, or document that this is deliberate
+  structural regularisation rather than dropout in the usual sense.
+
+## D18 — LLM-Rubric runtime figure uses hardcoded numbers
+
+- **Status:** open
+- **Affects:** one appendix figure
+- **Detail:** `plot_llmrubric_cpm_sigmoid.py` carries
+  `marformer_total_runtime_seconds` as a literal dict of hand-entered values
+  (e.g. `10: (4*60+47) * 70/300.0`), rather than reading elapsed time from the
+  runs. The same is true of `stan_runtime_seconds`. So the runtime curve cannot
+  be regenerated from a rerun — it will silently show the old machine's timings.
+- **Why it matters:** the paper quotes "18 minutes versus 162 minutes ... a
+  roughly 9x speedup" from this figure. Those numbers describe the old cluster.
+- **To resolve:** read elapsed seconds from each run's launcher metadata, which
+  `run_marformer_group.sh` already records as `elapsed_seconds`.
+
+## D19 — The RERUN matrix was missing the largest item sizes
+
+- **Status:** decided (2026-08-25)
+- **Affects:** 3 points on every item-generalization figure
+- **Detail:** the paper sweeps item generalization over
+  `{100,...,1000} u {2000,3000,4000}` for Marformer (Stan stops at 500), but
+  `RERUN/jobs/generate_data.sbatch` and `submit_all.sh` stopped at 1000.
+- **Resolved:** both extended. The base bundle already holds `K_TRAIN=4800`
+  items, so the large sizes are subsets of it — `SUBSPLIT_ONLY=1` re-derives
+  the splits from an existing base without re-running HMC.
 
 ---
 

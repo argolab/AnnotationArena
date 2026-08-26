@@ -12,7 +12,15 @@
 # real directory there, by design.
 set -euo pipefail
 
-source "$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")/config/cluster.sh"
+# Under sbatch the script is copied to /var/spool, so BASH_SOURCE no longer
+# points into the repo. submit_all.sh sources config/cluster.sh (which exports
+# RERUN_DIR) before submitting, and --export=ALL carries it in; fall back to
+# path resolution only when this script is run directly.
+if [[ -n "${RERUN_DIR:-}" && -f "${RERUN_DIR}/config/cluster.sh" ]]; then
+    source "${RERUN_DIR}/config/cluster.sh"
+else
+    source "$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")/config/cluster.sh"
+fi
 
 RUN_ID=""
 REBUILD=false

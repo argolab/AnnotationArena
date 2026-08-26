@@ -265,6 +265,7 @@ class EntityMarformer(nn.Module):
         self.use_addone_attn = config.use_addone_attn
         self.use_param_output_head = config.use_param_output_head
         self.use_embed_unembed = config.use_embed_unembed
+        self.dual_outer_residual = getattr(config, "dual_outer_residual", "all")
 
         # Global param dim = max over types.
         self.global_param_dim = max(t.param_dim for t in types.values())
@@ -513,6 +514,19 @@ class EntityMarformer(nn.Module):
             return self._forward_emb(graph, device)
         return self._forward_dual(graph, device)
 
+    def _skip_outer_residual(self, layer_idx: int, num_blocks: int) -> bool:
+        """Whether this layer emits only the rotated part, with no outer residual add."""
+        mode = self.dual_outer_residual
+        if mode == "all":
+            return False
+        if mode == "none":
+            return True
+        if mode == "not_last":
+            return layer_idx == num_blocks - 1
+        raise ValueError(
+            f"Unknown dual_outer_residual: {mode!r}. Choose 'all', 'not_last', or 'none'."
+        )
+
     def _forward_dual(self, graph: EntityGraph, device: torch.device) -> torch.Tensor:
         """Dual-stream forward pass (original architecture)."""
         features, params, attn_mask = self._build_initial_streams(graph, device=device)
@@ -520,7 +534,8 @@ class EntityMarformer(nn.Module):
         K_aug = self._get_k_aug(graph, device)
 
         combined = torch.cat([features, params], dim=-1)  # [1, L, model_dim]
-        for block in self.blocks:
+        num_blocks = len(self.blocks)
+        for layer_idx, block in enumerate(self.blocks):
             normed_attn = block["norm_1"](combined)
             attn_out    = block["attn"](normed_attn, edge_mask=edge_mask, attn_mask=attn_mask, K_aug=K_aug)
             combined    = combined + attn_out
@@ -529,8 +544,17 @@ class EntityMarformer(nn.Module):
             z_ff      = block["ff"](normed_ff)
             combined  = combined + z_ff
 
-            features = features + block["dropout_2"](block["proj_out"](combined))
-            params   = params   + block["dropout_2"](block["W_param"](combined))
+            # Outer residual. `combined` already carries an inner residual stream, so
+            # adding proj_out/W_param back onto features/params gives a second, parallel
+            # stream -- the "double residual stream". dual_outer_residual selects which
+            # layers keep that outer add; dropping it leaves only the rotated part.
+            feat_update  = block["dropout_2"](block["proj_out"](combined))
+            param_update = block["dropout_2"](block["W_param"](combined))
+            if self._skip_outer_residual(layer_idx, num_blocks):
+                features, params = feat_update, param_update
+            else:
+                features = features + feat_update
+                params   = params   + param_update
             combined = torch.cat([features, params], dim=-1)
 
         if self.use_param_output_head:

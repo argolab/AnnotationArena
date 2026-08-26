@@ -20,7 +20,15 @@ set -euo pipefail
 # lr=2e-4, wd=0.01, masking 15%, K=5 augmentations, masked loss weight 15,
 # 400 epochs). Change them there so training and the paper stay in sync.
 
-source "$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")/config/cluster.sh"
+# Under sbatch the script is copied to /var/spool, so BASH_SOURCE no longer
+# points into the repo. submit_all.sh sources config/cluster.sh (which exports
+# RERUN_DIR) before submitting, and --export=ALL carries it in; fall back to
+# path resolution only when this script is run directly.
+if [[ -n "${RERUN_DIR:-}" && -f "${RERUN_DIR}/config/cluster.sh" ]]; then
+    source "${RERUN_DIR}/config/cluster.sh"
+else
+    source "$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")/config/cluster.sh"
+fi
 
 # Job parameters arrive in a file, not via --export (see write_conf in
 # submit_all.sh: --export mangles comma-separated size lists and spaces).
@@ -28,6 +36,8 @@ if [[ -n "${RERUN_CONF:-}" ]]; then
     # shellcheck disable=SC1090
     source "${RERUN_CONF}"
 fi
+# This is a --gres=gpu job; a silent CPU fallback would be a bug, not a fallback.
+export REQUIRE_GPU=1
 rerun_activate_env
 
 : "${RUN_ID:?}" "${FAMILY:?}" "${AXIS:?}" "${PROTOCOL:?}" "${SIZES:?}"
@@ -41,14 +51,26 @@ if [[ "${PROTOCOL}" == "transductive" ]]; then
 else
     RESULTS_SUBDIR="MARFORMER-NT"
 fi
-OUTPUT_ROOT="$(rerun_results_root "${RUN_ID}")/${RESULTS_SUBDIR}/DOMAIN3-SIGMOID/${AXIS_DIR}"
+# VARIANT_TAG keeps ablation arms from colliding in the results tree. Empty for
+# the plain replication, so those paths stay exactly what the plot scripts glob.
+VARIANT_TAG="${VARIANT_TAG:-}"
+if [[ -n "${VARIANT_TAG}" ]]; then
+    OUTPUT_ROOT="$(rerun_results_root "${RUN_ID}")/${RESULTS_SUBDIR}/DOMAIN3-SIGMOID/${AXIS_DIR}/${VARIANT_TAG}"
+else
+    OUTPUT_ROOT="$(rerun_results_root "${RUN_ID}")/${RESULTS_SUBDIR}/DOMAIN3-SIGMOID/${AXIS_DIR}"
+fi
 
 # Point the upstream runner at this run's data and results.
 export DOMAIN3_DATASET_LABEL="DOMAIN3-SIGMOID"
-export DOMAIN3_DATA_ROOT="$(rerun_data_root "${RUN_ID}")"
+# DATA_RUN_ID lets an ablation reuse an existing run's generated data instead of
+# regenerating it, so every arm is compared on byte-identical splits.
+export DOMAIN3_DATA_ROOT="$(rerun_data_root "${DATA_RUN_ID:-${RUN_ID}}")"
 export DOMAIN3_SPLIT_PREFIX="DOMAIN3-SIGMOID"
 export DOMAIN3_EXP_PREFIX="domain3_sigmoid"
 export DOMAIN3_MAX_ITEM="${DOMAIN3_MAX_ITEM:-300}"   # see FIGURES.md discrepancy #1
+# Architecture / optimisation knobs the ablations vary; defaults reproduce the paper.
+export DOMAIN3_DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
+export DOMAIN3_SEED="${DOMAIN3_SEED:-42}"
 mkdir -p "${OUTPUT_ROOT}"
 
 # Note: run_marformer_group.sh also tees its own log into imputer/ranking/logs/
@@ -61,6 +83,8 @@ echo " RUN_ID      : ${RUN_ID}"
 echo " OUTPUT_ROOT : ${OUTPUT_ROOT}"
 echo " DATA_ROOT   : ${DOMAIN3_DATA_ROOT}"
 echo " MAX_ITEM    : ${DOMAIN3_MAX_ITEM}"
+echo " RESIDUAL    : ${DOMAIN3_DUAL_OUTER_RESIDUAL}"
+echo " SEED        : ${DOMAIN3_SEED}"
 echo "=============================================================="
 
 rerun_run bash "${RANKING_ROOT}/scripts/DOMAIN3/run_marformer_group.sh" \

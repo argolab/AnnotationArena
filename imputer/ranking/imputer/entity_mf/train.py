@@ -462,7 +462,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         imputer behavior.
         """
         metrics = self.trainer.callback_metrics if hasattr(self, "trainer") else {}
-        total = metrics.get("train/loss", torch.tensor(0.0, device=self.device))
+        total = metrics.get("train/loss_epoch", metrics.get("train/loss", torch.tensor(0.0, device=self.device)))
         total_f = float(total.detach().cpu()) if isinstance(total, torch.Tensor) else float(total)
 
         print(f"[Epoch {self.current_epoch}] total_train_loss={total_f:.4f}")
@@ -472,6 +472,18 @@ class EntityMarformerLightningModule(pl.LightningModule):
             "epoch": int(self.current_epoch),
             "total_loss": total_f,
         }
+
+        # Raw (unweighted) training cross-entropies, on the same scale as the
+        # val/test "missing" xent below. Without these the history has no
+        # train-side number comparable to validation, so a train/val gap --
+        # the thing you look at to see overfitting -- cannot be read off it.
+        # Lightning suffixes "_epoch" when a metric is logged with both
+        # on_step=True and on_epoch=True, so check that key first.
+        for key, name in (("train/masked_ce", "train_masked_ce"),
+                          ("train/observed_ce", "train_observed_ce")):
+            val = metrics.get(f"{key}_epoch", metrics.get(key, None))
+            if val is not None:
+                epoch_metrics[name] = float(val.detach().cpu()) if isinstance(val, torch.Tensor) else float(val)
 
         if self.transductive:
             # In transductive mode, run a single evaluation on the combined split
@@ -778,6 +790,17 @@ def main():
         help="Override EntityMarformerConfig.dropout.",
     )
     parser.add_argument(
+        "--dual-outer-residual",
+        choices=["all", "not_last", "none"],
+        default="all",
+        help=(
+            "Dual-stream only. Which layers keep the outer residual add "
+            "(features/params += proj(combined)). 'all' is the current architecture "
+            "(double residual stream); 'not_last' drops it in the final layer; "
+            "'none' drops it everywhere, leaving a single inner residual stream."
+        ),
+    )
+    parser.add_argument(
         "--use-per-head-rel",
         action="store_true",
         default=True,
@@ -953,6 +976,7 @@ def main():
         config.num_ffn_layers = args.num_ffn_layers
     if args.dropout is not None:
         config.dropout = args.dropout
+    config.dual_outer_residual   = args.dual_outer_residual
     config.use_per_head_rel      = args.use_per_head_rel
     config.use_pointer           = args.use_pointer
     config.use_rel_value         = args.use_rel_value
@@ -1015,6 +1039,7 @@ def main():
             "d_ff": config.d_ff,
             "num_ffn_layers": config.num_ffn_layers,
             "dropout": config.dropout,
+            "dual_outer_residual": config.dual_outer_residual,
             "use_per_head_rel": config.use_per_head_rel,
             "use_pointer": config.use_pointer,
             "use_rel_value": config.use_rel_value,

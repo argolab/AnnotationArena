@@ -18,8 +18,24 @@ export RERUN_DIR REPO_ROOT RANKING_ROOT RUNS_ROOT
 # sbatch is rejected without this (site billing plugin).
 SBATCH_ACCEPT_COST="--comment=accept_cost"
 
-# h100 is the best default: 20 nodes, 1- and 4-GPU jobs start immediately.
-GPU_PARTITION="${GPU_PARTITION:-h100}"
+# Marformer training is CPU-bound, not GPU-bound: an "epoch" is 5 batch-1
+# full-graph steps, and most of the wall clock goes into building the entity
+# graph in Python. Measured on the Item_T_200 split, 20 epochs (2026-08-25):
+#
+#     l40s  L40S        23s   mean GPU util  9%  (max 24%)
+#     h100  H100 80GB   26s   mean GPU util 11%  (max 30%)
+#     a100  A100 80GB   30s   mean GPU util 11%  (max 29%)
+#
+# The GPU is idle ~90% of the time, so the GPU class barely matters and a
+# faster one buys nothing. What matters is how many tasks can run at once, so
+# list several partitions and let Slurm start the job wherever there is room.
+# (This also means multi-GPU is pointless here -- there is no batch dimension
+# to shard, and DDP over the 5 mask augmentations would change the
+# optimisation, not just its speed.)
+# Keep this a SINGLE partition. A comma-separated list makes most array tasks
+# come back "user env retrieval failed requeued held" on this cluster and they
+# have to be released by hand; one partition submits cleanly.
+GPU_PARTITION="${GPU_PARTITION:-l40s}"
 CPU_PARTITION="${CPU_PARTITION:-med}"
 
 # Prefer plain --mem= : --mem-per-cpu is capped per partition on skipjack.
@@ -31,8 +47,15 @@ CPU_CPUS="${CPU_CPUS:-8}"
 CPU_MEM="${CPU_MEM:-64G}"
 CPU_TIME="${CPU_TIME:-2-00:00:00}"   # MaxTime is 3 days everywhere
 
+# gh104 hands out GPUs that torch cannot initialise: nvidia-smi works and the
+# device nodes are present, but cuInit() returns 999 (CUDA_ERROR_UNKNOWN), so
+# torch.cuda.is_available() is False. Jobs that land there either die in
+# Lightning's RNG setup or -- worse -- silently fall back to CPU. Same node the
+# lingua-2 scripts exclude for the same reason.
+EXCLUDE_NODES="${EXCLUDE_NODES:-gh104}"
+
 export SBATCH_ACCEPT_COST GPU_PARTITION CPU_PARTITION \
-       GPU_CPUS GPU_MEM GPU_TIME CPU_CPUS CPU_MEM CPU_TIME
+       GPU_CPUS GPU_MEM GPU_TIME CPU_CPUS CPU_MEM CPU_TIME EXCLUDE_NODES
 
 # ---------------------------------------------------------------- environment
 # The upstream scripts/DOMAIN3/common.sh does `conda activate prabhav2 || true`,
@@ -60,14 +83,31 @@ rerun_activate_env() {
     fi
     set -u
 
-    python - <<'PY'
+    # REQUIRE_GPU=1 makes a missing GPU fatal. Without it the Domain 3 runners
+    # quietly fall back to --device cpu: the job "succeeds", runs ~100x slower,
+    # and nothing in the results says so. A --gres=gpu job that cannot see a
+    # GPU is a scheduling bug. See EXCLUDE_NODES above for the node that
+    # caused this.
+    REQUIRE_GPU="${REQUIRE_GPU:-0}" python - <<'PY'
+import os
 import sys
 try:
     import torch  # noqa: F401
 except Exception as exc:                      # pragma: no cover
     sys.exit(f"FATAL: torch not importable in this environment: {exc}")
+available = torch.cuda.is_available()
 print(f"python  : {sys.executable}")
-print(f"torch   : {torch.__version__}  cuda={torch.cuda.is_available()}")
+print(f"torch   : {torch.__version__}  cuda={available}")
+if available:
+    print(f"gpu     : {torch.cuda.get_device_name(0)}")
+elif os.environ.get("REQUIRE_GPU") == "1":
+    node = os.environ.get("SLURMD_NODENAME", "this node")
+    cvd = os.environ.get("CUDA_VISIBLE_DEVICES")
+    sys.exit(
+        f"FATAL: REQUIRE_GPU=1 but torch.cuda.is_available() is False on {node} "
+        f"(CUDA_VISIBLE_DEVICES={cvd!r}). Refusing to fall back to CPU. "
+        "If this node is bad, add it to EXCLUDE_NODES in RERUN/config/cluster.sh."
+    )
 PY
 }
 
