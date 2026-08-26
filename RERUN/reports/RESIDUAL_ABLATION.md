@@ -30,6 +30,40 @@ So there really are two residual streams stacked: an inner one that produces
 attention and FFN outputs never reach the next layer directly — they only get
 there through `[W_1; W_2]`.
 
+### What the two streams actually hold
+
+This matters for reading the result, and it is not obvious from the code.
+
+With `embedding_dim = 80` and `global_param_dim = 5`, every token's state is
+
+    combined (80) = [ features (75) | params (5) ]
+
+`features` is the entity-identity half: a per-type centroid plus an optional
+per-entity deviation. `params` is **not** a generic hidden vector — it is the
+model's running logit accumulator. `RatingVariableType.build_param` initialises
+it as
+
+| token | `params` at layer 0 |
+|---|---|
+| masked or missing | `[1, 0, 0, 0, 0]` — mask bit set, logits zero |
+| observed, value `v` | `[0, ...]` with `logit_high = 20.0` at slot `1+v` |
+
+and the model's output logits are read straight back out of the same slots,
+`params[1 : 1+C]`. So the outer residual makes the output a **sum over layers**:
+
+$$\text{logits} \;=\; \underbrace{p_0}_{\text{input encoding}} \;+\; \sum_{\ell=1}^{8} W_\text{param}\,c_\ell$$
+
+This is exactly why the Logit Lens appendix works — `params` is readable as a
+distribution at every depth, because it is the same object at every depth.
+
+Two consequences for the ablation:
+
+- For a **masked** token — i.e. every prediction target — `p_0` contributes
+  zero to the logits, so nothing is lost by discarding the *input* encoding.
+- For an **observed** token, `p_0` carries a ±20 logit of the true value. Under
+  `none` that spike is destroyed after layer 1 and must be re-derived by
+  attention at every subsequent layer.
+
 ## The three variants
 
 Added as `dual_outer_residual` (config → `train.py --dual-outer-residual` →
@@ -110,13 +144,24 @@ positive means, and the effect is clearest where the noise is lowest (K = 300,
 t ≈ 4.1). So the outer residual in the *intermediate* layers is doing real
 work; this is not redundant machinery that can simply be deleted.
 
-That combination makes sense structurally. With the outer add removed
-everywhere, the only path from layer $\ell$ to layer $\ell+1$ is through
-$[W_1; W_2]$ — a rank-limited linear map that must carry the entire stream. The
-identity path is gone, and with it the usual optimisation benefit of a residual
-network. Removing it in the last layer only costs nothing because there is no
-subsequent layer that needs the identity path — you are just changing how the
-output head reads the final state.
+That combination makes sense structurally, though not for the reason I first
+wrote. `[proj_out; W_param]` stacks a 75x80 and a 5x80 matrix into a **square
+80x80 map, and it is full rank** — checked on trained checkpoints, rank 80/80
+at layers 0, 3 and 7 in all three variants. So the problem is not that the map
+cannot represent the stream.
+
+It is **conditioning**. The smallest singular value of that map is 0.0013-0.016
+depending on layer and variant, against a largest of ~1.1 — condition numbers in
+the hundreds. With the outer add removed everywhere, the state reaches the
+output only as a product of eight such maps, and directions aligned with the
+small singular values are crushed geometrically. With the outer add present,
+`params` accumulates *additively*, so the layer-0 encoding and every layer's
+contribution reach the output unmultiplied. That is the ordinary residual-network
+argument, and it applies to the outer stream exactly as it does to the inner one.
+
+Removing the add in the last layer only costs nothing because no subsequent
+layer needs that path — you are changing how the output head reads the final
+state, not how signal propagates through the stack.
 
 ## Recommendation
 
