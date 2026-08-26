@@ -10,20 +10,28 @@ trained on newly generated synthetic data rather than any cached results.
 
 Jason asked four questions. Taking them in order:
 
+0. **Do we overfit in the same way?** On Domain 3 synthetic, no. **On real
+   LLM-Rubric data at small training sizes, yes — badly** (validation log-loss
+   1.35 at its minimum, 3.69 by epoch 300, while accuracy keeps improving).
+   See §4b. The two arms of the paper behave completely differently here.
 1. **Is it the masking procedure inflating the training sample?** Partly, but
    that is not the main thing.
 2. **Is it weight decay?** Marginally.
-3. **Is it early stopping on validation data?** **No — there is no validation
-   set, no early stopping, and no validation-based model selection anywhere in
-   Domain 3.**
+3. **Is it early stopping on validation data?** In Domain 3 synthetic, no —
+   there is no validation set, no early stopping, and no validation-based
+   selection at all. On LLM-Rubric there *is*, and it is doing essentially all
+   of the work.
 4. **Which split is calibration measured on?** Test — but for the synthetic
    figures the *checkpoint was also chosen on test*, so the reported calibration
    is optimistic. The real-data (LLM-Rubric) figures do not have this problem.
 
-The reason the failure mode does not appear is more structural than any of the
-first three: **in the item-generalization setting the model has no per-item
-parameters to overfit with.** It cannot put mass on the training $y_i$ because
-it has no way to represent "item $i$". See §3.
+The reason the failure mode does not appear *in Domain 3 synthetic* is more
+structural than any of the first three: **in the item-generalization setting
+the model has no per-item parameters to overfit with.** It cannot put mass on
+the training $y_i$ because it has no way to represent "item $i$" — the item
+deviation table is dropped on every training step and ends at exactly zero.
+See §3. On LLM-Rubric that dropout is 0.7 rather than 1.0, items keep some
+identity, and the failure mode returns.
 
 There is one place where the model *does* put near-total mass on the training
 values, and it is worth knowing about: §5.
@@ -162,6 +170,63 @@ Three things to note.
 - **The small-sample end is where the gap lives** (~0.24 nats at 100 items /
   10 annotators), which is the regime Jason expected to be worst. It is real
   but it is a fifth of the distance to chance, not a collapse.
+
+## 4b. On real data at small K, we overfit *exactly* the way Jason describes
+
+The synthetic results above make Marformer look immune. It is not. On
+LLM-Rubric, where items keep their identity (`item_dropout_rate = 0.7`, not
+1.0) and the training set can be genuinely tiny, the failure mode appears in
+textbook form.
+
+Validation log-loss over 300 epochs, `LLMRubric_225_25_9_10` (10 training
+items):
+
+| epoch (approx) | val log-loss | val accuracy |
+|---|---|---|
+| 20 | 1.52 | 0.23 |
+| 40 | 1.73 | 0.39 |
+| 120 | 1.64 | 0.43 |
+| 180 | 2.32 | 0.41 |
+| 240 | 2.64 | 0.36 |
+| 300 | 3.69 | 0.39 |
+
+Log-loss bottoms out around epoch 71 and then climbs to **2.7x chance**
+(chance = 1.386), while **accuracy keeps improving**. That is precisely the
+signature from the heteroskedastic paper: the point prediction is still getting
+better while the predicted distribution becomes overconfident, so log-loss
+blows up even as the argmax improves. It also answers Jason's parenthetical
+directly — if we stop early, we are *not* stopping while the mean is still in
+error; we are stopping while the mean is still improving and the variance has
+already collapsed. The two are trading off against each other.
+
+The effect decays monotonically with training size, exactly as Jason
+predicted:
+
+| K_train | min val log-loss | final val log-loss | inflation |
+|---|---|---|---|
+| 10 | 1.350 | 3.693 | **+2.343** |
+| 20 | 1.069 | 1.608 | +0.539 |
+| 30 | 1.002 | 1.536 | +0.534 |
+| 40 | 1.009 | 1.388 | +0.379 |
+| 50 | 1.064 | 1.250 | +0.186 |
+| 75 | 1.012 | 1.084 | +0.072 |
+
+So the honest overall picture is:
+
+- **Domain 3 synthetic**: no overfitting, because §3 removes the parameters
+  that would be needed for it, and there is no validation set — but none is
+  needed.
+- **LLM-Rubric**: strong overfitting at small K, and the reported numbers are
+  saved *entirely* by validation-based checkpoint selection. `best.json` there
+  comes from the validation-selected checkpoint, so the paper's 1.52 at
+  K_train = 10 is roughly the epoch-71 minimum, not the epoch-300 value of 3.69
+  the model actually ends at.
+
+That is worth stating plainly in the paper. As written, the methods section
+implies early stopping is a minor detail; on the real-data arm it is the
+difference between 1.5 and 3.7 nats. It is also the reason the paper's own
+text has Marformer *losing* to Stan CPM and Best Unigram at K_train = 10 —
+that is the regime where this bites hardest.
 
 ## 5. The one place we *do* put a ton of mass on the training answer
 
