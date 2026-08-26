@@ -13,7 +13,15 @@ set -euo pipefail
 #   RUN_ID   run label
 #   FAMILY   Marformer | MarformerNT
 
-source "$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")/config/cluster.sh"
+# Under sbatch the script is copied to /var/spool, so BASH_SOURCE no longer
+# points into the repo. submit_all.sh sources config/cluster.sh (which exports
+# RERUN_DIR) before submitting, and --export=ALL carries it in; fall back to
+# path resolution only when this script is run directly.
+if [[ -n "${RERUN_DIR:-}" && -f "${RERUN_DIR}/config/cluster.sh" ]]; then
+    source "${RERUN_DIR}/config/cluster.sh"
+else
+    source "$(dirname "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")")/config/cluster.sh"
+fi
 
 # Job parameters arrive in a file, not via --export (see write_conf in
 # submit_all.sh: --export mangles comma-separated size lists and spaces).
@@ -21,6 +29,8 @@ if [[ -n "${RERUN_CONF:-}" ]]; then
     # shellcheck disable=SC1090
     source "${RERUN_CONF}"
 fi
+# This is a --gres=gpu job; a silent CPU fallback would be a bug, not a fallback.
+export REQUIRE_GPU=1
 rerun_activate_env
 
 : "${RUN_ID:?}" "${FAMILY:?}"

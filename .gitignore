@@ -358,3 +358,7 @@ Marformer-Paper
 RERUN/runs/
 # Staged input data (LLM-Rubric bundles, 18M) -- real data, not generated here
 RERUN/shared/
+
+# Compiled Stan executables (built on demand by cmdstanpy)
+imputer/ranking/STAN/stan_models/*
+!imputer/ranking/STAN/stan_models/*.stan

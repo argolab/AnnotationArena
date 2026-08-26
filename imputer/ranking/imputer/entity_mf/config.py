@@ -31,3 +31,7 @@ class EntityMarformerConfig:
     use_graph_mask: bool = False         # Hard graph attention mask: allow attention only where edge_mask or K_aug pointer exists (+ self)
     use_param_output_head: bool = False  # Predict final params from the last combined hidden state instead of using the residual param stream directly
     use_embed_unembed: bool = False      # Embedding/unembedding architecture: single residual stream; value embedded via learned A*x+b at layer 0, unembedded via per-type linear at output
+    dual_outer_residual: str = "all"     # Dual-stream only. Which layers keep the OUTER residual add (features/params += proj(combined)).
+                                         #   "all"      -> baseline: every layer adds (double residual stream: inner on `combined`, outer on features/params)
+                                         #   "not_last" -> every layer but the last adds; the last layer emits only [proj_out; W_param](combined)
+                                         #   "none"     -> no layer adds; the stream is carried purely by `combined`'s inner residual, rotated each layer

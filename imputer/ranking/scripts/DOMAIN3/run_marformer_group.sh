@@ -91,7 +91,7 @@ domain3_enter_repo
 
 SCRIPT_START=$SECONDS
 
-SEED=42
+SEED="${DOMAIN3_SEED:-42}"   # overridable so ablations can average over seeds
 TYPE_EMBEDDING_INIT="kaiming"
 EMBEDDING_DIM=80
 NUM_LAYERS=8
@@ -110,6 +110,10 @@ MASKED_LOSS_WEIGHT=15.0
 OBSERVED_LOSS_WEIGHT=1.0
 DEVICE="$(domain3_choose_torch_device)"
 MAX_ITEM="${DOMAIN3_MAX_ITEM:-100}"
+# Which layers keep the outer residual add (features/params += proj(combined)).
+# "all" is the shipped architecture; "not_last" / "none" are the residual-stream
+# ablation. Overridable so the ablation does not need its own runner.
+DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
 ITEM_DROPOUT_RATE=1.0
 ANNOTATOR_DROPOUT_RATE=0.0
 ITEM_REG_WEIGHT=0.0
@@ -248,6 +252,7 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
         --item-reg-weight        "${ITEM_REG_WEIGHT}"      \
         --attribute-reg-weight   "${ATTRIBUTE_REG_WEIGHT}" \
         --annotator-reg-weight   "${ANNOTATOR_REG_WEIGHT}" \
+        --dual-outer-residual    "${DUAL_OUTER_RESIDUAL}"    \
         ${TRANSDUCTIVE_FLAG}                               \
         ${PER_HEAD_FLAG}                                   \
         ${SCALE_FLAG}                                      \
@@ -273,6 +278,7 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
   "output_dir": "${RUN_DIR}",
   "elapsed_seconds": ${RUN_ELAPSED},
   "hyperparameters": {
+    "dual_outer_residual": "${DUAL_OUTER_RESIDUAL}",
     "seed": ${SEED},
     "embedding_dim": ${EMBEDDING_DIM},
     "num_layers": ${NUM_LAYERS},
