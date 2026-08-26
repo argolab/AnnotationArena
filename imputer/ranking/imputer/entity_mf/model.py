@@ -279,6 +279,8 @@ class EntityMarformer(nn.Module):
         self.use_embed_unembed = config.use_embed_unembed
         # Set by enable_compile(); None means run the eager block stack.
         self._compiled_blocks = None
+        # Set by enable_amp(); None means run the block stack in fp32.
+        self._amp_dtype = None
         self.dual_outer_residual = getattr(config, "dual_outer_residual", "all")
         self.inner_residual = getattr(config, "inner_residual", "both")
         if self.inner_residual not in ("both", "ff_only", "none"):
@@ -408,6 +410,26 @@ class EntityMarformer(nn.Module):
         if self.use_embed_unembed:
             raise ValueError("enable_compile only covers the dual-stream path")
         self._compiled_blocks = torch.compile(self._dual_blocks, mode=mode, dynamic=False)
+
+    def enable_amp(self, dtype: str = "none") -> None:
+        """
+        Run the block stack under autocast.
+
+        The block is dominated by traffic over the [B, H, L, L] score tensor, so
+        halving its width is worth more here than the matmul speedup. Note the
+        param stream carries raw logits (logit_high = 20), so this is a real
+        numerical change, not just a speed knob -- check the loss curve.
+        """
+        self._amp_dtype = {"none": None, "bf16": torch.bfloat16,
+                           "fp16": torch.float16}[dtype]
+
+    def _run_blocks(self, *core_args) -> torch.Tensor:
+        core = self._compiled_blocks if self._compiled_blocks is not None else self._dual_blocks
+        if self._amp_dtype is None:
+            return core(*core_args)
+        with torch.autocast("cuda", dtype=self._amp_dtype):
+            out = core(*core_args)
+        return out.float()
 
     def _make_attn_block(self, config: EntityMarformerConfig, num_relationships: int) -> RelationalAttentionBlock:
         return RelationalAttentionBlock(
@@ -626,8 +648,7 @@ class EntityMarformer(nn.Module):
         features, params, attn_mask = self._build_initial_streams_batched(graph, status, device)
         edge_mask = graph.build_edge_masks(device=device)
         K_aug = self._get_k_aug(graph, device)
-        core = self._compiled_blocks if self._compiled_blocks is not None else self._dual_blocks
-        return core(features, params, edge_mask, attn_mask, K_aug)
+        return self._run_blocks(features, params, edge_mask, attn_mask, K_aug)
 
     def _build_initial_streams_batched(
         self,
@@ -689,8 +710,7 @@ class EntityMarformer(nn.Module):
         features, params, attn_mask = self._build_initial_streams(graph, device=device)
         edge_mask = graph.build_edge_masks(device=device)
         K_aug = self._get_k_aug(graph, device)
-        core = self._compiled_blocks if self._compiled_blocks is not None else self._dual_blocks
-        return core(features, params, edge_mask, attn_mask, K_aug)
+        return self._run_blocks(features, params, edge_mask, attn_mask, K_aug)
 
     def _dual_blocks(
         self,

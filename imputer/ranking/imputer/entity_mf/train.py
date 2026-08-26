@@ -1030,6 +1030,11 @@ def main():
         help="Epoch at which to apply one LR drop when --lr-schedule step.",
     )
     parser.add_argument(
+        "--amp", default="none", choices=["none", "bf16", "fp16"],
+        help="Run the block stack under autocast. Numerically real: the param "
+             "stream carries raw logits.",
+    )
+    parser.add_argument(
         "--tf32", action="store_true",
         help="Allow TF32 for fp32 matmuls (H100/A100). Fewer mantissa bits, "
              "much higher matmul throughput.",
@@ -1191,6 +1196,7 @@ def main():
             "batch_augmentations": bool(args.batch_augmentations),
             "eval_every": args.eval_every,
             "tf32": bool(args.tf32),
+            "amp": args.amp,
         },
         "run": {
             "run_dir": str(run_dir),
@@ -1227,6 +1233,8 @@ def main():
 
     if args.tf32:
         torch.set_float32_matmul_precision("high")
+    if args.amp != "none":
+        model.enable_amp(args.amp)
 
     if args.compile_mode != "none":
         model.enable_compile(args.compile_mode)
