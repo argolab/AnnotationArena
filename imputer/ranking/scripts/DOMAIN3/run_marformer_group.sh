@@ -99,8 +99,8 @@ ATTENTION_HEADS=4
 D_FF=128
 NUM_FFN_LAYERS=1
 DROPOUT=0.1
-EPOCHS=400
-LR=2e-4
+EPOCHS="${DOMAIN3_EPOCHS:-400}"   # overridable so the runner can be smoke-tested
+LR="${DOMAIN3_LR:-2e-4}"
 LR_SCHEDULE="none"
 LR_MIN=1e-5
 WEIGHT_DECAY=0.01
@@ -117,6 +117,16 @@ DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
 # Residual adds inside the block: both | ff_only | none. "none" leaves the outer
 # add as the only skip connection.
 INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
+# Speed knobs (see RERUN/reports/TRAINING_SPEED.md). All default to off, so the
+# shipped configuration is the same optimisation problem as before.
+# BATCH_AUGMENTATIONS folds the mask augmentations into one batched step, which
+# is one optimizer step per epoch instead of MASK_AUGMENTATIONS -- raise
+# DOMAIN3_LR with it. It pays when the chunks are small (max_item <= 100) and
+# does not at 300.
+BATCH_AUGMENTATIONS="${DOMAIN3_BATCH_AUGMENTATIONS:-false}"
+TF32="${DOMAIN3_TF32:-false}"
+COMPILE_MODE="${DOMAIN3_COMPILE:-none}"
+EVAL_EVERY="${DOMAIN3_EVAL_EVERY:-1}"
 ITEM_DROPOUT_RATE=1.0
 ANNOTATOR_DROPOUT_RATE=0.0
 ITEM_REG_WEIGHT=0.0
@@ -156,6 +166,10 @@ GRAPHMASK_FLAG=""
 [ "${USE_GRAPH_MASK}" = "true" ] && GRAPHMASK_FLAG="--use-graph-mask"
 LLM_DIST_FLAG=""
 [ "${LLM_INPUT_DIST}" = "true" ] && LLM_DIST_FLAG="--llm-input-dist"
+BATCH_AUG_FLAG=""
+[ "${BATCH_AUGMENTATIONS}" = "true" ] && BATCH_AUG_FLAG="--batch-augmentations"
+TF32_FLAG=""
+[ "${TF32}" = "true" ] && TF32_FLAG="--tf32"
 OVERWRITE_FLAG=""
 [ "${OVERWRITE_EXISTING}" = "true" ] && OVERWRITE_FLAG="--overwrite-existing-data"
 TRANSDUCTIVE_FLAG=""
@@ -194,6 +208,8 @@ echo " USE_POINTER         : ${USE_POINTER}"
 echo " SCALE_SHARED_REL    : ${SCALE_SHARED_REL}"
 echo " TRANSDUCTIVE        : $([ "${PROTOCOL}" = "transductive" ] && echo "true" || echo "false")"
 echo " USE_EMBED_UNEMBED   : ${USE_EMBED_UNEMBED}"
+echo " BATCH_AUGMENTATIONS : ${BATCH_AUGMENTATIONS}"
+echo " TF32 / COMPILE      : ${TF32} / ${COMPILE_MODE}"
 
 for RAW_SIZE in "${SIZE_LIST[@]}"; do
     SIZE="$(echo "${RAW_SIZE}" | xargs)"
@@ -257,6 +273,10 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
         --annotator-reg-weight   "${ANNOTATOR_REG_WEIGHT}" \
         --dual-outer-residual    "${DUAL_OUTER_RESIDUAL}"    \
         --inner-residual         "${INNER_RESIDUAL}"        \
+        --compile                "${COMPILE_MODE}"          \
+        --eval-every             "${EVAL_EVERY}"            \
+        ${BATCH_AUG_FLAG}                                  \
+        ${TF32_FLAG}                                       \
         ${TRANSDUCTIVE_FLAG}                               \
         ${PER_HEAD_FLAG}                                   \
         ${SCALE_FLAG}                                      \
