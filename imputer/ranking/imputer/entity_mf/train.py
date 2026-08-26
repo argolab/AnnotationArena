@@ -95,6 +95,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         lr_step_epoch: int = 40,
         random_item_chunks: bool = False,
         batch_augmentations: bool = False,
+        eval_every: int = 1,
     ):
         super().__init__()
         self.model = model
@@ -116,6 +117,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.lr_step_epoch = lr_step_epoch
         self.random_item_chunks = bool(random_item_chunks)
         self.batch_augmentations = bool(batch_augmentations)
+        self.eval_every = max(1, int(eval_every))
         if self.batch_augmentations:
             if random_item_chunks:
                 raise ValueError("--batch-augmentations needs fixed chunk graphs; "
@@ -507,14 +509,27 @@ class EntityMarformerLightningModule(pl.LightningModule):
 
         return loss
 
+    @torch.no_grad()
     def on_train_epoch_end(self) -> None:
         """
         Epoch-end summary + evaluation.
+
+        no_grad: nothing here is differentiated, but Lightning does not disable
+        autograd in this hook, so every epoch used to build (and free) a full
+        backward graph for the evaluation forward passes.
 
         Training_step focuses on optimizing the masked loss; here we run the
         full evaluation path on train/test splits, goal is to get the loss on missing tokens
         imputer behavior.
         """
+        # --eval-every N: run the epoch-end evaluation only every N epochs (the
+        # final epoch always runs). The evaluation is a full forward over every
+        # chunk of the split, so at N=1 it is a third of the wall clock.
+        last_epoch = (self.trainer.max_epochs is not None
+                      and self.current_epoch >= self.trainer.max_epochs - 1)
+        if self.eval_every > 1 and not last_epoch and (self.current_epoch % self.eval_every):
+            return
+
         metrics = self.trainer.callback_metrics if hasattr(self, "trainer") else {}
         total = metrics.get("train/loss_epoch", metrics.get("train/loss", torch.tensor(0.0, device=self.device)))
         total_f = float(total.detach().cpu()) if isinstance(total, torch.Tensor) else float(total)
@@ -1015,6 +1030,15 @@ def main():
         help="Epoch at which to apply one LR drop when --lr-schedule step.",
     )
     parser.add_argument(
+        "--tf32", action="store_true",
+        help="Allow TF32 for fp32 matmuls (H100/A100). Fewer mantissa bits, "
+             "much higher matmul throughput.",
+    )
+    parser.add_argument(
+        "--eval-every", type=int, default=1,
+        help="Run the epoch-end evaluation every N epochs (the last epoch always runs).",
+    )
+    parser.add_argument(
         "--batch-augmentations", action="store_true",
         help="Run the mask augmentations as one batched forward instead of one "
              "optimizer step each. MCAR masking only. One step per epoch, so the "
@@ -1165,6 +1189,8 @@ def main():
             "device": args.device,
             "compile_mode": args.compile_mode,
             "batch_augmentations": bool(args.batch_augmentations),
+            "eval_every": args.eval_every,
+            "tf32": bool(args.tf32),
         },
         "run": {
             "run_dir": str(run_dir),
@@ -1196,7 +1222,11 @@ def main():
         lr_step_epoch=args.lr_step_epoch,
         random_item_chunks=bool(args.random_item_chunks),
         batch_augmentations=bool(args.batch_augmentations),
+        eval_every=args.eval_every,
     )
+
+    if args.tf32:
+        torch.set_float32_matmul_precision("high")
 
     if args.compile_mode != "none":
         model.enable_compile(args.compile_mode)

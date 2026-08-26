@@ -26,9 +26,13 @@ def main() -> None:
     ap.add_argument("--max-item", type=int, default=100)
     ap.add_argument("--iters", type=int, default=8)
     ap.add_argument("--rows", type=int, default=25)
+    ap.add_argument("--batch", type=int, default=1, help="mask augmentations per forward")
+    ap.add_argument("--tf32", action="store_true")
     args = ap.parse_args()
 
     device = torch.device("cuda")
+    if args.tf32:
+        torch.set_float32_matmul_precision("high")
     bundle, converter, sizes = load_bundle_and_converter(Path(args.data_dir))
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"], num_annotators=sizes["num_annotators"],
@@ -51,12 +55,22 @@ def main() -> None:
     model = EntityMarformer(cfg, types, graph.num_relationships).to(device).train()
     opt = torch.optim.AdamW(model.parameters(), lr=2e-4, weight_decay=0.01)
 
+    from imputer.entity_mf.fastgraph import graph_tensors
+    gt = graph_tensors(graph, types, model.global_param_dim, device)
+    n_maskable = sum(1 for t in graph.tokens if t.status == 2 and t.raw_data is not None)
+
     def step():
         opt.zero_grad(set_to_none=True)
-        params = model(graph, device=device)
-        loss, _, _ = compute_trainable_loss(params, graph, model.types,
-                                            model.global_param_dim, device,
-                                            masked_loss_weight=15.0, observed_loss_weight=1.0)
+        if args.batch > 1:
+            status = gt.sample_status(n_maskable, 0.15, args.batch)
+            params = model.forward_batched(graph, status, device=device)
+        else:
+            status = None
+            params = model(graph, device=device)
+        loss, *_ = compute_trainable_loss(params, graph, model.types,
+                                          model.global_param_dim, device,
+                                          masked_loss_weight=15.0, observed_loss_weight=1.0,
+                                          status=status)
         loss.backward()
         opt.step()
 

@@ -134,7 +134,10 @@ def main() -> None:
         f_ref, p_ref, m_ref = model._build_initial_streams_ref(graph, device)
     check("features", f_new, f_ref)
     check("params", p_new, p_ref)
-    check("attn_mask", m_new.float(), m_ref.float())
+    # The vectorised path returns None (nothing is padded) where the reference
+    # returned an all-true mask; that is the same mask, minus a masked_fill over
+    # the score tensor per layer.
+    check("attn_mask all-valid", float(m_new is None and bool(m_ref.all())), 1.0, tol=0)
 
     print("\n2. rating loss breakdown")
     with torch.no_grad():
