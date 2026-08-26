@@ -124,6 +124,10 @@ class GraphTensors:
         self._status = torch.empty(L, dtype=torch.long, device=device)
         self._status_cpu = torch.empty(L, dtype=torch.long)
         self.refresh(graph)
+        # Statuses as the graph was constructed, before any training mask was
+        # applied. sample_status() rebuilds from this, so it does not matter
+        # what the last step left behind.
+        self.base_status = self._status.clone()
 
     @staticmethod
     def _build_targets(t: EntityType, tokens, pos: torch.Tensor):
@@ -166,6 +170,34 @@ class GraphTensors:
     @property
     def status(self) -> torch.Tensor:
         return self._status
+
+    def sample_status(self, n_maskable: int, masking_rate: float, batch: int) -> torch.Tensor:
+        """
+        Draw `batch` independent MCAR masks over the first `n_maskable` tokens.
+
+        Returns [B, L] statuses (0=missing, 1=masked, 2=observed). Equivalent to
+        calling MCARMasking.mask() `batch` times -- exactly
+        floor(n_maskable * masking_rate) tokens masked per draw, chosen without
+        replacement -- but as three kernels instead of B * n_maskable Python
+        objects. Sorting a uniform row is the standard way to get a random
+        permutation, so taking its first k entries is a uniform k-subset.
+
+        Chunk-graph layout puts the maskable tokens first; everything after
+        n_maskable keeps its constructed status.
+        """
+        L = self.num_tokens
+        status = self.base_status.unsqueeze(0).expand(batch, L).clone()
+        if n_maskable <= 0:
+            return status
+        k = int(n_maskable * masking_rate)
+        k = max(0, min(n_maskable, k))
+        if k == 0:
+            return status
+        pick = torch.rand(batch, n_maskable, device=self.device).argsort(dim=1)[:, :k]
+        rows = torch.arange(batch, device=self.device).unsqueeze(1).expand(batch, k)
+        head = status[:, :n_maskable]
+        head[rows.reshape(-1), pick.reshape(-1)] = 1
+        return status
 
     @property
     def hidden(self) -> torch.Tensor:

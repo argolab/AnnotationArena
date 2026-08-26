@@ -15,7 +15,7 @@ from .types import LossBreakdown, EntityType
 
 def _rating_breakdown_fast(
     params: torch.Tensor,
-    gt: GraphTensors,
+    status: torch.Tensor,
     sl: TypeSlice,
     t: Any,
 ) -> LossBreakdown:
@@ -30,14 +30,17 @@ def _rating_breakdown_fast(
     """
     device = params.device
     C = t.num_classes
-    logits = params[0].index_select(0, sl.positions)[:, 1 : 1 + C]     # [M, C]
+    B = params.shape[0]
+    logits = params.index_select(1, sl.positions)[..., 1 : 1 + C]       # [B, M, C]
 
     if sl.soft_targets is not None:
         losses = -(sl.soft_targets * F.log_softmax(logits, dim=-1)).sum(dim=-1)
     else:
-        losses = F.cross_entropy(logits, sl.targets, reduction="none")  # [M]
+        losses = F.cross_entropy(
+            logits.reshape(-1, C), sl.targets.repeat(B), reduction="none"
+        ).view(B, -1)                                                   # [B, M]
 
-    status = gt.status.index_select(0, sl.positions)                    # [M]
+    status = status.index_select(1, sl.positions)                       # [B, M]
     is_masked   = (status == 1).to(losses.dtype)
     is_observed = (status == 2).to(losses.dtype)
     is_missing  = (status == 0).to(losses.dtype)
@@ -79,6 +82,7 @@ def _aggregate_loss_from_breakdowns(
     types: Dict[str, Any],
     global_param_dim: int,
     device: torch.device,
+    status: torch.Tensor | None = None,
 ) -> dict:
     """
     Aggregate per-type LossBreakdown into global observed/masked/missing losses
@@ -88,6 +92,9 @@ def _aggregate_loss_from_breakdowns(
     comprehension each, to build a type mask that GraphTensors now caches.
     """
     gt = graph_tensors(graph, types, global_param_dim, device)
+    # [B, L] statuses. The unbatched path reads them off the graph's tokens;
+    # the batched training path passes one row per mask augmentation.
+    status = gt.status.unsqueeze(0) if status is None else status
     weighted_masked_sum = torch.zeros((), device=device)
     weighted_observed_sum = torch.zeros((), device=device)
     sum_observed = 0.0
@@ -111,8 +118,13 @@ def _aggregate_loss_from_breakdowns(
             continue
 
         if sl.vectorised and getattr(t, "num_classes", None) is not None:
-            b: LossBreakdown = _rating_breakdown_fast(params, gt, sl, t)
+            b: LossBreakdown = _rating_breakdown_fast(params, status, sl, t)
         else:
+            if params.shape[0] != 1:
+                raise NotImplementedError(
+                    f"type {type_name!r} has no vectorised loss, so it cannot run "
+                    "in the batched-augmentation path"
+                )
             b = t.compute_loss_breakdown(
                 predicted_params=params,
                 tokens=graph.tokens,
@@ -195,6 +207,7 @@ def compute_trainable_loss(
     device: torch.device,
     masked_loss_weight: float = 1.0,
     observed_loss_weight: float = 0.0,
+    status: torch.Tensor | None = None,
 ) -> tuple:
     """
     Compute the scalar trainable loss as a weighted combination of masked and observed losses.
@@ -207,11 +220,12 @@ def compute_trainable_loss(
         - raw_masked_ce: unweighted mean CE on masked tokens (float, for logging)
         - raw_observed_ce: unweighted mean CE on observed tokens (float, for logging)
     """
-    out = _aggregate_loss_from_breakdowns(params, graph, types, global_param_dim, device)
+    out = _aggregate_loss_from_breakdowns(params, graph, types, global_param_dim,
+                                          device, status=status)
     loss = masked_loss_weight * out["trainable_masked_loss"]
     if observed_loss_weight > 0:
         loss = loss + observed_loss_weight * out["trainable_observed_loss"]
-    return loss, out["loss_masked"], out["loss_observed"]
+    return loss, out["loss_masked"], out["loss_observed"], out["n_masked"], out["n_observed"]
 
 
 def _merge_chunk_results(split: str, chunk_results: List["EntityEvalResults"]) -> "EntityEvalResults":
