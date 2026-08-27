@@ -242,6 +242,35 @@ def main() -> None:
           blk._rel_bias(q_head, edge_flat, edge_rel, L),
           torch.einsum("bhir,ijr->bhij", q_head, dense), tol=1e-5)
 
+    print("\n6. batched structured masking == StructuredMasking.mask")
+    # LLM-Rubric's regime. At human_observed_rate=0 the reference is fully
+    # deterministic, so this is an exact comparison; at 0.3 only the counts and
+    # the always-observed set are determined.
+    from imputer.entity_mf.masking import StructuredMasking, StructuredMaskConfig
+
+    always = [maskable[0].annotator_id]
+    n_mask = len(maskable)
+    ann = gt.annot_ids[:n_mask]
+
+    for rate in (0.0, 0.3):
+        ref_vars = StructuredMasking(StructuredMaskConfig(
+            masking_rate=0.15, always_observed_ids=always,
+            human_observed_rate=rate)).mask(maskable)
+        ref_status = torch.tensor([v.status for v in ref_vars], device=device)
+        got = gt.sample_status_structured(n_mask, always, rate, batch=2)[:, :n_mask]
+
+        n_human = int((ann != always[0]).sum())
+        want_obs = n_human - int(n_human * rate) if rate else n_human
+        check(f"rate={rate} always-observed kept",
+              int(((ann == always[0]) & (got != 2)).sum()), 0, tol=0)
+        check(f"rate={rate} masked count per row",
+              got.eq(1).sum(dim=1).unique().tolist()[0], want_obs, tol=0)
+        check(f"rate={rate} reference masked count",
+              int(ref_status.eq(1).sum()), want_obs, tol=0)
+        if rate == 0.0:
+            check("rate=0.0 exact match vs reference",
+                  got[0].float(), ref_status.float(), tol=0)
+
     print()
     if FAILURES:
         raise SystemExit(f"FAILED: {', '.join(FAILURES)}")
