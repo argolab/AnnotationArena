@@ -44,26 +44,31 @@ for C in ${COMMITS}; do
         fi
     fi
 
-    CE=$(srun --jobid="${JOBID}" --overlap bash -lc "
-        eval \"\$(conda shell.bash hook)\"; conda activate torch
-        cd ${WT}/imputer/ranking; export PYTHONPATH=\$PWD:${WT}
-        rm -rf ${WT}/out
-        python -u -m imputer.entity_mf.train --data-dir ${SPLIT} \
-          --run-name run --output-root ${WT}/out --seed ${SEED} \
-          --embedding-dim 80 --num-layers 8 --attention-heads 4 --d-ff 128 \
-          --num-ffn-layers 1 --dropout 0.1 --item-dropout-rate 1.0 \
-          --annotator-dropout-rate 0.0 --epochs ${EPOCHS} --lr 2e-4 \
-          --lr-schedule none --lr-min 1e-5 --weight-decay 0.01 --masking-rate 0.15 \
-          --mask-augmentations 5 --masked-loss-weight 15.0 --observed-loss-weight 1.0 \
-          --device cuda --max-item 300 --type-embedding-init kaiming \
-          --transductive-learning --no-per-head-rel --scale-shared-rel --use-pointer \
-          --overwrite-existing-data >/dev/null 2>&1
-        python - ${WT}/out/run/training_history.json <<'PY'
-import json, sys
-h = json.load(open(sys.argv[1]))
-m = h[-1].get('combined_eval', {}).get('metrics', {}).get('missing', {}).get('rating', {})
-print(f\"{m.get('xent', float('nan')):.4f}\")
-PY" 2>/dev/null | tail -1)
+    # Two attempts: srun into a shared allocation occasionally fails to launch,
+    # and a flaky launch must not be reported as a regression.
+    CE=CRASH
+    for attempt in 1 2; do
+        srun --jobid="${JOBID}" --overlap bash -lc "
+            eval \"\$(conda shell.bash hook)\"; conda activate torch
+            cd ${WT}/imputer/ranking; export PYTHONPATH=\$PWD:${WT}
+            rm -rf ${WT}/out
+            python -u -m imputer.entity_mf.train --data-dir ${SPLIT} \
+              --run-name run --output-root ${WT}/out --seed ${SEED} \
+              --embedding-dim 80 --num-layers 8 --attention-heads 4 --d-ff 128 \
+              --num-ffn-layers 1 --dropout 0.1 --item-dropout-rate 1.0 \
+              --annotator-dropout-rate 0.0 --epochs ${EPOCHS} --lr 2e-4 \
+              --lr-schedule none --lr-min 1e-5 --weight-decay 0.01 --masking-rate 0.15 \
+              --mask-augmentations 5 --masked-loss-weight 15.0 --observed-loss-weight 1.0 \
+              --device cuda --max-item 300 --type-embedding-init kaiming \
+              --transductive-learning --no-per-head-rel --scale-shared-rel --use-pointer \
+              --overwrite-existing-data" >"${WT}/train.log" 2>&1
+        CE=$(srun --jobid="${JOBID}" --overlap bash -lc "
+            eval \"\$(conda shell.bash hook)\"; conda activate torch
+            python ${OPT}/RERUN/bench/_final_ce.py ${WT}/out/run/training_history.json" \
+            2>/dev/null | tail -1)
+        [[ "${CE}" != "CRASH" && -n "${CE}" ]] && break
+        echo "  (attempt ${attempt} failed for ${C:0:9}; see ${WT}/train.log)" >&2
+    done
 
     printf '%-10s %-52s %-10s %-10s\n' "${C:0:9}" "${SUBJ}" "${EQUIV}" "${CE:-CRASH}"
 done
