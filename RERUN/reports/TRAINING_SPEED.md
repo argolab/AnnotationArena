@@ -228,6 +228,128 @@ LLMRUBRIC_BATCH_AUGMENTATIONS=true LLMRUBRIC_TF32=true LLMRUBRIC_LR=1e-3 \
 
 Do not turn it on at `max_item=300` — measured above, it loses there.
 
+## 6. Regression testing
+
+Three layers, at different resolutions. The branch is deliberately *not*
+bit-identical to the reference -- entity dropout moved from a per-token CPU
+`torch.rand(1).item()` to one GPU Bernoulli kernel, so the RNG stream differs --
+which is why the evidence has to be layered rather than a single diff.
+
+### 6.1 Unit equivalence (exact) — `RERUN/bench/test_equiv.py`
+
+Each rewritten path is checked against the loop it replaced, on a real split,
+with dropout off so the comparison is deterministic:
+
+| section | checks | worst difference |
+|---|---|---|
+| 1 | `_build_initial_streams` vs the per-token loop | 0 (exact) |
+| 2 | vectorised rating loss vs `compute_loss_breakdown` | 1.2e-7 |
+| 3 | `evaluate_entity_marformer_split` vs the reference loop | 2.4e-7 |
+| 4 | `forward_batched` (B=3) vs three separate passes | 7.6e-6 |
+| 5 | sparse relational bias vs the dense einsum | 0 (exact) |
+| 6 | `sample_status_structured` vs `StructuredMasking.mask` | 0 (exact at rate 0) |
+
+### 6.2 Checkpoint re-scoring (near-exact) — `RERUN/bench/test_checkpoints.py`
+
+The strongest check available, because it has no randomness in it at all:
+`test.py` calls `model.eval()`, so the one intentional numerical difference
+cannot enter. It re-scores run directories produced by the *old* code with the
+candidate `test.py` and diffs against the `TEST_RESULTS` json those runs
+already contain -- which also proves old checkpoints still load.
+
+Over 20 `replicate-01` runs (6 annotator-axis, 5 item-axis from K=100 to 3000,
+5 LLM-Rubric, 4 more annotator sizes):
+
+```
+accuracy, n, spearman_r, kendall_tau     bit-identical  (0.0e+00)
+log_loss, rmse, pearson_r                max 8.7e-08 relative
+```
+
+That residual is float32 reassociation: replacing broadcast-and-sum with einsum
+and a dense contraction with `index_add` changes the summation order, not the
+arithmetic.
+
+### 6.3 Per-commit walk — `RERUN/bench/walk_commits.sh`
+
+Every commit on the branch, replayed in a throwaway worktree, running *that
+commit's own* `test_equiv.py` plus a fixed 15-epoch `Item_T_300` training:
+
+```
+f4776f6  benchmark harness / baseline          n/a    1.5117
+26ae05b  tensorise the graph->tensor path      PASS   1.4864
+3a531c2  launch overhead, eval graph cache     PASS   1.4863
+ee53e26  --batch-augmentations                 PASS   1.4863
+2df9ee7  score-tensor passes, no_grad eval     PASS   1.4863
+a923fbf  --amp                                 PASS   1.4863
+6bf359e  batched structured masking            PASS   1.4864
+253db85  runner knobs                          PASS   1.4864
+5fa73ad  report + combined ablation table      PASS   1.4863
+8f8f965  sparse relational / pointer bias      PASS   1.4863
+94e49b9  final measurements                    PASS   1.4863
+b081c27  D21                                   PASS   1.4863
+cca9a94  regression harness                    PASS   1.4863
+```
+
+Flat from the first optimisation commit onward. The 1.5117 -> 1.4863 step at
+`26ae05b` is the RNG stream change and nothing else -- it appears exactly where
+entity dropout moved to the GPU and never moves again.
+
+### 6.4 Configuration matrix — `RERUN/bench/regression.py`
+
+Every data regime crossed with every model flag the changed attention still
+has to support. 3 seeds x 15 epochs per cell, reference = the pre-optimisation
+checkout, candidate = this branch. Final missing-rating CE:
+
+```
+cell                          reference          candidate     verdict
+item_T/default            1.5209 +/-0.016   1.5144 +/-0.048    PASS
+item_T/per_head_rel       1.5319 +/-0.039   1.5005 +/-0.017    PASS
+item_T/rel_value          1.5209 +/-0.016   1.5144 +/-0.048    PASS
+item_T/graph_mask         1.4040 +/-0.027   1.4029 +/-0.064    PASS
+item_T/addone_attn        1.5207 +/-0.016   1.5143 +/-0.049    PASS
+item_T/param_head         1.4117 +/-0.003   1.4028 +/-0.006    PASS
+item_T/deviation_norm     1.5208 +/-0.016   1.5145 +/-0.048    PASS
+item_T/embed_unembed      1.4090 +/-0.014   1.4178 +/-0.023    PASS
+item_T/random_chunks      1.5396 +/-0.032   1.5180 +/-0.032    PASS
+item_T/valtest_mask       1.6012 +/-0.029   1.6090 +/-0.009    PASS
+item_T/outer_none_id      1.5267 +/-0.013   1.5179 +/-0.020    PASS
+item_T/inner_none         1.3948 +/-0.006   1.3889 +/-0.008    PASS
+item_NT/default           1.5331 +/-0.036   1.5302 +/-0.042    PASS
+annot_T/default           1.5333 +/-0.025   1.5103 +/-0.034    PASS
+llmrubric/default         1.4394 +/-0.016   1.4448 +/-0.025    PASS
+item_T/tf32               1.5209 +/-0.016   1.5145 +/-0.048    PASS
+item_T/eval_every5        1.5209 +/-0.016   1.5167 +/-0.029    PASS
+item_T/amp_bf16           1.5209 +/-0.016   1.5207 +/-0.047    PASS
+item_T/compile            1.5209 +/-0.016   1.4973 +/-0.015    PASS
+item_T/batch_aug          1.5209 +/-0.016   2.1021 +/-0.160    DIFFERS (expected)
+llmrubric/batch_aug       1.4394 +/-0.016   2.0571 +/-0.115    DIFFERS (expected)
+```
+
+The two `batch_aug` cells are supposed to differ: at a fixed 15 epochs they run
+a fifth of the optimizer steps at the reference learning rate, so they are
+behind by construction. Their equivalence is the 400-epoch equal-loss result in
+section 3, not this table.
+
+`rel_value`, `addone_attn` and `deviation_norm` land within 2e-4 of `default`,
+which is also what an inert flag would look like. `RERUN/bench/test_flags_live.py`
+rules that out by asserting each flag changes a forward pass on identical
+weights: per-head relational attention moves the logits by 22, the param output
+head by 22, dropping the pointer by 22, graph mask by 1.9, deviation norm by
+9.6, rel_value by 7.7e-2, scale_shared_rel by 5.0e-2, and add-one attention by
+4.3e-3 -- genuinely tiny, which is why its loss barely moves. The coverage is
+real; the flags are just not all equally consequential.
+
+**What this layer can and cannot see.** With 3 seeds at 15 epochs the tolerance
+band is wide (a few hundredths of a nat), so this is a crash-and-gross-drift
+detector, not a precision instrument. The precision evidence is 6.1 and 6.2.
+Its job is coverage: every flag the changed attention still has to support gets
+exercised at least once, including the three the paper never uses.
+
+Not covered, and known: the figure pipeline was checked by inspection rather
+than executed -- `plot_domain3_sigmoid.py` and `plot_training_history.py` read
+`train_config.json` only through `.get()` by name, and this branch only adds
+keys, so the additions cannot break them.
+
 ## 6. Reproducing
 
 ```bash
@@ -237,6 +359,12 @@ python -m RERUN.bench.test_equiv --data-dir <split>                    # correct
 python -m RERUN.bench.kernel_profile --data-dir <split> --batch 5      # kernels
 RERUN/bench/sanity_configs.sh <checkout> 60                            # annot + LLM-Rubric
 RERUN/bench/bench_llmrubric.sh <checkout> 50 300 tag [args...]
+
+# regression (see section 6)
+python -m RERUN.bench.test_equiv --data-dir <split>
+python -m RERUN.bench.test_checkpoints --runs-root <RERUN/runs/*/RESULTS>
+RERUN/bench/walk_commits.sh <slurm-jobid> 15 42
+python -m RERUN.bench.regression --ref <checkout> --cand <checkout> --jobid <id>
 ```
 
 `RERUN/bench/BASELINE.md` holds the pre-optimisation reference so the whole
