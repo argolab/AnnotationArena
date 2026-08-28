@@ -212,6 +212,12 @@ footer {
       <div class="seg" id="c-seed"></div>
       <p class="note" id="seed-note"></p>
     </div>
+    <div class="ctrl" id="compare-ctrl" hidden>
+      <span class="label">Compare with</span>
+      <div class="seg" id="c-compare"></div>
+      <p class="note">Overlays another run's results as a dashed grey line, on the
+        same splits and seeds, so the difference is the protocol alone.</p>
+    </div>
     <div class="ctrl">
       <span class="label">Arms</span>
       <div class="seg" id="c-arms"></div>
@@ -295,6 +301,10 @@ const DATA = JSON.parse(document.getElementById("payload").textContent);
 // Stamped onto every figure title by build_report.py --marker, so the two
 // protocol variants of this page can never be confused for one another.
 const FIGURE_MARKER = "";
+// Optional dashed reference series, injected by build_report.py --baseline.
+// Only per-run metrics, no curves: enough to compare protocols on the same
+// splits without doubling the page.
+const BASELINE = __BASELINE__;
 const RUNS = DATA.runs;
 
 /* ------------------------------------------------------------------ state */
@@ -316,7 +326,7 @@ const CKPT = {
 const state = {
   ckpt: "last", seedMode: "aggregate", axis: "item", metric: "log_loss",
   arms: new Set(ARMS.map(a => a.key)), focus: null,
-  theme: null, maxItem: "trained",
+  theme: null, maxItem: "trained", compare: "none",
 };
 const seedsAvailable = [...new Set(RUNS.map(r => r.seed))].sort((a, b) => a - b);
 
@@ -586,18 +596,49 @@ function generalizationSpec(axis, metric, height, width) {
       series.push({ label: arm.label, color: arm.color, soft: arm.soft, points });
     }
   }
+  if (state.compare !== "none" && Object.keys(BASELINE.runs).length) {
+    for (const arm of ARMS) {
+      if (!state.arms.has(arm.key)) continue;
+      const bySize = new Map();
+      for (const r of RUNS) {
+        if (r.family !== arm.key || r.axis !== axis) continue;
+        const b = BASELINE.runs[`${r.family}|${r.axis}|${r.size}|${r.seed}`];
+        if (!b) continue;
+        const v = metric === "runtime_min" ? b.runtime_min
+                                           : (b[state.compare] || {})[metric];
+        if (v === null || v === undefined) continue;
+        if (!bySize.has(r.size)) bySize.set(r.size, []);
+        bySize.get(r.size).push(+v);
+      }
+      const points = [...bySize.entries()].sort((a, b) => a[0] - b[0])
+        .map(([size, vs]) => ({ x: size, y: mean(vs), meta: { baseline: true, size, vs } }));
+      if (points.length) {
+        series.push({
+          label: `${arm.label} \u00b7 ${BASELINE.label} (${CKPT[state.compare].label.toLowerCase()})`,
+          color: "var(--ink-3)", soft: "transparent", points,
+          width: 1.4, r: 2.4, dash: "4 3", isBaseline: true,
+        });
+      }
+    }
+  }
   return {
     height, width, series,
     xLabel: axis === "item" ? "TRAINING ITEMS (K)" : "TRAINING ANNOTATORS (J)",
     yLabel: m.label.toUpperCase(),
     yFloor: metric === "accuracy" ? undefined : undefined,
     tip: (s, p) => tipHtml(s, p, metric),
-    onPick: (s, p) => selectRun(p.meta.run),
+    onPick: (s, p) => { if (!p.meta.baseline) selectRun(p.meta.run); },
   };
 }
 
 function tipHtml(s, p, metric) {
   const m = METRICS[metric];
+  if (p.meta.baseline) {
+    return `<h4>${s.label}</h4><dl>
+      <dt>Value</dt><dd>${fmt(p.y, m.dp)}</dd>
+      <dt>Seeds</dt><dd>${p.meta.vs.map(v => fmt(v, m.dp)).join(", ")}</dd></dl>
+      <p class="hint">Reference series; not a run on this page.</p>`;
+  }
   const run = p.meta.run;
   const rows = [];
   rows.push(["Value", fmt(p.y, m.dp) + (p.lo !== undefined && p.hi > p.lo
@@ -778,6 +819,15 @@ function buildControls() {
     it => state.axis === it.key, it => { state.axis = it.key; });
   segment($("c-metric"), Object.entries(METRICS).map(([k, v]) => ({ key: k, label: v.label })),
     it => state.metric === it.key, it => { state.metric = it.key; });
+
+  if (Object.keys(BASELINE.runs).length) {
+    segment($("c-compare"),
+      [{ key: "none", label: "Off" },
+       { key: "last", label: `${BASELINE.label}: last` },
+       { key: "best", label: `${BASELINE.label}: best on test` }],
+      it => state.compare === it.key, it => { state.compare = it.key; });
+    $("compare-ctrl").hidden = false;
+  }
 
   segment($("c-maxitem"),
     [{ key: "trained", label: "Trained max_item" }, { key: "paper", label: "Paper max_item" }],
