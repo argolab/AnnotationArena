@@ -279,6 +279,16 @@ footer {
       <div class="grid-6" id="calib-grid"></div>
     </section>
 
+    <section id="stop-section" hidden>
+      <div class="sec-head">
+        <span class="eyebrow">Validation protocol</span>
+        <h2>Where each size was told to stop</h2>
+        <p id="stop-caption"></p>
+      </div>
+      <div class="grid-6" id="stop-grid"></div>
+      <div class="tablewrap"><table id="stop-table"></table></div>
+    </section>
+
     <section>
       <div class="sec-head">
         <span class="eyebrow">Every number</span>
@@ -419,11 +429,28 @@ function lineChart(host, spec) {
     parts.push(`<line class="gridline" x1="${M.l}" x2="${W - M.r}" y1="${Y(t).toFixed(1)}" y2="${Y(t).toFixed(1)}"/>`);
     parts.push(`<text x="${M.l - 8}" y="${(Y(t) + 3.5).toFixed(1)}" text-anchor="end">${t}</text>`);
   }
-  const showEvery = Math.ceil(xTicks.length / 9);
+  // Gridline at every tick, but a label only where it clears its neighbours. A
+  // log axis bunches the large values (3000 and 4000 land a few units apart at
+  // K=4000), so index-based thinning alone still collides. The endpoints are
+  // the two labels worth keeping, so the last one is placed first and anything
+  // it would overlap is dropped rather than the last one being skipped.
+  const halfWidth = t => 3.6 * String(t).length + 3;
+  const keep = new Set();
+  if (xTicks.length) {
+    keep.add(xTicks.length - 1);
+    let prevLeft = X(xTicks[xTicks.length - 1]) - halfWidth(xTicks[xTicks.length - 1]);
+    for (let i = xTicks.length - 2; i >= 0; i--) {
+      if (X(xTicks[i]) + halfWidth(xTicks[i]) + 4 <= prevLeft) {
+        keep.add(i);
+        prevLeft = X(xTicks[i]) - halfWidth(xTicks[i]);
+      }
+    }
+  }
   xTicks.forEach((t, i) => {
-    parts.push(`<line class="gridline" x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="${M.t}" y2="${H - M.b}"/>`);
-    if (i % showEvery === 0 || i === xTicks.length - 1)
-      parts.push(`<text x="${X(t).toFixed(1)}" y="${H - M.b + 15}" text-anchor="middle">${t}</text>`);
+    const px = X(t);
+    parts.push(`<line class="gridline" x1="${px.toFixed(1)}" x2="${px.toFixed(1)}" y1="${M.t}" y2="${H - M.b}"/>`);
+    if (keep.has(i))
+      parts.push(`<text x="${px.toFixed(1)}" y="${H - M.b + 15}" text-anchor="middle">${t}</text>`);
   });
   parts.push(`<line class="axis" x1="${M.l}" x2="${W - M.r}" y1="${H - M.b}" y2="${H - M.b}"/>`);
   parts.push(`<line class="axis" x1="${M.l}" x2="${M.l}" y1="${M.t}" y2="${H - M.b}"/>`);
@@ -760,6 +787,78 @@ function renderFocus() {
   lineChart($("focus-chart"), generalizationSpec(state.axis, state.metric, 380, 760));
 }
 
+function renderStopping() {
+  const sel = DATA.selection;
+  const section = $("stop-section");
+  if (!sel || !sel.rows || !sel.rows.length) { section.hidden = true; return; }
+  section.hidden = false;
+
+  // One point per (arm, axis, size): the epoch the pooled validation curve
+  // chose. Fallback cells are drawn hollow -- they had no validation signal.
+  const grid = $("stop-grid");
+  grid.innerHTML = "";
+  for (const axis of ["item", "annot"]) {
+    const series = [];
+    for (const arm of ARMS) {
+      if (!state.arms.has(arm.key)) continue;
+      const bySize = new Map();
+      for (const r of sel.rows) {
+        if (r.family !== arm.key || r.axis !== axis || r.refit_epochs == null) continue;
+        bySize.set(r.size, r);
+      }
+      const points = [...bySize.entries()].sort((a, b) => a[0] - b[0])
+        .map(([size, r]) => ({ x: size, y: r.refit_epochs, meta: { row: r } }));
+      if (points.length) series.push({ label: arm.label, color: arm.color, soft: arm.soft, points });
+    }
+    if (!series.length) continue;
+    const card = document.createElement("div");
+    card.className = "card";
+    grid.appendChild(card);
+    const body = document.createElement("div");
+    card.innerHTML = `<div class="chart-title">
+      <span class="name">${axis === "item" ? "Item" : "Annotator"} axis \u2014 selected epoch</span>
+      ${FIGURE_MARKER ? `<span class="marker">${FIGURE_MARKER}</span>` : ""}
+      <span class="unit">of ${sel.rows[0].total_epochs || 400} trained</span></div>`;
+    card.appendChild(body);
+    lineChart(body, {
+      height: 300, width: 430, series,
+      xLabel: axis === "item" ? "TRAINING ITEMS (K)" : "TRAINING ANNOTATORS (J)",
+      yLabel: "EPOCH CHOSEN",
+      tip: (s2, p) => {
+        const r = p.meta.row;
+        return `<h4>${s2.label} \u00b7 ${p.x}</h4><dl>
+          <dt>Refit epochs</dt><dd>${r.refit_epochs}</dd>
+          <dt>Pooled argmin</dt><dd>${r.pooled_epoch ?? "\u2014"}</dd>
+          <dt>This seed alone</dt><dd>${r.per_run_epoch ?? "\u2014"}</dd>
+          <dt>Best val CE</dt><dd>${r.best_val_ce != null ? fmt(r.best_val_ce, 4) : "\u2014"}</dd>
+          <dt>Val CE at end</dt><dd>${r.last_val_ce != null ? fmt(r.last_val_ce, 4) : "\u2014"}</dd>
+          </dl>${r.fallback ? '<p class="hint">No validation signal here; axis median used.</p>' : ""}`;
+      },
+    });
+  }
+
+  const nFallback = sel.rows.filter(r => r.fallback).length;
+  $("stop-caption").innerHTML =
+    `Selected per training size by pooling the seeds' validation curves and taking the
+     argmin of a ${sel.smooth}-epoch centred moving average. All seeds of a size refit to
+     the same budget. ${nFallback ? `<strong>${nFallback}</strong> run(s) had no training
+     block to carve from and fell back to their axis median &mdash; hover to see which.` : ""}`;
+
+  const head = ["Arm", "Axis", "Size", "Seed", "Refit epochs", "Pooled", "This seed", "Best val CE", "Val CE at end"];
+  $("stop-table").innerHTML =
+    `<thead><tr>${head.map((h, i) => `<th class="${i < 2 ? "txt" : ""}">${h}</th>`).join("")}</tr></thead>
+     <tbody>${sel.rows.slice().sort((a, b) =>
+        a.family.localeCompare(b.family) || a.axis.localeCompare(b.axis) || a.size - b.size || a.seed - b.seed)
+       .filter(r => state.arms.has(r.family))
+       .map(r => `<tr>
+         <td class="txt">${armOf(r.family)?.label ?? r.family}</td><td class="txt">${r.axis}</td>
+         <td>${r.size}</td><td>${r.seed}</td>
+         <td>${r.refit_epochs ?? "\u2014"}${r.fallback ? " *" : ""}</td>
+         <td>${r.pooled_epoch ?? "\u2014"}</td><td>${r.per_run_epoch ?? "\u2014"}</td>
+         <td>${r.best_val_ce != null ? fmt(r.best_val_ce, 4) : "\u2014"}</td>
+         <td>${r.last_val_ce != null ? fmt(r.last_val_ce, 4) : "\u2014"}</td></tr>`).join("")}</tbody>`;
+}
+
 function renderTable() {
   const rows = RUNS
     .filter(r => state.arms.has(r.family))
@@ -782,7 +881,7 @@ function renderTable() {
 }
 
 function renderAll() {
-  renderSmallMultiples(); renderFocus(); renderCalibration(); renderTable();
+  renderSmallMultiples(); renderFocus(); renderCalibration(); renderStopping(); renderTable();
   if (state.focus) renderDetail();
 }
 
