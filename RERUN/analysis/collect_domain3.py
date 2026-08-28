@@ -50,29 +50,53 @@ def read_json(path: Path) -> Any:
         return None
 
 
-def collect_checkpoints(run_dir: Path) -> dict:
-    """Every scored checkpoint, as {kind: metrics} plus an epoch-indexed curve."""
-    out: dict[str, Any] = {"curve": [], "last": None, "best": None, "best_epoch": None}
+def collect_checkpoints(run_dir: Path, total_epochs: int | None = None) -> dict:
+    """
+    Every scored checkpoint, as an epoch-indexed curve plus the two policies.
+
+    "best" is synthesised here rather than read from a best.json, because none
+    exists: Lightning's ModelCheckpoint monitors val/missing_ce, and Domain 3
+    has no validation split, so it never saved a best-*.ckpt in this
+    configuration at all. The paper's figures get their "best" from
+    plot_domain3_sigmoid._write_best_json_from_test_results, which is an argmin
+    over every scored checkpoint -- last.json included -- keyed on
+    missing.log_loss with rmse then filename as tie-breaks. That rule is
+    reproduced exactly, so the page's "best on test" is the paper's policy and
+    not an approximation of it.
+    """
+    out: dict[str, Any] = {"curve": [], "last": None, "best": None,
+                           "best_epoch": None, "best_source": None}
     tr = run_dir / "TEST_RESULTS"
     if not tr.is_dir():
         return out
+    candidates = []
     for path in sorted(tr.glob("*.json")):
+        if path.name in {"best.json", "launcher_metadata.json"}:
+            continue
         data = read_json(path)
         if not isinstance(data, dict) or "missing" not in data:
             continue
         m = data["missing"]
+        if m.get("log_loss") is None or not m.get("n"):
+            continue
         entry = {k: m.get(k) for k in ("log_loss", "accuracy", "rmse", "n",
                                        "spearman_r", "kendall_tau", "pearson_r")}
+        candidates.append((float(m["log_loss"]),
+                           float(m.get("rmse") or float("inf")), path.name, entry))
         if path.name == "last.json":
             out["last"] = entry
-        elif path.name == "best.json":
-            out["best"] = entry
-            out["best_epoch"] = _epoch_of(data.get("checkpoint"))
         else:
             match = CKPT_RE.search(path.name)
             if match:
                 out["curve"].append({"epoch": int(match.group(1)), **entry})
     out["curve"].sort(key=lambda e: e["epoch"])
+    if candidates:
+        candidates.sort(key=lambda r: (r[0], r[1], r[2]))
+        _, _, name, entry = candidates[0]
+        out["best"] = entry
+        out["best_source"] = name
+        out["best_epoch"] = (total_epochs - 1 if name == "last.json"
+                             else _epoch_of(name))
     return out
 
 
@@ -150,7 +174,7 @@ def main() -> None:
                           "seed": seed},
                 "runtime_min": (float(meta["elapsed_seconds"]) / 60.0
                                 if meta.get("elapsed_seconds") is not None else None),
-                "test": collect_checkpoints(run_dir),
+                "test": collect_checkpoints(run_dir, train_cfg.get("epochs")),
                 "history": collect_history(run_dir, args.history_stride),
             })
 

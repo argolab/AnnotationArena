@@ -513,7 +513,16 @@ function renderCalibration() {
     grid.innerHTML = '<p class="empty">No calibration data for this selection.</p>';
     return;
   }
-  for (const [id, entries] of [...cells.entries()].sort()) {
+  // Order by arm (as listed in ARMS), then axis, then size -- a plain string
+  // sort puts "MarformerNT|..." before "Marformer|..." because '|' > 'N'.
+  const order = ([id]) => {
+    const [f, a, sz] = id.split("|");
+    return [ARMS.findIndex(x => x.key === f), a === "item" ? 0 : 1, +sz];
+  };
+  for (const [id, entries] of [...cells.entries()].sort((p, q) => {
+    const [a1, a2, a3] = order(p), [b1, b2, b3] = order(q);
+    return a1 - b1 || a2 - b2 || a3 - b3;
+  })) {
     const [family, axis, size] = id.split("|");
     const arm = armOf(family);
     entries.sort((a, b) => a.seed - b.seed);
