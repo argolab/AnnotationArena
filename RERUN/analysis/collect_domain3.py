@@ -13,7 +13,12 @@ and pulls, per trained model:
   * wall clock (launcher_metadata.json).
 
 The seed layout follows submit_all.sh --seeds: the first seed is canonical and
-sits directly under <AXIS>/, later seeds under <AXIS>/seed<N>/.
+sits directly under <AXIS>/, later seeds under <AXIS>/seed<N>/. A validation run
+adds a variant level, <AXIS>/<variant>/seed<N>/, and crucially the phase-A search
+tree sits beside the refit tree as <variant>-search/ with *identical run
+directory names* -- so it is excluded by default. Collecting both would produce
+two entries per (family, axis, size, seed) and silently corrupt every mean on
+the page.
 
     python collect_domain3.py --run-dir RERUN/runs/seeds-01 -o out.json
 """
@@ -136,6 +141,14 @@ def main() -> None:
     ap.add_argument("--label", default="", help="tag shown in the report header")
     ap.add_argument("--calibration", default="",
                     help="JSON from collect_calibration.py, merged into the payload")
+    ap.add_argument("--epoch-table", default="",
+                    help="JSON from select_epochs.py, embedded so the page can show "
+                         "which epoch each size was stopped at and why")
+    ap.add_argument("--exclude", default="-search",
+                    help="skip run directories whose path contains this; the phase-A "
+                         "search tree shares its run names with the refit tree")
+    ap.add_argument("--include", default="",
+                    help="keep only run directories whose path contains this")
     args = ap.parse_args()
 
     root = Path(args.run_dir)
@@ -151,6 +164,11 @@ def main() -> None:
             m = RUN_RE.search(run_dir.name)
             if not m:
                 continue
+            rel = str(run_dir.relative_to(base))
+            if args.exclude and args.exclude in rel:
+                continue
+            if args.include and args.include not in rel:
+                continue
             axis = m.group(1).lower()
             size = int(m.group(3))
             # <AXIS>/<run>  (canonical) or <AXIS>/seed<N>/<run>
@@ -161,7 +179,12 @@ def main() -> None:
             meta = read_json(run_dir / "launcher_metadata.json") or {}
             model_cfg = cfg.get("model", {})
             train_cfg = cfg.get("training", {})
+            # <AXIS>/<variant>/seed<N>/<run>  ->  variant, else ""
+            parts = rel.split("/")
+            variant = parts[0] if len(parts) > 2 or (len(parts) == 2 and not sm) else ""
             runs.append({
+                "variant": variant,
+                "validation": cfg.get("validation", {"protocol": "none"}),
                 "family": "Marformer" if family_dir == "MARFORMER" else "MarformerNT",
                 "protocol": protocol,
                 "axis": axis,
@@ -185,6 +208,7 @@ def main() -> None:
         "runs": runs,
         "calibration": (read_json(Path(args.calibration)) or {}).get("calibration", [])
                        if args.calibration else [],
+        "selection": read_json(Path(args.epoch_table)) if args.epoch_table else None,
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
