@@ -8,8 +8,18 @@ runs' training_history.json, takes the argmin of the validation missing-rating
 cross-entropy, and writes the per-(family, axis, size, seed) epoch budget that
 phase B refits to on the whole training partition.
 
-Selection is per run, not per size: that is what early stopping actually is, and
-it lets the seed spread in the *selected epoch* be reported rather than hidden.
+Selection is **per training size**, pooling the seeds: the validation curves of
+a size's seeds are averaged epoch-by-epoch and the argmin of that mean is taken,
+so all seeds of a size refit to the same budget. Per-run selection is recorded
+alongside for comparison, but it is not used, and the reason is visible in the
+data: on a validation set of ~200 targets the per-run argmin swings between
+epoch 74 and epoch 305 for neighbouring sizes, which is noise, not signal.
+
+For the same reason the pooled curve is smoothed with a short centred moving
+average before the argmin (--smooth, default 5 epochs). This narrows the search
+to the bottom of the basin instead of the single luckiest epoch in it; set
+--smooth 1 to disable and see the raw choice, which is also recorded.
+
 Sizes with no training block to carve from (Item_T_100 has K_train = 0, and
 Annot_T_10 has no training annotators) cannot select on data at all; they fall
 back to the median selected epoch of their own axis and are flagged.
@@ -38,6 +48,18 @@ def val_curve(history: list) -> list[tuple[int, float]]:
     return out
 
 
+def smooth(ys: list[float], window: int) -> list[float]:
+    """Centred moving average; the ends shrink the window rather than pad it."""
+    if window <= 1:
+        return list(ys)
+    half = window // 2
+    out = []
+    for i in range(len(ys)):
+        lo, hi = max(0, i - half), min(len(ys), i + half + 1)
+        out.append(sum(ys[lo:hi]) / (hi - lo))
+    return out
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", required=True)
@@ -46,6 +68,10 @@ def main() -> None:
     ap.add_argument("-o", "--out", required=True)
     ap.add_argument("--min-epochs", type=int, default=25,
                     help="floor on the refit budget; a 1-epoch model is a bug, not a choice")
+    ap.add_argument("--select", default="per-size", choices=["per-size", "per-run"],
+                    help="per-size pools a size's seeds before taking the argmin")
+    ap.add_argument("--smooth", type=int, default=5,
+                    help="centred moving average applied before the argmin; 1 disables")
     args = ap.parse_args()
 
     root = Path(args.run_dir) / "RESULTS"
@@ -74,49 +100,74 @@ def main() -> None:
             rows.append({
                 "family": family, "axis": axis, "size": int(m.group(3)), "seed": seed,
                 "n_val_points": len(curve),
-                "best_epoch": min(curve, key=lambda t: t[1])[0] if curve else None,
+                "per_run_epoch": min(curve, key=lambda t: t[1])[0] if curve else None,
                 "best_val_ce": min(c[1] for c in curve) if curve else None,
                 "last_val_ce": curve[-1][1] if curve else None,
                 "total_epochs": len(history),
                 "path": str(run_dir.relative_to(Path(args.run_dir))),
+                "_curve": curve,
             })
+
+    # Pool a size's seeds: average the validation curves epoch by epoch, then
+    # take the argmin of the smoothed mean.
+    pooled: dict[tuple, int | None] = {}
+    for key in {(r["family"], r["axis"], r["size"]) for r in rows}:
+        curves = [dict(r["_curve"]) for r in rows
+                  if (r["family"], r["axis"], r["size"]) == key and r["_curve"]]
+        if not curves:
+            pooled[key] = None
+            continue
+        shared = sorted(set.intersection(*(set(c) for c in curves)))
+        if not shared:
+            pooled[key] = None
+            continue
+        means = [sum(c[e] for c in curves) / len(curves) for e in shared]
+        sm = smooth(means, args.smooth)
+        pooled[key] = shared[min(range(len(sm)), key=lambda i: sm[i])]
 
     # Fallback for cells with no validation signal, by axis.
     by_axis: dict[str, list[int]] = {}
-    for r in rows:
-        if r["best_epoch"] is not None:
-            by_axis.setdefault(r["axis"], []).append(r["best_epoch"])
+    for (family, axis, _size), ep in pooled.items():
+        if ep is not None:
+            by_axis.setdefault(axis, []).append(ep)
     fallback = {a: int(statistics.median(v)) for a, v in by_axis.items()}
 
     table: dict[str, int] = {}
     for r in rows:
-        ep = r["best_epoch"]
+        key = (r["family"], r["axis"], r["size"])
+        ep = pooled.get(key) if args.select == "per-size" else r["per_run_epoch"]
+        r["pooled_epoch"] = pooled.get(key)
         r["fallback"] = ep is None
         if ep is None:
             ep = fallback.get(r["axis"])
             if ep is None:
                 continue
-            r["best_epoch"] = ep
+        r["best_epoch"] = ep
         # history epochs are 0-indexed; --epochs is a count.
         r["refit_epochs"] = max(args.min_epochs, ep + 1)
         table[f"{r['family']}|{r['axis']}|{r['size']}|{r['seed']}"] = r["refit_epochs"]
+        r.pop("_curve", None)
+    for r in rows:
+        r.pop("_curve", None)
 
-    payload = {"variant": args.variant, "fallback_by_axis": fallback,
-               "epochs": table, "rows": rows}
+    payload = {"variant": args.variant, "select": args.select, "smooth": args.smooth,
+               "fallback_by_axis": fallback, "epochs": table, "rows": rows}
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
     with open(out, "w") as fh:
         json.dump(payload, fh, indent=1)
 
-    print(f"{len(rows)} search runs -> {len(table)} epoch budgets  ({out})")
-    print(f"{'family':<13}{'axis':<7}{'size':>6}{'seed':>6}{'sel.ep':>8}{'refit':>7}"
-          f"{'val CE':>9}{'':>3}")
+    print(f"{len(rows)} search runs -> {len(table)} epoch budgets "
+          f"(select={args.select}, smooth={args.smooth})  ({out})")
+    print(f"{'family':<13}{'axis':<7}{'size':>6}{'seed':>6}{'per-run':>9}{'pooled':>8}"
+          f"{'refit':>7}{'val CE':>9}{'':>3}")
     for r in sorted(rows, key=lambda r: (r["family"], r["axis"], r["size"], r["seed"])):
         flag = " *fallback" if r["fallback"] else ""
+        ce = f"{r['best_val_ce']:.4f}" if r["best_val_ce"] is not None else "-"
         print(f"{r['family']:<13}{r['axis']:<7}{r['size']:>6}{r['seed']:>6}"
-              f"{r['best_epoch'] if r['best_epoch'] is not None else '-':>8}"
-              f"{r.get('refit_epochs', '-'):>7}"
-              f"{(f'{r['best_val_ce']:.4f}' if r['best_val_ce'] is not None else '-'):>9}{flag}")
+              f"{r['per_run_epoch'] if r['per_run_epoch'] is not None else '-':>9}"
+              f"{r['pooled_epoch'] if r['pooled_epoch'] is not None else '-':>8}"
+              f"{r.get('refit_epochs', '-'):>7}{ce:>9}{flag}")
     if any(r["fallback"] for r in rows):
         print("\n* no validation signal (no training block to carve); axis median used")
 
