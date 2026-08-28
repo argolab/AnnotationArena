@@ -59,8 +59,18 @@ if [[ -d "${TARGET}" ]]; then
     rm -rf "${TARGET}"
 fi
 
+# Speed knobs, off by default. LLM-Rubric runs at max_item=10, so a bundle is
+# ~23 small chunks and batching the mask augmentations is worth ~2.6x here --
+# see RERUN/reports/TRAINING_SPEED.md. It is one optimizer step per epoch
+# instead of five, so raise LLMRUBRIC_LR with it (1e-3 measured best).
+BATCH_AUG_FLAG=""
+[[ "${LLMRUBRIC_BATCH_AUGMENTATIONS:-false}" == "true" ]] && BATCH_AUG_FLAG="--batch-augmentations"
+TF32_FLAG=""
+[[ "${LLMRUBRIC_TF32:-false}" == "true" ]] && TF32_FLAG="--tf32"
+
 echo "=============================================================="
 echo " LLM-Rubric | Marformer | size=${SIZE}"
+echo " LR     : ${LLMRUBRIC_LR:-2e-4}  batch_aug=${LLMRUBRIC_BATCH_AUGMENTATIONS:-false}"
 echo " DATA   : ${DATA_ROOT}/${SPLIT}"
 echo " OUTPUT : ${OUTPUT_ROOT}/${SPLIT}"
 echo "=============================================================="
@@ -82,7 +92,6 @@ rerun_run python -u -m imputer.entity_mf.train \
     --dropout              0.1                     \
     --item-dropout-rate    0.7                     \
     --epochs               300                     \
-    --lr                   2e-4                    \
     --lr-schedule          none                    \
     --lr-min               1e-5                    \
     --weight-decay         0.01                    \
@@ -102,6 +111,9 @@ rerun_run python -u -m imputer.entity_mf.train \
     --scale-shared-rel                             \
     --use-pointer                                  \
     --llm-input-dist                               \
+    --lr                   "${LLMRUBRIC_LR:-2e-4}" \
+    ${BATCH_AUG_FLAG}                              \
+    ${TF32_FLAG}                                   \
     --overwrite-existing-data
 
 ELAPSED=$(( SECONDS - START ))

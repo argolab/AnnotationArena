@@ -115,6 +115,31 @@ class EntityGraph:
         self._edge_mask_cache[dev_key] = edge_mask
         return edge_mask
 
+    def build_edge_index(self, device: torch.device) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Sparse form of the same edges: (flat_qk, rel) index tensors.
+
+        flat_qk[e] = src[e] * L + tgt[e], so a [B, L*L] accumulator can be
+        scattered into and reshaped. The dense [L, L, R] mask is ~6 nonzeros per
+        row -- 365 MiB at L=3900, R=6 -- and contracting against it with an
+        einsum lands in cuBLAS gemvx at ~0.9 ms a call, 30% of GPU time. The
+        scatter touches only the nnz.
+
+        Cached per device; topology never changes for a given graph.
+        """
+        dev_key = str(device)
+        cached = getattr(self, "_edge_index_cache", None)
+        if cached is None:
+            cached = {}
+            self._edge_index_cache = cached
+        if dev_key not in cached:
+            L = self.num_tokens
+            srcs = torch.tensor(self._edge_srcs, dtype=torch.long, device=device)
+            tgts = torch.tensor(self._edge_tgts, dtype=torch.long, device=device)
+            rels = torch.tensor(self._edge_rels, dtype=torch.long, device=device)
+            cached[dev_key] = (srcs * L + tgts, rels)
+        return cached[dev_key]
+
 
 def variable_list_to_entity_graph(
     ranking_vars: List[RankingData],

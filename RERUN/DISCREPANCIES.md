@@ -350,6 +350,32 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
   of hardcoding, and use the same value on both sides. Related to D1, which is
   the same class of bug on the training side.
 
+## D21 — the per-epoch evaluation runs with dropout on
+
+- **Where:** `imputer/entity_mf/train.py`, `on_train_epoch_end`.
+- **What the code does:** it calls `evaluate_entity_marformer_split` without
+  ever putting the model in eval mode. `test.py` does call `model.eval()`
+  (line 170), and it is the only place in the training/eval path that does.
+  So every number in `training_history.json` — including the
+  `combined_missing` / `val_missing` cross-entropies the training curves are
+  drawn from, and the `val/missing_ce` the "best" checkpoint is selected on —
+  is computed with `nn.Dropout(0.1)` active in every block and with entity
+  deviations dropped at their training rates (1.0 on the item axis, 0.8 on the
+  annotator axis).
+- **Does it move numbers?** Not the reported ones: every published metric comes
+  from `test.py`, which evaluates correctly. It does move the *curves*, which
+  are noisier and biased high, and it makes the `best` checkpoint selection
+  partly a lottery over dropout masks. On the annotator axis, where the
+  annotator deviations are dropped 80% of the time, the effect is larger than
+  on the item axis.
+- **Found:** while profiling (`reports/TRAINING_SPEED.md`); the evaluation also
+  ran with autograd enabled, which was fixed there because it is purely a
+  speed matter. The train/eval mode question is not, so it was left alone.
+- **To resolve:** wrap the epoch-end evaluation in `model.eval()` /
+  `model.train()`. That changes every recorded training curve, including the
+  ones `reports/OVERFITTING.md` reads, so it wants a deliberate rerun rather
+  than a quiet fix. Related to D17 (dropout is not rescaled at eval either).
+
 ---
 
 ## How to add an entry
