@@ -30,6 +30,7 @@ from .fastgraph import graph_tensors
 from .model import EntityMarformer
 from .eval import compute_trainable_loss, evaluate_entity_marformer_split, EntityEvalResults
 from .masking import MaskingStrategy, build_default_masking_strategy
+from .validation import carve_validation, summarise as summarise_validation
 
 
 def _save_json(data: Any, path: Path) -> None:
@@ -96,6 +97,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         random_item_chunks: bool = False,
         batch_augmentations: bool = False,
         eval_every: int = 1,
+        val_missing_in_graph: bool = True,
     ):
         super().__init__()
         self.model = model
@@ -118,6 +120,10 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.random_item_chunks = bool(random_item_chunks)
         self.batch_augmentations = bool(batch_augmentations)
         self.eval_every = max(1, int(eval_every))
+        # test_missing is held out of the training graph entirely. A carved
+        # validation set has to be held out the same way, or it is an easier
+        # problem than the test set and the epoch it selects is biased late.
+        self.val_missing_in_graph = bool(val_missing_in_graph)
         # Which always-observed annotators the batched sampler must honour.
         # None means MCAR.
         self._always_obs: List[int] | None = None
@@ -235,7 +241,9 @@ class EntityMarformerLightningModule(pl.LightningModule):
                 maskable_sources = (list(self.train_observed) + list(self.val_observed)
                                     + list(self.test_observed))
                 fixed_sources    = []
-            missing_sources  = list(self.train_missing)  + list(self.val_missing)
+            missing_sources  = list(self.train_missing)
+            if self.val_missing_in_graph:
+                missing_sources += list(self.val_missing)
         else:
             maskable_sources = list(self.train_observed)
             fixed_sources    = []
@@ -1040,6 +1048,20 @@ def main():
         help="Epoch at which to apply one LR drop when --lr-schedule step.",
     )
     parser.add_argument(
+        "--val-protocol", default="none", choices=["none", "block", "mcar"],
+        help="Carve a validation split out of the training partition at load time. "
+             "'block' holds out whole items (item axis) or annotators (annotator axis), "
+             "posing the same question the test block does; 'mcar' hides random observed "
+             "training cells. Domain 3 ships with an empty validation split.",
+    )
+    parser.add_argument("--val-frac", type=float, default=0.15,
+                        help="Fraction of training entities (block) or observed cells (mcar) to hold out.")
+    parser.add_argument("--val-split-seed", type=int, default=7,
+                        help="Seed for the validation carve. Deliberately separate from --seed so "
+                             "every training seed sees the same split.")
+    parser.add_argument("--val-axis", default="", choices=["", "item", "annot"],
+                        help="Override the axis for --val-protocol block (default: read from the bundle).")
+    parser.add_argument(
         "--amp", default="none", choices=["none", "bf16", "fp16"],
         help="Run the block stack under autocast. Numerically real: the param "
              "stream carries raw logits.",
@@ -1083,6 +1105,15 @@ def main():
     data_dir = Path(args.data_dir)
 
     bundle, converter, sizes = load_bundle_and_converter(data_dir)
+
+    # Carve validation before anything reads partitions off the bundle. This
+    # mutates the in-memory bundle only; the files on disk are untouched, so
+    # every arm still trains on byte-identical data.
+    val_summary = carve_validation(
+        bundle, args.val_protocol, args.val_frac, args.val_split_seed,
+        axis=(args.val_axis or None),
+    )
+    print(f"[EntityMarformer] {summarise_validation(val_summary)}")
 
     config = EntityMarformerConfig()
     if args.embedding_dim is not None:
@@ -1207,11 +1238,15 @@ def main():
             "eval_every": args.eval_every,
             "tf32": bool(args.tf32),
             "amp": args.amp,
+            "val_protocol": args.val_protocol,
         },
         "run": {
             "run_dir": str(run_dir),
             "seed": args.seed,
         },
+        # Without this the validation split is irreproducible, and a validation
+        # number nobody can reproduce is worse than none.
+        "validation": val_summary,
     }
     _save_json(train_config, run_dir / "train_config.json")
 
@@ -1239,6 +1274,7 @@ def main():
         random_item_chunks=bool(args.random_item_chunks),
         batch_augmentations=bool(args.batch_augmentations),
         eval_every=args.eval_every,
+        val_missing_in_graph=(args.val_protocol == "none"),
     )
 
     if args.tf32:

@@ -127,6 +127,11 @@ BATCH_AUGMENTATIONS="${DOMAIN3_BATCH_AUGMENTATIONS:-false}"
 TF32="${DOMAIN3_TF32:-false}"
 COMPILE_MODE="${DOMAIN3_COMPILE:-none}"
 EVAL_EVERY="${DOMAIN3_EVAL_EVERY:-1}"
+# Validation protocol. Domain 3 ships with an empty validation split, so "none"
+# means there is nothing to stop early on -- see imputer/entity_mf/validation.py.
+VAL_PROTOCOL="${DOMAIN3_VAL_PROTOCOL:-none}"
+VAL_FRAC="${DOMAIN3_VAL_FRAC:-0.15}"
+VAL_SPLIT_SEED="${DOMAIN3_VAL_SPLIT_SEED:-7}"
 ITEM_DROPOUT_RATE=1.0
 ANNOTATOR_DROPOUT_RATE=0.0
 ITEM_REG_WEIGHT=0.0
@@ -208,6 +213,7 @@ echo " USE_POINTER         : ${USE_POINTER}"
 echo " SCALE_SHARED_REL    : ${SCALE_SHARED_REL}"
 echo " TRANSDUCTIVE        : $([ "${PROTOCOL}" = "transductive" ] && echo "true" || echo "false")"
 echo " USE_EMBED_UNEMBED   : ${USE_EMBED_UNEMBED}"
+echo " VAL_PROTOCOL        : ${VAL_PROTOCOL} (frac ${VAL_FRAC}, split seed ${VAL_SPLIT_SEED})"
 echo " BATCH_AUGMENTATIONS : ${BATCH_AUGMENTATIONS}"
 echo " TF32 / COMPILE      : ${TF32} / ${COMPILE_MODE}"
 
@@ -275,6 +281,9 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
         --inner-residual         "${INNER_RESIDUAL}"        \
         --compile                "${COMPILE_MODE}"          \
         --eval-every             "${EVAL_EVERY}"            \
+        --val-protocol           "${VAL_PROTOCOL}"          \
+        --val-frac               "${VAL_FRAC}"              \
+        --val-split-seed         "${VAL_SPLIT_SEED}"        \
         ${BATCH_AUG_FLAG}                                  \
         ${TF32_FLAG}                                       \
         ${TRANSDUCTIVE_FLAG}                               \
