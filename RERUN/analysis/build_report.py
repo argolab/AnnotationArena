@@ -26,6 +26,10 @@ def main() -> None:
     ap.add_argument("--template", default=str(HERE / "report_template.html"))
     ap.add_argument("--title", default="", help="override the <title>")
     ap.add_argument("--marker", default="", help="short badge shown on every figure title")
+    ap.add_argument("--baseline", default="",
+                    help="a collect_domain3.py JSON to overlay as a dashed reference "
+                         "series (only its per-run metrics are embedded, not curves)")
+    ap.add_argument("--baseline-label", default="baseline")
     args = ap.parse_args()
 
     template = Path(args.template).read_text()
@@ -36,7 +40,17 @@ def main() -> None:
     # of "<" keeps the document well-formed without touching the parsed values.
     payload = raw.replace("<", "\\u003c").replace(">", "\\u003e").replace("&", "\\u0026")
 
+    baseline = {"label": args.baseline_label, "runs": {}}
+    if args.baseline:
+        src = json.loads(Path(args.baseline).read_text())
+        for r in src["runs"]:
+            key = f"{r['family']}|{r['axis']}|{r['size']}|{r['seed']}"
+            baseline["runs"][key] = {"last": r["test"]["last"], "best": r["test"]["best"],
+                                     "runtime_min": r["runtime_min"]}
+        print(f"baseline: {len(baseline['runs'])} runs from {args.baseline}")
+
     html = template.replace("__DATA__", payload)
+    html = html.replace("__BASELINE__", json.dumps(baseline).replace("<", "\\u003c"))
     if args.title:
         html = html.replace("<title>Domain 3 Replication</title>", f"<title>{args.title}</title>")
     if args.marker:
