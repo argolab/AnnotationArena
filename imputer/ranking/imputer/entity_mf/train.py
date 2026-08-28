@@ -26,6 +26,7 @@ from imputer.utils import sizes_from_configs
 from .config import EntityMarformerConfig
 from .types import build_default_domain3_types
 from .data import variable_list_to_entity_graph
+from .fastgraph import graph_tensors
 from .model import EntityMarformer
 from .eval import compute_trainable_loss, evaluate_entity_marformer_split, EntityEvalResults
 from .masking import MaskingStrategy, build_default_masking_strategy
@@ -93,6 +94,8 @@ class EntityMarformerLightningModule(pl.LightningModule):
         lr_min: float = 1e-5,
         lr_step_epoch: int = 40,
         random_item_chunks: bool = False,
+        batch_augmentations: bool = False,
+        eval_every: int = 1,
     ):
         super().__init__()
         self.model = model
@@ -113,6 +116,20 @@ class EntityMarformerLightningModule(pl.LightningModule):
         self.lr_min = lr_min
         self.lr_step_epoch = lr_step_epoch
         self.random_item_chunks = bool(random_item_chunks)
+        self.batch_augmentations = bool(batch_augmentations)
+        self.eval_every = max(1, int(eval_every))
+        # Which always-observed annotators the batched sampler must honour.
+        # None means MCAR.
+        self._always_obs: List[int] | None = None
+        if always_observed_ids is not None:
+            self._always_obs = list(always_observed_ids)
+        elif llm_annotator_id is not None:
+            self._always_obs = [llm_annotator_id]
+        self._human_observed_rate = float(human_observed_rate)
+        if self.batch_augmentations and random_item_chunks:
+            raise ValueError("--batch-augmentations needs fixed chunk graphs; "
+                             "it is incompatible with --random-item-chunks")
+
         self._last_logged_lr = float(learning_rate)
 
         # Build persistent splits from the bundle. Training-time graphs may merge
@@ -148,6 +165,10 @@ class EntityMarformerLightningModule(pl.LightningModule):
             always_observed_ids=always_observed_ids,
         )
         self.training_history: List[Dict[str, Any]] = []
+        # Per-split evaluation graph cache. The evaluated variable lists and
+        # their statuses never change, so the chunk partition, the graphs, and
+        # the tensors cached on them are built once instead of every epoch.
+        self._eval_graph_cache: Dict[str, Any] = {}
         # Pre-build per-chunk EntityGraphs for non-transductive mode.
         # Graphs are reused every step; only variable token statuses are updated in-place.
         # edge_mask and K_aug are cached on each graph object after the first forward pass.
@@ -307,7 +328,15 @@ class EntityMarformerLightningModule(pl.LightningModule):
             tok.raw_data["is_masked"] = var.is_masked
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay)
+        # fused: the model is ~100 small parameter tensors, so an unfused AdamW
+        # launches hundreds of tiny kernels and shows up as ~15% of GPU time.
+        fused = torch.cuda.is_available() and all(
+            p.is_cuda and p.dtype.is_floating_point for p in self.parameters()
+        )
+        optimizer = torch.optim.AdamW(
+            self.parameters(), lr=self.learning_rate,
+            weight_decay=self.weight_decay, fused=fused,
+        )
         if self.lr_schedule == "cosine":
             scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
                 optimizer, T_max=self.trainer.max_epochs, eta_min=self.lr_min
@@ -326,7 +355,10 @@ class EntityMarformerLightningModule(pl.LightningModule):
     def train_dataloader(self):
         """Dummy dataloader with mask_augmentations entries per epoch.
         Each entry triggers a training_step with fresh random masking."""
-        ds = torch.utils.data.TensorDataset(torch.zeros(self.mask_augmentations))
+        # With batch_augmentations the augmentations become the batch dimension
+        # of a single forward, so the epoch is one step rather than N.
+        n = 1 if self.batch_augmentations else self.mask_augmentations
+        ds = torch.utils.data.TensorDataset(torch.zeros(n))
         return torch.utils.data.DataLoader(ds, batch_size=1)
 
     def on_train_epoch_start(self) -> None:
@@ -346,6 +378,18 @@ class EntityMarformerLightningModule(pl.LightningModule):
                 f"{self._last_logged_lr:.6g} -> {current_lr:.6g}"
             )
             self._last_logged_lr = current_lr
+
+    def _deviation_reg(self, device: torch.device) -> torch.Tensor:
+        """L2 penalty on the per-entity deviation tables."""
+        reg_loss = torch.zeros((), device=device)
+        for type_name, t in self.model.types.items():
+            if not t.variation.enabled or t.variation.reg_weight <= 0.0:
+                continue
+            table = self.model.deviation_tables.get(type_name, None)
+            if table is None:
+                continue
+            reg_loss = reg_loss + t.variation.reg_weight * table.pow(2).sum()
+        return reg_loss
 
     def training_step(self, batch, batch_idx):
         """
@@ -376,6 +420,37 @@ class EntityMarformerLightningModule(pl.LightningModule):
             chunk_fixed    = chunk_data.get("chunk_fixed", [])
             chunk_missing  = chunk_data["chunk_missing"]
 
+            if self.batch_augmentations:
+                # All mask augmentations of this chunk in one pass; see
+                # EntityMarformer.forward_batched.
+                graph = chunk_data["graph"]
+                gt = graph_tensors(graph, self.types, self.model.global_param_dim, device)
+                if self._always_obs is None:
+                    status = gt.sample_status(len(chunk_observed), self.masking_rate,
+                                              self.mask_augmentations)
+                else:
+                    status = gt.sample_status_structured(
+                        len(chunk_observed), self._always_obs,
+                        self._human_observed_rate, self.mask_augmentations)
+                params = self.model.forward_batched(graph, status, device=device)
+                trainable_loss, chunk_masked_ce, chunk_observed_ce, n_masked, n_observed_chunk = (
+                    compute_trainable_loss(
+                        params, graph, self.model.types, self.model.global_param_dim, device,
+                        masked_loss_weight=self.masked_loss_weight,
+                        observed_loss_weight=self.observed_loss_weight,
+                        status=status,
+                    )
+                )
+                chunk_loss = trainable_loss + self._deviation_reg(device)
+                weight = n_masked if n_masked > 0 else 1
+                loss_tensors.append(chunk_loss)
+                loss_weights.append(weight)
+                masked_ce_accum += chunk_masked_ce * n_masked
+                masked_ce_count += n_masked
+                observed_ce_accum += chunk_observed_ce * n_observed_chunk
+                observed_ce_count += n_observed_chunk
+                continue
+
             # Apply training mask to observed vars in this chunk.
             masked_or_observed = self.masking_strategy.mask(chunk_observed)
 
@@ -396,22 +471,13 @@ class EntityMarformerLightningModule(pl.LightningModule):
             params = self.model(graph, device=device)  # [1, L, P]
             ########################################################
 
-            trainable_loss, chunk_masked_ce, chunk_observed_ce = compute_trainable_loss(
+            trainable_loss, chunk_masked_ce, chunk_observed_ce, _, _ = compute_trainable_loss(
                 params, graph, self.model.types, self.model.global_param_dim, device,
                 masked_loss_weight=self.masked_loss_weight,
                 observed_loss_weight=self.observed_loss_weight,
             )
 
-            # Deviation regularization (per-entity deviations)
-            reg_loss = torch.zeros((), device=device)
-            for type_name, t in self.model.types.items():
-                if not t.variation.enabled or t.variation.reg_weight <= 0.0:
-                    continue
-                table = self.model.deviation_tables.get(type_name, None)
-                if table is None:
-                    continue
-                reg_loss = reg_loss + t.variation.reg_weight * table.pow(2).sum()
-
+            reg_loss = self._deviation_reg(device)
             chunk_loss = trainable_loss + reg_loss
             
             # Weight by number of masked tokens; if none, fall back to 1.
@@ -453,14 +519,27 @@ class EntityMarformerLightningModule(pl.LightningModule):
 
         return loss
 
+    @torch.no_grad()
     def on_train_epoch_end(self) -> None:
         """
         Epoch-end summary + evaluation.
+
+        no_grad: nothing here is differentiated, but Lightning does not disable
+        autograd in this hook, so every epoch used to build (and free) a full
+        backward graph for the evaluation forward passes.
 
         Training_step focuses on optimizing the masked loss; here we run the
         full evaluation path on train/test splits, goal is to get the loss on missing tokens
         imputer behavior.
         """
+        # --eval-every N: run the epoch-end evaluation only every N epochs (the
+        # final epoch always runs). The evaluation is a full forward over every
+        # chunk of the split, so at N=1 it is a third of the wall clock.
+        last_epoch = (self.trainer.max_epochs is not None
+                      and self.current_epoch >= self.trainer.max_epochs - 1)
+        if self.eval_every > 1 and not last_epoch and (self.current_epoch % self.eval_every):
+            return
+
         metrics = self.trainer.callback_metrics if hasattr(self, "trainer") else {}
         total = metrics.get("train/loss_epoch", metrics.get("train/loss", torch.tensor(0.0, device=self.device)))
         total_f = float(total.detach().cpu()) if isinstance(total, torch.Tensor) else float(total)
@@ -498,6 +577,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
                     max_item=self.max_item,
+                    cache=self._eval_graph_cache,
                 )
                 rating_missing = (
                     combined_eval.metrics.get("missing", {}).get("rating", {})
@@ -526,6 +606,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
                     max_item=self.max_item,
+                    cache=self._eval_graph_cache,
                 )
                 rating_missing = (
                     val_eval.metrics.get("missing", {}).get("rating", {})
@@ -556,6 +637,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
                     max_item=self.max_item,
+                    cache=self._eval_graph_cache,
                 )
                 rating_missing = (
                     train_eval.metrics.get("missing", {}).get("rating", {})
@@ -583,6 +665,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
                     max_item=self.max_item,
+                    cache=self._eval_graph_cache,
                 )
                 rating_missing = (
                     val_eval.metrics.get("missing", {}).get("rating", {})
@@ -957,6 +1040,31 @@ def main():
         help="Epoch at which to apply one LR drop when --lr-schedule step.",
     )
     parser.add_argument(
+        "--amp", default="none", choices=["none", "bf16", "fp16"],
+        help="Run the block stack under autocast. Numerically real: the param "
+             "stream carries raw logits.",
+    )
+    parser.add_argument(
+        "--tf32", action="store_true",
+        help="Allow TF32 for fp32 matmuls (H100/A100). Fewer mantissa bits, "
+             "much higher matmul throughput.",
+    )
+    parser.add_argument(
+        "--eval-every", type=int, default=1,
+        help="Run the epoch-end evaluation every N epochs (the last epoch always runs).",
+    )
+    parser.add_argument(
+        "--batch-augmentations", action="store_true",
+        help="Run the mask augmentations as one batched forward instead of one "
+             "optimizer step each. MCAR masking only. One step per epoch, so the "
+             "learning rate usually wants raising.",
+    )
+    parser.add_argument(
+        "--compile", dest="compile_mode", default="none",
+        choices=["none", "default", "reduce-overhead", "max-autotune"],
+        help="torch.compile mode for the block stack (the step is launch-bound).",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=42,
@@ -1094,6 +1202,11 @@ def main():
             "item_dropout_rate": args.item_dropout_rate,
             "annotator_dropout_rate": args.annotator_dropout_rate,
             "device": args.device,
+            "compile_mode": args.compile_mode,
+            "batch_augmentations": bool(args.batch_augmentations),
+            "eval_every": args.eval_every,
+            "tf32": bool(args.tf32),
+            "amp": args.amp,
         },
         "run": {
             "run_dir": str(run_dir),
@@ -1124,7 +1237,17 @@ def main():
         lr_min=args.lr_min,
         lr_step_epoch=args.lr_step_epoch,
         random_item_chunks=bool(args.random_item_chunks),
+        batch_augmentations=bool(args.batch_augmentations),
+        eval_every=args.eval_every,
     )
+
+    if args.tf32:
+        torch.set_float32_matmul_precision("high")
+    if args.amp != "none":
+        model.enable_amp(args.amp)
+
+    if args.compile_mode != "none":
+        model.enable_compile(args.compile_mode)
 
     accelerator = "gpu" if args.device == "cuda" and torch.cuda.is_available() else "cpu"
     logger = TensorBoardLogger(save_dir=str(run_dir), name="lightning_logs")
