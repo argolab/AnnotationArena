@@ -49,11 +49,39 @@ def chunk_by_item(variables, max_item):
     return chunks or [variables]
 
 
+def resolve_checkpoint(run_dir: Path, which: str) -> Path:
+    """
+    Path to the weights for a checkpoint policy.
+
+    'best' has to be resolved through TEST_RESULTS rather than the best-*.ckpt
+    file Lightning wrote: that callback monitors val/missing_ce, which Domain 3
+    never logs because it has no validation split, so the file it saved is not
+    the argmin of anything. The policy the paper's figures actually use is the
+    argmin over the periodic checkpoints scored on test, so that is what this
+    reconstructs.
+    """
+    ckpts = run_dir / "checkpoints"
+    if which == "last":
+        return _find_checkpoint(ckpts, "last")
+    best_epoch, best_ll = None, float("inf")
+    for path in (run_dir / "TEST_RESULTS").glob("periodic-epoch=*.json"):
+        with open(path) as fh:
+            ll = json.load(fh).get("missing", {}).get("log_loss")
+        if ll is not None and ll < best_ll:
+            best_ll, best_epoch = ll, re.search(r"epoch=(\d+)", path.name).group(1)
+    if best_epoch is None:
+        raise FileNotFoundError(f"no scored periodic checkpoints under {run_dir}")
+    path = ckpts / f"periodic-epoch={best_epoch}.ckpt"
+    if not path.is_file():
+        raise FileNotFoundError(f"{path} missing")
+    return path
+
+
 @torch.no_grad()
 def probs_and_labels(run_dir: Path, device: torch.device, max_item, which="last"):
     """Per-example predicted distributions over the test-missing cells."""
     model, eval_vars, _cfg = _reconstruct(run_dir)
-    _load_checkpoint(model, _find_checkpoint(run_dir / "checkpoints", which), device)
+    _load_checkpoint(model, resolve_checkpoint(run_dir, which), device)
     model.to(device).eval()
     C = model.types["rating"].num_classes
     rows, labels = [], []
@@ -109,7 +137,8 @@ def main() -> None:
     ap.add_argument("--bootstrap", type=int, default=500)
     ap.add_argument("--checkpoints", default="last,best",
                     help="which checkpoints to score; 'best' is the test-argmin the "
-                         "paper's figures use, so the pair shows D14 in calibration too")
+                         "paper's figures use (resolved through TEST_RESULTS, so eval "
+                         "must have run), which shows D14 in calibration too")
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args()
 
