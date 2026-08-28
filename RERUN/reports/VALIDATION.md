@@ -141,33 +141,67 @@ sizes:
 
 At J=10 on the NT arm it recovers 78% of a 0.23-nat gap.
 
+### Corrected: on the held-out cells alone it is much better than that
+
+The numbers above are the *pooled* metric `test.py` reports, and that metric is
+mostly training-partition cells (discrepancy **D22** -- 24% of it is genuinely
+held-out at K=500, 2.9% at K=4000). Scoring on the 414 genuinely held-out cells
+instead:
+
+```
+val-block vs last epoch, POOLED metric      -0.0343 nats   (28/38 cells better)
+val-block vs last epoch, TEST cells only    -0.0635 nats   (35/38 cells better)
+```
+
+The pooled number understates the protocol by roughly half, and for a coherent
+reason: early stopping costs a little on the training partition's own missing
+cells -- more epochs do fit those better -- and gains a lot on the held-out
+cells, which is where the overfitting actually shows. Pooling the two nets them
+against each other.
+
+On test cells alone the annotator axis is transformed:
+
+| setting | no validation | **block validation** | delta |
+|---|---|---|---|
+| MarformerNT annot J=10 | 1.2515 | **0.9731** | **-0.278** |
+| MarformerNT annot J=15 | 1.2085 | **0.9250** | **-0.284** |
+| Marformer annot J=25 | 1.0793 | **0.9318** | -0.148 |
+| Marformer annot J=30 | 1.0266 | **0.9143** | -0.112 |
+| Marformer item K=100 | 1.0966 | **1.0026** | -0.094 |
+
 ### Where it does not work, and why
 
-Ten cells got worse, and they cluster: the **item axis between K=300 and K=700
-on the non-transductive arm**.
+On the pooled metric ten cells got worse, clustered on the non-transductive item
+axis between K=300 and K=700. **On test cells alone only three cells are worse,
+and all three by 0.006 nats or less** -- K=2000 (+0.005), K=4000 (+0.000) and
+non-transductive K=400 (+0.006), which are exactly the settings where there is
+no overfitting to remove and validation correctly declines to act. The
+"failure band" was an artifact of the pooled metric.
 
-| setting | last | **val-block** | selected epoch |
-|---|---|---|---|
-| MarformerNT item K=300 | 0.9317 | 0.9565 | 109 |
-| MarformerNT item K=400 | 0.8765 | 0.9071 | 138 |
-| MarformerNT item K=500 | 0.8669 | 0.9294 | 66 |
+What survives is a milder version: at the large item sizes the protocol has
+nothing to gain and adds a little variance. That is the right behaviour, not a
+defect.
 
-These stop far too early. The cause is visible in the search runs: at
-MarformerNT K=500 the three seeds' own argmins were 67, 226 and 82, and the
-pooled curve chose 65. The block validation set there is ~146 target cells on
-~60 held-out items, which is too few to locate the minimum -- and unlike the
-annotator axis, where overfitting is severe and the basin is deep, here the
-basin is shallow, so noise dominates the choice.
+The one genuine fragility remains the width of the search: at MarformerNT
+K=500 the three seeds' own argmins were 67, 226 and 82, on a validation set of
+~146 target cells over ~60 held-out items. Pooling and smoothing absorbed it
+here, but the margin is thin.
 
-So the protocol's failure mode is exactly the one you would predict: it needs
-either a real overfitting signal to lock onto, or a validation set big enough to
-see through the noise. It has neither in that band.
-
-Two things would address it, in order of cost: a one-standard-error rule (pick
+Two things would harden it, in order of cost: a one-standard-error rule (pick
 the earliest epoch within 1 SE of the minimum, which formalises the flat-basin
 handling already visible at K=400), and a larger validation fraction on the item
-axis. The MCAR arm also bears directly on this, since it holds out cells rather
-than whole items and so gets a denser signal on the same budget.
+axis.
+
+### The MCAR arm had a bug; it is re-running
+
+The first MCAR run came out catastrophically worse (+0.278 nats, stopping at 39
+epochs on average). That was not a property of MCAR validation, it was an
+implementation error: the MCAR carve moves observed cells *out* of the observed
+list, so `val_observed` is empty and the validation graph was nothing but
+targets -- no context at all, a task on which the least-trained model wins.
+`val_eval_vars` now scores MCAR cells against `train_observed`, which is the
+context they actually came from. Verified on a 40-epoch run: the curve descends
+like the block arm's. Re-running as `val-mcar-02`.
 
 ## Status
 
@@ -176,7 +210,7 @@ Runs in flight:
 | Run | Protocol | Tasks |
 |---|---|---|
 | `val-block-01` | block | **complete** -- 114 search + 114 refit, evaluated |
-| `val-mcar-01` | mcar | running |
+| `val-mcar-02` | mcar | running (the first attempt hit the context bug above) |
 
 Both over seeds 42/43/44 on the `replicate-01` data, so they are directly
 comparable to `seeds-01`.

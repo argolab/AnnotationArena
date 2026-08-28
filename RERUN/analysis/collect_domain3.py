@@ -144,6 +144,10 @@ def main() -> None:
     ap.add_argument("--epoch-table", default="",
                     help="JSON from select_epochs.py, embedded so the page can show "
                          "which epoch each size was stopped at and why")
+    ap.add_argument("--split-metrics", default="",
+                    help="JSON from split_missing_metrics.py; adds the test-partition "
+                         "and training-partition metrics so the page can score on the "
+                         "held-out cells alone rather than the pooled number (D22)")
     ap.add_argument("--exclude", default="-search",
                     help="skip run directories whose path contains this; the phase-A "
                          "search tree shares its run names with the refit tree")
@@ -154,6 +158,10 @@ def main() -> None:
     root = Path(args.run_dir)
     results = root / "RESULTS"
     runs = []
+    split = {}
+    if args.split_metrics:
+        for r in (read_json(Path(args.split_metrics)) or {}).get("rows", []):
+            split[(r["family"], r["axis"], r["size"], r["seed"])] = r
 
     for family_dir, protocol in (("MARFORMER", "transductive"),
                                  ("MARFORMER-NT", "nontransductive")):
@@ -199,6 +207,8 @@ def main() -> None:
                 "runtime_min": (float(meta["elapsed_seconds"]) / 60.0
                                 if meta.get("elapsed_seconds") is not None else None),
                 "test": collect_checkpoints(run_dir, train_cfg.get("epochs")),
+                "split": split.get(("Marformer" if family_dir == "MARFORMER" else "MarformerNT",
+                                    axis, size, seed)),
                 "history": collect_history(run_dir, args.history_stride),
             })
 
