@@ -261,6 +261,18 @@ footer {
       <div class="card" id="hyper-card" hidden></div>
     </section>
 
+    <section id="calib-section" hidden>
+      <div class="sec-head">
+        <span class="eyebrow">Paper figures</span>
+        <h2>Calibration</h2>
+        <p id="calib-caption"></p>
+      </div>
+      <div class="ctrl" style="flex-direction:row;align-items:center;gap:var(--s3)">
+        <span class="label">Evaluated at</span><div class="seg" id="c-maxitem"></div>
+      </div>
+      <div class="grid-6" id="calib-grid"></div>
+    </section>
+
     <section>
       <div class="sec-head">
         <span class="eyebrow">Every number</span>
@@ -304,7 +316,7 @@ const CKPT = {
 const state = {
   ckpt: "last", seedMode: "aggregate", axis: "item", metric: "log_loss",
   arms: new Set(ARMS.map(a => a.key)), focus: null,
-  theme: null,
+  theme: null, maxItem: "trained",
 };
 const seedsAvailable = [...new Set(RUNS.map(r => r.seed))].sort((a, b) => a - b);
 
@@ -438,6 +450,100 @@ function lineChart(host, spec) {
     node.addEventListener("mouseleave", hideTip);
     if (spec.onPick) node.addEventListener("click", () => spec.onPick(s, p));
   });
+}
+
+/**
+ * Reliability diagram: the smoothed accuracy-vs-confidence curve against the
+ * diagonal, with the bootstrap band. Distances from the diagonal are the whole
+ * point, so both axes are fixed to [0, 1] and the box is square -- a rescaled
+ * reliability diagram flatters or exaggerates miscalibration.
+ */
+function reliabilityChart(host, panels, title, marker) {
+  const S = 300, M = { t: 10, r: 10, b: 34, l: 40 };
+  const X = v => M.l + v * (S - M.l - M.r);
+  const Y = v => M.t + (1 - v) * (S - M.t - M.b);
+  const parts = [];
+  for (const t of [0, 0.25, 0.5, 0.75, 1]) {
+    parts.push(`<line class="gridline" x1="${M.l}" x2="${S - M.r}" y1="${Y(t)}" y2="${Y(t)}"/>`);
+    parts.push(`<line class="gridline" x1="${X(t)}" x2="${X(t)}" y1="${M.t}" y2="${S - M.b}"/>`);
+    parts.push(`<text x="${M.l - 6}" y="${Y(t) + 3.5}" text-anchor="end">${t}</text>`);
+    parts.push(`<text x="${X(t)}" y="${S - M.b + 14}" text-anchor="middle">${t}</text>`);
+  }
+  parts.push(`<line x1="${X(0)}" y1="${Y(0)}" x2="${X(1)}" y2="${Y(1)}"
+               stroke="var(--ink-3)" stroke-width="1" stroke-dasharray="4 4"/>`);
+  for (const pan of panels) {
+    if (!pan.mesh || !pan.mesh.length) continue;
+    if (pan.lower && pan.lower.length === pan.mesh.length) {
+      const up = pan.mesh.map((x, i) => `${X(x).toFixed(1)},${Y(pan.upper[i]).toFixed(1)}`);
+      const dn = pan.mesh.map((x, i) => `${X(x).toFixed(1)},${Y(pan.lower[i]).toFixed(1)}`).reverse();
+      parts.push(`<polygon points="${up.concat(dn).join(" ")}" fill="${pan.soft}" stroke="none"/>`);
+    }
+    const d = pan.mesh.map((x, i) => `${i ? "L" : "M"}${X(x).toFixed(1)} ${Y(pan.mu[i]).toFixed(1)}`).join(" ");
+    parts.push(`<path d="${d}" fill="none" stroke="${pan.color}" stroke-width="1.9"
+                 stroke-linejoin="round" ${pan.dash ? `stroke-dasharray="${pan.dash}"` : ""}/>`);
+  }
+  parts.push(`<line class="axis" x1="${M.l}" x2="${S - M.r}" y1="${S - M.b}" y2="${S - M.b}"/>`);
+  parts.push(`<line class="axis" x1="${M.l}" x2="${M.l}" y1="${M.t}" y2="${S - M.b}"/>`);
+  parts.push(`<text class="axis-title" x="${(M.l + S - M.r) / 2}" y="${S - 4}" text-anchor="middle">CONFIDENCE</text>`);
+  parts.push(`<text class="axis-title" transform="translate(11 ${(M.t + S - M.b) / 2}) rotate(-90)" text-anchor="middle">ACCURACY</text>`);
+  host.innerHTML = `<div class="chart-title"><span class="name">${title}</span>
+      ${marker ? `<span class="marker">${marker}</span>` : ""}
+      <span class="unit">${panels[0] ? panels[0].note : ""}</span></div>
+    <svg class="chart" viewBox="0 0 ${S} ${S}" role="img"
+         aria-label="Reliability diagram for ${title}">${parts.join("")}</svg>`;
+}
+
+function renderCalibration() {
+  const cal = DATA.calibration || [];
+  const section = $("calib-section");
+  if (!cal.length) { section.hidden = true; return; }
+  section.hidden = false;
+
+  const key = `${state.ckpt}_${state.maxItem}`;
+  const grid = $("calib-grid");
+  grid.innerHTML = "";
+  const cells = new Map();
+  for (const c of cal) {
+    if (!state.arms.has(c.family) || !c[key]) continue;
+    const id = `${c.family}|${c.axis}|${c.size}`;
+    if (!cells.has(id)) cells.set(id, []);
+    cells.get(id).push(c);
+  }
+  if (!cells.size) {
+    grid.innerHTML = '<p class="empty">No calibration data for this selection.</p>';
+    return;
+  }
+  for (const [id, entries] of [...cells.entries()].sort()) {
+    const [family, axis, size] = id.split("|");
+    const arm = armOf(family);
+    entries.sort((a, b) => a.seed - b.seed);
+    const panels = entries.map((c, i) => ({
+      ...c[key], color: arm.color, soft: arm.soft,
+      dash: state.seedMode === "seeds" && i ? (i === 1 ? "5 3" : "2 3") : null,
+      note: `n = ${c[key].n}`,
+    }));
+    const shown = state.seedMode === "seeds" ? panels : panels.slice(0, 1);
+    const smece = entries.map(c => c[key].smece);
+    const ci = entries.map(c => c[key].ci_width);
+    const card = document.createElement("div");
+    card.className = "card";
+    grid.appendChild(card);
+    reliabilityChart(card, shown,
+      `${arm.label} \u00b7 ${axis === "item" ? "K" : "J"} = ${size}`, FIGURE_MARKER);
+    const label = state.seedMode === "seeds"
+      ? entries.map((c, i) => `seed ${c.seed}: ${fmt(smece[i], 4)}`).join("  \u00b7  ")
+      : `smECE ${fmt(mean(smece), 4)} \u00b1 ${fmt(mean(ci), 4)}`
+        + (entries.length > 1 ? `  (mean of ${entries.length} seeds)` : "");
+    card.insertAdjacentHTML("beforeend",
+      `<p class="note" style="margin:var(--s2) 0 0;font-family:var(--f-mono);
+        font-variant-numeric:tabular-nums">${label}</p>`);
+  }
+  $("calib-caption").innerHTML =
+    `Accuracy against confidence over all four rating classes, smoothed with the same
+     kernel estimator the paper uses (relplot, 500 bootstrap resamples). The dashed
+     diagonal is perfect calibration. smECE is the area between the curve and that
+     diagonal; the paper reports 0.016 &plusmn; 0.007 for the item panel and
+     0.022 &plusmn; 0.009 for the annotator panel.`;
 }
 
 /* ------------------------------------------------- generalization figures */
@@ -625,7 +731,10 @@ function renderTable() {
      }).join("")}</tbody>`;
 }
 
-function renderAll() { renderSmallMultiples(); renderFocus(); renderTable(); if (state.focus) renderDetail(); }
+function renderAll() {
+  renderSmallMultiples(); renderFocus(); renderCalibration(); renderTable();
+  if (state.focus) renderDetail();
+}
 
 /* -------------------------------------------------------------- controls */
 function segment(host, items, isOn, onPick) {
@@ -660,6 +769,10 @@ function buildControls() {
     it => state.axis === it.key, it => { state.axis = it.key; });
   segment($("c-metric"), Object.entries(METRICS).map(([k, v]) => ({ key: k, label: v.label })),
     it => state.metric === it.key, it => { state.metric = it.key; });
+
+  segment($("c-maxitem"),
+    [{ key: "trained", label: "Trained max_item" }, { key: "paper", label: "Paper max_item" }],
+    it => state.maxItem === it.key, it => { state.maxItem = it.key; });
 
   const themes = [{ key: "light", label: "Light" }, { key: "dark", label: "Dark" }, { key: null, label: "System" }];
   segment($("c-theme"), themes, it => state.theme === it.key, it => {
