@@ -72,6 +72,22 @@ export DOMAIN3_MAX_ITEM="${DOMAIN3_MAX_ITEM:-300}"   # see FIGURES.md discrepanc
 export DOMAIN3_DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
 export DOMAIN3_INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
 export DOMAIN3_SEED="${DOMAIN3_SEED:-42}"
+# Validation carve (phase A) and, for phase B, a per-(size, seed) epoch budget
+# looked up from the selection file written by analysis/select_epochs.py.
+export DOMAIN3_VAL_PROTOCOL="${DOMAIN3_VAL_PROTOCOL:-none}"
+export DOMAIN3_VAL_FRAC="${DOMAIN3_VAL_FRAC:-0.15}"
+export DOMAIN3_VAL_SPLIT_SEED="${DOMAIN3_VAL_SPLIT_SEED:-7}"
+if [[ -n "${EPOCH_TABLE:-}" ]]; then
+    KEY="${FAMILY}|${AXIS}|${SIZE}|${DOMAIN3_SEED}"
+    LOOKUP="$(python - "${EPOCH_TABLE}" "${KEY}" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))["epochs"].get(sys.argv[2], ""))
+PY
+)"
+    [[ -n "${LOOKUP}" ]] || { echo "FATAL: no epoch budget for ${KEY} in ${EPOCH_TABLE}" >&2; exit 1; }
+    export DOMAIN3_EPOCHS="${LOOKUP}"
+    echo " EPOCHS (validated)  : ${DOMAIN3_EPOCHS}  [${KEY}]"
+fi
 mkdir -p "${OUTPUT_ROOT}"
 
 # Note: run_marformer_group.sh also tees its own log into imputer/ranking/logs/
@@ -87,6 +103,7 @@ echo " MAX_ITEM    : ${DOMAIN3_MAX_ITEM}"
 echo " RESIDUAL    : ${DOMAIN3_DUAL_OUTER_RESIDUAL}"
 echo " INNER RESID : ${DOMAIN3_INNER_RESIDUAL}"
 echo " SEED        : ${DOMAIN3_SEED}"
+echo " VAL         : ${DOMAIN3_VAL_PROTOCOL}"
 echo "=============================================================="
 
 rerun_run bash "${RANKING_ROOT}/scripts/DOMAIN3/run_marformer_group.sh" \
