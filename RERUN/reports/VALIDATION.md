@@ -68,14 +68,54 @@ K &minus; 100 -- and **`Item_T_100` has zero training items**. Likewise
 all; they take their axis's median selected epoch and are flagged as fallbacks
 in the epoch table and on the report page.
 
+## What the search phase found
+
+All 114 block-carve search runs completed. Selected budgets, and the validation
+CE at the chosen epoch versus at epoch 399:
+
+| arm | axis | size | refit epochs | per-run argmin spread | val CE @ best | val CE @ end |
+|---|---|---|---|---|---|---|
+| Marformer | annot | 15 | 59 | 78&ndash;385 | 0.884 | 1.303 |
+| Marformer | annot | 25 | 149 | 126&ndash;163 | 1.032 | **1.791** |
+| Marformer | item | 300 | 128 | 118&ndash;174 | 0.812 | 0.964 |
+| Marformer | item | 500 | 156 | 145&ndash;278 | 0.974 | 1.163 |
+| Marformer | item | 2000 | 390 | 352&ndash;399 | 0.800 | 0.804 |
+| Marformer | item | 4000 | 389 | 342&ndash;386 | 0.806 | 0.818 |
+| MarformerNT | annot | 15 | 105 | 63&ndash;125 | 1.065 | **3.087** |
+
+Three things worth reading off it.
+
+**The overfitting is severe where it exists.** Marformer on 25 annotators ends
+0.76 nats above its own validation optimum; Marformer NT on 15 annotators ends
+**2.0 nats** above. That is not a tuning detail.
+
+**And absent where it does not.** At item K=2000 and above the chosen epoch is
+390 of 400 and the validation CE barely moves across the whole run
+(0.800 &rarr; 0.804). Validation correctly declines to stop early when there is
+nothing to stop.
+
+**Pooling the seeds was necessary, not cosmetic.** The per-run argmins span
+78&ndash;385 within a single cell. At Marformer item K=400 the three seeds bottom
+at 284, 305 and 314 while the pooled curve chooses 185 -- which looks wrong until
+you look at the basin: the pooled mean is 1.0518 at epoch 185 and 1.0495 at 314,
+a 0.002-nat difference across 130 epochs. Each seed's own argmin is the bottom of
+its own noise; the pooled curve says the basin is flat and the early end of it is
+the conservative choice. A one-standard-error rule would formalise this and is
+the obvious refinement if the protocol is kept.
+
+**Six cells had no validation signal** -- `Item_T_100` and `Annot_T_10`, both
+with no training block to carve from, times three seeds. They take their axis
+median (181 and 176 epochs) and are flagged as fallbacks in the epoch table and
+on the report page.
+
 ## Status
 
 Runs in flight:
 
 | Run | Protocol | Tasks |
 |---|---|---|
-| `val-block-01` | block | 114 search + 114 refit |
-| `val-mcar-01` | mcar | 114 search + 114 refit |
+| `val-block-01` | block | search **done** (114/114), refit running |
+| `val-mcar-01` | mcar | held until the block arm finishes |
 
 Both over seeds 42/43/44 on the `replicate-01` data, so they are directly
 comparable to `seeds-01`.
