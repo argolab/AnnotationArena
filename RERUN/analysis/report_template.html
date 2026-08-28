@@ -205,6 +205,11 @@ footer {
 
 <div class="shell">
   <aside class="rail">
+    <div class="ctrl" id="scope-ctrl" hidden>
+      <span class="label">Score on</span>
+      <div class="seg" id="c-scope"></div>
+      <p class="note" id="scope-note"></p>
+    </div>
     <div class="ctrl">
       <span class="label">Checkpoint</span>
       <div class="seg" id="c-ckpt"></div>
@@ -332,6 +337,15 @@ const METRICS = {
   spearman_r:{label: "Spearman r",    unit: "higher is better", dp: 4, better: "high" },
   runtime_min:{label:"Training time", unit: "minutes", dp: 1, better: "low" },
 };
+// Which cells the metric is averaged over. test.py pools the held-out test
+// cells with the training partition's own missing cells, and the test cells are
+// a minority almost everywhere -- 2.9% of the number at K=4000 (D22).
+const SCOPE = {
+  pooled: { label: "All missing cells",
+            note: "What test.py reports: held-out test cells pooled with the training partition's own missing cells. The test share falls from 100% at K=100 to 2.9% at K=4000." },
+  test:   { label: "Test cells only",
+            note: "The 414 genuinely held-out cells, the same count at every size. This is the generalization number." },
+};
 const CKPT = {
   last: { label: "Last epoch", note: "No selection at all \u2014 epoch 399 as trained. The honest default when there is no validation split." },
   best: { label: "Best on test", note: "The argmin over checkpoints scored on the test set. This is what the paper's figures use, and it is optimistic: the model picks its own luckiest epoch (discrepancy D14)." },
@@ -339,7 +353,7 @@ const CKPT = {
 const state = {
   ckpt: "last", seedMode: "aggregate", axis: "item", metric: "log_loss",
   arms: new Set(ARMS.map(a => a.key)), focus: null,
-  theme: null, maxItem: "trained", compare: "none",
+  theme: null, maxItem: "trained", compare: "none", scope: "pooled",
 };
 const seedsAvailable = [...new Set(RUNS.map(r => r.seed))].sort((a, b) => a - b);
 
@@ -350,6 +364,11 @@ const mean = a => a.reduce((s, x) => s + x, 0) / a.length;
 
 function metricOf(run, metric, ckpt) {
   if (metric === "runtime_min") return run.runtime_min;
+  // The test-only decomposition exists for the last checkpoint only -- it is
+  // recomputed from weights, and only the last checkpoint is the reported model.
+  if (state.scope === "test" && ckpt === "last" && run.split && run.split.test) {
+    return run.split.test[metric] ?? null;
+  }
   const t = run.test || {};
   if (ckpt === "best") return t.best ? t.best[metric] : null;
   return t.last ? t.last[metric] : null;
@@ -902,6 +921,14 @@ function segment(host, items, isOn, onPick) {
 }
 
 function buildControls() {
+  if (RUNS.some(r => r.split && r.split.test)) {
+    segment($("c-scope"), Object.entries(SCOPE).map(([k, v]) => ({ key: k, label: v.label })),
+      it => state.scope === it.key, it => { state.scope = it.key; });
+    $("scope-note").textContent = SCOPE[state.scope].note
+      + (state.scope === "test" && state.ckpt !== "last"
+         ? "  Only available for the last checkpoint." : "");
+    $("scope-ctrl").hidden = false;
+  }
   segment($("c-ckpt"), Object.entries(CKPT).map(([k, v]) => ({ key: k, label: v.label })),
     it => state.ckpt === it.key, it => { state.ckpt = it.key; });
   $("ckpt-note").textContent = CKPT[state.ckpt].note;
