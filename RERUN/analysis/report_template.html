@@ -1,0 +1,706 @@
+<title>Domain 3 Replication</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Serif:wght@500;600&display=swap">
+
+<style>
+/* ---------------------------------------------------------------- tokens --
+   Light is the bare :root so the un-stamped ("system") state resolves fully.
+   Dark is redefined twice: once behind prefers-color-scheme guarded against an
+   explicit light choice, once behind the explicit dark stamp. */
+:root {
+  --ground:      #F5F7F9;
+  --surface:     #FFFFFF;
+  --surface-2:   #EDF1F5;
+  --ink:         #16202B;
+  --ink-2:       #4A5A6B;
+  --ink-3:       #64737E;
+  --rule:        #D7DFE7;
+  --grid:        #E4EAF0;
+  --accent:      #2F6DB5;
+  --accent-soft: #2F6DB522;
+  --accent-2:    #C97B2E;
+  --accent-2-soft:#C97B2E22;
+  --good:        #3F8A63;
+  --warn:        #B5482F;
+  --shadow:      0 1px 2px #16202b0f, 0 8px 24px #16202b0d;
+  --on-accent:   #FFFFFF;
+
+  --f-display: "IBM Plex Serif", Georgia, "Times New Roman", serif;
+  --f-body:    "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --f-mono:    "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --s1: 4px; --s2: 8px; --s3: 12px; --s4: 16px; --s5: 24px; --s6: 32px; --s7: 48px;
+  --radius: 6px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #0F151C; --surface: #161E27; --surface-2: #1D2731;
+    --ink: #E4EAF0; --ink-2: #A3B1BF; --ink-3: #7A8A99;
+    --rule: #2A3641; --grid: #222D37;
+    --accent: #6FA5E6; --accent-soft: #6FA5E62E;
+    --accent-2: #E0A055; --accent-2-soft: #E0A0552E;
+    --good: #74B593; --warn: #E07960;
+    --shadow: 0 1px 2px #0006, 0 8px 24px #0004;
+    --on-accent: #0F151C;
+  }
+}
+:root[data-theme="dark"] {
+  --ground: #0F151C; --surface: #161E27; --surface-2: #1D2731;
+  --ink: #E4EAF0; --ink-2: #A3B1BF; --ink-3: #7A8A99;
+  --rule: #2A3641; --grid: #222D37;
+  --accent: #6FA5E6; --accent-soft: #6FA5E62E;
+  --accent-2: #E0A055; --accent-2-soft: #E0A0552E;
+  --good: #74B593; --warn: #E07960;
+  --shadow: 0 1px 2px #0006, 0 8px 24px #0004;
+  --on-accent: #0F151C;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--f-body);
+  font-size: 15px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { font-family: var(--f-display); text-wrap: balance; margin: 0; font-weight: 600; }
+a { color: var(--accent); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+/* ---------------------------------------------------------------- chrome -- */
+.masthead {
+  border-bottom: 1px solid var(--rule);
+  background: var(--surface);
+  padding: var(--s5) var(--s6);
+  display: flex; flex-wrap: wrap; gap: var(--s5);
+  align-items: flex-end; justify-content: space-between;
+}
+.masthead h1 { font-size: 26px; letter-spacing: -0.01em; }
+.masthead .sub { color: var(--ink-2); font-size: 14px; margin-top: var(--s1); max-width: 62ch; }
+.stamps { display: flex; gap: var(--s5); flex-wrap: wrap; }
+.stamp { display: flex; flex-direction: column; gap: 2px; }
+.stamp .k {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.stamp .v { font-family: var(--f-mono); font-size: 15px; font-variant-numeric: tabular-nums; }
+
+.shell { display: grid; grid-template-columns: 244px minmax(0, 1fr); gap: 0; align-items: start; }
+@media (max-width: 900px) { .shell { grid-template-columns: minmax(0, 1fr); } }
+
+.rail {
+  position: sticky; top: 0; align-self: start;
+  padding: var(--s5); border-right: 1px solid var(--rule);
+  background: var(--surface); min-height: 100vh;
+  display: flex; flex-direction: column; gap: var(--s5);
+}
+@media (max-width: 900px) {
+  .rail { position: static; min-height: 0; border-right: none; border-bottom: 1px solid var(--rule); }
+}
+.ctrl { display: flex; flex-direction: column; gap: var(--s2); }
+.ctrl > .label {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+.seg { display: flex; flex-wrap: wrap; gap: var(--s1); }
+.seg button, .chip {
+  font-family: var(--f-body); font-size: 13px; color: var(--ink-2);
+  background: var(--surface-2); border: 1px solid transparent;
+  padding: 5px 10px; border-radius: var(--radius); cursor: pointer;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.seg button:hover, .chip:hover { color: var(--ink); border-color: var(--rule); }
+.seg button[aria-pressed="true"] {
+  background: var(--accent); color: var(--on-accent); border-color: var(--accent);
+}
+.swatch-row { display: flex; align-items: center; gap: var(--s2); font-size: 13px; color: var(--ink-2); }
+.swatch { display: inline-block; width: 22px; height: 3px; border-radius: 2px; flex: none; }
+.note { font-size: 12px; color: var(--ink-3); line-height: 1.5; }
+
+main { padding: var(--s6); display: flex; flex-direction: column; gap: var(--s7); min-width: 0; }
+section { display: flex; flex-direction: column; gap: var(--s4); }
+.sec-head { display: flex; flex-direction: column; gap: var(--s1); }
+.sec-head h2 { font-size: 19px; }
+.sec-head p { margin: 0; color: var(--ink-2); font-size: 14px; max-width: 72ch; }
+.eyebrow {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--ink-3);
+}
+
+.card {
+  background: var(--surface); border: 1px solid var(--rule);
+  border-radius: var(--radius); padding: var(--s4); box-shadow: var(--shadow);
+}
+.grid-6 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--s4); }
+.chart-title {
+  display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3);
+  margin-bottom: var(--s2);
+}
+.chart-title .name { font-family: var(--f-display); font-size: 15px; font-weight: 600; }
+.chart-title .unit { font-family: var(--f-mono); font-size: 11px; color: var(--ink-3); }
+.marker {
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 1px 5px;
+}
+svg.chart { display: block; width: 100%; height: auto; overflow: visible; }
+svg.chart text { font-family: var(--f-mono); font-size: 11px; fill: var(--ink-3); }
+svg.chart .axis-title { font-size: 11px; fill: var(--ink-2); letter-spacing: 0.06em; }
+svg.chart .gridline { stroke: var(--grid); stroke-width: 1; }
+svg.chart .axis { stroke: var(--rule); stroke-width: 1; }
+svg.chart .pt { cursor: pointer; }
+
+.tip {
+  position: fixed; z-index: 40; pointer-events: none; opacity: 0;
+  background: var(--surface); border: 1px solid var(--rule); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: var(--s3); max-width: 320px; font-size: 12.5px;
+  transition: opacity .1s;
+}
+.tip h4 { margin: 0 0 var(--s2); font-family: var(--f-display); font-size: 13px; }
+.tip dl { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: 2px var(--s3); }
+.tip dt { color: var(--ink-3); font-size: 11px; }
+.tip dd {
+  margin: 0; font-family: var(--f-mono); font-size: 11.5px;
+  font-variant-numeric: tabular-nums; text-align: right;
+}
+.tip .hr { height: 1px; background: var(--rule); margin: var(--s2) 0; }
+.tip .hint { color: var(--ink-3); font-size: 11px; margin-top: var(--s2); }
+
+.tablewrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: var(--radius); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 13px; }
+th, td { padding: 7px var(--s3); text-align: right; white-space: nowrap; }
+th {
+  position: sticky; top: 0; background: var(--surface-2); color: var(--ink-2);
+  font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.07em; text-transform: uppercase;
+  font-weight: 500; border-bottom: 1px solid var(--rule);
+}
+td { font-family: var(--f-mono); font-variant-numeric: tabular-nums; border-bottom: 1px solid var(--grid); }
+td.txt, th.txt { text-align: left; font-family: var(--f-body); }
+tbody tr:hover td { background: var(--surface-2); }
+
+.empty { color: var(--ink-3); font-size: 13px; padding: var(--s5); text-align: center; }
+.legend { display: flex; gap: var(--s4); flex-wrap: wrap; font-size: 12px; color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 6px; }
+footer {
+  border-top: 1px solid var(--rule); padding: var(--s5) var(--s6);
+  color: var(--ink-3); font-size: 12.5px;
+}
+</style>
+
+<div class="masthead">
+  <div>
+    <h1>Domain 3 Replication</h1>
+    <p class="sub">Marformer generalization on the Domain 3 sigmoid synthetic benchmark, swept over
+      training size. Every point is a trained model; hover for the hyperparameters it was
+      actually trained with, click to open its checkpoint and training curves.</p>
+  </div>
+  <div class="stamps" id="stamps"></div>
+</div>
+
+<div class="shell">
+  <aside class="rail">
+    <div class="ctrl">
+      <span class="label">Checkpoint</span>
+      <div class="seg" id="c-ckpt"></div>
+      <p class="note" id="ckpt-note"></p>
+    </div>
+    <div class="ctrl">
+      <span class="label">Seeds</span>
+      <div class="seg" id="c-seed"></div>
+      <p class="note" id="seed-note"></p>
+    </div>
+    <div class="ctrl">
+      <span class="label">Arms</span>
+      <div class="seg" id="c-arms"></div>
+    </div>
+    <div class="ctrl">
+      <span class="label">Focus chart</span>
+      <div class="seg" id="c-axis"></div>
+      <div class="seg" id="c-metric"></div>
+    </div>
+    <div class="ctrl">
+      <span class="label">Theme</span>
+      <div class="seg" id="c-theme"></div>
+    </div>
+    <div class="legend" id="legend"></div>
+  </aside>
+
+  <main>
+    <section>
+      <div class="sec-head">
+        <span class="eyebrow">Paper figures</span>
+        <h2>The six generalization sweeps</h2>
+        <p id="fig-caption"></p>
+      </div>
+      <div class="grid-6" id="small-multiples"></div>
+    </section>
+
+    <section>
+      <div class="sec-head">
+        <span class="eyebrow">Focus</span>
+        <h2 id="focus-heading">Focus chart</h2>
+        <p>The same data at full size. Click any point to load that run below.</p>
+      </div>
+      <div class="card"><div id="focus-chart"></div></div>
+    </section>
+
+    <section>
+      <div class="sec-head">
+        <span class="eyebrow">Selected run</span>
+        <h2 id="detail-heading">No run selected</h2>
+        <p id="detail-sub">Click a point in any chart above to see how that model behaved over
+          training &mdash; which is where checkpoint choice stops being a detail.</p>
+      </div>
+      <div class="grid-6">
+        <div class="card"><div id="ckpt-chart"></div></div>
+        <div class="card"><div id="hist-chart"></div></div>
+      </div>
+      <div class="card" id="hyper-card" hidden></div>
+    </section>
+
+    <section>
+      <div class="sec-head">
+        <span class="eyebrow">Every number</span>
+        <h2>Run table</h2>
+        <p>One row per trained model, at the checkpoint policy selected on the left.</p>
+      </div>
+      <div class="tablewrap"><table id="table"></table></div>
+    </section>
+  </main>
+</div>
+
+<footer id="footer"></footer>
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script id="payload" type="application/json">__DATA__</script>
+<script>
+(() => {
+"use strict";
+const DATA = JSON.parse(document.getElementById("payload").textContent);
+// Stamped onto every figure title by build_report.py --marker, so the two
+// protocol variants of this page can never be confused for one another.
+const FIGURE_MARKER = "";
+const RUNS = DATA.runs;
+
+/* ------------------------------------------------------------------ state */
+const ARMS = [
+  { key: "Marformer",   label: "Transductive",     color: "var(--accent)",   soft: "var(--accent-soft)" },
+  { key: "MarformerNT", label: "Non-transductive", color: "var(--accent-2)", soft: "var(--accent-2-soft)" },
+];
+const METRICS = {
+  log_loss: { label: "Test log-loss", unit: "nats, lower is better", dp: 4, better: "low" },
+  accuracy: { label: "Accuracy",      unit: "fraction, higher is better", dp: 4, better: "high" },
+  rmse:     { label: "RMSE",          unit: "rating units, lower is better", dp: 4, better: "low" },
+  spearman_r:{label: "Spearman r",    unit: "higher is better", dp: 4, better: "high" },
+  runtime_min:{label:"Training time", unit: "minutes", dp: 1, better: "low" },
+};
+const CKPT = {
+  last: { label: "Last epoch", note: "No selection at all \u2014 epoch 399 as trained. The honest default when there is no validation split." },
+  best: { label: "Best on test", note: "The argmin over checkpoints scored on the test set. This is what the paper's figures use, and it is optimistic: the model picks its own luckiest epoch (discrepancy D14)." },
+};
+const state = {
+  ckpt: "last", seedMode: "aggregate", axis: "item", metric: "log_loss",
+  arms: new Set(ARMS.map(a => a.key)), focus: null,
+  theme: null,
+};
+const seedsAvailable = [...new Set(RUNS.map(r => r.seed))].sort((a, b) => a - b);
+
+/* ------------------------------------------------------------------ utils */
+const $ = id => document.getElementById(id);
+const fmt = (v, dp) => (v === null || v === undefined || Number.isNaN(v)) ? "\u2014" : (+v).toFixed(dp);
+const mean = a => a.reduce((s, x) => s + x, 0) / a.length;
+
+function metricOf(run, metric, ckpt) {
+  if (metric === "runtime_min") return run.runtime_min;
+  const t = run.test || {};
+  if (ckpt === "best") return t.best ? t.best[metric] : null;
+  return t.last ? t.last[metric] : null;
+}
+const armOf = key => ARMS.find(a => a.key === key);
+
+/** Runs for one arm+axis, grouped by size, as {size, values:[{seed, v, run}]}. */
+function seriesData(family, axis, metric, ckpt) {
+  const bySize = new Map();
+  for (const r of RUNS) {
+    if (r.family !== family || r.axis !== axis) continue;
+    const v = metricOf(r, metric, ckpt);
+    if (v === null || v === undefined) continue;
+    if (!bySize.has(r.size)) bySize.set(r.size, []);
+    bySize.get(r.size).push({ seed: r.seed, v: +v, run: r });
+  }
+  return [...bySize.entries()]
+    .map(([size, values]) => ({ size, values: values.sort((a, b) => a.seed - b.seed) }))
+    .sort((a, b) => a.size - b.size);
+}
+
+/* ------------------------------------------------------------------ chart */
+const TIP = $("tip");
+function showTip(html, ev) {
+  TIP.innerHTML = html;
+  TIP.style.opacity = "1";
+  const pad = 14, w = TIP.offsetWidth, h = TIP.offsetHeight;
+  let x = ev.clientX + pad, y = ev.clientY + pad;
+  if (x + w > innerWidth - 8) x = ev.clientX - w - pad;
+  if (y + h > innerHeight - 8) y = ev.clientY - h - pad;
+  TIP.style.left = Math.max(8, x) + "px";
+  TIP.style.top = Math.max(8, y) + "px";
+}
+const hideTip = () => { TIP.style.opacity = "0"; };
+
+function niceTicks(lo, hi, count) {
+  if (!(hi > lo)) return [lo];
+  const raw = (hi - lo) / count;
+  const mag = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw) || 10 * mag;
+  const out = [];
+  for (let t = Math.ceil(lo / step) * step; t <= hi + step * 1e-9; t += step) out.push(+t.toFixed(10));
+  return out;
+}
+
+/**
+ * Line chart with a log-scaled x axis (training size spans 100..4000).
+ * spec.series: [{label, color, soft, points:[{x, y, lo, hi, meta}]}]
+ */
+function lineChart(host, spec) {
+  const W = spec.width || 640, H = spec.height || 300;
+  const M = { t: 12, r: 14, b: 40, l: 54 };
+  const xs = spec.series.flatMap(s => s.points.map(p => p.x));
+  const ysAll = spec.series.flatMap(s => s.points.flatMap(p => [p.lo ?? p.y, p.hi ?? p.y]));
+  if (!xs.length) { host.innerHTML = '<p class="empty">No completed runs for this selection yet.</p>'; return; }
+
+  // Training size spans 100..4000 and is read as a ratio, so that axis is log.
+  // Epochs are read as a count, so those charts pass xLog:false.
+  const useLog = spec.xLog !== false;
+  const lx = v => (useLog ? Math.log10(v) : v);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs);
+  const spanX = (lx(x1) - lx(x0)) || 1;
+  const padX = spanX * 0.04;
+  const X = v => M.l + (lx(v) - lx(x0) + padX) / (spanX + 2 * padX) * (W - M.l - M.r);
+  let y0 = Math.min(...ysAll), y1 = Math.max(...ysAll);
+  if (y1 - y0 < 1e-9) { y0 -= 0.5; y1 += 0.5; }
+  const padY = (y1 - y0) * 0.12;
+  y0 -= padY; y1 += padY;
+  if (spec.yFloor !== undefined) y0 = Math.min(y0, spec.yFloor);
+  const Y = v => M.t + (1 - (v - y0) / (y1 - y0)) * (H - M.t - M.b);
+
+  const yTicks = niceTicks(y0, y1, 5);
+  // On a log axis the sweep sizes themselves are the meaningful ticks; on a
+  // linear one, ask for a round handful instead of one per data point.
+  const xTicks = useLog ? [...new Set(xs)].sort((a, b) => a - b)
+                        : niceTicks(x0, x1, 6).filter(t => t >= x0 && t <= x1);
+  const parts = [];
+
+  for (const t of yTicks) {
+    parts.push(`<line class="gridline" x1="${M.l}" x2="${W - M.r}" y1="${Y(t).toFixed(1)}" y2="${Y(t).toFixed(1)}"/>`);
+    parts.push(`<text x="${M.l - 8}" y="${(Y(t) + 3.5).toFixed(1)}" text-anchor="end">${t}</text>`);
+  }
+  const showEvery = Math.ceil(xTicks.length / 9);
+  xTicks.forEach((t, i) => {
+    parts.push(`<line class="gridline" x1="${X(t).toFixed(1)}" x2="${X(t).toFixed(1)}" y1="${M.t}" y2="${H - M.b}"/>`);
+    if (i % showEvery === 0 || i === xTicks.length - 1)
+      parts.push(`<text x="${X(t).toFixed(1)}" y="${H - M.b + 15}" text-anchor="middle">${t}</text>`);
+  });
+  parts.push(`<line class="axis" x1="${M.l}" x2="${W - M.r}" y1="${H - M.b}" y2="${H - M.b}"/>`);
+  parts.push(`<line class="axis" x1="${M.l}" x2="${M.l}" y1="${M.t}" y2="${H - M.b}"/>`);
+  parts.push(`<text class="axis-title" x="${(M.l + W - M.r) / 2}" y="${H - 6}" text-anchor="middle">${spec.xLabel}</text>`);
+  parts.push(`<text class="axis-title" transform="translate(13 ${(M.t + H - M.b) / 2}) rotate(-90)" text-anchor="middle">${spec.yLabel}</text>`);
+
+  const dots = [];
+  spec.series.forEach((s, si) => {
+    const pts = s.points.slice().sort((a, b) => a.x - b.x);
+    if (!pts.length) return;
+    if (pts.some(p => p.lo !== undefined && p.hi !== undefined && p.hi > p.lo)) {
+      const up = pts.map(p => `${X(p.x).toFixed(1)},${Y(p.hi).toFixed(1)}`);
+      const dn = pts.slice().reverse().map(p => `${X(p.x).toFixed(1)},${Y(p.lo).toFixed(1)}`);
+      parts.push(`<polygon points="${up.concat(dn).join(" ")}" fill="${s.soft}" stroke="none"/>`);
+    }
+    const d = pts.map((p, i) => `${i ? "L" : "M"}${X(p.x).toFixed(1)} ${Y(p.y).toFixed(1)}`).join(" ");
+    parts.push(`<path d="${d}" fill="none" stroke="${s.color}" stroke-width="${s.width || 1.9}"
+                 stroke-linejoin="round" stroke-linecap="round" ${s.dash ? `stroke-dasharray="${s.dash}"` : ""}/>`);
+    pts.forEach((p, pi) => dots.push(
+      `<circle class="pt" cx="${X(p.x).toFixed(1)}" cy="${Y(p.y).toFixed(1)}" r="${s.r || 3.4}"
+        fill="${s.color}" stroke="var(--surface)" stroke-width="1.4"
+        data-s="${si}" data-p="${pi}"/>`));
+  });
+
+  host.innerHTML =
+    `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="${spec.yLabel} against ${spec.xLabel}">
+       ${parts.join("")}${dots.join("")}
+     </svg>`;
+  const svg = host.querySelector("svg");
+  svg.querySelectorAll(".pt").forEach(node => {
+    const s = spec.series[+node.dataset.s];
+    const p = s.points.slice().sort((a, b) => a.x - b.x)[+node.dataset.p];
+    node.addEventListener("mousemove", ev => showTip(spec.tip(s, p), ev));
+    node.addEventListener("mouseleave", hideTip);
+    if (spec.onPick) node.addEventListener("click", () => spec.onPick(s, p));
+  });
+}
+
+/* ------------------------------------------------- generalization figures */
+function generalizationSpec(axis, metric, height, width) {
+  const m = METRICS[metric];
+  const series = [];
+  for (const arm of ARMS) {
+    if (!state.arms.has(arm.key)) continue;
+    const data = seriesData(arm.key, axis, metric, state.ckpt);
+    if (!data.length) continue;
+    if (state.seedMode === "seeds") {
+      const bySeed = new Map();
+      for (const row of data) for (const v of row.values) {
+        if (!bySeed.has(v.seed)) bySeed.set(v.seed, []);
+        bySeed.get(v.seed).push({ x: row.size, y: v.v, meta: { run: v.run, seed: v.seed } });
+      }
+      [...bySeed.entries()].sort((a, b) => a[0] - b[0]).forEach(([seed, points], i) => {
+        series.push({
+          label: `${arm.label} \u00b7 seed ${seed}`, color: arm.color, soft: arm.soft,
+          points, width: 1.4, r: 2.8, dash: i === 0 ? null : (i === 1 ? "5 3" : "2 3"), seed,
+        });
+      });
+    } else {
+      const points = data.map(row => {
+        const vs = row.values.map(v => v.v);
+        return {
+          x: row.size, y: mean(vs), lo: Math.min(...vs), hi: Math.max(...vs),
+          meta: { run: row.values[0].run, values: row.values },
+        };
+      });
+      series.push({ label: arm.label, color: arm.color, soft: arm.soft, points });
+    }
+  }
+  return {
+    height, width, series,
+    xLabel: axis === "item" ? "TRAINING ITEMS (K)" : "TRAINING ANNOTATORS (J)",
+    yLabel: m.label.toUpperCase(),
+    yFloor: metric === "accuracy" ? undefined : undefined,
+    tip: (s, p) => tipHtml(s, p, metric),
+    onPick: (s, p) => selectRun(p.meta.run),
+  };
+}
+
+function tipHtml(s, p, metric) {
+  const m = METRICS[metric];
+  const run = p.meta.run;
+  const rows = [];
+  rows.push(["Value", fmt(p.y, m.dp) + (p.lo !== undefined && p.hi > p.lo
+    ? ` <span style="color:var(--ink-3)">(${fmt(p.lo, m.dp)}\u2013${fmt(p.hi, m.dp)})</span>` : "")]);
+  if (p.meta.values) {
+    for (const v of p.meta.values) rows.push([`seed ${v.seed}`, fmt(v.v, m.dp)]);
+  } else if (p.meta.seed !== undefined) {
+    rows.push(["Seed", p.meta.seed]);
+  }
+  const h = run.hyper || {};
+  const hyperRows = [
+    ["Checkpoint", CKPT[state.ckpt].label],
+    ["Test n", run.test?.last?.n ?? "\u2014"],
+    ["Epochs", h.epochs], ["LR", h.lr], ["Weight decay", h.weight_decay],
+    ["Layers \u00d7 dim", `${h.num_layers} \u00d7 ${h.embedding_dim}`],
+    ["Heads / d_ff", `${h.attention_heads} / ${h.d_ff}`],
+    ["Dropout", h.dropout], ["Masking rate", h.masking_rate],
+    ["Augmentations", h.mask_augmentations], ["max_item", h.max_item],
+    ["Item dropout", h.item_dropout_rate], ["Annot dropout", h.annotator_dropout_rate],
+    ["Train time", run.runtime_min ? fmt(run.runtime_min, 1) + " min" : "\u2014"],
+  ].filter(r => r[1] !== undefined && r[1] !== null);
+  return `<h4>${s.label} \u00b7 ${p.x} ${p.meta.run.axis === "item" ? "items" : "annotators"}</h4>
+    <dl>${rows.map(r => `<dt>${r[0]}</dt><dd>${r[1]}</dd>`).join("")}</dl>
+    <div class="hr"></div>
+    <dl>${hyperRows.map(r => `<dt>${r[0]}</dt><dd>${r[1]}</dd>`).join("")}</dl>
+    <p class="hint">Click to open this run's curves.</p>`;
+}
+
+/* --------------------------------------------------------- selected run -- */
+function selectRun(run) {
+  state.focus = run;
+  renderDetail();
+  $("detail-heading").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function renderDetail() {
+  const run = state.focus;
+  if (!run) return;
+  const arm = armOf(run.family);
+  $("detail-heading").textContent =
+    `${arm.label} \u00b7 ${run.size} ${run.axis === "item" ? "items" : "annotators"} \u00b7 seed ${run.seed}`;
+  const bestEp = run.test.best_epoch;
+  $("detail-sub").innerHTML = bestEp !== null && bestEp !== undefined
+    ? `Scored at every 25th epoch. The test-argmin lands at <strong>epoch ${bestEp}</strong>;
+       the last epoch is ${run.hyper.epochs - 1}. The gap between those two lines is exactly what
+       selecting on test buys, and what a validation split would have to earn honestly.`
+    : "Scored at every 25th epoch.";
+
+  const curve = run.test.curve || [];
+  lineChart($("ckpt-chart"), {
+    height: 300, width: 430,
+    series: [{ label: "Test log-loss", color: arm.color, soft: arm.soft,
+               points: curve.map(c => ({ x: c.epoch + 1, y: c.log_loss, meta: { run, epoch: c.epoch, row: c } })) }],
+    xLog: false, xLabel: "EPOCH", yLabel: "TEST LOG-LOSS",
+    tip: (s, p) => `<h4>Epoch ${p.meta.epoch}</h4><dl>
+        <dt>Log-loss</dt><dd>${fmt(p.meta.row.log_loss, 4)}</dd>
+        <dt>Accuracy</dt><dd>${fmt(p.meta.row.accuracy, 4)}</dd>
+        <dt>RMSE</dt><dd>${fmt(p.meta.row.rmse, 4)}</dd>
+        <dt>Spearman r</dt><dd>${fmt(p.meta.row.spearman_r, 4)}</dd></dl>`,
+  });
+  $("ckpt-chart").insertAdjacentHTML("afterbegin",
+    `<div class="chart-title"><span class="name">Test loss by checkpoint</span>
+       <span class="unit">every 25 epochs</span></div>`);
+
+  const hist = run.history || [];
+  lineChart($("hist-chart"), {
+    height: 300, width: 430,
+    series: [
+      { label: "Train (masked)", color: "var(--ink-3)", soft: "transparent", r: 0, width: 1.5,
+        points: hist.filter(h => h.train_ce != null).map(h => ({ x: h.epoch + 1, y: h.train_ce, meta: { row: h } })) },
+      { label: "Held-out", color: arm.color, soft: arm.soft, r: 0, width: 1.8,
+        points: hist.filter(h => h.eval_ce != null).map(h => ({ x: h.epoch + 1, y: h.eval_ce, meta: { row: h } })) },
+    ].filter(s => s.points.length),
+    xLog: false, xLabel: "EPOCH", yLabel: "CROSS-ENTROPY",
+    tip: (s, p) => `<h4>${s.label} \u00b7 epoch ${p.meta.row.epoch}</h4><dl>
+        <dt>Value</dt><dd>${fmt(p.y, 4)}</dd></dl>`,
+  });
+  $("hist-chart").insertAdjacentHTML("afterbegin",
+    `<div class="chart-title"><span class="name">Training curve</span>
+       <span class="unit">grey = train, colour = held-out</span></div>`);
+
+  const h = run.hyper;
+  const card = $("hyper-card");
+  card.hidden = false;
+  card.innerHTML = `<div class="chart-title"><span class="name">Hyperparameters as trained</span>
+      <span class="unit">${run.path}</span></div>
+    <div class="tablewrap" style="border:none">
+      <table><tbody>${Object.entries(h).map(([k, v]) =>
+        `<tr><td class="txt">${k}</td><td>${v === null ? "\u2014" : String(v)}</td></tr>`).join("")}</tbody></table>
+    </div>`;
+}
+
+/* ------------------------------------------------------------- rendering */
+function renderSmallMultiples() {
+  const host = $("small-multiples");
+  host.innerHTML = "";
+  const figs = [];
+  for (const axis of ["item", "annot"]) {
+    for (const metric of ["log_loss", "rmse", "runtime_min"]) figs.push({ axis, metric });
+  }
+  for (const f of figs) {
+    const card = document.createElement("div");
+    card.className = "card";
+    const m = METRICS[f.metric];
+    card.innerHTML = `<div class="chart-title">
+        <span class="name">${f.axis === "item" ? "Item" : "Annotator"} generalization &mdash; ${m.label}</span>
+        ${FIGURE_MARKER ? `<span class="marker">${FIGURE_MARKER}</span>` : ""}
+        <span class="unit">${m.unit}</span></div><div class="body"></div>`;
+    host.appendChild(card);
+    lineChart(card.querySelector(".body"), generalizationSpec(f.axis, f.metric, 300, 430));
+  }
+}
+
+function renderFocus() {
+  const m = METRICS[state.metric];
+  $("focus-heading").textContent =
+    `${state.axis === "item" ? "Item" : "Annotator"} generalization \u2014 ${m.label}`
+    + (FIGURE_MARKER ? `  [${FIGURE_MARKER}]` : "");
+  lineChart($("focus-chart"), generalizationSpec(state.axis, state.metric, 380, 760));
+}
+
+function renderTable() {
+  const rows = RUNS
+    .filter(r => state.arms.has(r.family))
+    .sort((a, b) => a.family.localeCompare(b.family) || a.axis.localeCompare(b.axis)
+                 || a.size - b.size || a.seed - b.seed);
+  const head = ["Arm", "Axis", "Size", "Seed", "Log-loss", "Accuracy", "RMSE", "Spearman", "Best ep.", "Minutes"];
+  $("table").innerHTML =
+    `<thead><tr>${head.map((h, i) => `<th class="${i < 2 ? "txt" : ""}">${h}</th>`).join("")}</tr></thead>
+     <tbody>${rows.map(r => {
+       const ok = state.ckpt === "best" ? r.test.best : r.test.last;
+       return `<tr>
+         <td class="txt">${armOf(r.family).label}</td>
+         <td class="txt">${r.axis}</td>
+         <td>${r.size}</td><td>${r.seed}</td>
+         <td>${fmt(ok?.log_loss, 4)}</td><td>${fmt(ok?.accuracy, 4)}</td>
+         <td>${fmt(ok?.rmse, 4)}</td><td>${fmt(ok?.spearman_r, 4)}</td>
+         <td>${r.test.best_epoch ?? "\u2014"}</td>
+         <td>${fmt(r.runtime_min, 1)}</td></tr>`;
+     }).join("")}</tbody>`;
+}
+
+function renderAll() { renderSmallMultiples(); renderFocus(); renderTable(); if (state.focus) renderDetail(); }
+
+/* -------------------------------------------------------------- controls */
+function segment(host, items, isOn, onPick) {
+  host.innerHTML = "";
+  for (const it of items) {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = it.label;
+    b.setAttribute("aria-pressed", String(isOn(it)));
+    b.addEventListener("click", () => { onPick(it); buildControls(); renderAll(); });
+    host.appendChild(b);
+  }
+}
+
+function buildControls() {
+  segment($("c-ckpt"), Object.entries(CKPT).map(([k, v]) => ({ key: k, label: v.label })),
+    it => state.ckpt === it.key, it => { state.ckpt = it.key; });
+  $("ckpt-note").textContent = CKPT[state.ckpt].note;
+
+  const seedItems = [{ key: "aggregate", label: "Aggregate" }, { key: "seeds", label: "Per seed" }];
+  segment($("c-seed"), seedItems, it => state.seedMode === it.key, it => { state.seedMode = it.key; });
+  $("seed-note").textContent = state.seedMode === "aggregate"
+    ? `Line is the mean over ${seedsAvailable.length} seed${seedsAvailable.length > 1 ? "s" : ""}; the band spans min to max.`
+    : `One line per seed (${seedsAvailable.join(", ")}), un-aggregated.`;
+
+  segment($("c-arms"), ARMS.map(a => ({ key: a.key, label: a.label })),
+    it => state.arms.has(it.key),
+    it => { state.arms.has(it.key) ? state.arms.delete(it.key) : state.arms.add(it.key);
+            if (!state.arms.size) state.arms.add(it.key); });
+
+  segment($("c-axis"), [{ key: "item", label: "Item axis" }, { key: "annot", label: "Annotator axis" }],
+    it => state.axis === it.key, it => { state.axis = it.key; });
+  segment($("c-metric"), Object.entries(METRICS).map(([k, v]) => ({ key: k, label: v.label })),
+    it => state.metric === it.key, it => { state.metric = it.key; });
+
+  const themes = [{ key: "light", label: "Light" }, { key: "dark", label: "Dark" }, { key: null, label: "System" }];
+  segment($("c-theme"), themes, it => state.theme === it.key, it => {
+    state.theme = it.key;
+    if (it.key) document.documentElement.setAttribute("data-theme", it.key);
+    else document.documentElement.removeAttribute("data-theme");
+    try { localStorage.setItem("d3theme", it.key ?? ""); } catch (e) { /* private mode */ }
+  });
+
+  $("legend").innerHTML = ARMS.filter(a => state.arms.has(a.key)).map(a =>
+    `<span><i class="swatch" style="background:${a.color}"></i>${a.label}</span>`).join("");
+}
+
+/* ------------------------------------------------------------------ boot */
+function boot() {
+  try {
+    const t = localStorage.getItem("d3theme");
+    if (t) { state.theme = t; document.documentElement.setAttribute("data-theme", t); }
+  } catch (e) { /* storage unavailable; system theme is a fine default */ }
+
+  const complete = RUNS.filter(r => r.test.last).length;
+  $("stamps").innerHTML = [
+    ["Run", DATA.label], ["Models", `${complete} / ${RUNS.length}`],
+    ["Seeds", seedsAvailable.join(" \u00b7 ")], ["Sizes", `${new Set(RUNS.map(r => r.size)).size}`],
+  ].map(([k, v]) => `<div class="stamp"><span class="k">${k}</span><span class="v">${v}</span></div>`).join("");
+
+  $("fig-caption").innerHTML =
+    `Item generalization sweeps K from 100 to 4000 training items; the annotator sweep varies J from
+     10 to 50 annotators. Both arms train on the same generated splits, so the two curves are
+     directly comparable. Every control on the left applies to all six panels at once.`;
+
+  $("footer").innerHTML =
+    `Generated from <code>${DATA.run_id}</code> &mdash; ${RUNS.length} trained models.
+     Log-loss is on the test-missing cells only. Chance for a 4-class rating is
+     ln 4 = 1.3863. Calibration (smECE) figures are not included here: they need per-example
+     probabilities recomputed from each checkpoint rather than the summary metrics this page reads.`;
+
+  buildControls();
+  renderAll();
+  addEventListener("scroll", hideTip, { passive: true });
+}
+boot();
+})();
+</script>

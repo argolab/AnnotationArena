@@ -29,6 +29,10 @@ RUN_ID=""
 STAGE="all"
 DATA_FROM=""
 DRY_RUN=false
+# Marformer seeds. The FIRST seed is the canonical arm and lands at the paths
+# the paper's plot scripts glob; the rest go under seed<N>/ so they add error
+# bars without changing what make_figures.sh sees.
+SEEDS="42"
 
 usage() {
     sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'
@@ -39,6 +43,9 @@ Options:
   --stage S        all (default) | data | marformer | stan | eval
                    | llmrubric | llmrubric-eval   (real LLM-Rubric arm)
   --data-from ID   reuse another run's generated data instead of regenerating
+  --seeds A,B,C    Marformer seeds (default 42). The first is canonical and
+                   keeps the paper's result paths; later ones land under
+                   <AXIS>/seed<N>/ so the plot scripts are unaffected.
   --dry-run        print the sbatch commands without submitting
 EOF
     exit "${1:-0}"
@@ -49,6 +56,7 @@ while [[ $# -gt 0 ]]; do
         --run-id)    RUN_ID="$2"; shift 2 ;;
         --stage)     STAGE="$2"; shift 2 ;;
         --data-from) DATA_FROM="$2"; shift 2 ;;
+        --seeds)     SEEDS="$2"; shift 2 ;;
         --dry-run)   DRY_RUN=true; shift ;;
         -h|--help)   usage 0 ;;
         *) echo "unknown argument: $1" >&2; usage 1 ;;
@@ -152,18 +160,25 @@ fi
 # ------------------------------------------------------------- 2. marformer
 declare -A EVAL_DEPS=( [Marformer]="" [MarformerNT]="" )
 if [[ "${STAGE}" == "all" || "${STAGE}" == "marformer" ]]; then
-    for row in "${MARFORMER_MATRIX[@]}"; do
-        IFS='|' read -r family axis protocol sizes <<< "${row}"
-        n="$(count_sizes "${sizes}")"
-        name="D3SIG-${family}-${axis}"
-        conf="$(write_conf "${name}" "RUN_ID=${RUN_ID}" "FAMILY=${family}" \
-                           "AXIS=${axis}" "PROTOCOL=${protocol}" "SIZES=${sizes}")"
-        jid="$(submit "${name}" "${conf}" -p "${GPU_PARTITION}" -c "${GPU_CPUS}" \
-                      --mem="${GPU_MEM}" -t "${GPU_TIME}" ${EXCLUDE_ARG} \
-                      --array="0-$((n-1))" $(dep "${GEN_JOB}") \
-                      "${RERUN_DIR}/jobs/marformer_train.sbatch")"
-        echo "marformer : ${name} (${n} tasks) job ${jid}"
-        EVAL_DEPS[${family}]="${EVAL_DEPS[${family}]:+${EVAL_DEPS[${family}]}:}${jid}"
+    IFS=',' read -r -a SEED_LIST <<< "${SEEDS}"
+    for si in "${!SEED_LIST[@]}"; do
+        seed="${SEED_LIST[${si}]}"
+        # First seed keeps the canonical (untagged) result paths.
+        if [[ "${si}" -eq 0 ]]; then variant=""; else variant="seed${seed}"; fi
+        for row in "${MARFORMER_MATRIX[@]}"; do
+            IFS='|' read -r family axis protocol sizes <<< "${row}"
+            n="$(count_sizes "${sizes}")"
+            name="D3SIG-${family}-${axis}${variant:+-${variant}}"
+            conf="$(write_conf "${name}" "RUN_ID=${RUN_ID}" "FAMILY=${family}" \
+                               "AXIS=${axis}" "PROTOCOL=${protocol}" "SIZES=${sizes}" \
+                               "DOMAIN3_SEED=${seed}" "VARIANT_TAG=${variant}")"
+            jid="$(submit "${name}" "${conf}" -p "${GPU_PARTITION}" -c "${GPU_CPUS}" \
+                          --mem="${GPU_MEM}" -t "${GPU_TIME}" ${EXCLUDE_ARG} \
+                          --array="0-$((n-1))" $(dep "${GEN_JOB}") \
+                          "${RERUN_DIR}/jobs/marformer_train.sbatch")"
+            echo "marformer : ${name} (${n} tasks, seed ${seed}) job ${jid}"
+            EVAL_DEPS[${family}]="${EVAL_DEPS[${family}]:+${EVAL_DEPS[${family}]}:}${jid}"
+        done
     done
 fi
 

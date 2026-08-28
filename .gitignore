@@ -362,3 +362,7 @@ RERUN/shared/
 # Compiled Stan executables (built on demand by cmdstanpy)
 imputer/ranking/STAN/stan_models/*
 !imputer/ranking/STAN/stan_models/*.stan
+
+# Built interactive reports: several MB of embedded JSON, reproducible from a
+# run tree with RERUN/analysis/{collect_domain3,build_report}.py
+RERUN/reports/build/
