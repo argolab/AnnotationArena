@@ -110,6 +110,8 @@ def main() -> None:
     ap.add_argument("--history-stride", type=int, default=2,
                     help="keep every Nth training epoch (the curves are 400 long)")
     ap.add_argument("--label", default="", help="tag shown in the report header")
+    ap.add_argument("--calibration", default="",
+                    help="JSON from collect_calibration.py, merged into the payload")
     args = ap.parse_args()
 
     root = Path(args.run_dir)
@@ -157,6 +159,8 @@ def main() -> None:
         "label": args.label or root.name,
         "n_runs": len(runs),
         "runs": runs,
+        "calibration": (read_json(Path(args.calibration)) or {}).get("calibration", [])
+                       if args.calibration else [],
     }
     out = Path(args.out)
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -164,7 +168,8 @@ def main() -> None:
         json.dump(payload, fh, separators=(",", ":"))
     size_mb = out.stat().st_size / 2**20
     complete = sum(1 for r in runs if r["test"]["last"])
-    print(f"{len(runs)} runs ({complete} with test results) -> {out}  {size_mb:.1f} MiB")
+    print(f"{len(runs)} runs ({complete} with test results), "
+          f"{len(payload['calibration'])} calibration panels -> {out}  {size_mb:.1f} MiB")
     by = {}
     for r in runs:
         by.setdefault((r["family"], r["axis"]), set()).add(r["seed"])
