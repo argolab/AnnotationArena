@@ -114,7 +114,11 @@ def main() -> None:
                 # point that is already on screen, which is the real case.
                 pt.scroll_into_view_if_needed()
                 page.wait_for_timeout(350)
-                pt.hover()
+                # force=True skips the actionability wait. Two series can put a
+                # point at the same coordinates (they do at K=100), so the one
+                # drawn second intercepts the pointer and a normal hover blocks
+                # forever. What is under test is the handler, not hit-testing.
+                pt.hover(force=True)
                 page.wait_for_timeout(250)
                 if page.eval_on_selector("#tip", "e => getComputedStyle(e).opacity") == "0":
                     problems.append(f"[{theme}] hovering a point produced no tooltip")
@@ -123,7 +127,7 @@ def main() -> None:
 
             # clicking a data point must populate the detail section
             if pt:
-                pt.click()
+                pt.click(force=True)
                 page.wait_for_timeout(400)
                 head = page.inner_text("#detail-heading")
                 if "No run selected" in head:
