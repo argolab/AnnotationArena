@@ -16,7 +16,13 @@ set -euo pipefail
 # tree that already holds canonical results without destroying them. Set
 # CLEAR=1 to force a clean re-evaluation.
 #
-# Required env: RUN_ID.  Optional: CLEAR=1.
+# Required env: RUN_ID.
+# Optional: CLEAR=1 to re-evaluate from scratch;
+#           INCLUDE=<substring> / EXCLUDE=<substring> to restrict which run
+#           directories are walked. A validation run holds both the phase-A
+#           search tree and the phase-B refit tree, and only the refit models
+#           are reportable -- scoring the search tree first just delays the
+#           numbers that matter.
 
 if [[ -n "${RERUN_DIR:-}" && -f "${RERUN_DIR}/config/cluster.sh" ]]; then
     source "${RERUN_DIR}/config/cluster.sh"
@@ -34,7 +40,9 @@ rerun_activate_env
 : "${RUN_ID:?RUN_ID is required}"
 RESULTS_ROOT="$(rerun_results_root "${RUN_ID}")"
 
-mapfile -t RUN_DIRS < <(find "${RESULTS_ROOT}" -maxdepth 6 -type d -name '*_MARFORMER' | sort)
+mapfile -t RUN_DIRS < <(find "${RESULTS_ROOT}" -maxdepth 6 -type d -name '*_MARFORMER' | sort \
+    | { [[ -n "${INCLUDE:-}" ]] && grep -F -- "${INCLUDE}" || cat; } \
+    | { [[ -n "${EXCLUDE:-}" ]] && grep -vF -- "${EXCLUDE}" || cat; })
 [[ ${#RUN_DIRS[@]} -gt 0 ]] || { echo "no Marformer runs under ${RESULTS_ROOT}" >&2; exit 1; }
 
 echo "=============================================================="
