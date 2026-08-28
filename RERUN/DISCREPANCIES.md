@@ -376,6 +376,62 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
   ones `reports/OVERFITTING.md` reads, so it wants a deliberate rerun rather
   than a quiet fix. Related to D17 (dropout is not rescaled at eval either).
 
+## D22 — the reported "test" metric is mostly *training*-partition cells
+
+- **Where:** `imputer/entity_mf/test.py`, `_reconstruct` (line ~77) feeding
+  `evaluate_entity_marformer_split`.
+- **What the code does:** it builds one evaluation graph from
+  `train_obs + test_obs + test_miss + train_miss`, and then reports metrics over
+  **every** status-0 token in that graph. So the number labelled "test" averages
+  the held-out test cells together with the training partition's own missing
+  cells. The pooling is not a rounding detail; the test cells are a minority
+  almost everywhere, and their share shrinks as the sweep grows, because the
+  test block is a fixed 100 items (414 cells) while the training partition grows
+  with K:
+
+  | split | test cells | training cells | test share of the reported number |
+  |---|---|---|---|
+  | `Item_T_500` | 414 | 1 317 | 24% |
+  | `Item_T_1000` | 414 | 3 002 | 12% |
+  | `Item_T_4000` | 414 | 13 836 | **2.9%** |
+  | `Annot_T_30` | 414 | 701 | 37% |
+  | `Annot_T_50` | 414 | 1 424 | 23% |
+
+- **Does it move numbers?** Yes, and it moves the shape of the headline figure.
+  Marformer, item axis, last checkpoint, mean over 3 seeds:
+
+  | K | published (pooled) | test cells only |
+  |---|---|---|
+  | 100 | 1.0966 | 1.0966 |
+  | 200 | 0.9805 | 1.0127 |
+  | 500 | 0.8639 | 0.9179 |
+  | 1000 | 0.8681 | 0.9338 |
+  | 2000 | 0.7874 | 0.8730 |
+  | 4000 | **0.7691** | **0.8590** |
+
+  The published curve falls 0.33 nats from K=100 to K=4000 and is monotone. The
+  test-only curve falls 0.24 nats, is **not** monotone (it flattens after
+  K≈500 and moves within noise thereafter), and sits 0.09 nats higher at the
+  right-hand end. The item-generalization claim is therefore weaker than the
+  figure shows, and the part of the curve beyond K≈1000 is mostly measuring
+  in-domain matrix completion on training items -- which the transductive model
+  has already seen the rest of -- rather than generalization to unseen items.
+
+- **It also interacts with the validation work.** Scoring on the pooled metric,
+  block validation beats no-validation in 28 of 38 cells (mean -0.034 nats).
+  Scoring on the test cells alone it wins **35 of 38** (mean **-0.064**). Early
+  stopping costs a little on the training-partition cells and gains a lot on the
+  test cells, so the pooled number understates it by roughly half, and the
+  apparent "failure band" at non-transductive item K=300-700 largely disappears.
+- **Verified:** `RERUN/analysis/split_missing_metrics.py` recomputes both from
+  the same forward pass; `_verify_split.py` confirms it reproduces the stored
+  `last.json` log-loss to six decimals at test.py's own chunk size, so the split
+  is a decomposition of the published number, not a different measurement.
+- **To resolve:** report the test partition separately. Either restrict the
+  metric to `instance == "test"` cells, or report both and say which is which.
+  Related to D20, which is the same class of bug (an evaluation setting that
+  does not match what was intended) on the chunking side.
+
 ---
 
 ## How to add an entry

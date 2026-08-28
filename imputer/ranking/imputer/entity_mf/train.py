@@ -162,6 +162,25 @@ class EntityMarformerLightningModule(pl.LightningModule):
         # Full per-partition variable lists for evaluation (observed + missing).
         self.train_all: List[RankingData] = self.train_observed + self.train_missing
         self.val_all: List[RankingData] = self.val_observed + self.val_missing
+        # What the validation forward pass is run on. A validation cell needs
+        # context to be predictable at all, and where that context comes from
+        # depends on the carve:
+        #
+        #   block  the held-out block brings its own observed cells, exactly as
+        #          the test block does. val_all is right.
+        #   mcar   the hidden cells were taken *out* of the observed list, so
+        #          val_observed is empty and val_all is nothing but targets --
+        #          a graph with no context, where the best model is the least
+        #          trained one. Their context is the training partition they
+        #          came from, so score them against train_observed.
+        #
+        # train_missing is deliberately not included: every status-0 token in
+        # the graph is averaged into the reported metric, so adding it would
+        # dilute the validation number with cells that are not validation.
+        self.val_eval_vars: List[RankingData] = (
+            self.val_all if self.val_observed
+            else (list(self.train_observed) + list(self.val_missing) if self.val_missing else [])
+        )
         self.test_all: List[RankingData] = self.test_observed + self.test_missing
         # Masking strategy can be MCAR or structured (LLM vs human) depending on args.
         self.masking_strategy: MaskingStrategy = build_default_masking_strategy(
@@ -605,11 +624,11 @@ class EntityMarformerLightningModule(pl.LightningModule):
                 print("No combined variables to evaluate on")
 
             # Val-only metrics (used for checkpointing).
-            if self.val_all:
+            if self.val_eval_vars:
                 val_eval: EntityEvalResults = evaluate_entity_marformer_split(
                     model=self.model,
                     split="val",
-                    variables=self.val_all,
+                    variables=self.val_eval_vars,
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
@@ -664,11 +683,11 @@ class EntityMarformerLightningModule(pl.LightningModule):
             else:
                 print("No train variables to evaluate on")
 
-            if self.val_all:
+            if self.val_eval_vars:
                 val_eval: EntityEvalResults = evaluate_entity_marformer_split(
                     model=self.model,
                     split="val",
-                    variables=self.val_all,
+                    variables=self.val_eval_vars,
                     types=self.model.types,
                     global_param_dim=self.model.global_param_dim,
                     device=self.device,
