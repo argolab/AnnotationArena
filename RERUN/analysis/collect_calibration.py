@@ -140,6 +140,12 @@ def main() -> None:
                          "paper's figures use (resolved through TEST_RESULTS, so eval "
                          "must have run), which shows D14 in calibration too")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--exclude", default="-search",
+                    help="skip run directories whose path contains this; a validation "
+                         "run holds the phase-A search tree beside the refit tree with "
+                         "identical run names, and collecting both would put six curves "
+                         "in a three-seed panel")
+    ap.add_argument("--include", default="")
     args = ap.parse_args()
 
     wanted = {}
@@ -158,6 +164,11 @@ def main() -> None:
         for run_dir in sorted(base.rglob("*_MARFORMER")):
             m = RUN_RE.search(run_dir.name)
             if not m:
+                continue
+            rel = str(run_dir.relative_to(base))
+            if args.exclude and args.exclude in rel:
+                continue
+            if args.include and args.include not in rel:
                 continue
             axis = m.group(1).lower()
             size = int(m.group(3))

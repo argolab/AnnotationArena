@@ -137,14 +137,17 @@ section { display: flex; flex-direction: column; gap: var(--s4); }
 }
 .grid-6 { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--s4); }
 .chart-title {
-  display: flex; align-items: baseline; justify-content: space-between; gap: var(--s3);
-  margin-bottom: var(--s2);
+  display: flex; align-items: baseline; justify-content: space-between;
+  gap: var(--s2); flex-wrap: wrap; margin-bottom: var(--s2);
 }
+.chart-title .name { flex: 1 1 auto; min-width: 0; }
 .chart-title .name { font-family: var(--f-display); font-size: 15px; font-weight: 600; }
+.chart-title .unit { flex: none; }
 .chart-title .unit { font-family: var(--f-mono); font-size: 11px; color: var(--ink-3); }
 .marker {
   font-family: var(--f-mono); font-size: 10px; letter-spacing: 0.06em; text-transform: uppercase;
   color: var(--accent); border: 1px solid var(--accent); border-radius: 3px; padding: 1px 5px;
+  white-space: nowrap; flex: none; align-self: center;
 }
 svg.chart { display: block; width: 100%; height: auto; overflow: visible; }
 svg.chart text { font-family: var(--f-mono); font-size: 11px; fill: var(--ink-3); }

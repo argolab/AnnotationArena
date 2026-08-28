@@ -108,14 +108,75 @@ with no training block to carve from, times three seeds. They take their axis
 median (181 and 176 epochs) and are flagged as fallbacks in the epoch table and
 on the report page.
 
+## Result
+
+Both artifacts, side by side:
+
+- No validation: https://claude.ai/code/artifact/96812eeb-4c0c-4c9a-a413-67bd321e6282
+- Block validation: https://claude.ai/code/artifact/5bae9038-9624-4a46-ae8b-d9faa1f8f6b6
+
+Across all 38 settings x 3 seeds, test-missing log-loss:
+
+```
+val-block vs last epoch      -0.0343 nats   (28 of 38 cells better)
+val-block vs best-on-test    +0.0233 nats
+mean refit budget            191 epochs (of 400)
+```
+
+**This is the outcome the protocol was built for.** Test-set selection was
+buying 0.057 nats of optimism on average; block validation recovers 60% of it
+legitimately, and the remaining +0.023 is the honest price of not looking at
+test. It also halves training: 191 epochs instead of 400.
+
+Where it works best is where D14 was worst -- the annotator axis and small item
+sizes:
+
+| setting | last | best on test | **val-block** |
+|---|---|---|---|
+| Marformer annot J=10 | 1.0984 | 0.9646 | **0.9881** |
+| Marformer annot J=20 | 1.0213 | 0.9067 | **0.9509** |
+| Marformer item K=100 | 1.0966 | 0.9627 | **1.0026** |
+| MarformerNT annot J=10 | 1.1433 | 0.9157 | **0.9665** |
+| MarformerNT annot J=30 | 0.9003 | 0.8152 | **0.8292** |
+
+At J=10 on the NT arm it recovers 78% of a 0.23-nat gap.
+
+### Where it does not work, and why
+
+Ten cells got worse, and they cluster: the **item axis between K=300 and K=700
+on the non-transductive arm**.
+
+| setting | last | **val-block** | selected epoch |
+|---|---|---|---|
+| MarformerNT item K=300 | 0.9317 | 0.9565 | 109 |
+| MarformerNT item K=400 | 0.8765 | 0.9071 | 138 |
+| MarformerNT item K=500 | 0.8669 | 0.9294 | 66 |
+
+These stop far too early. The cause is visible in the search runs: at
+MarformerNT K=500 the three seeds' own argmins were 67, 226 and 82, and the
+pooled curve chose 65. The block validation set there is ~146 target cells on
+~60 held-out items, which is too few to locate the minimum -- and unlike the
+annotator axis, where overfitting is severe and the basin is deep, here the
+basin is shallow, so noise dominates the choice.
+
+So the protocol's failure mode is exactly the one you would predict: it needs
+either a real overfitting signal to lock onto, or a validation set big enough to
+see through the noise. It has neither in that band.
+
+Two things would address it, in order of cost: a one-standard-error rule (pick
+the earliest epoch within 1 SE of the minimum, which formalises the flat-basin
+handling already visible at K=400), and a larger validation fraction on the item
+axis. The MCAR arm also bears directly on this, since it holds out cells rather
+than whole items and so gets a denser signal on the same budget.
+
 ## Status
 
 Runs in flight:
 
 | Run | Protocol | Tasks |
 |---|---|---|
-| `val-block-01` | block | search **done** (114/114), refit running |
-| `val-mcar-01` | mcar | held until the block arm finishes |
+| `val-block-01` | block | **complete** -- 114 search + 114 refit, evaluated |
+| `val-mcar-01` | mcar | running |
 
 Both over seeds 42/43/44 on the `replicate-01` data, so they are directly
 comparable to `seeds-01`.

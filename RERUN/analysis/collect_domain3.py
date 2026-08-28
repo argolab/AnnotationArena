@@ -179,9 +179,10 @@ def main() -> None:
             meta = read_json(run_dir / "launcher_metadata.json") or {}
             model_cfg = cfg.get("model", {})
             train_cfg = cfg.get("training", {})
-            # <AXIS>/<variant>/seed<N>/<run>  ->  variant, else ""
+            # rel is <AXIS>/<run>, <AXIS>/seed<N>/<run>, or
+            # <AXIS>/<variant>/seed<N>/<run>; only the last form has a variant.
             parts = rel.split("/")
-            variant = parts[0] if len(parts) > 2 or (len(parts) == 2 and not sm) else ""
+            variant = parts[1] if len(parts) == 4 else ""
             runs.append({
                 "variant": variant,
                 "validation": cfg.get("validation", {"protocol": "none"}),
