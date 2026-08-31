@@ -482,3 +482,35 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
 Keep the shape: what the paper says, what the code does, whether it moves
 numbers or only prose, and what would resolve it. Anything that changes numbers
 should say which figures are affected, so a rerun can be scoped.
+
+## D24 — item chunking puts a visible discontinuity in the generalization curve
+
+- **Where:** `DOMAIN3_MAX_ITEM=300` in
+  `scripts/DOMAIN3-SIGMOID/run_marformer_group.sh`, consumed as `--max-item`,
+  with chunking done by `_chunk_variables_by_item_limit`.
+- **What happens:** the item-generalization curve jumps at exactly the first
+  training size whose graph no longer fits in one chunk, in *both* arms:
+
+  | bundle | items in graph | chunks @300 | corner log-loss |
+  |---|---|---|---|
+  | `Item_T_500` | 295 | 1 | 0.9179 |
+  | **`Item_T_600`** | **356** | **2** | **1.0934** |
+  | `Item_T_700` | 417 | 2 | 0.9748 |
+  | `Item_NT_400` | 295 | 1 | 0.9365 |
+  | **`Item_NT_500`** | **356** | **2** | **1.0786** |
+  | `Item_NT_600` | 417 | 2 | 0.9898 |
+
+  Roughly +0.17 nats at the boundary, decaying as further items are added. It is
+  not seed noise -- all three seeds show it -- and it is not a bad item draw:
+  `Item_T_600` and `Item_NT_500` have byte-identical training item sets (290
+  items), which is exactly why the two curves spike 100 apart on the x-axis.
+- **Why it matters:** the published figure inherits a discontinuity that is an
+  artifact of an implementation detail, not a property of the model. It falls in
+  the middle of the range where the paper compares against Stan.
+- **Relation to D1:** the paper states chunking at **500**, not 300. At 500 the
+  first two-chunk size would be ~900 items instead of ~600, so the artifact
+  should move. `chunk500-01` tests exactly that at sizes 600-900.
+- **To resolve:** decide a single chunk size for both training and evaluation
+  (D1/D20), and check whether the discontinuity survives it. If it does, the
+  chunking needs to keep the test corner intact rather than letting a chunk
+  boundary cut through it.
