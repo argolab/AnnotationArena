@@ -55,9 +55,9 @@ measurement. Cost: ~30 s per pass on one H100.
 | item | T | 100–1000, 2000, 3000, 4000 | — | 0 |
 | item | NT | 100–900 | **1000, 2000, 3000, 4000** | 4 x 3 seeds = 12 |
 | annot | T | 10–50 | — | 0 |
-| annot | NT | 10–40 | **45, 50** | 2 x 3 seeds = 6 |
+| annot | NT | 10–40 | **not extendable — see below** | 0 |
 
-18 new trainings. Data for those NT sizes does not exist and must be generated
+12 new trainings. Data for those NT sizes does not exist and must be generated
 first (§3).
 
 ### 1c. Pilot: beyond the paper's range  *(only after 1a+1b land)*
@@ -77,6 +77,19 @@ Kept in its own tree (§6) so it cannot contaminate the figure.
 - **The empirical baselines** (unigram / NB / log-linear) — they run from
   `BASELINES/structured_baselines`, are cheap, and can be added later; they are
   not part of 6(a)/(b) `_clean_nt` panels.
+
+**The annotator NT curve cannot be extended.** `domain3subsplit.py:511` enforces
+`train_size <= total_annots - test_annotators`, and the base bundle has J = 50
+with 10 annotators reserved for the corner, so 40 is a hard ceiling. This is not
+an oversight in the paper: `Annot_T_50` trains on 50 - 10 = 40 training
+annotators plus the 10 corner annotators, and `Annot_NT_40` trains on 40
+training annotators, so at matched x both arms see the same number. The NT curve
+ends at 40 because that is where the annotators run out. Extending it would
+require generating a new base with J > 50, which changes the domain and is not
+part of this task.
+
+The item axis has the same structure but a ceiling of 4900 (5000 items minus the
+100-item corner), so 4000 is comfortably reachable.
 
 ---
 
