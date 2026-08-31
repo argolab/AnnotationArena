@@ -192,7 +192,53 @@ the earliest epoch within 1 SE of the minimum, which formalises the flat-basin
 handling already visible at K=400), and a larger validation fraction on the item
 axis.
 
-### The MCAR arm had a bug; it is re-running
+## MCAR against block: the same destination, a different instrument
+
+Both arms are complete. On the held-out cells (n=414, last checkpoint, 3 seeds):
+
+```
+block validation vs no validation   -0.0635 nats   (35/38 cells better)
+mcar  validation vs no validation   -0.0602 nats   (34/38 cells better)
+block vs mcar                       -0.0033 nats   (21/38 cells block better)
+```
+
+**They end up in the same place.** A 0.003-nat gap on 38 cells, with block ahead
+in 21 of them, is a coin flip. If the question is only "what does the final
+model score", the choice does not matter.
+
+They are not the same instrument, though, and the difference is visible in the
+validation curves rather than the test numbers:
+
+| | block | mcar |
+|---|---|---|
+| mean overfit gap seen (val CE at end &minus; at best) | **+0.276** | +0.142 |
+| worst gap seen | **+2.93** | +0.55 |
+| mean stopping epoch | 191 | 221 |
+
+Block validation holds out whole items or annotators, so it is looking at the
+generalization cliff and sees the full size of it. MCAR hides cells of items the
+model has already seen most of, so it is looking at a completion task, measures
+about half the drop, and stops 30 epochs later on average. Where that matters is
+the tail: at item K &ge; 2000, where there is nothing to gain, MCAR gives up
+0.013&ndash;0.016 nats by stopping slightly early while block is neutral
+(&plusmn;0.000).
+
+So: **use block.** Not because it scores better -- it does not, measurably --
+but because it is measuring the quantity the paper is about, and it degrades
+more gracefully when there is nothing to find.
+
+### Both help far more on the annotator axis
+
+| | annotator axis | item axis |
+|---|---|---|
+| block | **-0.1151** | -0.0259 |
+| mcar | **-0.1126** | -0.0221 |
+
+A factor of about five. That tracks the overfitting: the annotator sweep is the
+regime where training ends 0.7&ndash;2.9 nats above the validation optimum, and
+the item sweep beyond K~1000 is the regime where it ends essentially at it.
+
+### The MCAR arm had a bug on its first attempt
 
 The first MCAR run came out catastrophically worse (+0.278 nats, stopping at 39
 epochs on average). That was not a property of MCAR validation, it was an
@@ -200,8 +246,8 @@ implementation error: the MCAR carve moves observed cells *out* of the observed
 list, so `val_observed` is empty and the validation graph was nothing but
 targets -- no context at all, a task on which the least-trained model wins.
 `val_eval_vars` now scores MCAR cells against `train_observed`, which is the
-context they actually came from. Verified on a 40-epoch run: the curve descends
-like the block arm's. Re-running as `val-mcar-02`.
+context they actually came from. Re-run as `val-mcar-02`; the numbers above are
+from that run.
 
 ## Status
 
@@ -210,7 +256,7 @@ Runs in flight:
 | Run | Protocol | Tasks |
 |---|---|---|
 | `val-block-01` | block | **complete** -- 114 search + 114 refit, evaluated |
-| `val-mcar-02` | mcar | running (the first attempt hit the context bug above) |
+| `val-mcar-02` | mcar | **complete** (the first attempt hit the context bug above) |
 
 Both over seeds 42/43/44 on the `replicate-01` data, so they are directly
 comparable to `seeds-01`.
