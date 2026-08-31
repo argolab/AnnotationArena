@@ -432,6 +432,49 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
   Related to D20, which is the same class of bug (an evaluation setting that
   does not match what was intended) on the chunking side.
 
+## D23 — Marformer and Stan are scored on different cell sets in the same figure
+
+- **Where:** `scripts/DOMAIN3-SIGMOID/plot_domain3_sigmoid.py`.
+  `_marformer_probs_all_missing` (line ~383) vs `_stan_probs_from_eval_dir`
+  (line ~510).
+- **What the code does:** the two series in the item/annotator generalization
+  figures are built from different populations.
+  - **Stan** restricts to the test block:
+    `test_idxs = bundle["missing_ratings_indexes_in_test_instance"]`, then
+    `df[df["missing_rating_idx"].isin(test_idxs)]`. Test cells only, n=414.
+  - **Marformer** takes `eval_vars` from `test.py::_reconstruct` — which is
+    `train_obs + test_obs + test_miss + train_miss` (D22) — and keeps *every*
+    `is_missing` token. Train and test pooled. The plotted log-loss is then
+    overridden by `best.json`'s `missing.log_loss`, which is pooled as well.
+- **Why it matters:** this is not the same measurement. Training-partition
+  missing cells are in-domain completion on items the transductive model has
+  seen most of; test cells are unseen items. The training cells are easier —
+  Marformer's train log-loss is below its test log-loss in **all 38 runs** of
+  `replicate-01`. So Marformer is scored on a progressively easier mixture
+  (97% training cells at K=4000) while Stan is scored purely on the hard task.
+- **Magnitude** (Marformer, item axis, transductive, seed 42, last checkpoint —
+  the plotted value against its own test-only value):
+
+  | K | plotted (pooled) | test cells only | unearned advantage |
+  |---|---|---|---|
+  | 200 | 0.9234 | 0.9570 | 0.034 |
+  | 500 | 0.8454 | 0.9051 | 0.060 |
+  | 1000 | 0.8380 | 0.9160 | 0.078 |
+  | 2000 | 0.7840 | 0.8775 | 0.094 |
+  | 4000 | 0.7640 | 0.8492 | 0.085 |
+
+  Correcting it moves the Marformer curve *up* by 0.03-0.09 nats with Stan
+  unchanged. `ITEM_STAN_CUTOFF = 500` means the exact-comparison region carries
+  a 0.03-0.06 nat distortion. The calibration figures inherit it too, since
+  smECE is computed from the same payloads.
+- **Unresolved:** whether this changes the ranking or only the margin. Stan was
+  not rerun, so there are no Stan results in this tree to compare against. The
+  Marformer side is already corrected for all 38 settings in
+  `RERUN/_d22/split.json`; this needs Stan's per-size log-losses to close.
+- **To resolve:** score Marformer on `missing_ratings_indexes_in_test_instance`
+  too, which is the same fix as D22 applied at the plotting layer. No
+  retraining — the checkpoints are on disk.
+
 ---
 
 ## How to add an entry
