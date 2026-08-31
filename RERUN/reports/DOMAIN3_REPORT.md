@@ -1,6 +1,15 @@
 # Domain 3 interactive report
 
-Live page: https://claude.ai/code/artifact/96812eeb-4c0c-4c9a-a413-67bd321e6282
+Three pages, same tooling, same splits and seeds:
+
+| Page | Protocol | Marker |
+|---|---|---|
+| [Domain 3 Replication](https://claude.ai/code/artifact/96812eeb-4c0c-4c9a-a413-67bd321e6282) | none (as the paper runs it) | &mdash; |
+| [Domain 3 Validation Protocol](https://claude.ai/code/artifact/5bae9038-9624-4a46-ae8b-d9faa1f8f6b6) | block carve | `BLOCK VAL` |
+| [Domain 3 MCAR Validation](https://claude.ai/code/artifact/d5c50d63-a9fd-4d26-9869-f565652e06b3) | MCAR carve | `MCAR VAL` |
+
+The two validation pages carry the first as a dashed overlay, so the difference
+on screen is the protocol alone.
 
 Reproduce it from a run tree in three commands:
 
