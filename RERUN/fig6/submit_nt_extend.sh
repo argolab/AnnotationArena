@@ -57,7 +57,13 @@ echo "partition: ${GPU_PARTITION}${EXCLUDE_ARG:+  ${EXCLUDE_ARG}}"
 echo
 
 IFS=',' read -r -a SEED_LIST <<< "${SEEDS}"
-for seed in "${SEED_LIST[@]}"; do
+for si in "${!SEED_LIST[@]}"; do
+    seed="${SEED_LIST[${si}]}"
+    # Seed separation follows submit_all.sh: the FIRST seed keeps the canonical
+    # untagged path that the plot scripts glob, and the rest go under seed<N>/.
+    # Without this every seed writes to the same run directory and the last one
+    # to finish silently wins.
+    if [[ "${si}" -eq 0 ]]; then variant=""; else variant="seed${seed}"; fi
     name="FIG6-NT-item-s${seed}"
     conf="${CONF_DIR}/${name}.env"
     : > "${conf}"
@@ -65,7 +71,7 @@ for seed in "${SEED_LIST[@]}"; do
     for kv in "RUN_ID=${RUN_ID}" "DATA_RUN_ID=${RUN_ID}" \
               "FAMILY=MarformerNT" "AXIS=item" "PROTOCOL=nontransductive" \
               "SIZES=${SIZES}" "DOMAIN3_SEED=${seed}" "DOMAIN3_MAX_ITEM=300" \
-              "DOMAIN3_BATCH_AUGMENTATIONS=false"; do
+              "DOMAIN3_BATCH_AUGMENTATIONS=false" "VARIANT_TAG=${variant}"; do
         printf '%s=%q\n' "${kv%%=*}" "${kv#*=}" >> "${conf}"
     done
 
