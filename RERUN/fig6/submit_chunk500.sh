@@ -46,7 +46,7 @@ for seed in "${SEED_LIST[@]}"; do
     for kv in "RUN_ID=${RUN_ID}" "DATA_RUN_ID=${RUN_ID}" "FAMILY=Marformer" \
               "AXIS=item" "PROTOCOL=transductive" "SIZES=${SIZES}" \
               "DOMAIN3_SEED=${seed}" "DOMAIN3_MAX_ITEM=500" \
-              "DOMAIN3_BATCH_AUGMENTATIONS=false" "VARIANT_TAG=chunk500"; do
+              "DOMAIN3_BATCH_AUGMENTATIONS=false" "VARIANT_TAG=chunk500/seed${seed}"; do
         printf '%s=%q\n' "${kv%%=*}" "${kv#*=}" >> "${conf}"
     done
     export RERUN_CONF="${conf}"
