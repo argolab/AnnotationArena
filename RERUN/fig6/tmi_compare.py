@@ -26,15 +26,18 @@ def main():
     a = ap.parse_args()
     dev = torch.device(a.device if torch.cuda.is_available() else "cpu")
     out = {}
-    print(f"{'run':<28} {'train':>9} {'corner':>9} {'gap':>9}")
+    print(f"{'run':<52} {'train':>9} {'corner':>9} {'gap':>9}")
     for rd in a.run_dir:
         rd = Path(rd)
         mi = json.loads((rd / "train_config.json").read_text())["training"]["max_item"]
         rows, _ = evaluate(rd, dev, a.checkpoint, mi)
         tr, te = summarise(rows, "train"), summarise(rows, "test")
         gap = te["log_loss"] - tr["log_loss"] if (tr and te) else None
-        out[rd.name] = {"train": tr, "corner": te, "gap": gap, "max_item": mi}
-        print(f"{rd.name:<28} {tr['log_loss']:>9.4f} {te['log_loss']:>9.4f} {gap:>+9.4f}")
+        # Runs differ by variant directory, not by run name -- keying on
+        # rd.name alone silently collapses the off/on pair into one entry.
+        label = "/".join(rd.parts[-3:])
+        out[label] = {"train": tr, "corner": te, "gap": gap, "max_item": mi}
+        print(f"{label:<52} {tr['log_loss']:>9.4f} {te['log_loss']:>9.4f} {gap:>+9.4f}")
     Path(a.out).write_text(json.dumps(out, indent=2))
 
 if __name__ == "__main__":
