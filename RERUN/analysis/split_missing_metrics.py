@@ -38,13 +38,47 @@ RUN_RE = re.compile(r"DOMAIN3-SIGMOID_(Item|Annot)_(T|NT)_(\d+)_MARFORMER$")
 SEED_RE = re.compile(r"^seed(\d+)$")
 
 
-def chunk_by_item(variables, max_item):
+def chunk_by_item(variables, max_item, keep_whole=None):
+    """Group variables into chunks of at most `max_item` distinct items.
+
+    Items are sorted and cut into contiguous blocks -- the same rule training
+    uses. That is fine for training items but hazardous for the evaluation
+    target: the test corner is always the highest item ids, so it lands at the
+    tail, and whenever the item count sits just past a chunk boundary the corner
+    is split and part of it ends up in an orphan chunk with no training context
+    at all. At Item_NT_4000 that put 239 of 414 corner cells in a 36-item chunk
+    holding zero training items, and they scored 1.29 against 0.86 for the cells
+    that kept context.
+
+    `keep_whole` is a set of item ids that must never be split and must always
+    share a chunk with training context: they are removed from the round-robin,
+    then appended to the chunk with the most room. Passing None reproduces the
+    old behaviour exactly.
+    """
     if max_item is None:
         return [variables]
     ids = sorted({i for v in variables for i in v.item_ids})
+    protected = sorted(set(keep_whole) & set(ids)) if keep_whole else []
+    rest = [i for i in ids if i not in set(protected)]
+
+    if protected:
+        # Reserve room for the protected block, then fill the remaining budget
+        # with contiguous training items. Anything left over chunks as usual.
+        budget = max(0, max_item - len(protected))
+        if budget <= 0:
+            groups = [set(protected)] if protected else []
+            groups += [set(rest[i:i + max_item]) for i in range(0, len(rest), max_item)]
+        else:
+            # Give the corner the LAST `budget` items, which are its nearest
+            # neighbours in id order and so the most natural context.
+            groups = [set(protected) | set(rest[-budget:])]
+            head = rest[:-budget] if budget else rest
+            groups += [set(head[i:i + max_item]) for i in range(0, len(head), max_item)]
+    else:
+        groups = [set(ids[i:i + max_item]) for i in range(0, len(ids), max_item)]
+
     out = []
-    for i in range(0, len(ids), max_item):
-        keep = set(ids[i:i + max_item])
+    for keep in groups:
         sel = [v for v in variables if all(j in keep for j in v.item_ids)]
         if sel:
             out.append(sel)
@@ -52,14 +86,24 @@ def chunk_by_item(variables, max_item):
 
 
 @torch.no_grad()
-def evaluate(run_dir: Path, device: torch.device, which: str, max_item):
-    """Per-cell loss over every missing rating, tagged with its partition."""
+def evaluate(run_dir: Path, device: torch.device, which: str, max_item,
+             corner_whole: bool = False):
+    """Per-cell loss over every missing rating, tagged with its partition.
+
+    corner_whole=True keeps every test-partition item in one chunk together with
+    training context, so the reported metric is never computed on a
+    context-stripped orphan chunk.
+    """
     model, eval_vars, cfg = _reconstruct(run_dir)
     _load_checkpoint(model, _find_checkpoint(run_dir / "checkpoints", which), device)
     model.to(device).eval()
     C = model.types["rating"].num_classes
     rows = []
-    for chunk in chunk_by_item(eval_vars, max_item):
+    keep = None
+    if corner_whole:
+        keep = {i for v in eval_vars
+                if getattr(v, "instance", None) == "test" for i in v.item_ids}
+    for chunk in chunk_by_item(eval_vars, max_item, keep_whole=keep):
         graph = variable_list_to_entity_graph(chunk, model.types)
         params = model(graph, device=device)
         for idx, var in enumerate(chunk):
@@ -93,6 +137,9 @@ def main() -> None:
     ap.add_argument("--exclude", default="-search")
     ap.add_argument("--include", default="")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--corner-whole", action="store_true",
+                    help="never split the test corner across chunks, and always "
+                         "give it training context (see chunk_by_item)")
     args = ap.parse_args()
 
     device = torch.device(args.device if torch.cuda.is_available() else "cpu")
@@ -116,7 +163,8 @@ def main() -> None:
             with open(run_dir / "train_config.json") as fh:
                 trained_max_item = json.load(fh)["training"].get("max_item")
             # test.py hardcodes max_item=500; use the trained value (D20).
-            rows, _ = evaluate(run_dir, device, args.checkpoint, trained_max_item)
+            rows, _ = evaluate(run_dir, device, args.checkpoint, trained_max_item,
+                               corner_whole=args.corner_whole)
             # Ablation arms live at <AXIS>/<variant>/seed<N>/<run>, so without the
             # variant the rows collapse and every arm looks identical.
             variant = str(Path(rel).parent.parent) if Path(rel).parent.parent != Path(".") else ""

@@ -72,6 +72,7 @@ export DOMAIN3_MAX_ITEM="${DOMAIN3_MAX_ITEM:-300}"   # see FIGURES.md discrepanc
 export DOMAIN3_DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
 export DOMAIN3_INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
 export DOMAIN3_TEST_MISSING_IN_GRAPH="${DOMAIN3_TEST_MISSING_IN_GRAPH:-false}"
+export DOMAIN3_RANDOM_ITEM_CHUNKS="${DOMAIN3_RANDOM_ITEM_CHUNKS:-false}"
 export DOMAIN3_SEED="${DOMAIN3_SEED:-42}"
 # Validation carve (phase A) and, for phase B, a per-(size, seed) epoch budget
 # looked up from the selection file written by analysis/select_epochs.py.

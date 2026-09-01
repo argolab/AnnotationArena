@@ -22,6 +22,12 @@ rerun_activate_env
 
 : "${TARGET_RUNS:?TARGET_RUNS must be set (space separated run ids)}"
 CKPT="${CORNER_CKPT:-last}"
+# Keep the test corner in one chunk with training context. Without this the
+# corner can be split so that most of it lands in an orphan chunk holding no
+# training items at all -- at Item_NT_4000 that was 239 of 414 cells scoring
+# 1.29 against 0.86 for the cells that kept context.
+WHOLE="${CORNER_WHOLE:-1}"
+WHOLE_FLAG=""; [ "${WHOLE}" = "1" ] && WHOLE_FLAG="--corner-whole"
 
 cd "$(dirname "${RERUN_DIR}")"
 for rid in ${TARGET_RUNS}; do
@@ -29,7 +35,7 @@ for rid in ${TARGET_RUNS}; do
     python RERUN/analysis/split_missing_metrics.py \
         --run-dir "RERUN/runs/${rid}" \
         --checkpoint "${CKPT}" \
-        --device cuda \
-        -o "RERUN/fig6/out/corner_${rid}_${CKPT}.json"
+        --device cuda ${WHOLE_FLAG} \
+        -o "RERUN/fig6/out/cw_corner_${rid}_${CKPT}.json"
 done
 echo "corner evaluation complete"
