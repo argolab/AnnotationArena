@@ -121,6 +121,10 @@ INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
 # (no labels, no loss), the way train_missing already is, so test items are
 # structurally identical to training items. Default off = shipped behaviour.
 TEST_MISSING_IN_GRAPH="${DOMAIN3_TEST_MISSING_IN_GRAPH:-false}"
+# Shuffle item ids before cutting them into chunks, and rebuild the chunks fresh
+# every step instead of caching one fixed partition. Default off = shipped
+# behaviour, where every epoch sees the same contiguous item groups.
+RANDOM_ITEM_CHUNKS="${DOMAIN3_RANDOM_ITEM_CHUNKS:-false}"
 # Speed knobs (see RERUN/reports/TRAINING_SPEED.md). All default to off, so the
 # shipped configuration is the same optimisation problem as before.
 # BATCH_AUGMENTATIONS folds the mask augmentations into one batched step, which
@@ -177,6 +181,8 @@ LLM_DIST_FLAG=""
 [ "${LLM_INPUT_DIST}" = "true" ] && LLM_DIST_FLAG="--llm-input-dist"
 BATCH_AUG_FLAG=""
 [ "${BATCH_AUGMENTATIONS}" = "true" ] && BATCH_AUG_FLAG="--batch-augmentations"
+RANDOM_CHUNK_FLAG=""
+[ "${RANDOM_ITEM_CHUNKS}" = "true" ] && RANDOM_CHUNK_FLAG="--random-item-chunks"
 TEST_MISSING_FLAG=""
 [ "${TEST_MISSING_IN_GRAPH}" = "true" ] && TEST_MISSING_FLAG="--test-missing-in-graph"
 TF32_FLAG=""
@@ -303,6 +309,7 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
         ${LLM_DIST_FLAG}                                   \
         ${EMBED_UNEMBED_FLAG}                              \
         ${TEST_MISSING_FLAG}                               \
+        ${RANDOM_CHUNK_FLAG}                               \
         ${OVERWRITE_FLAG}
 
     RUN_ELAPSED=$(( SECONDS - RUN_START ))
