@@ -98,6 +98,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         batch_augmentations: bool = False,
         eval_every: int = 1,
         val_missing_in_graph: bool = True,
+        test_missing_in_graph: bool = False,
     ):
         super().__init__()
         self.model = model
@@ -124,6 +125,15 @@ class EntityMarformerLightningModule(pl.LightningModule):
         # validation set has to be held out the same way, or it is an easier
         # problem than the test set and the epoch it selects is biased late.
         self.val_missing_in_graph = bool(val_missing_in_graph)
+        # Transductive only. By default test_missing is absent from the training
+        # graph while train_missing is present as unsupervised status-0 nodes, so
+        # test items are structurally unlike training items and the corner metric
+        # carries that difference on top of genuine generalization. Setting this
+        # puts test_missing in the graph the same way -- node positions only, no
+        # labels and no loss -- which is exactly the graph evaluation builds. It
+        # reveals the test missingness *pattern*, ignorable under the MCAR
+        # assumption this domain is generated with.
+        self.test_missing_in_graph = bool(test_missing_in_graph)
         # Which always-observed annotators the batched sampler must honour.
         # None means MCAR.
         self._always_obs: List[int] | None = None
@@ -245,7 +255,9 @@ class EntityMarformerLightningModule(pl.LightningModule):
             from partial context directly simulates the test-time prediction task.
           - fixed_sources: empty in transductive mode (no always-observed annotator).
           - missing_sources (train + val missing): always status=0, no loss.
-            test_missing is held out entirely — not in the training graph.
+            test_missing is held out entirely — not in the training graph,
+            unless test_missing_in_graph is set, which adds it as status=0 with
+            no loss so test items match training items structurally.
         Graph topology is identical every step, so caching applies here too.
         """
         if self.transductive:
@@ -263,6 +275,8 @@ class EntityMarformerLightningModule(pl.LightningModule):
             missing_sources  = list(self.train_missing)
             if self.val_missing_in_graph:
                 missing_sources += list(self.val_missing)
+            if self.test_missing_in_graph:
+                missing_sources += list(self.test_missing)
         else:
             maskable_sources = list(self.train_observed)
             fixed_sources    = []
@@ -1067,6 +1081,13 @@ def main():
         help="Epoch at which to apply one LR drop when --lr-schedule step.",
     )
     parser.add_argument(
+        "--test-missing-in-graph", action="store_true",
+        help="Transductive only. Put test_missing in the training graph as "
+             "status-0 nodes (no labels, no loss), the same way train_missing "
+             "already is, so test items are structurally identical to training "
+             "items. This is the graph evaluation builds; it exposes the test "
+             "missingness pattern, which is ignorable under MCAR.")
+    parser.add_argument(
         "--val-protocol", default="none", choices=["none", "block", "mcar"],
         help="Carve a validation split out of the training partition at load time. "
              "'block' holds out whole items (item axis) or annotators (annotator axis), "
@@ -1294,6 +1315,7 @@ def main():
         batch_augmentations=bool(args.batch_augmentations),
         eval_every=args.eval_every,
         val_missing_in_graph=(args.val_protocol == "none"),
+        test_missing_in_graph=args.test_missing_in_graph,
     )
 
     if args.tf32:
