@@ -46,6 +46,12 @@ FAMILY_STYLE = {
 }
 SEL_LABEL = {"valblock": "block-val + refit", "last": "last checkpoint",
              "published": "as published (pooled, test-selected)"}
+STAN_STYLE = {
+    "Stan Oracle": dict(color="#0d47a1", marker="^"),
+    "Stan Both":   dict(color="#1565c0", marker="s"),
+    "Stan Bin":    dict(color="#1976d2", marker="P"),
+    "Stan Proj":   dict(color="#42a5f5", marker="X"),
+}
 AXIS_TITLE = {"item": "Item generalization", "annot": "Annotator generalization"}
 AXIS_XLABEL = {"item": r"$K_\mathrm{train}$ (items available for training)",
                "annot": r"$J_\mathrm{train}$ (annotators available for training)"}
@@ -90,7 +96,28 @@ def series(cells, family, axis, selection):
     return sorted(pts)
 
 
-def panel(ax, cells, axis, primary, reference):
+def draw_stan(ax, stan, axis):
+    """Overlay the published Stan curves, digitized from the paper's figures.
+
+    Legitimate to put on the same axes: Stan was always scored on the 414-cell
+    corner, so it needs no correction -- it is the Marformer series that moved.
+    """
+    if not stan or axis not in stan:
+        return
+    flat_from = stan.get(f"{axis}_flat_beyond")
+    xmax = None
+    for sname, pts in stan[axis].items():
+        st = STAN_STYLE.get(sname, dict(color="#888", marker="."))
+        xs = sorted(int(k) for k in pts)
+        ys = [pts[str(x)] for x in xs]
+        ax.plot(xs, ys, color=st["color"], marker=st["marker"], ls="-", lw=1.4,
+                ms=4.0, alpha=0.9, zorder=3, label=f"{sname} (published)")
+        if flat_from and xmax:
+            pass
+    return
+
+
+def panel(ax, cells, axis, primary, reference, stan=None, flat_to=None):
     for family, st in FAMILY_STYLE.items():
         if reference:
             ref = series(cells, family, axis, reference)
@@ -108,12 +135,23 @@ def panel(ax, cells, axis, primary, reference):
                         [y + s for y, s in zip(ys, sds)],
                         color=st["color"], alpha=0.15, lw=0, zorder=1)
 
+    draw_stan(ax, stan, axis)
+    # The paper draws Stan flat past its last measured size on the item axis
+    # (cost, not a result). Reproduce that as a reference line, dotted.
+    if stan and flat_to and axis == "item":
+        fb = stan.get("item_flat_beyond")
+        if fb:
+            for sname, spts in stan["item"].items():
+                st = STAN_STYLE.get(sname, dict(color="#888"))
+                ax.plot([fb, flat_to], [spts[str(fb)]] * 2, color=st["color"],
+                        ls=":", lw=1.3, alpha=0.75, zorder=2)
+
     ax.set_xscale("log")
     ax.set_xlabel(AXIS_XLABEL[axis])
     ax.set_ylabel("Log-loss on the test corner (nats)")
     ax.set_title(AXIS_TITLE[axis], fontsize=11)
     ax.grid(alpha=0.25, lw=0.6)
-    ax.legend(fontsize=7.5, frameon=False)
+    ax.legend(fontsize=8, frameon=False, ncol=2, loc="upper right")
 
 
 def main():
@@ -123,6 +161,8 @@ def main():
     ap.add_argument("--primary", default="valblock")
     ap.add_argument("--reference", default="last",
                     help="second series drawn dotted; empty string to omit")
+    ap.add_argument("--stan", default="",
+                    help="stan_digitized.json; overlays the published Stan curves")
     ap.add_argument("--published", default="",
                     help="published.json from extract_published.py; adds an "
                          "'as published' column (seed 42 only) to the table")
@@ -132,10 +172,15 @@ def main():
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     cells = load(args.corner)
+    stan = json.loads(Path(args.stan).read_text()) if args.stan else None
 
     for axis, tag in (("item", "a"), ("annot", "b")):
-        fig, ax = plt.subplots(figsize=(5.4, 4.0), dpi=200)
-        panel(ax, cells, axis, args.primary, args.reference or None)
+        # Full width rather than a side-by-side pair: with Stan overlaid there
+        # are eight series, and the legend needs the room.
+        fig, ax = plt.subplots(figsize=(10.0, 5.0), dpi=200)
+        pts = series(cells, "Marformer", axis, args.primary)
+        flat_to = max(p[0] for p in pts) if pts else None
+        panel(ax, cells, axis, args.primary, args.reference or None, stan=stan, flat_to=flat_to)
         fig.tight_layout()
         out = outdir / f"fig6{tag}_{axis}_log_loss_corrected.png"
         fig.savefig(out)
