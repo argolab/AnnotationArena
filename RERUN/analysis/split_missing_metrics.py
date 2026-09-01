@@ -117,8 +117,11 @@ def main() -> None:
                 trained_max_item = json.load(fh)["training"].get("max_item")
             # test.py hardcodes max_item=500; use the trained value (D20).
             rows, _ = evaluate(run_dir, device, args.checkpoint, trained_max_item)
+            # Ablation arms live at <AXIS>/<variant>/seed<N>/<run>, so without the
+            # variant the rows collapse and every arm looks identical.
+            variant = str(Path(rel).parent.parent) if Path(rel).parent.parent != Path(".") else ""
             entry = {"family": family, "axis": m.group(1).lower(), "size": int(m.group(3)),
-                     "seed": seed, "max_item": trained_max_item,
+                     "seed": seed, "max_item": trained_max_item, "variant": variant,
                      "test": summarise(rows, "test"), "train": summarise(rows, "train"),
                      "pooled": {"n": len(rows),
                                 "log_loss": sum(r[1] for r in rows) / len(rows),
