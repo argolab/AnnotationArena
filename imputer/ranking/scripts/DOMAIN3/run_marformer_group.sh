@@ -117,6 +117,10 @@ DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
 # Residual adds inside the block: both | ff_only | none. "none" leaves the outer
 # add as the only skip connection.
 INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
+# Transductive only. Put test_missing in the training graph as status-0 nodes
+# (no labels, no loss), the way train_missing already is, so test items are
+# structurally identical to training items. Default off = shipped behaviour.
+TEST_MISSING_IN_GRAPH="${DOMAIN3_TEST_MISSING_IN_GRAPH:-false}"
 # Speed knobs (see RERUN/reports/TRAINING_SPEED.md). All default to off, so the
 # shipped configuration is the same optimisation problem as before.
 # BATCH_AUGMENTATIONS folds the mask augmentations into one batched step, which
@@ -173,6 +177,8 @@ LLM_DIST_FLAG=""
 [ "${LLM_INPUT_DIST}" = "true" ] && LLM_DIST_FLAG="--llm-input-dist"
 BATCH_AUG_FLAG=""
 [ "${BATCH_AUGMENTATIONS}" = "true" ] && BATCH_AUG_FLAG="--batch-augmentations"
+TEST_MISSING_FLAG=""
+[ "${TEST_MISSING_IN_GRAPH}" = "true" ] && TEST_MISSING_FLAG="--test-missing-in-graph"
 TF32_FLAG=""
 [ "${TF32}" = "true" ] && TF32_FLAG="--tf32"
 OVERWRITE_FLAG=""
@@ -296,6 +302,7 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
         ${GRAPHMASK_FLAG}                                  \
         ${LLM_DIST_FLAG}                                   \
         ${EMBED_UNEMBED_FLAG}                              \
+        ${TEST_MISSING_FLAG}                               \
         ${OVERWRITE_FLAG}
 
     RUN_ELAPSED=$(( SECONDS - RUN_START ))
