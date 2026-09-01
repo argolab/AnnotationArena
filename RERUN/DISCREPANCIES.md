@@ -536,7 +536,57 @@ should say which figures are affected, so a rerun can be scoped.
   never evaluated in a starved final chunk. Until then any item-axis figure
   carries a spike whose position is set by `max_item`.
 
-## D25 — the non-transductive arm overfits badly past K≈900, and the paper never looks
+## D25 — CORRECTED: the "non-transductive divergence" was a chunking artifact
+
+**This entry originally claimed the NT arm genuinely degrades past K≈900 and that
+the paper's comparability claim was false. That was wrong.** The cause was the
+test corner being split across an evaluation chunk boundary, with most of it
+landing in a chunk that contains no training items at all.
+
+- **What the split looks like.** `Item_NT_4000` has 2436 items in the evaluation
+  graph; at `max_item=300` that is 9 chunks, and the last one holds 36 items:
+
+  | chunk | items | train obs | train miss | test obs | **test miss** |
+  |---|---|---|---|---|---|
+  | 7 | 300 | 1605 | 1554 | 158 | **175** |
+  | 8 | **36** | **0** | **0** | 202 | **239** |
+
+  So 239 of the 414 corner cells — 58% — are predicted from a 36-item graph with
+  **zero training context**. Their log-loss is **1.2918**; the 175 cells that do
+  have context score **0.8571**. The weighted mean is 1.108, which is exactly the
+  number this entry originally reported as "NT diverging".
+
+- **The transductive arm is not affected, by luck of alignment.** `Item_T_4000`
+  has 2375 items → 8 chunks, and all 414 corner cells sit together in the last
+  chunk alongside 1192 training cells, scoring 0.8516. NT has 61 more items
+  (2436 vs 2375), which pushes past the 2400 boundary and orphans a tail chunk.
+
+- **With the corner kept whole, NT matches T.** Re-scored at `max_item=1500`,
+  where the corner is intact and still has training context:
+
+  | K | T corner | NT corner | NT − T |
+  |---|---|---|---|
+  | 1000 | 0.8879 | 0.8856 | **−0.002** |
+  | 2000 | 0.8797 | 0.8947 | +0.015 |
+  | 4000 | 0.8636 | 0.8676 | +0.004 |
+
+  The divergence is gone. **The paper's claim that the non-transductive variant
+  "has comparable accuracy at large training sizes" holds.** The earlier
+  refutation, the learning-rate sweep, and the D26 reading of block-validation as
+  "under-stopping" were all chasing this artifact.
+
+- **What survives.** The corner-splitting is real and is a strict generalisation
+  of D24: chunking does not merely add a bump at one size, it can silently strip
+  the evaluation target of all context. Any figure built at `max_item=300`
+  inherits it wherever the item count lands just past a chunk boundary.
+- **To resolve:** evaluation must guarantee the corner is never split and always
+  shares a chunk with training items. Sweeping `max_item` is a workaround, not a
+  fix — at `max_item=3000` the single giant graph is itself far from the 300-item
+  graphs training saw, and T at K=4000 degrades to 0.9252.
+
+---
+
+## D25a (superseded) — the non-transductive arm overfits badly past K≈900, and the paper never looks
 
 - **Where:** the item-axis Marformer NT sweep. The published figure stops at
   K=500 for NT (`plot_domain3_sigmoid.py` caps it lower still,
