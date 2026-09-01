@@ -535,3 +535,46 @@ should say which figures are affected, so a rerun can be scoped.
   corner whole and give it training context in the same chunk, so the corner is
   never evaluated in a starved final chunk. Until then any item-axis figure
   carries a spike whose position is set by `max_item`.
+
+## D25 — the non-transductive arm overfits badly past K≈900, and the paper never looks
+
+- **Where:** the item-axis Marformer NT sweep. The published figure stops at
+  K=500 for NT (`plot_domain3_sigmoid.py` caps it lower still,
+  `ITEM_MARFORMER_NT_MAX = 500`), so nothing beyond that has been plotted.
+- **What happens:** extending NT to the transductive arm's full range, the
+  corner log-loss *reverses* — it improves to K≈900 and then gets steadily
+  worse, while the transductive arm keeps improving:
+
+  | K | Marformer T (corner) | Marformer NT (corner) |
+  |---|---|---|
+  | 900 | 0.9375 | 0.9529 |
+  | 1000 | 0.9338 | 1.1082 |
+  | 2000 | 0.8730 | 1.1265 |
+  | 4000 | 0.8590 | 1.1349 |
+
+- **It is overfitting, and this is measured, not inferred.** Scoring every
+  periodic checkpoint on the corner (`fig6/corner_curve.py`):
+
+  | run | corner min | at epoch | final (ep 399) | inflation |
+  |---|---|---|---|---|
+  | NT K=1000 | 0.9661 | 124 | 1.1082 | **+0.142** |
+  | NT K=4000 | 0.9742 | 99 | 1.1081 | **+0.134** |
+  | T K=4000 | 0.8516 | **399** | 0.8516 | +0.000 |
+
+  The NT curves bottom out around epoch 100–125 and climb monotonically to the
+  end. The transductive run at the same size has its minimum at the *last*
+  epoch and no inflation at all.
+- **Why the two arms differ:** transductive training puts the test corner's
+  observed cells in the training graph, so the model is anchored to the
+  evaluation distribution throughout. NT has no such anchor and overfits its
+  training items. The effect grows with K because more items mean more chunks,
+  hence more optimizer steps per epoch at a fixed 400 epochs.
+- **What it means for the paper.** main.tex:747 says the non-transductive
+  variant "has comparable accuracy at large training sizes". That claim is
+  **untested** — NT is never plotted past K=500 — and on the last checkpoint it
+  is false by ~0.28 nats at K=4000. Early-stopped it is much closer (0.974 vs
+  0.852) but still a real gap, and the gap no longer shrinks with K.
+- **To resolve:** NT needs early stopping to be reported honestly at all. The
+  block-validation refit protocol supplies it; `fig6-val-01` runs it for
+  K=1000–4000. Either extend the NT curve with that protocol, or state
+  explicitly that the comparability claim only covers K ≤ 500.
