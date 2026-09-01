@@ -584,8 +584,16 @@ should say which figures are affected, so a rerun can be scoped.
 - **Where:** `imputer/entity_mf/validation.py`, the `block` carve, as driven by
   `RERUN/submit_validation.sh`.
 - **What the carve does:** it holds out whole **items** from the training
-  partition — every annotator attached. The test corner is 100 items x **10**
-  annotators. So validation measures a denser, easier regime than the target.
+  partition, moving both their observed and their missing cells out
+  (`validation.py:94`), so validation items really are unseen. The carve is
+  principled; the problem is that its signal does not track the corner.
+
+  **CORRECTION.** An earlier version of this entry blamed annotator shape --
+  "the carve attaches all 50 annotators, the corner has 10". That is wrong on
+  the item axis: the item-split bundles contain only **10 annotators in total**,
+  the same 10 as the corner, with ~12 ratings per item in both blocks. Corner
+  and training block are structurally alike, so annotator density is not the
+  explanation.
 - **Consequence:** on the non-transductive arm the validation curve peaks much
   later than the corner does, so the selected stopping epoch is too late.
   NT item, K=1000, seed 42:
@@ -601,6 +609,16 @@ should say which figures are affected, so a rerun can be scoped.
   so it *does* see overfitting — it just calls it ~190 epochs late. The pooling
   and smoothing step, added because per-run argmins scattered 78-385, pushes the
   choice later still.
+- **What the evidence actually says.** The validation curve tracks the
+  *training* cells, not the corner. At NT K=1000: train cells 0.8392, val CE
+  0.880-0.950, corner 1.0778. Validation sits with the training distribution
+  while the corner is 0.24 nats away. Since NT's failure is transfer to the
+  corner rather than a fit failure (D25a: its training cells reach 0.7659 at
+  K=4000, matching the transductive arm's 0.7664), a validation set carved from
+  the training partition cannot see it. **The mechanism for why a held-out block
+  still behaves like training data is not yet established** -- val target counts
+  (400) and block sizes (~87 items vs the corner's 66) are comparable, so the
+  obvious size explanation does not hold either. This is open.
 - **What it costs on the corner** (3 seeds, item axis, NT):
 
   | K | plain 400 ep | block-val refit | corner-optimal |
