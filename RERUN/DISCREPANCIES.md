@@ -578,3 +578,45 @@ should say which figures are affected, so a rerun can be scoped.
   block-validation refit protocol supplies it; `fig6-val-01` runs it for
   K=1000–4000. Either extend the NT curve with that protocol, or state
   explicitly that the comparability claim only covers K ≤ 500.
+
+## D26 — the block-validation carve is shaped unlike the test corner, and under-stops the NT arm
+
+- **Where:** `imputer/entity_mf/validation.py`, the `block` carve, as driven by
+  `RERUN/submit_validation.sh`.
+- **What the carve does:** it holds out whole **items** from the training
+  partition — every annotator attached. The test corner is 100 items x **10**
+  annotators. So validation measures a denser, easier regime than the target.
+- **Consequence:** on the non-transductive arm the validation curve peaks much
+  later than the corner does, so the selected stopping epoch is too late.
+  NT item, K=1000, seed 42:
+
+  | signal | epoch |
+  |---|---|
+  | corner optimum (ground truth) | ~124 |
+  | block-val, this run's own argmin | 208 |
+  | block-val, pooled over seeds + smoothed | 312 |
+  | refit budget used | 313 |
+
+  The protocol is not blind — `best_val_ce` 0.880 rises to `last_val_ce` 0.950,
+  so it *does* see overfitting — it just calls it ~190 epochs late. The pooling
+  and smoothing step, added because per-run argmins scattered 78-385, pushes the
+  choice later still.
+- **What it costs on the corner** (3 seeds, item axis, NT):
+
+  | K | plain 400 ep | block-val refit | corner-optimal |
+  |---|---|---|---|
+  | 1000 | 1.0778 | 1.0519 | **0.9661** |
+  | 2000 | 1.1265 | **1.1408** | — |
+  | 3000 | 1.0782 | 1.0740 | — |
+  | 4000 | 1.1349 | 1.0632 | **0.9742** |
+
+  The refit recovers roughly a quarter to a half of the achievable gap, and at
+  K=2000 it is *worse* than not stopping early at all.
+- **Scope.** This bites the NT arm only. The transductive arm does not overfit
+  at these sizes (D25: corner minimum at epoch 399, zero inflation), so a late
+  stop costs it nothing, and the existing `val-block-01` results stand.
+- **To resolve:** carve validation blocks shaped like the corner — 100 items x
+  10 annotators — instead of whole items, so the selection signal and the
+  reported metric measure the same regime. Until then, NT points at K >= 1000
+  are protocol-limited and should be labelled as such rather than read as the
+  model's capability.
