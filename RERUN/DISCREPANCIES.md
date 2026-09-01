@@ -510,7 +510,28 @@ should say which figures are affected, so a rerun can be scoped.
 - **Relation to D1:** the paper states chunking at **500**, not 300. At 500 the
   first two-chunk size would be ~900 items instead of ~600, so the artifact
   should move. `chunk500-01` tests exactly that at sizes 600-900.
-- **To resolve:** decide a single chunk size for both training and evaluation
-  (D1/D20), and check whether the discontinuity survives it. If it does, the
-  chunking needs to keep the test corner intact rather than letting a chunk
-  boundary cut through it.
+- **CONFIRMED (chunk500-01, 24 runs, 3 seeds).** The prediction was that at
+  `max_item=500` the first two-chunk size moves from ~600 items to ~900, taking
+  the spike with it. It does, exactly:
+
+  | K | items | chunks@300 | LL @300 | chunks@500 | LL @500 |
+  |---|---|---|---|---|---|
+  | 500 | 295 | 1 | 0.9179 | 1 | 0.9201 |
+  | **600** | 356 | **2** | **1.0934** | **1** | **0.9384** |
+  | 700 | 417 | 2 | 0.9748 | 1 | 0.9064 |
+  | 800 | 474 | 2 | 0.9517 | 1 | 0.9038 |
+  | **900** | 527 | 2 | 0.9375 | **2** | **1.0264** |
+  | 1000 | 578 | 2 | 0.9338 | 2 | 1.0293 |
+  | 2000 | 1189 | 4 | 0.8730 | 3 | 0.9113 |
+  | 4000 | 2375 | 8 | 0.8590 | 5 | 0.8566 |
+
+  The spike is wherever the graph first fails to fit in one chunk, and nowhere
+  else. Raising the chunk size does not remove it, it relocates it.
+- **Note on the footnote's claim.** "Empirically the gap is small" holds at the
+  large end -- 0.8590 vs 0.8566 at K=4000 -- so chunk size is nearly free once
+  many chunks are in play. The cost is a *boundary* effect, roughly +0.15 nats
+  at the single size where the split first happens, not a monotone penalty.
+- **To resolve:** the fix is not a bigger chunk. Chunking must keep the test
+  corner whole and give it training context in the same chunk, so the corner is
+  never evaluated in a starved final chunk. Until then any item-axis figure
+  carries a spike whose position is set by `max_item`.
