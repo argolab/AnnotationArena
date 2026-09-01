@@ -638,3 +638,46 @@ should say which figures are affected, so a rerun can be scoped.
   reported metric measure the same regime. Until then, NT points at K >= 1000
   are protocol-limited and should be labelled as such rather than read as the
   model's capability.
+
+## D27 — the corner metric is only 414 cells, and that is most of the curve's wiggle
+
+- **Where:** the fixed test corner, `missing_ratings_indexes_in_test_instance`,
+  n = 414 at every training size.
+- **What was chased.** The transductive arm scores ~0.09 nats worse on the
+  corner than on training-partition missing cells. Candidate explanations, all
+  measured on `Item_T_2000`:
+
+  | candidate | verdict |
+  |---|---|
+  | test items lack the status-0 nodes training items carry | **ruled out** — `--test-missing-in-graph` moves the gap by 0.0007–0.0027 |
+  | item-specific parameters memorising training items | **ruled out** — `item_dropout_rate=1.0` keeps every item deviation at exactly 0 |
+  | label distribution shift in the corner | **ruled out** — worth +0.0069 nats |
+  | test items have less context (5.45 vs 5.92 obs/item) | **ruled out** — the gap survives matching on observed-cells-per-item |
+  | `test_obs` never actually masked, so no gradient | **ruled out** — masked at 0.146 vs train's 0.150 |
+  | chunk placement (corner is always the highest ids, hence the last chunk) | **partly** — 0.038 of 0.101; raising `max_item` to a single chunk leaves +0.063 |
+
+- **What it actually is.** Mostly sampling noise on a small fixed set. Against
+  random 414-cell draws from the training cells (20 000 draws, single chunk):
+
+  ```
+  train cells    n=6685  mean 0.8171
+  corner cells   n=414   mean 0.8797   gap +0.0626
+  random 414-cell draws: 95% CI [0.7614, 0.8748]   sd 0.0288
+  fraction of draws >= corner: 0.0165   (z = +2.17)
+  ```
+
+  The corner sits just outside the 95% interval — real, but z = 2.17, and the
+  **sampling sd for any 414-cell measurement is 0.0288**, i.e. ±0.058 at 95%.
+- **Why this matters for the figure.** Every point on the corrected item curve
+  carries ~±0.06 of pure cell-sampling noise before any seed variation, and
+  **more seeds do not reduce it** — all seeds score the identical 414 cells. That
+  is the source of the non-monotone wiggle in the corrected curve, and it is why
+  the published pooled curve looked smooth: averaging thousands of cells is far
+  less noisy, it just measures the wrong population (D22).
+- **Scale check.** The D22/D23 correction is +0.05 to +0.19 nats, comfortably
+  above this noise floor, so those conclusions stand. Individual point-to-point
+  movements of <0.06 in the corrected curve should not be read as signal.
+- **To resolve:** enlarge the corner, or report the corner mean with a
+  bootstrap CI over cells rather than a seed sd, or average several independent
+  corner draws per size. Any of the three; the current figure has no honest
+  error bar because the seed sd understates the real uncertainty.
