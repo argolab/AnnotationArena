@@ -60,12 +60,19 @@ if [[ -n "${DATA_FROM}" && ! -e "${RUN_DIR}/DATA" ]]; then
     ln -sfn "${SRC}" "${RUN_DIR}/DATA"
 fi
 
+# Default sweep. VAL_MATRIX overrides it with a newline-separated list of
+# family|axis|protocol|sizes rows, so a follow-up can run the protocol on a few
+# cells (e.g. the extended item-NT sizes) without re-running the whole grid.
+if [[ -n "${VAL_MATRIX:-}" ]]; then
+    mapfile -t MARFORMER_MATRIX <<< "${VAL_MATRIX}"
+else
 MARFORMER_MATRIX=(
   "Marformer|item|transductive|100,200,300,400,500,600,700,800,900,1000,2000,3000,4000"
   "Marformer|annot|transductive|10,15,20,25,30,35,40,45,50"
   "MarformerNT|item|nontransductive|100,200,300,400,500,600,700,800,900"
   "MarformerNT|annot|nontransductive|10,15,20,25,30,35,40"
 )
+fi
 
 write_conf() {
     local name="$1"; shift
