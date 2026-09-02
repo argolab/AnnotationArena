@@ -38,6 +38,10 @@ if [[ -n "${RERUN_CONF:-}" ]]; then
 fi
 # This is a --gres=gpu job; a silent CPU fallback would be a bug, not a fallback.
 export REQUIRE_GPU=1
+# Large training chunks sit right at the memory ceiling: max_item=1200 at K=4000
+# needs ~76 GiB with backward and died 3.5 GiB short on an 80 GiB A100.
+# expandable_segments reclaims fragmentation rather than reserving around it.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 rerun_activate_env
 
 : "${RUN_ID:?}" "${FAMILY:?}" "${AXIS:?}" "${PROTOCOL:?}" "${SIZES:?}"
