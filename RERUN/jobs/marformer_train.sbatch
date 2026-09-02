@@ -77,6 +77,14 @@ export DOMAIN3_DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
 export DOMAIN3_INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
 export DOMAIN3_TEST_MISSING_IN_GRAPH="${DOMAIN3_TEST_MISSING_IN_GRAPH:-false}"
 export DOMAIN3_RANDOM_ITEM_CHUNKS="${DOMAIN3_RANDOM_ITEM_CHUNKS:-false}"
+# Architecture knobs for the capacity sweep. Unset, these are the shipped
+# Domain 3 values, so every existing job is unaffected.
+export DOMAIN3_EMBEDDING_DIM="${DOMAIN3_EMBEDDING_DIM:-80}"
+export DOMAIN3_NUM_LAYERS="${DOMAIN3_NUM_LAYERS:-8}"
+export DOMAIN3_ATTENTION_HEADS="${DOMAIN3_ATTENTION_HEADS:-4}"
+export DOMAIN3_D_FF="${DOMAIN3_D_FF:-128}"
+export DOMAIN3_NUM_FFN_LAYERS="${DOMAIN3_NUM_FFN_LAYERS:-1}"
+export DOMAIN3_DROPOUT="${DOMAIN3_DROPOUT:-0.1}"
 export DOMAIN3_SEED="${DOMAIN3_SEED:-42}"
 # Validation carve (phase A) and, for phase B, a per-(size, seed) epoch budget
 # looked up from the selection file written by analysis/select_epochs.py.

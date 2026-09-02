@@ -93,12 +93,16 @@ SCRIPT_START=$SECONDS
 
 SEED="${DOMAIN3_SEED:-42}"   # overridable so ablations can average over seeds
 TYPE_EMBEDDING_INIT="kaiming"
-EMBEDDING_DIM=80
-NUM_LAYERS=8
-ATTENTION_HEADS=4
-D_FF=128
-NUM_FFN_LAYERS=1
-DROPOUT=0.1
+# Architecture. The defaults are the shipped Domain 3 configuration, the one
+# every published number was produced with. They are overridable so a capacity
+# sweep does not need a forked runner: unset, this block is byte-for-byte the
+# old behaviour.
+EMBEDDING_DIM="${DOMAIN3_EMBEDDING_DIM:-80}"
+NUM_LAYERS="${DOMAIN3_NUM_LAYERS:-8}"
+ATTENTION_HEADS="${DOMAIN3_ATTENTION_HEADS:-4}"
+D_FF="${DOMAIN3_D_FF:-128}"
+NUM_FFN_LAYERS="${DOMAIN3_NUM_FFN_LAYERS:-1}"
+DROPOUT="${DOMAIN3_DROPOUT:-0.1}"
 EPOCHS="${DOMAIN3_EPOCHS:-400}"   # overridable so the runner can be smoke-tested
 LR="${DOMAIN3_LR:-2e-4}"
 LR_SCHEDULE="none"
