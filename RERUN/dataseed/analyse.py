@@ -103,6 +103,7 @@ def main():
                     color=cols[s], lw=0.9, alpha=0.55, zorder=1)
         ax.set_xscale("log"); ax.set_xticks(sizes)
         ax.set_xticklabels([str(x) for x in sizes])
+        ax.minorticks_off()
         ax.set_xlabel("training items K"); ax.set_title(title, fontsize=10)
         ax.grid(alpha=0.25, lw=0.5)
     axes[0].set_ylabel("log-loss")
