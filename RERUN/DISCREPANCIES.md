@@ -731,3 +731,59 @@ landing in a chunk that contains no training items at all.
   bootstrap CI over cells rather than a seed sd, or average several independent
   corner draws per size. Any of the three; the current figure has no honest
   error bar because the seed sd understates the real uncertainty.
+
+---
+
+## D28 — the train-vs-corner gap is a property of base seed 42, not of the model
+
+**Status:** measured, 2026-09-02. Supersedes the "chunking plus sampling noise"
+reading in D27, which was right that the gap is not a bug but wrong about how
+much of it survives a redraw: none of it does.
+
+Domain 3 was regenerated from the Stan generator under six base seeds
+(42, 101–105), each into its own tree under `RERUN/runs/dataseed-s<N>/`. Seed 42
+reproduces the original bundles byte-for-byte, so the harness is deterministic
+and the five fresh draws differ only in the draw. Item axis, K ∈ {200, 500,
+1000}, both arms, everything else held at the Figure 6 values (chunk 300, no
+shuffle, 400 epochs, model seed 42, last checkpoint, corner-whole evaluation).
+
+Train-minus-corner gap, T arm:
+
+| K | s42 | s101 | s102 | s103 | s104 | s105 |
+|---|---|---|---|---|---|---|
+| 200 | **+0.106** | −0.083 | −0.049 | −0.114 | −0.242 | −0.257 |
+| 500 | **+0.080** | −0.013 | −0.043 | −0.037 | −0.126 | −0.096 |
+| 1000 | **+0.083** | −0.028 | −0.041 | −0.044 | −0.105 | −0.108 |
+
+Seed 42 is the only draw with a positive gap, in all six (arm, K) cells, at
+z = +2.0 to +3.8 against the five fresh draws. On a fresh draw the corner is
+*easier* than the training partition's own held-out cells.
+
+Three candidate mechanisms were checked and all are ruled out:
+
+- **Label difficulty.** Marginal predictors fitted on observed training cells
+  (unigram, P(c|attribute), P(c|annotator,attribute)) score the corner and the
+  training region within ±0.05 of each other on every seed, with no seed-42
+  outlier (`dataseed/corner_difficulty.py`).
+- **Context density.** Observed cells per scored item are 5.1–6.1 in both
+  regions on every seed. Seed 42's corner sits mid-pack at 5.45; seed 102 has
+  less corner context (5.15) and a negative gap.
+- **Corner size.** Seed 42's corner holds 414 missing cells, the largest of the
+  six (316–414) — more cells means less sampling noise, not more.
+
+What does vary is the realised difficulty of the ~400 specific cells. Across
+draws the corner log-loss spans 0.67–0.91 at fixed K, arm and protocol, with a
+standard deviation **~2x** that of the training-cell log-loss measured on the
+same checkpoints (0.085 vs 0.039 at K=1000). The corner is a 414-cell
+measurement and behaves like one.
+
+**Consequence for the paper.** Any claim that rests on the size or sign of the
+train-vs-corner difference at base seed 42 — including the reading that
+Marformer generalises worse to unseen items than it fits seen ones — is not
+supported. The corner-scored curve itself is fine; its *error bar across
+generative draws* is roughly ±0.09, which is larger than most of the differences
+Figure 6 is currently read as showing. Reported Domain 3 numbers should average
+over generative draws, not just over model seeds.
+
+Harness: `RERUN/dataseed/` (`submit_gen.sh`, `submit_train.sh`, `jobs/eval.sbatch`,
+`analyse.py`, `corner_difficulty.py`). Figure: `dataseed/out/dataseed_fig6.png`.
