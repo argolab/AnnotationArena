@@ -57,9 +57,9 @@ TEST_ITEMS=100; TEST_ANNOTS=10
 # (Marformer only -- Stan stops at 500 for cost reasons). The base bundle has
 # K_TRAIN=4800 items, so the large sizes are subsets of it, not a regeneration.
 ITEM_TRANS_SIZES="${ITEM_TRANS_SIZES:-100,200,300,400,500,600,700,800,900,1000,2000,3000,4000}"
-ITEM_NT_SIZES="100,200,300,400,500,600,700,800,900"
-ANNOT_TRANS_SIZES="10,15,20,25,30,35,40,45,50"
-ANNOT_NT_SIZES="10,15,20,25,30,35,40"
+ITEM_NT_SIZES="${ITEM_NT_SIZES:-100,200,300,400,500,600,700,800,900}"
+ANNOT_TRANS_SIZES="${ANNOT_TRANS_SIZES:-10,15,20,25,30,35,40,45,50}"
+ANNOT_NT_SIZES="${ANNOT_NT_SIZES:-10,15,20,25,30,35,40}"
 
 # --- generative hyperparameters ---------------------------------------------
 SIGMA_U=1.0; SIGMA_V=1.0; SIGMA_UIT=0.5; SIGMA_MEASUREMENT=0.1; KAPPA=15.0
