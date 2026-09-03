@@ -170,18 +170,46 @@ cells.</p>
 </section>
 
 <section>
+<h2>Does a bigger Marformer help?</h2>
+<p class=kick>Ten architectures at K&nbsp;=&nbsp;4000, each with a validation carve</p>
+<p>Depth 4&ndash;16, width 80&ndash;160, wider feed-forward, deeper feed-forward &mdash; all
+trained with a 15% block-validation carve so the stopping epoch is never chosen on test.
+Corner log-loss against the shipped 80-dim, 8-layer model:</p>
+<div class=tw><table>
+<caption>Change vs the shipped architecture &mdash; negative is better. One model seed.</caption>
+<thead><tr><th>architecture</th><th>dim</th><th>layers</th><th>transductive</th><th>non-transductive</th></tr></thead>
+<tbody>
+<tr><td class=k>wide160</td><td>160</td><td>8</td><td class=g>&minus;0.0221</td><td class=sd>+0.0019</td></tr>
+<tr><td class=k>wide128</td><td>128</td><td>8</td><td class=g>&minus;0.0171</td><td class=d>+0.0172</td></tr>
+<tr><td class=k>deep12</td><td>80</td><td>12</td><td class=sd>&minus;0.0095</td><td class=sd>&minus;0.0014</td></tr>
+<tr><td class=k>ff256</td><td>80</td><td>8</td><td class=sd>&minus;0.0080</td><td class=sd>+0.0017</td></tr>
+<tr><td class=k>shipped</td><td>80</td><td>8</td><td>0.8633</td><td>0.8607</td></tr>
+<tr><td class=k>deep16</td><td>80</td><td>16</td><td class=sd>+0.0047</td><td class=d>+0.0203</td></tr>
+<tr><td class=k>shallow4</td><td>80</td><td>4</td><td class=d>+0.0064</td><td class=d>+0.0160</td></tr>
+<tr><td class=k>big160x12</td><td>160</td><td>12</td><td class=sd>+0.0039</td><td class=d>+0.0133</td></tr>
+</tbody></table></div>
+<p><b>No architecture change is a reliable win.</b> Making the model wider helps the transductive
+arm by about 0.02 and does nothing for the non-transductive one; making it both wider and deeper
+is worse than either. Every effect here is smaller than the &plusmn;{g['corner_sd']:.3f} draw-to-draw spread
+above, and the two arms disagree in sign, so nothing on this table should be adopted yet. A
+three-seed replication of the top configurations is running.</p>
+<p class=note>The one clear signal is negative: depth alone does not help. 16 layers is worse than
+8 in both arms, and 4 layers is worse still &mdash; the shipped depth is already at the useful
+maximum.</p>
+</section>
+
+<section>
 <h2>Still running</h2>
 <p class=kick>Results expected shortly; this page updates as they land</p>
 <ul>
-<li><b>Capacity sweep.</b> Ten architectures (depth 4&ndash;16, width 80&ndash;160) at
-K&nbsp;=&nbsp;4000, each with a validation carve so the stopping epoch is chosen off-test.
-Asking whether a deeper or wider Marformer beats the shipped one.</li>
+<li><b>Capacity sweep, replicated.</b> The four best configurations above on two further model
+seeds, to see whether the width effect survives.</li>
 <li><b>Scale pilot.</b> A freshly generated dataset with 10,000 items, ten times the paper's
 range, to ask whether transfer keeps improving or has already saturated by K&nbsp;=&nbsp;3000&ndash;4000.</li>
 </ul>
 <p class=note>Given the draw-to-draw spread above, both will need more than one generative seed
-before any winner is believable. Effect sizes will be reported against the
-&plusmn;{g['corner_sd']:.3f} noise floor.</p>
+before any winner is believable. Effect sizes are reported against the
+&plusmn;{g['corner_sd']:.3f} noise floor throughout.</p>
 </section>
 
 <footer>

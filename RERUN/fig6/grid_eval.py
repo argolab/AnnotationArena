@@ -46,7 +46,8 @@ def main():
             variant = str(rel.parent.parent) if rel.parent.parent != Path(".") else ""
             sm = next((SEED_RE.match(p.name) for p in run.parents if SEED_RE.match(p.name)), None)
             seed = int(sm.group(1)) if sm else 42
-            cfg = json.loads((run / "train_config.json").read_text())["training"]
+            _tc = json.loads((run / "train_config.json").read_text())
+            cfg, cfgm = _tc["training"], _tc["model"]
             train_mi = cfg.get("max_item")
             # variant looks like "<Family>_sh<bool>_mi<int>"
             vm = re.search(r"_sh(true|false)_mi(\d+)", variant)
@@ -60,6 +61,13 @@ def main():
                         torch.cuda.empty_cache(); continue
                     te, tr = summarise(r, "test"), summarise(r, "train")
                     rows.append({"family": family, "axis": m.group(1).lower(),
+                                 # Full path: `variant` is derived from a fixed
+                                 # depth below the family root and collapses to
+                                 # "ITEM" for run trees laid out differently.
+                                 "run": str(run),
+                                 "arch": {k: cfgm.get(k) for k in
+                                          ("embedding_dim", "num_layers",
+                                           "attention_heads", "d_ff", "num_ffn_layers")},
                                  "size": int(m.group(3)), "seed": seed,
                                  "variant": variant, "shuffle": shuffle,
                                  "train_max_item": train_mi, "eval_max_item": emi,
