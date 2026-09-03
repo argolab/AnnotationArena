@@ -78,8 +78,9 @@ def seed_panel_html(seed: int, outdir: Path) -> str:
             return ""
         body = "".join(
             "<tr><td class=k>{size}</td><td>{corner:.4f}</td><td class=sd>{n}</td>"
-            "<td class=sd>{train:.4f}</td><td>{so}</td><td class=\"{cls}\">{delta}</td></tr>".format(
-                size=r["size"], corner=r["corner"], n=r["corner"] and r["n"], train=r["train"],
+            "<td class=sd>{train}</td><td>{so}</td><td class=\"{cls}\">{delta}</td></tr>".format(
+                size=r["size"], corner=r["corner"], n=r["n"],
+                train=(f'{r["train"]:.4f}' if r["train"] is not None else "&mdash;"),
                 so=(f'{r["stan_oracle"]:.3f}' if r["stan_oracle"] else "&mdash;"),
                 cls=("g" if r["stan_oracle"] and r["corner"] < r["stan_oracle"] else
                      "d" if r["stan_oracle"] else "sd"),

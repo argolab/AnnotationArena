@@ -1,0 +1,56 @@
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&family=Source+Serif+4:opsz,wght@8..60,400;8..60,600&display=swap">
+<style>:root{--ground:#F5F6F9;--surface:#fff;--surface-alt:#EEF0F6;--ink:#15171F;--ink-soft:#4B5162;
+--ink-faint:#787F92;--rule:#D7DAE4;--rule-strong:#B6BBCA;--accent:#2C4B7C;--accent-soft:#E5EAF3;
+--bad:#A33B31;--good:#2E7357;--measure:68ch;
+--fd:"IBM Plex Sans",Helvetica,Arial,sans-serif;--fb:"Source Serif 4",Georgia,serif;
+--fm:"IBM Plex Mono",ui-monospace,Menlo,monospace}
+@media(prefers-color-scheme:dark){:root:not([data-theme=light]){--ground:#0F1117;--surface:#171A22;
+--surface-alt:#1E222C;--ink:#E5E8F0;--ink-soft:#A9AFC0;--ink-faint:#7B8294;--rule:#2B303B;
+--rule-strong:#3D4452;--accent:#8AA8D8;--accent-soft:#1B2739;--bad:#E08379;--good:#6FBF95}}
+:root[data-theme=dark]{--ground:#0F1117;--surface:#171A22;--surface-alt:#1E222C;--ink:#E5E8F0;
+--ink-soft:#A9AFC0;--ink-faint:#7B8294;--rule:#2B303B;--rule-strong:#3D4452;--accent:#8AA8D8;
+--accent-soft:#1B2739;--bad:#E08379;--good:#6FBF95}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:var(--fb);font-size:17px;
+line-height:1.62;margin:0;padding:0 1.5rem 6rem;-webkit-font-smoothing:antialiased}
+.wrap{max-width:1120px;margin:0 auto}
+header{padding:4rem 0 1.6rem;border-bottom:2px solid var(--ink);margin-bottom:2.2rem}
+.eyebrow{font-family:var(--fm);font-size:.72rem;letter-spacing:.14em;text-transform:uppercase;
+color:var(--accent);margin:0 0 1rem}
+h1{font-family:var(--fd);font-weight:700;font-size:clamp(2rem,5vw,2.9rem);line-height:1.08;
+letter-spacing:-.022em;margin:0 0 .9rem;text-wrap:balance}
+.stand{font-size:1.1rem;color:var(--ink-soft);max-width:var(--measure);margin:0}
+h2{font-family:var(--fd);font-weight:600;font-size:1.4rem;margin:0 0 .4rem;padding-top:1.1rem;
+border-top:1px solid var(--rule-strong);text-wrap:balance}
+h3{font-family:var(--fd);font-weight:600;font-size:.95rem;letter-spacing:.02em;text-transform:uppercase;
+color:var(--ink-faint);margin:1.8rem 0 .6rem}
+.kick{font-family:var(--fm);font-size:.71rem;letter-spacing:.12em;text-transform:uppercase;
+color:var(--ink-faint);margin:0 0 1.3rem}
+section{margin:0 0 3rem}
+p{margin:0 0 1rem;max-width:var(--measure)}
+code{font-family:var(--fm);font-size:.855em;background:var(--surface-alt);padding:.1em .34em;border-radius:2px}
+figure{margin:0 0 1.6rem;background:var(--surface);border:1px solid var(--rule);padding:1rem}
+figure img{width:100%;height:auto;display:block}
+figcaption{font-size:.85rem;color:var(--ink-faint);margin-top:.7rem;font-family:var(--fd)}
+.tw{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);margin:0 0 .6rem}
+table{border-collapse:collapse;width:100%;font-family:var(--fm);font-size:.82rem;
+font-variant-numeric:tabular-nums}
+caption{caption-side:top;text-align:left;font-family:var(--fd);font-size:.83rem;font-weight:600;
+color:var(--ink-soft);padding:.7rem .9rem .55rem;border-bottom:1px solid var(--rule)}
+th,td{padding:.4rem .8rem;text-align:right;border-bottom:1px solid var(--rule);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+thead th{font-size:.68rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-faint);
+font-weight:500;border-bottom:1px solid var(--rule-strong)}
+tbody tr:nth-child(even){background:var(--surface-alt)}
+.k{color:var(--ink);font-weight:600}.sd{color:var(--ink-faint)}
+.d{color:var(--bad);font-weight:600}.g{color:var(--good);font-weight:600}
+.note{font-size:.85rem;color:var(--ink-faint);max-width:var(--measure);margin:0 0 1.6rem}
+.box{background:var(--accent-soft);border:1px solid var(--rule);border-left:3px solid var(--accent);
+padding:1.2rem 1.35rem;margin:0 0 1.6rem}
+.box.warn{border-left-color:var(--bad)}
+.box p{margin:0 0 .7rem}.box p:last-child{margin:0}
+ul{max-width:var(--measure);padding-left:1.15rem}li{margin-bottom:.45rem}
+footer{border-top:1px solid var(--rule-strong);padding-top:1.3rem;font-family:var(--fm);
+font-size:.78rem;color:var(--ink-faint);line-height:1.7}</style>
