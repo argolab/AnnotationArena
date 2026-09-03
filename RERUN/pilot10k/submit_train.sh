@@ -38,7 +38,11 @@ count=0
 for arm in "${ARM_LIST[@]}"; do
     proto=transductive; [[ "${arm}" == "MarformerNT" ]] && proto=nontransductive
     for seed in "${SEED_LIST[@]}"; do
-        variant=""; [[ "${seed}" != "42" ]] && variant="seed${seed}"
+        # Tag by chunk size: the first pass ran at 600 and hit the memory
+        # cliff above K=4000, so a 300 pass has to coexist with it rather than
+        # overwrite the sizes that did finish.
+        variant="mi${MAX_ITEM}"
+        [[ "${seed}" != "42" ]] && variant="${variant}/seed${seed}"
         name="P10K-${arm}-s${seed}"
         conf="${CONF_DIR}/${name}.env"; : > "${conf}"
         for kv in "RUN_ID=${RUN_ID}" "DATA_RUN_ID=${RUN_ID}" "FAMILY=${arm}" \
