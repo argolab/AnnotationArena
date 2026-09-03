@@ -104,7 +104,9 @@ def main():
         for r in sorted((r for r in mine if r["family"] == fam), key=lambda r: r["size"]):
             tbl.append({"family": fam, "size": r["size"],
                         "corner": r["corner"]["log_loss"], "n": r["corner"]["n"],
-                        "train": r["train"]["log_loss"],
+                        # train is None where the split leaves the training partition
+                        # with no missing cells to score.
+                        "train": (r["train"] or {}).get("log_loss"),
                         "stan_oracle": stan["Stan Oracle"].get(str(r["size"]))})
     Path(a.outdir, f"seed{a.seed}_table.json").write_text(
         json.dumps({"seed": a.seed, "band": band, "rows": tbl}, indent=2))
