@@ -87,7 +87,7 @@ def seed_panel_html(seed: int, outdir: Path) -> str:
                 delta=(f'{r["corner"] - r["stan_oracle"]:+.3f}' if r["stan_oracle"] else "&mdash;"))
             for r in rs)
         return f"""<div class=tw><table>
-<caption>{label} &mdash; data seed {seed}, corner log-loss vs published Stan Oracle</caption>
+<caption>{label} &mdash; data seed {seed}, corner log-loss vs Stan Oracle refit on the same draw</caption>
 <thead><tr><th>K</th><th>corner</th><th>cells</th><th>train cells</th>
 <th>Stan Oracle</th><th>&Delta; vs Stan</th></tr></thead>
 <tbody>{body}</tbody></table></div>"""
@@ -96,27 +96,29 @@ def seed_panel_html(seed: int, outdir: Path) -> str:
 <section>
 <h2>Data seed {seed} against the published Stan curves</h2>
 <p class=kick>Item axis &middot; fresh generative draw &middot; corner-scored, corner held whole</p>
-<div class="box warn">
-<p><b>These two series come from different worlds.</b> The Marformer curve is Domain 3
-regenerated under base seed {seed}. The Stan curves are digitized off the published figures and
-were produced on base seed&nbsp;42 &mdash; no Domain 3 sigmoid Stan run survived the migration, so
-they cannot be recomputed on this draw.</p>
-<p>D28 measured what that costs: corner log-loss moves by about
-<b>&plusmn;{band:.3f}</b> between draws at fixed K, arm and protocol. That is the shaded band
-behind the Stan Oracle line, and it is the same order as the Marformer&ndash;Stan gap the
-published figure is read as showing. Read the vertical distances against the band, not against
-the line.</p>
+<div class=box>
+<p><b>Both series come from the same data.</b> Stan has been refit on this draw &mdash; 20 HMC
+fits, sampler settings and model matrix taken verbatim from the paper's &mdash; and scored on
+exactly the cells Marformer is scored on. Earlier versions of this panel could only overlay the
+published seed-42 Stan curves, which meant reading a Marformer&ndash;Stan gap across two
+different draws of the world.</p>
+<p>The published curves are still drawn, faintly dotted, as a reference. The distance between
+each dotted line and its solid counterpart is how far <em>Stan alone</em> moves with the draw
+&mdash; which turns out to be substantial, and is the reason the same-draw refit was necessary.</p>
 </div>
 <figure><img alt="Marformer on data seed {seed} against the published Stan curves" src="{png}">
-<figcaption>Solid: Marformer transductive and non-transductive, trained and corner-scored entirely
-within the seed-{seed} tree. Dashed: the four published Stan variants, seed 42. Shaded: the
-measured across-draw spread of corner log-loss.</figcaption></figure>
+<figcaption>Red: Marformer transductive and non-transductive, trained and corner-scored entirely
+within the seed-{seed} tree. Blue solid: the four Stan variants refit on the same draw. Blue
+dotted: the same four variants as published, on seed 42.</figcaption></figure>
 {tbl("Marformer", "Transductive")}
 {tbl("MarformerNT", "Non-transductive")}
-<p class=note>Protocol matches the corrected panels: training chunk 300, no shuffling, 400 epochs,
-model seed 42, last checkpoint, corner held whole in a chunk that carries training context.
-Stan stops at K=500 in the paper for cost reasons, so comparisons beyond that point are against
-a flat extrapolation and are not measurements.</p>
+<p class=note>Marformer protocol matches the corrected panels: training chunk 300, no shuffling,
+400 epochs, model seed 42, last checkpoint, corner held whole in a chunk that carries training
+context. Stan: 1 chain, 300 warmup, 500 sampling, stopping at K=500 where the paper stopped for
+HMC cost &mdash; there is no Stan point beyond that, so the Marformer curve past 500 has no
+comparison line. A cross-check refitting Stan on seed&nbsp;42, whose data is byte-identical to
+the published dataset, is running; until it lands, treat the absolute Stan level here as
+provisional.</p>
 </section>"""
 
 
