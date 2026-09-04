@@ -105,13 +105,17 @@ NUM_FFN_LAYERS="${DOMAIN3_NUM_FFN_LAYERS:-1}"
 DROPOUT="${DOMAIN3_DROPOUT:-0.1}"
 EPOCHS="${DOMAIN3_EPOCHS:-400}"   # overridable so the runner can be smoke-tested
 LR="${DOMAIN3_LR:-2e-4}"
-LR_SCHEDULE="none"
-LR_MIN=1e-5
-WEIGHT_DECAY=0.01
+LR_SCHEDULE="${DOMAIN3_LR_SCHEDULE:-none}"
+LR_MIN="${DOMAIN3_LR_MIN:-1e-5}"
+WEIGHT_DECAY="${DOMAIN3_WEIGHT_DECAY:-0.01}"
 MASKING_RATE=0.15
 MASK_AUGMENTATIONS=5
-MASKED_LOSS_WEIGHT=15.0
-OBSERVED_LOSS_WEIGHT=1.0
+# The objective is written in the paper (eq:trainreg) with the masked term at
+# weight 1 and the copy term at lambda_copy; the code ships the equivalent
+# unnormalised 15:1. Overridable so FUTURE_EXPERIMENTS S5 can test whether the
+# normalised form is a parity match without forking the runner.
+MASKED_LOSS_WEIGHT="${DOMAIN3_MASKED_LOSS_WEIGHT:-15.0}"
+OBSERVED_LOSS_WEIGHT="${DOMAIN3_OBSERVED_LOSS_WEIGHT:-1.0}"
 DEVICE="$(domain3_choose_torch_device)"
 MAX_ITEM="${DOMAIN3_MAX_ITEM:-100}"
 # Which layers keep the outer residual add (features/params += proj(combined)).
@@ -166,6 +170,13 @@ if [[ "${AXIS}" == "annot" ]]; then
     ITEM_REG_WEIGHT=0.0
     ATTRIBUTE_REG_WEIGHT=0.0
 fi
+
+# delta_tau (paper: the per-type embedding dropout rate). The axis block above
+# picks the shipped per-axis values -- item axis 1.0/0.0, annotator axis 0.0/0.8
+# -- so these overrides are applied last, after the axis has had its say.
+# FUTURE_EXPERIMENTS S2 uses them to look for a single rule of thumb.
+ITEM_DROPOUT_RATE="${DOMAIN3_ITEM_DROPOUT:-${ITEM_DROPOUT_RATE}}"
+ANNOTATOR_DROPOUT_RATE="${DOMAIN3_ANNOT_DROPOUT:-${ANNOTATOR_DROPOUT_RATE}}"
 
 PER_HEAD_FLAG=""
 [ "${USE_PER_HEAD_REL}" = "false" ] && PER_HEAD_FLAG="--no-per-head-rel"
