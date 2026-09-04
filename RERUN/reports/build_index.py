@@ -93,8 +93,8 @@ survives scrutiny. Short answer: the model replicates, the <em>evaluation</em> d
 <p><b>1. Marformer and Stan were being scored on different cells.</b> The paper says all
 log-losses are computed on a fixed 414-cell &ldquo;test corner&rdquo;. Stan was. Marformer was
 scored on <em>every</em> missing cell in its graph &mdash; mostly cells belonging to training
-items, which are much easier. Rebuilt on the corner, Marformer is 0.05&ndash;0.19 nats worse
-than published at every training size, and the claim that it approaches near-oracle performance
+items, which are much easier. Rebuilt on the corner, Marformer is worse than published at
+every one of the 38 measured cells &mdash; by +0.03 to +0.14 nats, typically about +0.08 &mdash; and the claim that it approaches near-oracle performance
 by K&nbsp;=&nbsp;4000 does not survive.</p>
 </div>
 
