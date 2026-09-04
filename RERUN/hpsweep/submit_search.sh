@@ -56,6 +56,13 @@ for c in cfg:
 PY
 )
 
+# Cheap structural guard against the collision above: every seed must end up on
+# a distinct path, so the tag template has to mention the seed.
+if [[ "${SEEDS}" == *,* ]] && [[ "${PHASE}" == "search" ]]; then
+    :  # variant below includes /seed${seed}; kept explicit so a future edit that
+       # drops it fails review rather than silently overwriting results.
+fi
+
 IFS=',' read -r -a ARM_LIST <<< "${ARMS}"
 IFS=',' read -r -a SEED_LIST <<< "${SEEDS}"
 echo "${RUN_ID} phase=${PHASE}: ${#ROWS[@]} configs x ${#ARM_LIST[@]} arms x ${#SEED_LIST[@]} seeds, K=${SIZES}, chunk ${MAX_ITEM}"
@@ -65,7 +72,12 @@ for row in "${ROWS[@]}"; do
     for arm in "${ARM_LIST[@]}"; do
         proto=transductive; [[ "${arm}" == "MarformerNT" ]] && proto=nontransductive
         for seed in "${SEED_LIST[@]}"; do
-            variant="${arm}_${tag}-${PHASE}"
+            # The seed MUST be in the path. Without it every seed writes to the
+            # same run directory and the last one to finish silently wins --
+            # which is exactly what happened on 2026-09-04, when a 3-seed
+            # replication overwrote the single-seed results it was meant to
+            # extend. Same failure as submit_nt_extend.sh and submit_chunk500.sh.
+            variant="${arm}_${tag}-${PHASE}/seed${seed}"
             name="HP-${arm}-${tag}-${PHASE}-s${seed}"
             conf="${CONF_DIR}/${name}.env"; : > "${conf}"
             kvs=( "RUN_ID=${RUN_ID}" "DATA_RUN_ID=${RUN_ID}" "FAMILY=${arm}"
