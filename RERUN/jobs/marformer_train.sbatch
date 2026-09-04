@@ -104,6 +104,13 @@ export DOMAIN3_OBSERVED_LOSS_WEIGHT="${DOMAIN3_OBSERVED_LOSS_WEIGHT:-1.0}"
 export DOMAIN3_LR="${DOMAIN3_LR:-2e-4}"
 export DOMAIN3_LR_SCHEDULE="${DOMAIN3_LR_SCHEDULE:-none}"
 
+# The per-job conf is *sourced*, which sets shell variables but does not export
+# them, so anything the runner (a child process) needs must be re-exported here.
+# DOMAIN3_EPOCHS was previously exported only inside the EPOCH_TABLE branch,
+# which meant a conf setting it was silently ignored and the run took the
+# runner's 400-epoch default.
+[[ -n "${DOMAIN3_EPOCHS:-}" ]] && export DOMAIN3_EPOCHS
+
 export DOMAIN3_VAL_PROTOCOL="${DOMAIN3_VAL_PROTOCOL:-none}"
 export DOMAIN3_VAL_FRAC="${DOMAIN3_VAL_FRAC:-0.15}"
 export DOMAIN3_VAL_SPLIT_SEED="${DOMAIN3_VAL_SPLIT_SEED:-7}"
