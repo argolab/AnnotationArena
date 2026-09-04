@@ -2,6 +2,8 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --gres=gpu:1
+# The default is a GPU. A CPU-partition submission clears it with --gres=none on
+# the sbatch command line, which overrides this header; see side/submit_arms.sh.
 #SBATCH --comment=accept_cost
 set -euo pipefail
 
@@ -36,8 +38,12 @@ if [[ -n "${RERUN_CONF:-}" ]]; then
     # shellcheck disable=SC1090
     source "${RERUN_CONF}"
 fi
-# This is a --gres=gpu job; a silent CPU fallback would be a bug, not a fallback.
-export REQUIRE_GPU=1
+# A silent CPU fallback on a GPU node is a bug (it makes a 40-minute run take
+# hours and nobody notices), so a missing GPU is fatal by default. But Domain 3
+# training is CPU-bound -- the GPU sits ~90% idle while Python builds the entity
+# graph -- so running deliberately on a CPU partition is a legitimate throughput
+# choice when the GPU queues are deep. REQUIRE_GPU=0 selects that on purpose.
+export REQUIRE_GPU="${REQUIRE_GPU:-1}"
 # Large training chunks sit right at the memory ceiling: max_item=1200 at K=4000
 # needs ~76 GiB with backward and died 3.5 GiB short on an 80 GiB A100.
 # expandable_segments reclaims fragmentation rather than reserving around it.
