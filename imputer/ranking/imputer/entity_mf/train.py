@@ -7,6 +7,7 @@ python -m imputer.entity_mf.train   --data-dir path/to/your/bundle_dir   --epoch
 from __future__ import annotations
 
 import sys
+import time
 import argparse
 from pathlib import Path
 from typing import Dict, List, Any
@@ -200,6 +201,19 @@ class EntityMarformerLightningModule(pl.LightningModule):
             always_observed_ids=always_observed_ids,
         )
         self.training_history: List[Dict[str, Any]] = []
+        # Wall-clock accounting, split into fitting and imputing. They answer
+        # different questions -- how long the model takes to train, and how long
+        # it takes to fill in missing cells once trained -- and only the second
+        # is comparable with Stan's per-draw inference cost. Stan already
+        # records both (fit_elapsed_seconds / eval_elapsed_seconds); until now
+        # Marformer recorded a single launcher wall clock that mixed them, plus
+        # data loading and graph construction, so the two families could not be
+        # put on the same runtime axis.
+        self._epoch_t0: float | None = None
+        self._train_seconds_total: float = 0.0
+        self._eval_seconds_total: float = 0.0
+        self._eval_calls: int = 0
+        self._epochs_run: int = 0
         # Per-split evaluation graph cache. The evaluated variable lists and
         # their statuses never change, so the chunk partition, the graphs, and
         # the tensors cached on them are built once instead of every epoch.
@@ -404,10 +418,13 @@ class EntityMarformerLightningModule(pl.LightningModule):
 
     def on_train_epoch_start(self) -> None:
         """
-        Print when step LR schedule changes the optimizer LR.
+        Start the epoch wall clock, then print when step LR schedule changes
+        the optimizer LR.
         Lightning applies epoch schedulers between epochs; this hook reports
         the new LR at the start of the epoch where it becomes active.
         """
+        self._epoch_t0 = time.perf_counter()
+        self._epochs_run += 1
         if self.lr_schedule != "step":
             return
         if not hasattr(self, "trainer") or not self.trainer.optimizers:
@@ -573,6 +590,15 @@ class EntityMarformerLightningModule(pl.LightningModule):
         full evaluation path on train/test splits, goal is to get the loss on missing tokens
         imputer behavior.
         """
+        # Training time for this epoch is everything between the epoch start
+        # and here; the evaluation below is timed separately. Accounted before
+        # the --eval-every early return so epochs that skip evaluation still
+        # contribute their training cost to the total.
+        epoch_train_seconds = (None if self._epoch_t0 is None
+                               else time.perf_counter() - self._epoch_t0)
+        if epoch_train_seconds is not None:
+            self._train_seconds_total += epoch_train_seconds
+
         # --eval-every N: run the epoch-end evaluation only every N epochs (the
         # final epoch always runs). The evaluation is a full forward over every
         # chunk of the split, so at N=1 it is a third of the wall clock.
@@ -581,6 +607,7 @@ class EntityMarformerLightningModule(pl.LightningModule):
         if self.eval_every > 1 and not last_epoch and (self.current_epoch % self.eval_every):
             return
 
+        eval_t0 = time.perf_counter()
         metrics = self.trainer.callback_metrics if hasattr(self, "trainer") else {}
         total = metrics.get("train/loss_epoch", metrics.get("train/loss", torch.tensor(0.0, device=self.device)))
         total_f = float(total.detach().cpu()) if isinstance(total, torch.Tensor) else float(total)
@@ -727,16 +754,57 @@ class EntityMarformerLightningModule(pl.LightningModule):
             else:
                 print("No val variables to evaluate on")
 
+        eval_seconds = time.perf_counter() - eval_t0
+        self._eval_seconds_total += eval_seconds
+        self._eval_calls += 1
+        epoch_metrics["train_seconds"] = epoch_train_seconds
+        epoch_metrics["eval_seconds"] = eval_seconds
+
         self.training_history.append(epoch_metrics)
 
 
     def on_train_end(self) -> None:
-        """Save training history to run_dir/training_history.json for post-hoc plotting."""
-        if self.run_dir is not None and self.training_history:
+        """
+        Save the training history, and a runtime summary alongside it.
+
+        runtime.json separates the two costs a runtime figure needs:
+        `train_seconds` is fitting only, `eval_seconds` is the full-forward
+        imputation pass over every chunk of the evaluated splits. The launcher's
+        own `elapsed_seconds` stays what it was -- total process wall clock,
+        including data loading and graph construction -- so nothing downstream
+        that reads it changes meaning.
+        """
+        if self.run_dir is None:
+            return
+        if self.training_history:
             try:
                 _save_json(self.training_history, Path(self.run_dir) / "training_history.json")
             except Exception as e:
                 print(f"Warning: failed to save training history to {self.run_dir}: {e}")
+        try:
+            # Count epoch starts rather than current_epoch: Lightning leaves
+            # current_epoch at max_epochs once fit() returns, which would
+            # overcount by one and skew the per-epoch figure.
+            epochs = int(self._epochs_run)
+            runtime = {
+                "train_seconds": self._train_seconds_total,
+                "eval_seconds": self._eval_seconds_total,
+                "epochs": epochs,
+                "eval_calls": self._eval_calls,
+                "train_seconds_per_epoch": (self._train_seconds_total / epochs
+                                            if epochs else None),
+                "eval_seconds_per_call": (self._eval_seconds_total / self._eval_calls
+                                          if self._eval_calls else None),
+                "eval_every": int(self.eval_every),
+                "max_item": self.max_item,
+            }
+            _save_json(runtime, Path(self.run_dir) / "runtime.json")
+            print(f"[runtime] train {self._train_seconds_total:.1f}s over {epochs} epochs "
+                  f"({runtime['train_seconds_per_epoch']:.2f}s/epoch); "
+                  f"eval {self._eval_seconds_total:.1f}s over {self._eval_calls} calls "
+                  f"({(runtime['eval_seconds_per_call'] or 0):.2f}s/call)")
+        except Exception as e:
+            print(f"Warning: failed to save runtime summary to {self.run_dir}: {e}")
 
 
 ########################################################
