@@ -88,6 +88,16 @@ export DOMAIN3_DROPOUT="${DOMAIN3_DROPOUT:-0.1}"
 export DOMAIN3_SEED="${DOMAIN3_SEED:-42}"
 # Validation carve (phase A) and, for phase B, a per-(size, seed) epoch budget
 # looked up from the selection file written by analysis/select_epochs.py.
+# S2 (delta_tau) and S5 (loss-weight normalisation) knobs. Unset => the runner
+# keeps its shipped per-axis defaults, so passing these through cannot change
+# any existing arm. See RERUN/FUTURE_EXPERIMENTS.md.
+export DOMAIN3_ITEM_DROPOUT="${DOMAIN3_ITEM_DROPOUT:-}"
+export DOMAIN3_ANNOT_DROPOUT="${DOMAIN3_ANNOT_DROPOUT:-}"
+export DOMAIN3_MASKED_LOSS_WEIGHT="${DOMAIN3_MASKED_LOSS_WEIGHT:-15.0}"
+export DOMAIN3_OBSERVED_LOSS_WEIGHT="${DOMAIN3_OBSERVED_LOSS_WEIGHT:-1.0}"
+export DOMAIN3_LR="${DOMAIN3_LR:-2e-4}"
+export DOMAIN3_LR_SCHEDULE="${DOMAIN3_LR_SCHEDULE:-none}"
+
 export DOMAIN3_VAL_PROTOCOL="${DOMAIN3_VAL_PROTOCOL:-none}"
 export DOMAIN3_VAL_FRAC="${DOMAIN3_VAL_FRAC:-0.15}"
 export DOMAIN3_VAL_SPLIT_SEED="${DOMAIN3_VAL_SPLIT_SEED:-7}"
@@ -118,6 +128,9 @@ echo " RESIDUAL    : ${DOMAIN3_DUAL_OUTER_RESIDUAL}"
 echo " INNER RESID : ${DOMAIN3_INNER_RESIDUAL}"
 echo " SEED        : ${DOMAIN3_SEED}"
 echo " VAL         : ${DOMAIN3_VAL_PROTOCOL}"
+echo " DELTA_TAU   : item=${DOMAIN3_ITEM_DROPOUT:-<axis default>} annot=${DOMAIN3_ANNOT_DROPOUT:-<axis default>}"
+echo " LOSS W      : masked=${DOMAIN3_MASKED_LOSS_WEIGHT} observed=${DOMAIN3_OBSERVED_LOSS_WEIGHT}"
+echo " LR          : ${DOMAIN3_LR} (${DOMAIN3_LR_SCHEDULE})"
 echo "=============================================================="
 
 rerun_run bash "${RANKING_ROOT}/scripts/DOMAIN3/run_marformer_group.sh" \
