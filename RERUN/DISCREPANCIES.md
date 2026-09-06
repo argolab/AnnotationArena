@@ -629,7 +629,47 @@ landing in a chunk that contains no training items at all.
   K=1000–4000. Either extend the NT curve with that protocol, or state
   explicitly that the comparability claim only covers K ≤ 500.
 
-## D26 — the block-validation carve is shaped unlike the test corner, and under-stops the NT arm
+## D26 — RESOLVED. The block-validation carve is sound; the symptom was base seed 42
+
+> **Status (2026-09-05): superseded by measurement. The conclusion below was
+> wrong, the measurements were right.** This entry originally recorded that the
+> block carve selects a stopping epoch ~190 epochs later than the corner
+> optimum on the NT arm, and left the mechanism open. Re-running the same
+> protocol on two fresh generative draws shows the mismatch does not reproduce,
+> and identifies the mechanism: **the corner optimum moved, not the carve.**
+>
+> | draw | K | corner optimum epoch | val-selected epoch | val - corner |
+> |---|---|---|---|---|
+> | s42 (this entry) | 1000 | **~124** | 208-312 | **+84 to +188** |
+> | s101 | 1000 / 2000 / 4000 | 324 / 357 / 374 | 283 / 322 / 371 | -41 / -35 / **-3** |
+> | s105 | 1000 / 2000 / 4000 | 349 / 374 / 357 | 299 / 358 / 342 | -50 / -16 / -15 |
+>
+> On seed 42 the NT corner bottoms out at epoch ~124; on both fresh draws it
+> bottoms out at 324-374. The carve selects in much the same place on all three.
+> Seed 42's corner is an anomalously hard sample (**D28**, z = +2.0 to +3.8
+> across six arm/K cells), and a hard corner degrades sooner -- which reads as
+> "validation stopped too late" when that corner is the yardstick. **D28
+> explains D26.**
+>
+> On fresh draws the carve is *slightly conservative, never late*: it stops 3-50
+> epochs early, costs 0.006-0.022 nats against a corner oracle, and is within
+> noise of not stopping at all. Conservative is the right direction to err in.
+>
+> **Three things follow.** (1) Keep the `block` carve -- the corner-shaped carve
+> this entry called for was never built and is not needed. (2) The closing
+> instruction below, to label NT points at K >= 1000 as protocol-limited, is
+> **withdrawn**; they can be read as the model's capability. (3) A separate
+> finding falls out: on both fresh draws the NT corner optimum sits at 324-374
+> out of a 400-epoch budget, i.e. right at the end -- independent corroboration
+> that the epoch budget, not the carve, is what binds at large K.
+>
+> Evidence: `RERUN/side/out/arms_s7-block-s101.json`, `..._s105.json`; method
+> and full table in `RERUN/FUTURE_EXPERIMENTS.md` (S7 Result).
+>
+> *Everything below is the original entry, preserved because its measurements
+> stand and the seed-42 numbers are still the correct description of that draw.*
+
+### Original entry (base seed 42 only)
 
 - **Where:** `imputer/entity_mf/validation.py`, the `block` carve, as driven by
   `RERUN/submit_validation.sh`.
