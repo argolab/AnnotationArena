@@ -716,6 +716,49 @@ about **20%** of it, and unlike the earlier -0.034 estimate this one is claimabl
 under a protocol that never looks at the corner. The gap remains ~0.09 and
 capacity is the last hypothesis standing.
 
+### How F13 is implemented: per-run vs pooled selection (2026-09-06)
+
+`analysis/select_epochs.py` already implements phase A/B selection, but it
+selects **pooled across seeds** -- it averages a size's validation curves
+epoch-by-epoch, smooths (default 5), and gives every seed of that size the same
+budget. Its docstring gives the reason: at small K the per-run argmin swings
+between epoch 74 and 305 for neighbouring sizes, which is noise.
+
+The criterion-2 numbers above used **per-run** selection instead. Since the two
+disagree at K=4000 (938 and 654 per run, 600 pooled), it is worth settling which
+one ships. Both modes cost zero GPU to compare -- the curves are already on disk.
+
+| K | mode | epoch(s) | seed 42 | seed 43 | mean vs flat 400 |
+| --- | --- | --- | --- | --- | --- |
+| 1000 | per-run | 543 / 638 | +0.0038 | -0.0082 | **-0.0022** |
+| 1000 | pooled | 508 | +0.0060 | +0.0024 | +0.0042 |
+| 2000 | per-run | 671 / 800 | -0.0010 | -0.0221 | -0.0116 |
+| 2000 | pooled | 782 | -0.0018 | -0.0240 | **-0.0129** |
+| 4000 | per-run | 938 / 654 | -0.0179 | -0.0277 | **-0.0228** |
+| 4000 | pooled | 600 | -0.0086 | -0.0285 | -0.0185 |
+
+**Per-run wins at two sizes of three and on the average (-0.0122 vs -0.0091),
+but the margin is 0.003 on n=2 and is not significant.** What is worth acting on
+is the *mechanism* visible at K=4000: pooling gave both seeds epoch 600, which
+suits seed 43 (its own choice was 654) and costs seed 42 half its gain (-0.0086
+against the -0.0179 its own choice earned). The two seeds' optima genuinely
+differ at that size, and averaging their validation curves splits the difference
+rather than tracking either.
+
+**Recommendation: per-run selection with `--smooth 5` at K >= 1000; keep pooling
+only where the carve is too small to select on** -- the Item_T_100 and
+Annot_T_10 fallback cases `select_epochs.py` already detects and flags. The
+pooled default was a reasonable choice for a validation set of ~200 targets; at
+K >= 1000 the carve is an order of magnitude larger and per-run has real signal.
+This is a recommendation, not a measured win, and should be labelled as such.
+
+**One free improvement, already confirmed.** Smoothing the *validation* curve
+before its argmin (not just the corner curve when reading results) improves
+per-run selection at two sizes: K=1000 goes from +0.0026 to -0.0022 and K=4000
+from -0.0216 to -0.0228. `select_epochs.py` does this by default. The
+criterion-2 table above, which used the raw validation argmin, therefore slightly
+*understates* what the shipped harness will do.
+
 **The paper correction stands regardless of the final figure.** The published
 large-K Marformer points were trained for 400 epochs and are undertrained by
 roughly 0.02 nats at K=4000. That is a statement about the published numbers,
