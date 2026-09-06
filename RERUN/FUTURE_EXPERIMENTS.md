@@ -625,40 +625,54 @@ track their growth with K? K=1000 already said "picks late, but gains nothing"
 K=4000 is where the oracle gain is largest (-0.034) and therefore where a
 working selector has the most room to prove itself.
 
-### Wave 3d, criterion 2 — partial (2026-09-05, K=1000 both seeds + K=2000 seed 42)
+### Wave 3d, criterion 2 — K=1000 and K=2000 complete (2026-09-05)
 
 The selected epoch comes from the carve run's own validation curve; it is then
 applied to the *full-data* curve from `w3budget`, which is the protocol (select
-on the carve, refit on the full training partition) minus refit noise.
+on the carve, refit on the full training partition) minus refit noise. Both
+endpoints are read off the 5-checkpoint smoothed curve, for the reason given in
+the winner's-curse note above: comparing two single checkpoints of a curve whose
+adjacent-checkpoint sd is 0.009-0.018 measures the bumps, not the budget.
 
-| K | seed | carve-selected epoch | corner there | corner @400 | vs flat 400 | smoothed oracle epoch |
-| --- | --- | --- | --- | --- | --- | --- |
-| 1000 | 42 | 545 | 0.7757 | 0.7401 | **+0.0357** | 649 |
-| 1000 | 43 | 412 | 0.7285 | 0.7304 | -0.0019 | 699 |
-| 2000 | 42 | 705 | 0.7620 | 0.7534 | **+0.0086** | 624 |
+| K | seed | carve-selected epoch | smoothed corner there | smoothed @400 | vs flat 400 |
+| --- | --- | --- | --- | --- | --- |
+| 1000 | 42 | 545 | 0.7460 | 0.7422 | +0.0038 |
+| 1000 | 43 | 412 | 0.7342 | 0.7328 | +0.0014 |
+| 2000 | 42 | 705 | 0.7401 | 0.7387 | +0.0013 |
+| 2000 | 43 | 588 | 0.7197 | 0.7363 | **-0.0165** |
 
-**First half of criterion 2: PASSES.** The selected epoch tracks K -- mean 478
-at K=1000, 705 at K=2000 -- and it never runs away: the cap is 2000 and nothing
-selected past 705. The carve is reading a real signal, and it is consistently
-*conservative* relative to the smoothed oracle (616 and 641), never late.
+Mean: **+0.0026 at K=1000, -0.0076 at K=2000**.
 
-**Second half: FAILS so far.** Two of the three selected epochs land on a corner
-value **worse than flat 400**, and the third is a wash. The selector is picking
-plausible epochs and still losing, which is not a contradiction once the
-winner's-curse correction above is in hand: the smoothed headroom at these sizes
-is 0.010-0.015, while the checkpoint-to-checkpoint sd of the corner is
-0.009-0.018. **The prize is the same size as the noise you must land inside.**
-K=1000 seed 42 is the clean illustration -- epoch 549 sits at 0.776, epoch 399 at
-0.740, and the smoothed optimum at 649 is 0.732. No selector reading a validation
-curve can see a 0.036 bump that the corner has and validation does not.
+**First half of criterion 2: PASSES, and at K=2000 it is precise.** The selected
+epoch tracks K -- mean **478 at K=1000, 646 at K=2000** -- and never runs away
+inside a 2000-epoch cap. At K=2000 the carve's mean selection of 646 sits
+essentially on the smoothed oracle of 641. At K=1000 it is conservative (478 vs
+616), which is the expected direction: the carve trains on 85% of the data, so
+its own optimum genuinely arrives earlier than the refit's.
 
-**This is why K=4000 is the run that decides F13, not a confirmation of it.**
-K=4000 is the only size where the smoothed headroom (-0.029) is materially
-larger than the curve's own checkpoint noise (0.008) -- a factor of 3.6, against
-0.5-1.7 at the smaller sizes. If the carve cannot convert headroom into a win
-*there*, it cannot anywhere, and the honest outcome is to keep flat 400 and
-label the large-K points budget-limited in the paper. Both K=4000 runs are in
-flight.
+**Second half: the rule captures about half the available headroom at K=2000 and
+none at K=1000.** Against smoothed headroom of -0.010 (K=1000) and -0.015
+(K=2000), the rule delivers +0.003 and -0.008. That is a coherent result rather
+than a failure: at K=1000 there is essentially nothing to win and the rule wins
+nothing; at K=2000 there is 0.015 to win and it takes half.
+
+**Correction to the first reading of these runs.** An earlier version of this
+section reported +0.0357 at K=1000 seed 42 and called the second half a failure.
+That number compared two *single* checkpoints -- epoch 549 happened to sit on a
+0.03 bump. Smoothing both endpoints puts the same run at +0.0038. The bump was
+the measurement, not the protocol. The conclusion changes accordingly: the carve
+is not losing to flat 400, it is roughly breaking even at small K and gaining at
+larger K.
+
+**K=4000 still decides F13, for a sharper reason than before.** Extrapolating
+"captures about half", K=4000's -0.029 of smoothed headroom would yield about
+-0.015 -- exactly at this document's decision threshold, and the first size where
+the answer is not "too small to care". K=4000 is also the only size where
+headroom exceeds the curve's own checkpoint noise by a real factor (0.029 vs
+0.008, a factor of 3.6, against 0.5-1.7 at the smaller sizes). Both K=4000 runs
+are in flight. If they land near half the headroom, F13 ships as a K-dependent
+cap; if they come back at a wash like K=1000, flat 400 stays and the paper says
+the large-K points are budget-limited.
 
 **Caveat carried from the tail-averaging result:** tail-averaged corner numbers
 are invalid where the curve has not flattened, which is exactly the K=4000 case
