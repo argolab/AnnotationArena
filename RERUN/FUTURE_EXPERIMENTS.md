@@ -23,6 +23,54 @@ mismatches) and [FIGURES.md](FIGURES.md) (figure → script map).
 
 
 
+# Results index — the sweep is COMPLETE (2026-09-06)
+
+105 training runs against the 232 originally planned. All seven suites answered,
+all 13 rows of the final configuration frozen (Part 2), both launch gates
+closed. Every number below is a paired comparison on shared data draws and model
+seeds; the decision threshold is 0.015 nats. Full detail in the linked sections.
+
+| suite | question | answer | effect | ships as |
+| --- | --- | --- | --- | --- |
+| **S1** | Is the outer residual a workaround for LayerNorm'ing psi? | **No.** Residual variants do not converge under feature-only norm | norm ±0.02 no pattern; residual up to **0.143** | keep shipped arch; say psi is normalised |
+| **S2** | One delta_tau rule for all axes? | **Yes**, and delta_tau is close to inert everywhere | annot 0.7 vs 0.8: **+0.0002 ±0.0008** | 0.7 for the type generalised over, 0 for the rest |
+| **S3** | Tune lr, or remove the need to? | **Dropped** — nothing points at lr, and WSD breaks the prefix property | — | lr stays 2e-4, documented as hand-chosen |
+| **S4** | One chunk size for train and eval? | **No** — keep two, for a stated reason | identical below K=500; **0.018** above | train 300 / eval 500 |
+| **S5** | Does 1:1/15 need an lr rescale? | **No.** Same optimisation under AdamW | max ‖diff‖ **0.003** over 400 epochs | 1:1/15, lr unchanged |
+| **S6** | LLM-Rubric hyperparameters | Audited from real configs; no rerun needed | — | three paper numbers to change |
+| **S7** | Is the validation carve broken? | **No** — D26 was an artefact of base seed 42 | carve conservative by 3–50 epochs | keep `block` as shipped |
+| **W3a/d** | Is the 400-epoch budget too small? | **Yes at every K ≥ 1000**, and the fix must scale | **−0.022** at K=4000, free at K=1000 | cap 2000 + per-run carve selection |
+| **W3b** | Is forced amortisation (delta_item=1) the plateau? | **No** | ±0.003 at K=4000 | — |
+| **W3e** | Is capacity the plateau? | **No** — 4 architectures within the noise floor | all within **0.01** at their optima | keep 80/8/4/128 |
+
+**The two things that actually changed the design:** the epoch budget (F13) and
+the loss-weight form (F3). Everything else was confirmed as shipped or is a
+paper-text fix.
+
+**What none of it explains.** Stan reaches 0.619 at K=4000 where Marformer
+reaches 0.731. The budget change claims 0.022 of that 0.112. Every other proposed
+mechanism — context starvation, forced amortisation, normalisation placement,
+capacity in three directions — is dead. **~0.09 nats is unexplained and there is
+no configuration left to blame**, which makes it a property of the amortised
+model class rather than a tuning failure, and something to state in the paper
+rather than leave as an unexplained divergence.
+
+**Method results that paid for the sweep** (see Part 0): the true paired
+between-arm sd is **0.035**, not the 0.02 assumed from re-scoring; and averaging
+the last 5 checkpoints cuts that by 1.8× for free. Together they let the plan
+drop from 232 runs to 56 with no loss of sensitivity, and the freed budget went
+into the large-K work that everything above turns on.
+
+**Two traps recorded for whoever runs this next.** Corner curves are bumpy —
+adjacent-checkpoint sd 0.008–0.018, the same order as the effects being measured
+— so **always smooth before taking an argmin**; a raw argmin overstated the
+budget headroom by roughly 2× at small K. And `last.ckpt` is **not** a completion
+marker (Lightning rewrites it every epoch); `training_history.json` is.
+
+---
+
+
+
 # Part 0 — execution plan
 
 Written 2026-09-04, before any suite was run. This section is the plan; each
@@ -1187,6 +1235,32 @@ count minimal matters for the practical efficiency of the whole system.
 - **If lr must stay tuned:** document it as tuned on validation, and report the
 chosen value per domain.
 
+### Not run — DROPPED 2026-09-06 (user decision)
+
+The `side/s3-wsd` branch is built, committed (`1de1fc9`) and verified -- linear
+warmup, constant, then 1-sqrt decay to `lr_min`, shape checked at epochs 0, 19,
+320 and 399 -- but no S3 arm was ever launched, and none will be. Three reasons,
+in order of weight:
+
+1. **Nothing points at the learning rate any more.** S5 showed the loss-weight
+   reparameterisation needs no lr change (trajectories overlay within 0.003
+   nats at the same lr under AdamW), which was the one live reason to suspect
+   2e-4 was wrong. Every other suite came back within the noise floor at the
+   shipped lr.
+2. **WSD would break the property that made this sweep affordable.** At constant
+   lr a 400-epoch run is an exact prefix of a 1200-epoch run at the same seed,
+   so one long run supplies every shorter budget. That is what let W3d answer
+   the budget question from checkpoints instead of a fresh run per budget, and
+   what lets the capacity screen be re-read at whatever epoch the stopping rule
+   picks. Any length-dependent schedule -- cosine or WSD -- destroys it.
+3. **The budget question it was meant to support is already answered.** W3c was
+   explicitly conditional ("only worth running if 3a/3d say length matters --
+   a decay phase is how you spend a longer budget well"). F13 spends the longer
+   budget through validated early stopping instead, which needs no schedule.
+
+If lr is ever revisited, the branch is ready and the cost is the prefix property,
+which should be stated up front. Keep the branch; do not merge it.
+
 
 
 ## S4 — Evaluation chunk size: 300/300 vs 300/500
@@ -1465,7 +1539,7 @@ of: **pending** (not started), **blocked** (waiting on a Part 1 suite),
 | F1  | Single chunk size across train and eval, or a documented reason for two                                                                                           | S4         | **ready** — S4 done: keep 300 train / **500** eval, document the reason (inference has no backward pass). Identical below K=500, worth 0.015 nats above it. |
 | F2  | One $\delta_\tau$ rule applied to all axes and domains | S2 | **ready** — δ=0.7 is within noise of the shipped value on BOTH axes (item at K=300/1000/4000; annotator at J=30, two draws, +0.0002 ±0.0008). Rule: δ=0.7 for the type generalised over, 0 for the rest. Adopted for uniformity, not for a measured gain — δ_τ is close to inert everywhere we probed it. |
 | F3  | Loss weights normalised to $1 : 1/15$, **lr left at 2e-4** (not rescaled)                                                                                        | S5         | **ready** — S5 done 2026-09-05: parity holds at the same lr, trajectories overlay within 0.003 nats. Rescaling lr would have been a real change, not a re-parameterisation. |
-| F4  | lr either tuned on validation or made scheduler-insensitive (WSD)                                                                                                 | S3, S7     | blocked |
+| F4  | lr either tuned on validation or made scheduler-insensitive (WSD) | S3 | **dropped 2026-09-06** — lr left at 2e-4, documented as hand-chosen. Nothing points at it after S5, and WSD would break the checkpoint-prefix property the sweep depends on. Branch `side/s3-wsd` kept, not merged. |
 | F5  | Validation carve — **keep `block` as shipped**, no reshape | S7 | **ready** — S7 done 2026-09-05: the D26 mismatch is a seed-42 artifact; on two fresh draws the carve is slightly conservative, never late. |
 | F6  | Early stopping standardised across all three domains (carve → select → refit everywhere) | S7 | **unblocked** — the carve is trustworthy; proceed. |
 | F7  | LLM-Rubric hyperparameters recorded and paper text updated                                                                                                        | S6         | **ready** — audited 2026-09-04, full config in the S6 Result block; paper needs three numbers changed (400→300 epochs, state δ_item=0.7 and max_item=10). |
@@ -1541,7 +1615,7 @@ things still gating a launch.
 | 7 | validation carve | **`block`, as shipped** -- no reshape | SETTLED | **S7** |
 | 8 | stopping | carve -> select on validation -> refit on the full training partition | SETTLED | D14, **S7** |
 | 9 | checkpoint reported | the refit's **last** checkpoint, never an argmin on test | SETTLED | D14 |
-| 10 | replicates | **3 generative draws x 2 model seeds**, draw spread as the error band | SETTLED (a decision, not an experiment) | D28 + Part 0 noise table |
+| 10 | replicates | **3 generative draws x 2 model seeds**, draw spread as the error band | SETTLED — confirmed by the user 2026-09-06 | D28 + Part 0 noise table |
 | 11 | residual variant | `all` (shipped) | SETTLED | resid ablation, **S1** |
 | 12 | **epoch budget** | **cap 2000, stopping epoch chosen per run by the block carve, refit on full training partition** | SETTLED | **W3d** |
 | 13 | **capacity** | **80 / 8 / 4 / 128, unchanged** | SETTLED — four architectures land within the noise floor at K=4000 | **W3e** |
