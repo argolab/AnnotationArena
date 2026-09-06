@@ -493,6 +493,14 @@ Jason asks live in §Marformer Training (item A6 above).
   the block's own title, and it is 129 lines.
 4. Everything else — uncomment the note, drop the dead prose around it.
 
+**Note (2026-09-06):** Domain 3 now uses index macros (`\ncrit`/`\critidx`,
+`\njudge`/`\judgeidx`, `\nitem`/`\itemidx`, plus `\ratesub`/`\ratetuple`/
+`\tensordims`) defined at the top of the annotation section. The conversion
+skipped commented-out lines, so any block recovered from the list above still
+spells `$I$`/`$i$`/`$K$`/`$k$` literally and must be converted to the macros when
+it is uncommented — otherwise it will not follow the eventual I/K swap. The
+blue block at 1295–1316 holds most of these.
+
 A one-off way to see them all rendered: temporarily convert `%\jason{` to
 `\jason{` in a scratch copy and compile. Don't do this on `main.tex` directly —
 some of these blocks contain unbalanced math that will not compile.
