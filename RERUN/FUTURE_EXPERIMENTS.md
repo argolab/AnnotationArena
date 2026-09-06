@@ -820,66 +820,90 @@ What n=2 *can* do is rank five arms and rule out the possibility that one of the
 is dramatically better, which is the only outcome that would change the paper.
 
 
-### Wave 3e result (2026-09-06) — depth fails the same way width did
+### Wave 3e result (2026-09-06) — extra capacity changes WHEN the model peaks, not how well
 
-`capscreen-s101`, 6/10 runs: base, wide128 and deep12, both seeds each. K=4000,
-item axis, transductive, 1200-epoch cap, every curve smoothed over 5
-checkpoints before any epoch is read off it. Configs verified distinct in each
+`capscreen-s101`, 8/10 runs: base, wide128, wide160 and deep12, both seeds each.
+K=4000, item axis, transductive, 1200-epoch cap, curves smoothed over 5
+checkpoints before any epoch is read off them. Configs verified distinct in each
 arm's `train_config.json`.
 
-| arm | dim / layers / heads / d_ff | seed | smoothed optimum | corner there | corner @1200 |
+| arm | dim / layers / d_ff | seed | smoothed optimum | corner there | corner @1200 |
 | --- | --- | --- | --- | --- | --- |
-| `cap_base` | 80 / 8 / 4 / 128 | 42 | 849 | 0.7191 | 0.7255 |
+| `cap_base` | 80 / 8 / 128 | 42 | 849 | 0.7191 | 0.7255 |
 | `cap_base` | | 43 | 924 | 0.6886 | 0.7085 |
-| `cap_wide128` | 128 / 8 / 8 / 256 | 42 | 624 | 0.7184 | 0.7883 |
+| `cap_wide128` | 128 / 8 / 256 | 42 | 624 | 0.7184 | 0.7883 |
 | `cap_wide128` | | 43 | 674 | 0.7063 | 0.8741 |
-| `cap_deep12` | 80 / **12** / 4 / 128 | 42 | 824 | 0.7191 | 0.7731 |
+| `cap_wide160` | 160 / 8 / 320 | 42 | 449 | 0.7055 | 1.1504 |
+| `cap_wide160` | | 43 | 324 | 0.6982 | 1.1182 |
+| `cap_deep12` | 80 / **12** / 128 | 42 | 824 | 0.7191 | 0.7731 |
 | `cap_deep12` | | 43 | 674 | 0.7090 | 0.7718 |
 
 Paired against base at each arm's own optimum:
 
 | arm | seed 42 | seed 43 | 2-seed mean |
 | --- | --- | --- | --- |
-| `cap_wide128` | -0.0007 | +0.0177 | **+0.0085** |
-| `cap_deep12` | 0.0000 | +0.0204 | **+0.0102** |
+| `cap_wide128` | -0.0007 | +0.0177 | +0.0085 |
+| `cap_wide160` | -0.0136 | +0.0096 | **-0.0020** |
+| `cap_deep12` | 0.0000 | +0.0204 | +0.0102 |
 
-**Both extra-capacity arms are flat on one seed and worse on the other, and both
-have a 2-seed mean on the wrong side of zero.** The pre-registered escalation
-rule -- escalate if an arm's 2-seed mean beats base by >0.015, or its curve sits
-visibly below base over the second half of training; declare capacity dead only
-if every arm is flat or worse on both seeds -- is met in the "dead" direction for
-both arms tested. Neither escalates.
+**No arm escalates.** The pre-registered rule was: escalate if an arm's 2-seed
+mean beats base by more than 0.015, or its curve sits visibly below base over
+the second half of training. `cap_wide160` is nominally the best of the three at
+-0.0020, which is a fifth of the bar and well inside the per-seed spread
+(-0.0136 and +0.0096 disagree in sign); and every arm's second half sits far
+*above* base, not below.
 
-**And they fail in the diagnostic direction, which is worth more than the means
-at n=2.** A capacity-starved model would train *longer* than the baseline and
-bottom out *lower*. Both do the opposite on both counts: they peak 150-250
-epochs earlier (624-824 against base's 849-924) and then degrade far harder --
-by epoch 1200 they sit at 0.77-0.87 against base's 0.71-0.73. That is the
-over-capacity signature. The shipped 80x8 model is not the binding constraint at
-K=4000; if anything it is already at the edge of what this data supports.
+**The real pattern is not "bigger is worse", it is "bigger peaks sooner and
+falls apart faster".** At their own optima all four architectures land within
+0.01 of each other -- 0.7039 (base), 0.7124 (wide128), 0.7019 (wide160), 0.7141
+(deep12) -- which is the noise floor. What moves monotonically with capacity is
+everything else:
 
-**Verdict: capacity is not the Stan gap.** Two independent directions -- width
-(+0.0085) and depth (+0.0102) -- both fail, and fail the same way. The remaining
-two arms (`wide160`, `big`) both move width, which has now failed twice, so they
-are confirmatory rather than informative; they are running and will be reported,
-but the launch does not wait on them.
+| arm | mean optimum epoch | mean corner @1200 |
+| --- | --- | --- |
+| base 80 | 887 | 0.717 |
+| wide128 | 649 | 0.831 |
+| wide160 | 387 | **1.134** |
 
-**What n=2 supports, stated plainly.** It does not establish that wide128 and
-deep12 are *worse* than base -- both per-seed spreads straddle the paired noise
-floor. It does exclude the only outcome that would have changed the paper: an
-arm dramatically better at K=4000. The Stan gap is 0.11; the largest capacity
-effect measured here is 0.02, in the wrong direction.
+The optimum walks from epoch 887 down to 387 as width goes 80 -> 128 -> 160,
+and end-of-budget degradation grows from 0.717 to 1.134. Extra capacity is being
+spent on fitting the training partition faster, not on a better fit to the
+corner.
+
+**Verdict: capacity is not the Stan gap.** Four architectures spanning 2x width
+and 1.5x depth all reach the same corner value to within the noise floor. A
+capacity-starved model would train *longer* than the baseline and bottom out
+*lower*; every arm here does the opposite on both counts. The shipped 80x8
+configuration stands, and it is not the binding constraint at K=4000.
+
+**Correction to the earlier read of this sweep.** With only wide128 in hand this
+document said "wider is not better" and treated +0.0085 as a mild loss. With
+wide160 added the accurate statement is that extra width is *neutral* at the
+optimum and harmful only in when it gets there. The verdict is unchanged and
+better supported -- nothing beats base by more than noise -- but the mechanism
+described is different, and the earlier phrasing overstated what two seeds of
+one arm could show.
+
+**What n=2 supports, stated plainly.** It does not rank these architectures;
+every pairwise difference is inside the paired noise floor. It does exclude the
+only outcome that would have changed the paper: an arm dramatically better at
+K=4000. The Stan gap is 0.11 and the largest capacity effect measured is 0.02,
+with no consistent sign.
+
+**The last arm.** `cap_big` (128 dim x 12 layers) is still queued. It moves both
+axes that have now failed separately, so it is confirmatory; it will be recorded
+when it lands and the launch does not wait on it.
 
 **Where that leaves the gap.** Every mechanism proposed for the large-K plateau
 has now been tested. Training-chunk starvation: dead (+0.0094). Forced
 amortisation via delta_item: dead (+/-0.003). Normalisation placement: dead
 (+/-0.02, no pattern). Epoch budget: **real and claimable, worth 0.022** of the
-0.112. Capacity: dead in both directions. The residual ~0.09 is not explained by
-anything in this sweep, and the honest framing for the paper is that Stan's
-per-item parameters buy something Marformer's amortised representation does not
-recover at these sizes -- a property of the model class, not of the
-configuration. That is a finding, not a failure, but it should be stated rather
-than left as an unexplained gap in a figure.
+0.112. Capacity: dead across width and depth. The residual ~0.09 is not
+explained by anything in this sweep, and the honest framing for the paper is
+that Stan's per-item parameters buy something Marformer's amortised
+representation does not recover at these sizes -- a property of the model class,
+not of the configuration. That is a finding, not a failure, but it should be
+stated rather than left as an unexplained gap in a figure.
 
 
 ## Is every suite worth running? — recommendation
@@ -1502,7 +1526,7 @@ things still gating a launch.
 | 10 | replicates | **3 generative draws x 2 model seeds**, draw spread as the error band | SETTLED (a decision, not an experiment) | D28 + Part 0 noise table |
 | 11 | residual variant | `all` (shipped) | SETTLED | resid ablation, **S1** |
 | 12 | **epoch budget** | **cap 2000, stopping epoch chosen per run by the block carve, refit on full training partition** | SETTLED | **W3d** |
-| 13 | **capacity** | **80 / 8 / 4 / 128, unchanged** | SETTLED — width and depth both fail at K=4000 | **W3e** |
+| 13 | **capacity** | **80 / 8 / 4 / 128, unchanged** | SETTLED — four architectures land within the noise floor at K=4000 | **W3e** |
 
 **Both gates are closed. The final run is unblocked.**
 
@@ -1512,11 +1536,12 @@ things still gating a launch.
 nothing at K=1000. Ships as per-run selection under a raised cap. The harness
 was wired to execute exactly this and dry-run verified (commit b343e4d).
 
-*Capacity (13).* Closed 2026-09-06 in the negative. Width (+0.0085) and depth
-(+0.0102) both fail at K=4000, both peak earlier than the baseline and degrade
-harder afterwards -- the over-capacity signature, not the under-capacity one.
-The shipped 80x8 architecture stands. Two confirmatory width arms are still
-running and will be reported, but nothing waits on them.
+*Capacity (13).* Closed 2026-09-06 in the negative. Four architectures spanning
+2x width and 1.5x depth all reach the same corner value at K=4000 to within the
+noise floor (0.7019-0.7141). What capacity changes is when the model peaks --
+optimum epoch 887 -> 649 -> 387 as width grows -- and how hard it degrades
+after, not how well it does at its best. The shipped 80x8 stands. One
+confirmatory arm (`cap_big`) is still queued; nothing waits on it.
 
 **Launch command for the final run:**
 
