@@ -890,9 +890,27 @@ only outcome that would have changed the paper: an arm dramatically better at
 K=4000. The Stan gap is 0.11 and the largest capacity effect measured is 0.02,
 with no consistent sign.
 
-**The last arm.** `cap_big` (128 dim x 12 layers) is still queued. It moves both
-axes that have now failed separately, so it is confirmatory; it will be recorded
-when it lands and the launch does not wait on it.
+**The last arm hit a hardware ceiling, which is itself worth recording.**
+`cap_big` (128 dim x 12 layers x 8 heads x 256 d_ff) **does not fit on an H100 at
+K=4000**. Both seeds died 20-27 seconds in with a CUDA OOM at 92.2 GiB allocated
+of 93.1 GiB capacity, with only 84 MiB reserved-but-unallocated -- so this is a
+genuine memory ceiling, not the fragmentation that `expandable_segments` (already
+set in `jobs/marformer_train.sbatch`) exists to fix.
+
+Resubmitted to h200 (141 GiB) at the **same training chunk as every other arm**.
+The obvious fix -- dropping `max_item` from 300 -- would have cleared the OOM and
+destroyed the comparison, since training chunk is worth ~0.009 nats at K=4000
+(S4, finding 1). An arm measured at different settings is not the arm the screen
+was designed around. If h200 cannot hold it either, it is recorded as not
+runnable at comparable settings rather than run at settings that make it
+uninterpretable.
+
+Independently of what it eventually scores, **the practical ceiling is a result
+for the paper's cost discussion**: the largest architecture in this sweep cannot
+be trained at K=4000 on the most common 80-93 GiB accelerator. Marformer's memory
+grows with the item chunk *and* the model, and at large K the two multiply. That
+constrains what "just use a bigger model" can mean here, quite apart from
+whether a bigger model would have helped -- and on this evidence it would not.
 
 **Where that leaves the gap.** Every mechanism proposed for the large-K plateau
 has now been tested. Training-chunk starvation: dead (+0.0094). Forced
