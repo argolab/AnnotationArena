@@ -2,7 +2,8 @@
 # Run the validation protocol end to end for one Domain 3 run.
 #
 #   ./submit_validation.sh --run-id val-01 --data-from replicate-01 \
-#       --protocol block --seeds 42,43,44 [--stage search|refit|eval]
+#       --protocol block --seeds 42,43,44 [--stage search|refit|eval] \
+#       [--search-epochs 2000] [--select per-run|per-size] [--smooth 5]
 #
 # Three phases, chained by SLURM dependency:
 #
@@ -10,8 +11,17 @@
 #           (imputer/entity_mf/validation.py), for the full epoch budget, so the
 #           whole validation curve is available. Results land under
 #           <AXIS>/<variant>-search/seed<N>/.
+#           --search-epochs sets that budget. It is a CAP, not a target: the
+#           carve stops wherever it wants inside it, and the point of raising it
+#           is only that it must not bind. W3d measured selected epochs up to
+#           940 at K=4000, so the shipped 400 binds hard at large K; use 2000.
+#           Default 400 for backwards compatibility with existing runs.
 #   select  read those curves, take the argmin per run, write the epoch table.
 #           Runs as a short CPU job so it can be a dependency of the refit.
+#           --select per-run gives each run its own epoch (recommended at
+#           K >= 1000, where the carve is large enough to have real signal);
+#           per-size pools a size's seeds, which is safer on small carves.
+#           Both smooth the curve first; --smooth 1 disables.
 #   refit   retrain on the WHOLE training partition -- no carve -- for exactly
 #           the selected number of epochs. The final model is the last
 #           checkpoint, so nothing is ever selected on test. Results land under
@@ -28,6 +38,7 @@ EXCLUDE_ARG=""
 
 RUN_ID=""; DATA_FROM=""; PROTOCOL="block"; SEEDS="42,43,44"
 STAGE="all"; VAL_FRAC="0.15"; VAL_SPLIT_SEED="7"; DRY_RUN=false
+SEARCH_EPOCHS=""; SELECT_MODE=""; SMOOTH=""
 
 usage() { sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \?//'; exit "${1:-0}"; }
 while [[ $# -gt 0 ]]; do
@@ -39,6 +50,9 @@ while [[ $# -gt 0 ]]; do
         --stage)      STAGE="$2"; shift 2 ;;
         --val-frac)   VAL_FRAC="$2"; shift 2 ;;
         --val-split-seed) VAL_SPLIT_SEED="$2"; shift 2 ;;
+        --search-epochs)  SEARCH_EPOCHS="$2"; shift 2 ;;
+        --select)         SELECT_MODE="$2"; shift 2 ;;
+        --smooth)         SMOOTH="$2"; shift 2 ;;
         --dry-run)    DRY_RUN=true; shift ;;
         -h|--help)    usage 0 ;;
         *) echo "unknown argument: $1" >&2; usage 1 ;;
@@ -109,6 +123,7 @@ if [[ "${STAGE}" == "all" || "${STAGE}" == "search" ]]; then
                        "DOMAIN3_SEED=${seed}" "VARIANT_TAG=${VARIANT}-search/seed${seed}" \
                        "DOMAIN3_VAL_PROTOCOL=${PROTOCOL}" "DOMAIN3_VAL_FRAC=${VAL_FRAC}" \
                        "DOMAIN3_VAL_SPLIT_SEED=${VAL_SPLIT_SEED}" \
+                       ${SEARCH_EPOCHS:+"DOMAIN3_EPOCHS=${SEARCH_EPOCHS}"} \
                        "DATA_RUN_ID=${RUN_ID}")"
             jid="$(submit "${name}" "${conf}" -p "${GPU_PARTITION}" -c "${GPU_CPUS}" \
                           --mem="${GPU_MEM}" -t "${GPU_TIME}" ${EXCLUDE_ARG} \
@@ -123,6 +138,8 @@ fi
 SELECT_JOB=""
 if [[ "${STAGE}" == "all" || "${STAGE}" == "select" ]]; then
     conf="$(write_conf "VAL-${VARIANT}-SELECT" "RUN_ID=${RUN_ID}" "VARIANT=${VARIANT}" \
+               ${SELECT_MODE:+"SELECT_MODE=${SELECT_MODE}"} \
+               ${SMOOTH:+"SELECT_SMOOTH=${SMOOTH}"} \
                "EPOCH_TABLE=${EPOCH_TABLE}")"
     SELECT_JOB="$(submit "VAL-${VARIANT}-SELECT" "${conf}" -p "${CPU_PARTITION}" -c 2 \
                   --mem=8G -t 00:30:00 $(dep "${SEARCH_JOBS}") \
