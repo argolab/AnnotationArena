@@ -92,6 +92,9 @@ def main() -> None:
             with open(hist_path) as fh:
                 history = json.load(fh)
             curve = val_curve(history)
+            # Smoothed once here, and used for the per-run argmin below. The
+            # pooled path smooths its own mean curve separately.
+            curve_sm = smooth([c[1] for c in curve], args.smooth) if curve else []
             sm = next((SEED_RE.match(p.name) for p in run_dir.parents
                        if SEED_RE.match(p.name)), None)
             seed = int(sm.group(1)) if sm else 42
@@ -100,7 +103,15 @@ def main() -> None:
             rows.append({
                 "family": family, "axis": axis, "size": int(m.group(3)), "seed": seed,
                 "n_val_points": len(curve),
-                "per_run_epoch": min(curve, key=lambda t: t[1])[0] if curve else None,
+                # Smoothed, for the same reason the pooled curve is: the raw
+                # argmin picks the single luckiest epoch in the basin. This
+                # path used to take the raw argmin while --select per-size got
+                # a smoothed one, so the two modes were not comparable. On the
+                # W3d curves, smoothing here is worth -0.005 at K=1000 and
+                # -0.001 at K=4000. --smooth 1 restores the raw behaviour.
+                "per_run_epoch": (
+                    curve[min(range(len(curve_sm)), key=lambda i: curve_sm[i])][0]
+                    if curve else None),
                 "best_val_ce": min(c[1] for c in curve) if curve else None,
                 "last_val_ce": curve[-1][1] if curve else None,
                 "total_epochs": len(history),
