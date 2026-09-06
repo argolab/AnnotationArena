@@ -664,40 +664,62 @@ the measurement, not the protocol. The conclusion changes accordingly: the carve
 is not losing to flat 400, it is roughly breaking even at small K and gaining at
 larger K.
 
-### Wave 3d, criterion 2 at K=4000 — seed 42 PASSES, and passes well
+### Wave 3d, criterion 2 — DECIDED (2026-09-06). F13 is adopted.
 
-| K | carve-selected epoch (seed 42) | smoothed oracle | corner at the pick | vs flat 400 | share of headroom captured |
-| --- | --- | --- | --- | --- | --- |
-| 1000 | 545 | 649 | 0.7460 | +0.0038 | 0% |
-| 2000 | 705 | 624 | 0.7401 | +0.0013 | 0% |
-| **4000** | **940** | 849 | **0.7257** | **-0.0179** | **74%** |
+Both K=4000 validated runs are in. Selection is made on the carve's own
+validation curve inside a 2000-epoch cap and then applied to the full-data
+curve; both endpoints smoothed over 5 checkpoints.
 
-The selected epoch on this seed goes **545 -> 705 -> 940** as K goes 1000 ->
-2000 -> 4000. That is the monotone growth F13 requires, from a selector that
-never sees the corner.
+| K | seed | carve picked | smoothed oracle | vs flat 400 | headroom | captured |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1000 | 42 | 545 | 649 | +0.0038 | -0.0099 | 0% |
+| 1000 | 43 | 412 | 699 | +0.0014 | -0.0093 | 0% |
+| 2000 | 42 | 705 | 624 | +0.0013 | -0.0065 | 0% |
+| 2000 | 43 | 588 | 749 | -0.0165 | -0.0256 | 64% |
+| 4000 | 42 | 940 | 849 | **-0.0179** | -0.0240 | 74% |
+| 4000 | 43 | 585 | 749 | **-0.0253** | -0.0312 | 81% |
 
-And at K=4000 the selection finally *pays*: -0.0179 against flat 400,
-**past the 0.015 decision threshold**, capturing 74% of the -0.024 of smoothed
-headroom this seed had available. The rule is even slightly late here (940 vs an
-oracle of 849) rather than conservative as it was at K=1000, and still wins --
-because at K=4000 the curve around the optimum is flat enough that being 90
-epochs off costs almost nothing. That is the same fact, seen from the other side,
-that made K=1000 hopeless: there the curve's bumps were larger than the prize.
+Means by size: **+0.0026 at K=1000, -0.0076 at K=2000, -0.0216 at K=4000**,
+against available headroom of -0.0096, -0.0154 and -0.0276. The share of the
+headroom the rule converts rises **0% -> 50% -> 78%** with K, and at K=4000
+both seeds individually clear the 0.015 decision threshold.
 
-**Seed 43 is still running.** One seed cannot carry F13 on its own, and the
-K=2000 pair (+0.0013, -0.0165) is a live reminder of how much two seeds of the
-same size can differ. But the failure mode we were worried about -- the selector
-ignoring K and picking ~500 everywhere -- is now excluded on this seed.
+**Criterion 2 is MET, and with it F13.** The final run raises the epoch **cap**
+to 2000, selects the stopping epoch per run on the block carve, and refits on
+the full training partition. At small K this costs nothing measurable; at
+K=4000 it is worth about **0.022 nats**.
 
-**K=4000 decides F13, for a sharper reason than before.** Extrapolating
-"captures about half", K=4000's -0.029 of smoothed headroom would yield about
--0.015 -- exactly at this document's decision threshold, and the first size where
-the answer is not "too small to care". K=4000 is also the only size where
-headroom exceeds the curve's own checkpoint noise by a real factor (0.029 vs
-0.008, a factor of 3.6, against 0.5-1.7 at the smaller sizes). Both K=4000 runs
-are in flight. If they land near half the headroom, F13 ships as a K-dependent
-cap; if they come back at a wash like K=1000, flat 400 stays and the paper says
-the large-K points are budget-limited.
+**The mechanism is not the one the criterion was written around, and the
+difference matters for how F13 is specified.** The criterion said the selected
+epoch must grow with K. On seed 42 it does, cleanly: 545 -> 705 -> 940. On seed
+43 it does not: 412 -> 588 -> 585, essentially flat from K=2000 to K=4000 --
+and seed 43 nonetheless captures *more* of its headroom (81%) than seed 42 does
+(74%), while picking 164 epochs *earlier* than its own oracle.
+
+What actually generalises is this: **at large K the corner curve is flat around
+its optimum, so a wide range of stopping epochs wins, and precision stops
+mattering.** Seed 42 lands 91 epochs late, seed 43 lands 164 epochs early, and
+both beat flat 400 by more than the threshold. The same fact read backwards is
+why K=1000 is hopeless -- there the curve's checkpoint-to-checkpoint bumps
+(sd 0.014) are larger than the entire prize (0.010), so no selector can reliably
+land inside it.
+
+**Therefore F13 ships as a per-run selection under a raised cap, NOT as a fitted
+epochs(K) schedule.** A fitted curve was the original plan and it is the wrong
+object: the selected epoch is not a clean function of K (585 and 940 at the same
+size), and it does not need to be. The carve makes the choice per run, the cap
+only has to be generous enough not to bind. 2000 is generous: nothing selected
+past 940.
+
+**What this does to the Stan gap.** At K=4000, 0.022 nats off a 0.112 gap is
+about **20%** of it, and unlike the earlier -0.034 estimate this one is claimable
+under a protocol that never looks at the corner. The gap remains ~0.09 and
+capacity is the last hypothesis standing.
+
+**The paper correction stands regardless of the final figure.** The published
+large-K Marformer points were trained for 400 epochs and are undertrained by
+roughly 0.02 nats at K=4000. That is a statement about the published numbers,
+not only about the rerun.
 
 **Caveat carried from the tail-averaging result:** tail-averaged corner numbers
 are invalid where the curve has not flattened, which is exactly the K=4000 case
@@ -1382,7 +1404,7 @@ of: **pending** (not started), **blocked** (waiting on a Part 1 suite),
 | F10 | Domain 1: confirm what the committed training objective actually is (currently KL to exact BN posteriors, not CMLE on masked values) and reconcile with the paper | —          | pending |
 | F11 | Domain 1/2 model sizes, epochs, batch sizes reconciled with the paper table                                                                                       | —          | pending |
 | F12 | Runtime figures read elapsed time from run metadata instead of hardcoded numbers (D18)                                                                            | —          | pending |
-| F13 | Epoch **cap** raised with validation-chosen stopping, instead of a flat 400 | W3d | **reframed 2026-09-05** — a flat 1200 is +0.105 WORSE at K=1000 and -0.018 better at K=4000, so the budget must scale. Now depends entirely on the carve stopping correctly inside a 2000-epoch cap (`w3budgetval`). |
+| F13 | Epoch **cap** raised with validation-chosen stopping, instead of a flat 400 | W3d | **ready** — criterion 2 met 2026-09-06. Cap 2000, carve selects per run, refit on full training data. Worth -0.022 at K=4000, free at K=1000. Ships as per-run selection, **not** a fitted epochs(K) curve. |
 
 
 
@@ -1451,23 +1473,25 @@ things still gating a launch.
 | 9 | checkpoint reported | the refit's **last** checkpoint, never an argmin on test | SETTLED | D14 |
 | 10 | replicates | **3 generative draws x 2 model seeds**, draw spread as the error band | SETTLED (a decision, not an experiment) | D28 + Part 0 noise table |
 | 11 | residual variant | `all` (shipped) | SETTLED | resid ablation, **S1** |
-| 12 | **epoch budget** | **a function of K, not a flat 400** | **GATING** -- criterion 1 met, criterion 2 running | **W3d** |
+| 12 | **epoch budget** | **cap 2000, stopping epoch chosen per run by the block carve, refit on full training partition** | SETTLED | **W3d** |
 | 13 | **capacity** | unknown | **GATING** -- never measured | -- |
 
-**The two gates, restated plainly.**
+**The one gate left, restated plainly.**
 
-*Budget (12).* Criterion 1 is met: at K=4000 a fixed 1200-epoch budget is worth
--0.018 nats, and two further arms (NT item on both fresh draws) independently
-show the corner optimum sitting at the very end of a 400-epoch budget. What is
-not yet earned is the claim that our stopping rule finds that epoch **without
-being shown the corner** -- `w3budgetval` decides it. If it fails, the headroom
-is real but unclaimable, and that is an S7 problem rather than a budget one.
+*Budget (12) is closed.* Criterion 1 was met (the corner keeps descending past
+400 at large K) and criterion 2 was met on 2026-09-06: inside a 2000-epoch cap
+the block carve picks a stopping epoch that beats a flat 400 by 0.022 nats at
+K=4000, on both seeds, without ever seeing the corner -- and costs nothing at
+K=1000. It ships as a per-run selection, not a fitted schedule.
 
-*Capacity (13).* Still the only untested knob measured at the scale of the Stan
-gap. Everything settled above moves the number by 0.02 or less; the gap is 0.11.
-Launching the final run without knowing whether 80 dims and 8 layers are enough
-at K=4000 means the final figure is a carefully-tuned version of whatever
-plateau we already have. **This should be the next thing that gets GPU.**
+*Capacity (13) is the last thing standing.* Two of five arms are in and the news
+so far is that **width is not the answer**: `cap_wide128` is +0.0085 worse than
+base at its own optimum, peaks ~250 epochs earlier, and degrades to 0.79/0.87 by
+epoch 1200 against base's 0.73/0.71 -- the over-capacity signature, not the
+under-capacity one. `cap_deep12` is the informative arm left, since it is the
+only one that moves depth without width. If depth is also flat, the honest
+conclusion is that the Stan gap is not a capacity problem, and the final run can
+launch on the frozen configuration above.
 
 ### What changed from the pre-suite plan
 
