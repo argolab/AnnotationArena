@@ -40,7 +40,13 @@ def main():
             continue
         for run in sorted(base.rglob("*_MARFORMER")):
             m = RUN_RE.search(run.name)
+            # last.ckpt alone is not proof the run finished -- Lightning
+            # rewrites it every epoch. training_history.json is written once, at
+            # the end, so require both before scoring.
             if not m or not (run / "checkpoints" / "last.ckpt").is_file():
+                continue
+            if not (run / "training_history.json").is_file():
+                print(f"  [skip, still training] {run.name}", flush=True)
                 continue
             rel = run.relative_to(base)
             variant = str(rel.parent.parent) if rel.parent.parent != Path(".") else ""
