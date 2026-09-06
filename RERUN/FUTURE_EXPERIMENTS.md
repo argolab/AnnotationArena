@@ -728,6 +728,43 @@ written up as if it had.
 
 What n=2 *can* do is rank five arms and rule out the possibility that one of them
 is dramatically better, which is the only outcome that would change the paper.
+
+
+### Wave 3e, early read (2026-09-05) — 2 of 5 arms in: wider is not better
+
+`capscreen-s101`, 4/10 runs (base and wide128, both seeds). K=4000, item axis,
+transductive, 1200-epoch cap, every curve smoothed over 5 checkpoints before any
+epoch is read off it.
+
+| arm | seed | smoothed optimum epoch | corner there | corner @400 | corner @1200 |
+| --- | --- | --- | --- | --- | --- |
+| `cap_base` (80/8/4/128) | 42 | 849 | 0.7191 | 0.7430 | 0.7255 |
+| `cap_base` | 43 | 924 | 0.6886 | 0.7217 | 0.7085 |
+| `cap_wide128` (128/8/8/256) | 42 | 624 | 0.7184 | 0.7343 | 0.7883 |
+| `cap_wide128` | 43 | 674 | 0.7063 | 0.7188 | 0.8741 |
+
+At each arm's own best epoch, wide128 is **+0.0085 worse** than base on the
+2-seed mean (-0.0007 and +0.0177 per seed). It does not clear the escalation
+rule stated above -- not a 0.015 improvement, and its curve does not sit below
+base over the second half of training. On the contrary:
+
+**The signature is textbook over-capacity, not under-capacity.** wide128 reaches
+its optimum ~250 epochs *earlier* than base (624/674 vs 849/924) and then
+degrades hard: by epoch 1200 it is at 0.788 and 0.874 against base's 0.726 and
+0.709. A model that were capacity-starved would keep improving for longer than
+the baseline and bottom out lower. This one does the opposite on both counts.
+
+**A free consistency check.** `cap_base` is the shipped architecture at K=4000
+and lands its smoothed optimum at 849 and 924, against 849 / 749 / 1199 for the
+same configuration in `w3long`. Two independently submitted sweeps agree on the
+budget curve, which is reassurance for W3d as much as for this screen.
+
+**Do not over-read this.** It is n=2 on one of four non-baseline arms, and both
+optima are argmins on the corner -- fair between arms, since both get the same
+advantage, but inflated in absolute terms for both. The three remaining arms
+(`wide160`, `deep12`, `big`) are still queued. `deep12` is the informative one
+left: it is the only arm that moves *depth* without width, and width is what has
+just failed.
 The screen is also read on the **whole learning curve**, not a single endpoint:
 48 checkpoints per run, and a genuinely better architecture sits lower across the
 whole curve rather than at one epoch. That is the same trick that let S5 settle
