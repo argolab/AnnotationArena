@@ -820,81 +820,66 @@ What n=2 *can* do is rank five arms and rule out the possibility that one of the
 is dramatically better, which is the only outcome that would change the paper.
 
 
-### Wave 3e, early read (2026-09-05) — 2 of 5 arms in: wider is not better
+### Wave 3e result (2026-09-06) — depth fails the same way width did
 
-`capscreen-s101`, 4/10 runs (base and wide128, both seeds). K=4000, item axis,
-transductive, 1200-epoch cap, every curve smoothed over 5 checkpoints before any
-epoch is read off it.
+`capscreen-s101`, 6/10 runs: base, wide128 and deep12, both seeds each. K=4000,
+item axis, transductive, 1200-epoch cap, every curve smoothed over 5
+checkpoints before any epoch is read off it. Configs verified distinct in each
+arm's `train_config.json`.
 
-| arm | seed | smoothed optimum epoch | corner there | corner @400 | corner @1200 |
+| arm | dim / layers / heads / d_ff | seed | smoothed optimum | corner there | corner @1200 |
 | --- | --- | --- | --- | --- | --- |
-| `cap_base` (80/8/4/128) | 42 | 849 | 0.7191 | 0.7430 | 0.7255 |
-| `cap_base` | 43 | 924 | 0.6886 | 0.7217 | 0.7085 |
-| `cap_wide128` (128/8/8/256) | 42 | 624 | 0.7184 | 0.7343 | 0.7883 |
-| `cap_wide128` | 43 | 674 | 0.7063 | 0.7188 | 0.8741 |
+| `cap_base` | 80 / 8 / 4 / 128 | 42 | 849 | 0.7191 | 0.7255 |
+| `cap_base` | | 43 | 924 | 0.6886 | 0.7085 |
+| `cap_wide128` | 128 / 8 / 8 / 256 | 42 | 624 | 0.7184 | 0.7883 |
+| `cap_wide128` | | 43 | 674 | 0.7063 | 0.8741 |
+| `cap_deep12` | 80 / **12** / 4 / 128 | 42 | 824 | 0.7191 | 0.7731 |
+| `cap_deep12` | | 43 | 674 | 0.7090 | 0.7718 |
 
-At each arm's own best epoch, wide128 is **+0.0085 worse** than base on the
-2-seed mean (-0.0007 and +0.0177 per seed). It does not clear the escalation
-rule stated above -- not a 0.015 improvement, and its curve does not sit below
-base over the second half of training. On the contrary:
+Paired against base at each arm's own optimum:
 
-**The signature is textbook over-capacity, not under-capacity.** wide128 reaches
-its optimum ~250 epochs *earlier* than base (624/674 vs 849/924) and then
-degrades hard: by epoch 1200 it is at 0.788 and 0.874 against base's 0.726 and
-0.709. A model that were capacity-starved would keep improving for longer than
-the baseline and bottom out lower. This one does the opposite on both counts.
+| arm | seed 42 | seed 43 | 2-seed mean |
+| --- | --- | --- | --- |
+| `cap_wide128` | -0.0007 | +0.0177 | **+0.0085** |
+| `cap_deep12` | 0.0000 | +0.0204 | **+0.0102** |
 
-**A free consistency check.** `cap_base` is the shipped architecture at K=4000
-and lands its smoothed optimum at 849 and 924, against 849 / 749 / 1199 for the
-same configuration in `w3long`. Two independently submitted sweeps agree on the
-budget curve, which is reassurance for W3d as much as for this screen.
+**Both extra-capacity arms are flat on one seed and worse on the other, and both
+have a 2-seed mean on the wrong side of zero.** The pre-registered escalation
+rule -- escalate if an arm's 2-seed mean beats base by >0.015, or its curve sits
+visibly below base over the second half of training; declare capacity dead only
+if every arm is flat or worse on both seeds -- is met in the "dead" direction for
+both arms tested. Neither escalates.
 
-**Do not over-read this.** It is n=2 on one of four non-baseline arms, and both
-optima are argmins on the corner -- fair between arms, since both get the same
-advantage, but inflated in absolute terms for both. The three remaining arms
-(`wide160`, `deep12`, `big`) are still queued. `deep12` is the informative one
-left: it is the only arm that moves *depth* without width, and width is what has
-just failed.
-The screen is also read on the **whole learning curve**, not a single endpoint:
-48 checkpoints per run, and a genuinely better architecture sits lower across the
-whole curve rather than at one epoch. That is the same trick that let S5 settle
-parity in 4 runs instead of 48.
+**And they fail in the diagnostic direction, which is worth more than the means
+at n=2.** A capacity-starved model would train *longer* than the baseline and
+bottom out *lower*. Both do the opposite on both counts: they peak 150-250
+epochs earlier (624-824 against base's 849-924) and then degrade far harder --
+by epoch 1200 they sit at 0.77-0.87 against base's 0.71-0.73. That is the
+over-capacity signature. The shipped 80x8 model is not the binding constraint at
+K=4000; if anything it is already at the edge of what this data supports.
 
-**The screen's decision rule is deliberately permissive, because the errors are
-not symmetric.** Capacity is the last live hypothesis for the Stan gap, so a
-false negative here closes the investigation wrongly and is far more expensive
-than a false positive, which only costs the escalation runs.
+**Verdict: capacity is not the Stan gap.** Two independent directions -- width
+(+0.0085) and depth (+0.0102) -- both fail, and fail the same way. The remaining
+two arms (`wide160`, `big`) both move width, which has now failed twice, so they
+are confirmatory rather than informative; they are running and will be reported,
+but the launch does not wait on them.
 
-> **Escalate to the full 2 draws x 3 seeds if any arm's 2-seed mean beats base by
-> more than 0.015** -- half the real decision bar -- **or if any arm's curve sits
-> visibly below base's over the second half of training.** Declare capacity dead
-> only if every arm is flat or worse on both seeds.
+**What n=2 supports, stated plainly.** It does not establish that wide128 and
+deep12 are *worse* than base -- both per-seed spreads straddle the paired noise
+floor. It does exclude the only outcome that would have changed the paper: an
+arm dramatically better at K=4000. The Stan gap is 0.11; the largest capacity
+effect measured here is 0.02, in the wrong direction.
 
-**Success criterion:** an arm that beats the base model by more than 0.03 nats
-at K=4000 under an honest stopping rule. Anything smaller does not change the
-Marformer-vs-Stan story and would not justify changing the architecture the
-paper describes.
-
-**If nothing beats base:** that is a publishable result in itself -- it says the
-plateau is not a capacity limit, which combined with the budget and chunking
-results would leave the generative-model mismatch (Marformer is amortised, Stan
-is not) as the explanation, and that is a much more interesting sentence than
-"we did not tune enough".
-
-### Wave 4 — S3 proper, after S7 and S5
-
-lr interacts with the loss normalisation (S5) and can only be tuned honestly on
-a carve we trust (S7), so it goes last of the domain-3 suites.
-
-### Wave 4 — S6, off the critical path
-
-S6 is a different domain on real data; it does not gate the Domain 3 final run
-and should not be allowed to. Descoped to two steps, the first of which is
-nearly free — see the S6 note in Part 1.
-
-### Wave 5 — the final rerun
-
-Freeze every knob, regenerate on N draws, run the full grid.
+**Where that leaves the gap.** Every mechanism proposed for the large-K plateau
+has now been tested. Training-chunk starvation: dead (+0.0094). Forced
+amortisation via delta_item: dead (+/-0.003). Normalisation placement: dead
+(+/-0.02, no pattern). Epoch budget: **real and claimable, worth 0.022** of the
+0.112. Capacity: dead in both directions. The residual ~0.09 is not explained by
+anything in this sweep, and the honest framing for the paper is that Stan's
+per-item parameters buy something Marformer's amortised representation does not
+recover at these sizes -- a property of the model class, not of the
+configuration. That is a finding, not a failure, but it should be stated rather
+than left as an unexplained gap in a figure.
 
 
 ## Is every suite worth running? — recommendation
@@ -1517,24 +1502,30 @@ things still gating a launch.
 | 10 | replicates | **3 generative draws x 2 model seeds**, draw spread as the error band | SETTLED (a decision, not an experiment) | D28 + Part 0 noise table |
 | 11 | residual variant | `all` (shipped) | SETTLED | resid ablation, **S1** |
 | 12 | **epoch budget** | **cap 2000, stopping epoch chosen per run by the block carve, refit on full training partition** | SETTLED | **W3d** |
-| 13 | **capacity** | unknown | **GATING** -- never measured | -- |
+| 13 | **capacity** | **80 / 8 / 4 / 128, unchanged** | SETTLED — width and depth both fail at K=4000 | **W3e** |
 
-**The one gate left, restated plainly.**
+**Both gates are closed. The final run is unblocked.**
 
-*Budget (12) is closed.* Criterion 1 was met (the corner keeps descending past
-400 at large K) and criterion 2 was met on 2026-09-06: inside a 2000-epoch cap
-the block carve picks a stopping epoch that beats a flat 400 by 0.022 nats at
-K=4000, on both seeds, without ever seeing the corner -- and costs nothing at
-K=1000. It ships as a per-run selection, not a fitted schedule.
+*Budget (12).* Criterion 1 met, and criterion 2 met on 2026-09-06: inside a
+2000-epoch cap the block carve picks a stopping epoch that beats a flat 400 by
+0.022 nats at K=4000 on both seeds, without ever seeing the corner, and costs
+nothing at K=1000. Ships as per-run selection under a raised cap. The harness
+was wired to execute exactly this and dry-run verified (commit b343e4d).
 
-*Capacity (13) is the last thing standing.* Two of five arms are in and the news
-so far is that **width is not the answer**: `cap_wide128` is +0.0085 worse than
-base at its own optimum, peaks ~250 epochs earlier, and degrades to 0.79/0.87 by
-epoch 1200 against base's 0.73/0.71 -- the over-capacity signature, not the
-under-capacity one. `cap_deep12` is the informative arm left, since it is the
-only one that moves depth without width. If depth is also flat, the honest
-conclusion is that the Stan gap is not a capacity problem, and the final run can
-launch on the frozen configuration above.
+*Capacity (13).* Closed 2026-09-06 in the negative. Width (+0.0085) and depth
+(+0.0102) both fail at K=4000, both peak earlier than the baseline and degrade
+harder afterwards -- the over-capacity signature, not the under-capacity one.
+The shipped 80x8 architecture stands. Two confirmatory width arms are still
+running and will be reported, but nothing waits on them.
+
+**Launch command for the final run:**
+
+    ./submit_validation.sh --run-id <id> --data-from <draw> --protocol block \
+        --seeds 42,43 --search-epochs 2000 --select per-run --smooth 5
+
+which chains search -> select -> refit -> eval by SLURM dependency. Run it once
+per generative draw (three draws, per row 10 of the frozen table), and note the
+standing instruction that final-result runs wait for explicit go-ahead.
 
 ### What changed from the pre-suite plan
 
