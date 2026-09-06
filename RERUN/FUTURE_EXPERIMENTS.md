@@ -664,7 +664,32 @@ the measurement, not the protocol. The conclusion changes accordingly: the carve
 is not losing to flat 400, it is roughly breaking even at small K and gaining at
 larger K.
 
-**K=4000 still decides F13, for a sharper reason than before.** Extrapolating
+### Wave 3d, criterion 2 at K=4000 — seed 42 PASSES, and passes well
+
+| K | carve-selected epoch (seed 42) | smoothed oracle | corner at the pick | vs flat 400 | share of headroom captured |
+| --- | --- | --- | --- | --- | --- |
+| 1000 | 545 | 649 | 0.7460 | +0.0038 | 0% |
+| 2000 | 705 | 624 | 0.7401 | +0.0013 | 0% |
+| **4000** | **940** | 849 | **0.7257** | **-0.0179** | **74%** |
+
+The selected epoch on this seed goes **545 -> 705 -> 940** as K goes 1000 ->
+2000 -> 4000. That is the monotone growth F13 requires, from a selector that
+never sees the corner.
+
+And at K=4000 the selection finally *pays*: -0.0179 against flat 400,
+**past the 0.015 decision threshold**, capturing 74% of the -0.024 of smoothed
+headroom this seed had available. The rule is even slightly late here (940 vs an
+oracle of 849) rather than conservative as it was at K=1000, and still wins --
+because at K=4000 the curve around the optimum is flat enough that being 90
+epochs off costs almost nothing. That is the same fact, seen from the other side,
+that made K=1000 hopeless: there the curve's bumps were larger than the prize.
+
+**Seed 43 is still running.** One seed cannot carry F13 on its own, and the
+K=2000 pair (+0.0013, -0.0165) is a live reminder of how much two seeds of the
+same size can differ. But the failure mode we were worried about -- the selector
+ignoring K and picking ~500 everywhere -- is now excluded on this seed.
+
+**K=4000 decides F13, for a sharper reason than before.** Extrapolating
 "captures about half", K=4000's -0.029 of smoothed headroom would yield about
 -0.015 -- exactly at this document's decision threshold, and the first size where
 the answer is not "too small to care". K=4000 is also the only size where
