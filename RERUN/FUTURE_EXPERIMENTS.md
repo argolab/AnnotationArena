@@ -1413,6 +1413,67 @@ hyperparameter the paper does not discuss, and reporting it would invite the
 reader to wonder what else we swept. It belongs here.
 
 
+### S9 — does a larger effective batch stabilise training? (2026-09-08) NO, it is clearly worse. **Internal only.**
+
+**The question.** With one training instance ($N=1$), an epoch is
+`mask_augmentations=5` **separate** batch-of-one steps: 5 masks, 5 forwards, 5
+backwards, 5 optimizer steps. `--batch-augmentations` instead makes the 5 masks
+the batch dimension of one forward, so the gradient is averaged over 5 masks and
+the epoch is a single step. Tom asked whether that larger effective batch would
+stabilise training.
+
+`s9batch-s101`, 8 runs: K=300, item axis, 2 model seeds, tail-averaged, paired
+against the sequential baseline. Two fair comparisons, because they answer
+different questions:
+
+| arm | steps/epoch | epochs | total steps | compute | paired vs sequential |
+| --- | --- | --- | --- | --- | --- |
+| `b_seq_base` (shipped) | 5 x B=1 | 400 | 2000 | 1x | 0.0000 |
+| `b_batch_e400_lr1` | 1 x B=5, lr 2e-4 | 400 | 400 | 1x (matched compute) | +0.0410 +/-0.0391 |
+| `b_batch_e400_lr5` | 1 x B=5, lr 1e-3 | 400 | 400 | 1x | +0.0353 +/-0.0493 |
+| `b_batch_e2000` | 1 x B=5, lr 2e-4 | 2000 | 2000 | **5x (matched steps)** | **+0.1277 +/-0.0169** |
+
+Reference arm's absolute corner log-loss: 0.8070 (n=2, sd 0.0023).
+
+**The matched-steps arm is the worst, and it is the only one that clears two
+standard errors.** That is the arm which isolates the hypothesis: identical
+number of updates, each averaged over 5 masks instead of 1, at five times the
+compute. It is 0.128 nats worse. Averaging the masking noise away does not
+stabilise training, it degrades it.
+
+**Reading:** the per-mask gradient noise is doing useful work rather than being
+something to smooth out. Each mask is a different subproblem, and five separate
+steps explore more than one averaged step. This is consistent with
+`reports/TRAINING_SPEED.md` §3.1, which found batching no better at equal wall
+clock at this chunk size, but S9 is the stronger statement -- batching is worse
+even when *given* the extra compute to match step count.
+
+**Decision: keep the sequential default.** The final run inherits the shipped
+optimisation unchanged.
+
+**Consequence for the code.** `--batch-augmentations` is now measured, unused in
+every reported run, and worse where it was hoped to help. It is a candidate for
+deletion along with `forward_batched`, the batched `sample_status` path, and the
+`DOMAIN3_BATCH_AUGMENTATIONS` / `DOMAIN3_TF32` plumbing (including the export
+added on 2026-09-08 to make this experiment possible at all -- see below).
+
+**A bug this experiment exposed.** `jobs/marformer_train.sbatch` never exported
+`DOMAIN3_BATCH_AUGMENTATIONS`. The per-job conf is *sourced*, not exported, so a
+conf setting it to `true` was silently ignored and the runner used its sequential
+default. All four arms would have been byte-identical and the sweep would have
+reported a clean null. This is the same failure `DOMAIN3_EPOCHS` had earlier in
+this project; the export was added and the arms verified distinct in their
+`train_config.json` before the numbers were read.
+
+**Naming, for the write-up.** With $N=1$, "5 mask augmentations per epoch" is not
+a batching mechanism -- it is a relabelling of the step count. 400 epochs x 5
+augmentations is exactly 2000 gradient steps of batch size 1. The paper should
+say so directly rather than pairing "five independently masked versions" with
+"batch size 1", which reads as a variance-reduction scheme that does not exist
+in this domain. (In domain 2, where $N>1$, the $K$ maskings genuinely are pooled
+and shuffled across instances; the language is accurate there.)
+
+
 ## S6 — Replicate LLM-Rubric and pin down its hyperparameters
 
 - **Assumption under test:** our local LLM-Rubric config may not be what
