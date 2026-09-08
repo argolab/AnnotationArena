@@ -1370,6 +1370,49 @@ conditional on this failing and are not needed -- 24 runs saved.
 
 
 
+### S5b — is a 10-20x larger learning rate better anyway? (2026-09-08) NO. **Internal only, not for the paper.**
+
+**Why this ran late.** S5 answered "does rewriting $15:1$ as $1:1/15$ *require*
+an lr rescale?" -- no, AdamW is invariant to a global rescale of the loss. The
+lr-scaled arms were written into `arms_s5_lossnorm.json` and then shortlisted
+away with "only worth running if the parity overlay fails". The overlay
+succeeded, S3 (lr) was later dropped, and the separate question -- *is a larger
+lr simply better?* -- fell through the gap. Tom asked for it directly on
+2026-09-08 and it was run then. Recording the miss, not just the result.
+
+`s5b-s101`, 8 runs: K=300, item axis, 2 model seeds, 400 epochs, tail-averaged,
+paired against the shipped 15:1 at lr 2e-4.
+
+| arm | weights | lr | paired vs base |
+| --- | --- | --- | --- |
+| `s5_norm_lr1x` | 1 : 1/15 | 2e-4 | **+0.0004 +/-0.0003** |
+| `s5_norm_lr10x` | 1 : 1/15 | 2e-3 | **+0.1721 +/-0.0648** |
+| `s5_norm_lr20x` | 1 : 1/15 | 4e-3 | **+0.3117 +/-0.2314** |
+
+Reference arm's absolute corner log-loss: 0.7976 (n=2, sd 0.0053).
+
+**A 10-20x lr is 0.17-0.31 nats worse -- ten to twenty times the decision
+threshold.** Nothing diverged to NaN and every arm's training loss decreased, so
+this is not a blow-up; it is a much too large step size. The damage is not even
+reproducible: the 20x arm's two seeds differ enough to give a +/-0.23 error bar,
+against +/-0.005 for the baseline.
+
+Training-side detail worth keeping: the high-lr arms reach *lower* training loss
+on their lucky seed (0.458 masked CE at 10x against the baseline's 0.778) while
+scoring far worse on the corner -- overfitting, not better optimisation.
+
+**And a third confirmation of the parity claim.** `s5_norm_lr1x` matches base to
+four decimals on training loss (2.7606 -> 0.7710 vs 2.7606 -> 0.7711) as well as
+on the corner (+0.0004). Trajectory, training loss and test metric all agree, so
+$(15:1)$ and $(1:1/15)$ at the same lr are the same optimisation and not a
+coincidental tie.
+
+**Decision: 1 : 1/15 with lr unchanged at 2e-4** (F3, unchanged). **Not proposed
+for the paper** -- it is a "we checked, it is not better" result about a
+hyperparameter the paper does not discuss, and reporting it would invite the
+reader to wonder what else we swept. It belongs here.
+
+
 ## S6 — Replicate LLM-Rubric and pin down its hyperparameters
 
 - **Assumption under test:** our local LLM-Rubric config may not be what

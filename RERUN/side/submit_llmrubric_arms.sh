@@ -36,8 +36,14 @@ mkdir -p "${CONF_DIR}" "${LOG_DIR}"
 EXCLUDE_ARG=""; [[ -n "${EXCLUDE_NODES:-}" ]] && EXCLUDE_ARG="--exclude=${EXCLUDE_NODES}"
 n=$(awk -F, '{print NF}' <<< "${SIZES}")
 
-# arm tag | max_item | walltime (sized from the smoke, with margin)
-ARMS=( "mi10|10|01:15:00" "mi225|225|00:20:00" )
+# arm tag | max_item | walltime (sized per arm, with margin)
+# Timings measured at the largest size (175): chunk 10 = 23 chunks/epoch = 36 min,
+# chunk 25 = 9 chunks = ~14 min, chunk 225 = 1 chunk = 6 min. Per-chunk graph
+# construction dominates, so fewer/larger chunks run FASTER. Each arm gets its
+# own walltime rather than the slowest arm's, so the fast ones stay good
+# backfill candidates; margins are ~3x because nothing here resumes.
+ARMS_SPEC="${ARMS_SPEC:-mi10|10|01:15:00 mi225|225|00:20:00}"
+read -r -a ARMS <<< "${ARMS_SPEC}"
 
 IFS=',' read -r -a SEED_LIST <<< "${SEEDS}"
 echo "${RUN_ID}: ${#ARMS[@]} arms x ${#SEED_LIST[@]} seeds x ${n} sizes = $(( ${#ARMS[@]} * ${#SEED_LIST[@]} * n )) runs"
