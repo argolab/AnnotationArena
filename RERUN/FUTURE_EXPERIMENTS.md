@@ -42,6 +42,7 @@ seeds; the decision threshold is 0.015 nats. Full detail in the linked sections.
 | **W3a/d** | Is the 400-epoch budget too small? | **Yes at every K ≥ 1000**, and the fix must scale | **−0.022** at K=4000, free at K=1000 | cap 2000 + per-run carve selection |
 | **W3b** | Is forced amortisation (delta_item=1) the plateau? | **No** | ±0.003 at K=4000 | — |
 | **W3e** | Is capacity the plateau? | **No** — 5 architectures, none beats base | largest arm **+0.021** worse | keep 80/8/4/128 |
+| **S8** | Is LLM-Rubric's `max_item=10` costing us? | **No** — and train/eval chunk must MATCH | **-0.008**, within noise | keep 10; state it in the paper |
 
 **The two things that actually changed the design:** the epoch budget (F13) and
 the loss-weight form (F3). Everything else was confirmed as shipped or is a
@@ -1539,6 +1540,98 @@ of: **pending** (not started), **blocked** (waiting on a Part 1 suite),
 | F12 | Runtime figures read elapsed time from run metadata instead of hardcoded numbers (D18)                                                                            | —          | pending |
 | F13 | Epoch **cap** raised with validation-chosen stopping, instead of a flat 400 | W3d | **ready** — criterion 2 met 2026-09-06. Cap 2000, carve selects per run, refit on full training data. Worth -0.022 at K=4000, free at K=1000. Ships as per-run selection, **not** a fitted epochs(K) curve. |
 
+
+
+## S8 — LLM-Rubric's item chunk: does max_item=10 leave performance on the table?
+
+- **Assumption under test:** S6's audit found the real LLM-Rubric arm trains
+with `max_item=10` on a 225-item bundle, so the model conditions on at most 9
+other items. Domain 3 uses 300. S4 showed chunk size is worth up to 0.11 nats
+there, and S6 flagged this as "the single most likely place where the LLM-Rubric
+numbers are leaving performance on the table".
+- **Run:** retrain at `max_item` in {10, 225}, sizes {10, 50, 100, 175}, seeds
+{42, 43}; and separately sweep the *evaluation* chunk on existing checkpoints.
+
+### Result (2026-09-07) — the chunk is NOT leaving performance on the table
+
+**The honest answer is that this was a false alarm, and the first version of
+this result was my own measurement error.** Both halves are recorded because the
+error is instructive.
+
+**First, the thing that had to be understood before any number meant anything
+(D30).** There are two LLM-Rubric evaluations in the repo and they chunk
+differently:
+
+| producer | eval `max_item` | feeds |
+| --- | --- | --- |
+| `test.py` -> `TEST_RESULTS/*.json` | 500, i.e. the whole 225-item bundle | nothing published |
+| `plot_llmrubric_cpm_sigmoid.py` | **10** | **the paper's figure** |
+
+The plot does not read `missing.log_loss`; it reloads the checkpoint and
+recomputes, chunking at 10. So the published number is produced with training
+*and* evaluation at chunk 10.
+
+**The evaluation chunk sweep, on the published metric, all ten sizes** (no
+training; existing checkpoints re-scored through the plot's own function, so
+this is exactly the quantity the paper reports):
+
+| chunk vs 10 | mean over 10 sizes |
+| --- | --- |
+| 25 | **-0.0144** |
+| 50 | +0.0471 |
+| 100 | +0.2225 |
+| 225 | **+0.5043** |
+
+Two checks say the method is sound: at chunk 10 it reproduces the published
+figure (0.98-1.47 across sizes), and at chunk >= 225 it converges exactly onto
+`test.py`'s numbers (size 100 -> 1.9101, matching `best.json`). The two
+evaluation paths were never in conflict; they were measuring at different chunks.
+
+**Larger evaluation chunks are dramatically WORSE, which inverts S4's
+intuition** -- and the reason is the obvious one in hindsight: the model was
+trained at chunk 10 and has never seen a 225-item context, so evaluating it that
+way is out of distribution. On LLM-Rubric the training and evaluation chunk want
+to **match**. Domain 3 differs because there the training chunk (300) and the
+better evaluation chunk (500) are close, and both are large.
+
+**Now the training-chunk arms, compared correctly** -- each arm at its own best
+evaluation chunk, on the published metric, seed 42:
+
+| size | mi10 (shipped) best | mi225 best | difference |
+| --- | --- | --- | --- |
+| 10 | chunk 50, 1.4576 | chunk 50, 1.5015 | +0.0439 |
+| 50 | chunk 25, 1.0336 | chunk 100, 0.9926 | -0.0409 |
+| 100 | chunk 25, 0.9807 | chunk 25, 0.9633 | -0.0174 |
+| 175 | chunk 10, 0.9775 | chunk 25, 0.9616 | -0.0159 |
+
+**Mean -0.0076 -- within noise.** Training at 225 instead of 10 buys essentially
+nothing once each arm is evaluated fairly. Note that even the arm *trained* at
+225 prefers an evaluation chunk of 25.
+
+**RETRACTED: the first reading of S8.** Before the eval-chunk sweep existed,
+these arms were compared through `test.py`, which evaluates **every** arm at
+whole-bundle. That is matched for `mi225` and badly mismatched for `mi10`, so
+the comparison measured the baseline's handicap rather than the new arm's merit.
+The numbers reported at the time were -0.287 (size 50), -0.840 (size 100) and
+-0.300 (size 175). **They are artifacts and must not be quoted.** The correct
+figures are the table above, roughly forty times smaller and of inconsistent
+sign.
+
+**The general lesson, which is worth more than the result:** when an ablation
+changes what the model conditions on at training time, the evaluation must be
+re-examined before the arms are compared. A fixed evaluation setting that suits
+one arm is not neutral ground. This is the same class of error as D14
+(selecting on test) -- a measurement choice quietly deciding the outcome.
+
+**F-row consequence: none.** `max_item=10` stays as shipped for LLM-Rubric, and
+S6's flagged concern is closed as measured-and-negative rather than left open.
+What does need recording in the paper is that the LLM-Rubric evaluation chunks
+at 10 to match training, since that is a real methodological detail currently
+stated nowhere.
+
+**Still open, and unrelated to the chunk:** the LLM-Rubric figure is missing
+three of its five comparators, including Stan (D29). No claim about the margin
+over Stan on real data is supported by this tree until that baseline is run.
 
 
 ## The final rerun, specified
