@@ -39,8 +39,25 @@ SIZE="${SIZE_LIST[${SLURM_ARRAY_TASK_ID:-0}]}"
 
 RUN_DIR="$(rerun_run_dir "${RUN_ID}")"
 DATA_ROOT="${RUN_DIR}/DATA/LLM_RUBRIC"
-OUTPUT_ROOT="${RUN_DIR}/RESULTS/MARFORMER/LLM_RUBRIC"
 SPLIT="LLMRubric_225_25_9_${SIZE}"
+
+# Ablation knobs. Every default reproduces the original run exactly, so an
+# existing caller that sets none of these is unaffected.
+MAX_ITEM="${LLMRUBRIC_MAX_ITEM:-10}"
+SEED="${LLMRUBRIC_SEED:-42}"
+EPOCHS="${LLMRUBRIC_EPOCHS:-300}"
+
+# VARIANT_TAG keeps arms and seeds on distinct paths. This matters more here
+# than elsewhere: the block below *deletes* the target directory before
+# training, so two arms sharing a path would not merely collide, the second
+# would destroy the first. The unseeded default path is kept for the plain
+# replication so existing plot globs still resolve.
+VARIANT_TAG="${VARIANT_TAG:-}"
+if [[ -n "${VARIANT_TAG}" ]]; then
+    OUTPUT_ROOT="${RUN_DIR}/RESULTS/MARFORMER/LLM_RUBRIC/${VARIANT_TAG}"
+else
+    OUTPUT_ROOT="${RUN_DIR}/RESULTS/MARFORMER/LLM_RUBRIC"
+fi
 
 [[ -d "${DATA_ROOT}/${SPLIT}" ]] || {
     echo "FATAL: missing bundle ${DATA_ROOT}/${SPLIT}" >&2
@@ -71,6 +88,7 @@ TF32_FLAG=""
 echo "=============================================================="
 echo " LLM-Rubric | Marformer | size=${SIZE}"
 echo " LR     : ${LLMRUBRIC_LR:-2e-4}  batch_aug=${LLMRUBRIC_BATCH_AUGMENTATIONS:-false}"
+echo " MAXITEM: ${MAX_ITEM}   SEED: ${SEED}   EPOCHS: ${EPOCHS}"
 echo " DATA   : ${DATA_ROOT}/${SPLIT}"
 echo " OUTPUT : ${OUTPUT_ROOT}/${SPLIT}"
 echo "=============================================================="
@@ -83,7 +101,7 @@ rerun_run python -u -m imputer.entity_mf.train \
     --data-dir             "${DATA_ROOT}/${SPLIT}" \
     --run-name             "${SPLIT}"              \
     --output-root          "${OUTPUT_ROOT}"        \
-    --seed                 42                      \
+    --seed                 "${SEED}"               \
     --embedding-dim        80                      \
     --num-layers           8                       \
     --attention-heads      4                       \
@@ -91,7 +109,7 @@ rerun_run python -u -m imputer.entity_mf.train \
     --num-ffn-layers       1                       \
     --dropout              0.1                     \
     --item-dropout-rate    0.7                     \
-    --epochs               300                     \
+    --epochs               "${EPOCHS}"            \
     --lr-schedule          none                    \
     --lr-min               1e-5                    \
     --weight-decay         0.01                    \
@@ -102,7 +120,7 @@ rerun_run python -u -m imputer.entity_mf.train \
     --device               cuda                    \
     --llm-annotator-id     24                      \
     --human-observed-rate  0.0                     \
-    --max-item             10                      \
+    --max-item             "${MAX_ITEM}"           \
     --type-embedding-init  kaiming                 \
     --item-reg-weight      0.0                     \
     --attribute-reg-weight 0.0                     \

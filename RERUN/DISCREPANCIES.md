@@ -827,3 +827,108 @@ over generative draws, not just over model seeds.
 
 Harness: `RERUN/dataseed/` (`submit_gen.sh`, `submit_train.sh`, `jobs/eval.sbatch`,
 `analyse.py`, `corner_difficulty.py`). Figure: `dataseed/out/dataseed_fig6.png`.
+
+
+## D29 — the LLM-Rubric figure is missing three of its five comparators, including Stan
+
+**Status:** found 2026-09-07 while checking whether the pre-final-run changes
+threaten the LLM-Rubric result.
+
+`scripts/LLMRubric/plot_llmrubric_cpm_sigmoid.py` declares
+`SERIES_ORDER = ["Marformer", "Stan CPM", "MIWAE", "REMASKER", "Unigram Pool ij"]`.
+The figure reproduced in `runs/replicate-01/paper_figures/REAL-LLMRUBRIC/
+llmrubric_cpm_log_loss.png` contains **only Marformer and Unigram Pool ij**.
+The three missing series have no data in the tree:
+
+| expected path | present? |
+| --- | --- |
+| `RESULTS/STAN/CPMSigmoid` | no |
+| `RESULTS/STAN/LLM_RUBRIC/CPMSigmoid` (the path the run scripts write) | no |
+| `RESULTS/MIWAE` | no |
+| `RESULTS/REMASKER` | no |
+
+The plot degrades silently: it draws whatever series it finds, so the output is
+a plausible-looking two-curve figure rather than an error. FIGURES.md already
+warns about the *path mismatch* between where the Stan run scripts write and
+where the plot reads, but the more basic issue is that **the Stan CPM baseline
+was never run in this rerun tree at all**, so the symlink bridge in
+`make_figures.sh` has nothing to bridge.
+
+**Consequence, stated plainly:** the claim that Marformer beats Stan on real
+LLM-Rubric data **cannot currently be checked in this repository**. The
+reproduced figure compares Marformer only against a unigram pooling baseline.
+Anyone reading `paper_figures/REAL-LLMRUBRIC/` without opening the plot script
+would not know three comparators are absent.
+
+**To close it:** run the Stan CPM-Sigmoid baseline for LLM-Rubric (and MIWAE /
+REMASKER if those comparisons are still claimed), then regenerate. Until then
+no statement about the LLM-Rubric margin over Stan is supported by this tree.
+
+
+## D30 — the paper's LLM-Rubric number is computed at eval chunk 10, not by test.py
+
+**Status:** found 2026-09-07.
+
+There are two different LLM-Rubric evaluations in this repository and they do
+not agree, because they chunk differently:
+
+| producer | eval `max_item` | writes |
+| --- | --- | --- |
+| `imputer/entity_mf/test.py` | **500** (hardcoded, line ~241) -> the 225-item bundle is one chunk | `TEST_RESULTS/*.json` |
+| `scripts/LLMRubric/plot_llmrubric_cpm_sigmoid.py` | **10** (line 373, default line 278) | the published figure |
+
+The plot does not read `missing.log_loss` from the json; it reloads the
+checkpoint and **recomputes** predictions itself, chunking the evaluation at 10
+items. The json is used only to pick which checkpoint file to load. The two
+metrics also differ in which cells count as missing, so they are not on the same
+scale: at training size 100 the figure shows ~1.09 where `best.json` records
+1.9101.
+
+**Why this matters.** S4 established on Domain 3 that evaluation chunk size is
+worth up to 0.11 nats when set too small, and that the optimum is interior. The
+published LLM-Rubric numbers are produced with **both training and evaluation
+chunked at 10 items on a 225-item bundle**, and nobody has measured what that
+costs. Unlike the training-chunk question (S8, which needs retraining), the
+*evaluation* chunk can be swept on the checkpoints that already exist -- no
+training, no GPU -- and it acts directly on the quantity the paper reports.
+
+**A correction this supersedes:** an earlier note in this project's working
+record claimed the LLM-Rubric evaluation "already sees the whole bundle in one
+chunk, so only retraining can test this". That is true of `test.py` and false of
+the figure. The eval-only sweep is available after all.
+
+
+## D31 — LLM-Rubric best.json and last.json report identical metrics for every size
+
+**Status:** found 2026-09-07, cause not yet diagnosed.
+
+`jobs/llmrubric_eval.sbatch` runs `--checkpoint both`, which is meant to score
+the validation-selected checkpoint into `best.json` and the final one into
+`last.json`. Across **all ten** shipped sizes the two files name different
+checkpoints and carry **identical** metrics to full precision:
+
+| size | best.json checkpoint | last.json checkpoint | metrics identical |
+| --- | --- | --- | --- |
+| 10 | `best-epoch=0070.ckpt` | `last.ckpt` | yes |
+| 20 | `best-epoch=0082.ckpt` | `last.ckpt` | yes |
+| 30 | `best-epoch=0114.ckpt` | `last.ckpt` | yes |
+| 40 | `best-epoch=0120.ckpt` | `last.ckpt` | yes |
+| 50 | `best-epoch=0124.ckpt` | `last.ckpt` | yes |
+| 75 | `best-epoch=0098.ckpt` | `last.ckpt` | yes |
+| 100 | `best-epoch=0119.ckpt` | `last.ckpt` | yes |
+| 125 | `best-epoch=0154.ckpt` | `last.ckpt` | yes |
+| 150 | `best-epoch=0152.ckpt` | `last.ckpt` | yes |
+| 175 | `best-epoch=0173.ckpt` | `last.ckpt` | yes |
+
+Ten out of ten is not coincidence -- the periodic checkpoints of the same runs
+differ from each other by 0.1-0.6 nats, so two genuinely different checkpoints
+scoring the same to four decimals is not plausible. The likely explanation is
+that the `both` path records the checkpoint *name* it intended to load without
+actually reloading the weights, so both entries score whatever model is
+resident. This has not been confirmed by reading the code path.
+
+**Consequence:** any statement of the form "the validation-selected checkpoint
+scores X" on LLM-Rubric is currently unverified. The figure is not obviously
+affected, because the plot reloads checkpoints itself (D30) and uses the json
+only to choose between two files -- but that choice is being made on values that
+may both describe `last`.
