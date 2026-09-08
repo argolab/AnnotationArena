@@ -829,7 +829,55 @@ Harness: `RERUN/dataseed/` (`submit_gen.sh`, `submit_train.sh`, `jobs/eval.sbatc
 `analyse.py`, `corner_difficulty.py`). Figure: `dataseed/out/dataseed_fig6.png`.
 
 
-## D29 — the LLM-Rubric figure is missing three of its five comparators, including Stan
+## D29 — CORRECTED: the Stan LLM-Rubric baseline exists in the paper; it is the RERUN tree that lacks it
+
+**Correction, 2026-09-08.** The original entry below claimed that "the claim
+that Marformer beats Stan on real LLM-Rubric data cannot currently be checked in
+this repository". **That is wrong, and it was wrong because I checked one
+location and generalised from it.**
+
+`Marformer-Paper/PLOTS/REAL-LLMRUBRIC/llmrubric_cpm_log_loss.png` (dated
+2026-08-25 16:06) contains **all five series** -- Marformer, Stan CPM, MIWAE,
+REMASKER and Unigram Pool ij. So Stan *was* run for LLM-Rubric, and the result
+stands: **Marformer is below Stan CPM at every training size except the smallest.**
+Read off that figure, the margin is roughly:
+
+| training items | Stan CPM | Marformer | margin |
+| --- | --- | --- | --- |
+| 10 | ~1.43 | >1.5 | Stan better |
+| 20 | ~1.47 | ~1.13 | ~0.34 |
+| 30 | ~1.23 | ~1.03 | ~0.20 |
+| 50 | ~1.21 | ~1.05 | ~0.16 |
+| 100 | ~1.13 | ~1.02 | ~0.11 |
+| 175 | ~1.08 | ~1.00 | ~0.08 |
+
+(Approximate, read from the rendered figure rather than from data files -- the
+underlying numbers are wherever that figure was generated, not in `replicate-01`.)
+
+**What is actually true, and much narrower than the original claim:** the
+**rerun tree** `runs/replicate-01/RESULTS/` contains only `MARFORMER` and
+`MARFORMER-NT`. Stan CPM, MIWAE and REMASKER were never re-run there, so
+`make_figures.sh` regenerates a **two-curve** version of the figure that silently
+omits three comparators. The consequence is about *reproducibility of the
+figure*, not about whether the result holds:
+
+* Nothing needs re-running to know we beat Stan on LLM-Rubric. The paper's
+  figure already establishes it.
+* Something does need re-running if the goal is for the RERUN harness to
+  regenerate that figure end-to-end from scratch. That is a replication-coverage
+  gap, and a much lower priority than it looked.
+* Anyone comparing `runs/replicate-01/paper_figures/REAL-LLMRUBRIC/` against the
+  paper's `PLOTS/REAL-LLMRUBRIC/` will find them different, and should know why.
+
+**A corroboration that came free.** The Marformer curve in the paper's figure
+(~1.00 at size 175) matches the chunk-10 recompute measured in S8 (0.9775 at
+size 175). The published *Marformer* numbers reproduce from this tree; only the
+baselines are absent.
+
+**Original entry, superseded (the factual observations below are correct; only
+the conclusion drawn from them was overreaching):**
+
+## D29a (superseded) — the LLM-Rubric figure is missing three of its five comparators, including Stan
 
 **Status:** found 2026-09-07 while checking whether the pre-final-run changes
 threaten the LLM-Rubric result.
@@ -854,11 +902,12 @@ where the plot reads, but the more basic issue is that **the Stan CPM baseline
 was never run in this rerun tree at all**, so the symlink bridge in
 `make_figures.sh` has nothing to bridge.
 
-**Consequence, stated plainly:** the claim that Marformer beats Stan on real
-LLM-Rubric data **cannot currently be checked in this repository**. The
-reproduced figure compares Marformer only against a unigram pooling baseline.
-Anyone reading `paper_figures/REAL-LLMRUBRIC/` without opening the plot script
-would not know three comparators are absent.
+**Consequence (as originally written -- see the correction above for what this
+actually implies):** the reproduced figure compares Marformer only against a
+unigram pooling baseline. Anyone reading `paper_figures/REAL-LLMRUBRIC/` without
+opening the plot script would not know three comparators are absent. **The
+inference I drew from this -- that the Stan comparison could not be checked at
+all -- was wrong; the paper's own figure has it.**
 
 **To close it:** run the Stan CPM-Sigmoid baseline for LLM-Rubric (and MIWAE /
 REMASKER if those comparisons are still claimed), then regenerate. Until then
