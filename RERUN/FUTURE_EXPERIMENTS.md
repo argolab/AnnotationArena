@@ -1649,9 +1649,15 @@ What does need recording in the paper is that the LLM-Rubric evaluation chunks
 at 10 to match training, since that is a real methodological detail currently
 stated nowhere.
 
-**Still open, and unrelated to the chunk:** the LLM-Rubric figure is missing
-three of its five comparators, including Stan (D29). No claim about the margin
-over Stan on real data is supported by this tree until that baseline is run.
+**On the Stan comparison (corrected 2026-09-08):** an earlier version of this
+section said no claim about the margin over Stan on real data was supported
+until the baseline was re-run. That was wrong. The paper's own figure,
+`Marformer-Paper/PLOTS/REAL-LLMRUBRIC/llmrubric_cpm_log_loss.png`, contains all
+five series and shows **Marformer below Stan CPM at every training size except
+the smallest**, by roughly 0.08-0.34 nats. Stan was run; its results simply are
+not in the `replicate-01` rerun tree, which holds only MARFORMER and
+MARFORMER-NT. That is a figure-reproducibility gap (D29), not an open question
+about the result. Nothing needs re-running to state the LLM-Rubric conclusion.
 
 
 ## The final rerun, specified
