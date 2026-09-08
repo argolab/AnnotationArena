@@ -104,6 +104,14 @@ export DOMAIN3_OBSERVED_LOSS_WEIGHT="${DOMAIN3_OBSERVED_LOSS_WEIGHT:-1.0}"
 export DOMAIN3_LR="${DOMAIN3_LR:-2e-4}"
 export DOMAIN3_LR_SCHEDULE="${DOMAIN3_LR_SCHEDULE:-none}"
 
+# Speed/optimisation knobs. run_marformer_group.sh reads these, but the per-job
+# conf is *sourced* rather than exported, so without these lines a conf setting
+# DOMAIN3_BATCH_AUGMENTATIONS=true was silently ignored and the run used the
+# sequential default -- the same failure DOMAIN3_EPOCHS had. Defaults preserve
+# the shipped behaviour exactly.
+export DOMAIN3_BATCH_AUGMENTATIONS="${DOMAIN3_BATCH_AUGMENTATIONS:-false}"
+export DOMAIN3_TF32="${DOMAIN3_TF32:-false}"
+
 # The per-job conf is *sourced*, which sets shell variables but does not export
 # them, so anything the runner (a child process) needs must be re-exported here.
 # DOMAIN3_EPOCHS was previously exported only inside the EPOCH_TABLE branch,
