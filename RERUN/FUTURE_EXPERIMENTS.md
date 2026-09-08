@@ -42,7 +42,7 @@ seeds; the decision threshold is 0.015 nats. Full detail in the linked sections.
 | **W3a/d** | Is the 400-epoch budget too small? | **Yes at every K ≥ 1000**, and the fix must scale | **−0.022** at K=4000, free at K=1000 | cap 2000 + per-run carve selection |
 | **W3b** | Is forced amortisation (delta_item=1) the plateau? | **No** | ±0.003 at K=4000 | — |
 | **W3e** | Is capacity the plateau? | **No** — 5 architectures, none beats base | largest arm **+0.021** worse | keep 80/8/4/128 |
-| **S8** | Is LLM-Rubric's `max_item=10` costing us? | **No** — and train/eval chunk must MATCH | **-0.008**, within noise | keep 10; state it in the paper |
+| **S8** | Is LLM-Rubric's `max_item=10` costing us? | **No** — and train/eval chunk must MATCH | **-0.018 ±0.013**, n=8 | keep 10; state it in the paper |
 
 **The two things that actually changed the design:** the epoch budget (F13) and
 the loss-weight form (F3). Everything else was confirmed as shipped or is a
@@ -1604,9 +1604,29 @@ evaluation chunk, on the published metric, seed 42:
 | 100 | chunk 25, 0.9807 | chunk 25, 0.9633 | -0.0174 |
 | 175 | chunk 10, 0.9775 | chunk 25, 0.9616 | -0.0159 |
 
-**Mean -0.0076 -- within noise.** Training at 225 instead of 10 buys essentially
-nothing once each arm is evaluated fairly. Note that even the arm *trained* at
-225 prefers an evaluation chunk of 25.
+With the second seed added (seed 43, same protocol):
+
+| size | mi10 (shipped) best | mi225 s42 | mi225 s43 | mean difference |
+| --- | --- | --- | --- | --- |
+| 10 | chunk 50, 1.4576 | 1.5015 | 1.3735 | -0.0201 |
+| 50 | chunk 25, 1.0336 | 0.9926 | 0.9951 | -0.0397 |
+| 100 | chunk 25, 0.9807 | 0.9633 | 0.9889 | -0.0046 |
+| 175 | chunk 10, 0.9775 | 0.9616 | 0.9763 | -0.0086 |
+
+**Pooled -0.0182, sd 0.0356 over n=8, i.e. a standard error of 0.013.** The sign
+is consistent -- all four sizes favour the larger training chunk -- but the mean
+does not clear two standard errors, and it is roughly forty times smaller than
+the retracted figures below. Note that even the arm *trained* at 225 usually
+prefers an evaluation chunk of 25.
+
+**One limitation on the pairing, stated rather than glossed:** the `mi10` column
+is the *single* shipped seed, compared against two seeds of `mi225`. This is not
+a fully paired comparison. The `mi10` arms at seeds 42 and 43 were submitted with
+the rest of S8 and are slower to schedule (they carry a 1:15 walltime against the
+fast arm's 20 minutes, so they are worse backfill candidates); when they land the
+comparison can be made like-for-like and the consistent sign either survives or
+does not. Nothing downstream waits on it, because at this magnitude the answer is
+the same either way.
 
 **RETRACTED: the first reading of S8.** Before the eval-chunk sweep existed,
 these arms were compared through `test.py`, which evaluates **every** arm at
