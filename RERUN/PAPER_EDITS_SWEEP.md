@@ -10,10 +10,17 @@ it. Don't edit the ANCHOR lines; they locate the insertion point.
 Legend: **[rewrite]** = replace the anchor text. **[reply]** = `\response{Tom}`
 appended inside an existing note. **[insert]** = new text after the anchor.
 
+Each item now shows **REMOVES** (the text as it stands in `main.tex` today, so
+you can see exactly what disappears) and then **ADDS** (the replacement, in the
+editable block). Where an item removes nothing, REMOVES says so and quotes the
+surrounding text for orientation. Only the ADDS block is applied verbatim ---
+the REMOVES blocks are there to read, not to edit.
+
 Every EVIDENCE line points at the measurement in `RERUN/FUTURE_EXPERIMENTS.md`
 or `RERUN/DISCREPANCIES.md`. Nothing here is proposed without a number behind it.
 
 ---
+
 
 
 ## B1 — LLM-Rubric hyperparameters: three unstated or wrong numbers  [rewrite]  L1533
@@ -25,20 +32,29 @@ AdamW using learning rate $2\times10^{-4}$...". Your existing `\tom{}` note on
 this sentence asks which config we actually use; this resolves it.
 
 EVIDENCE: S6 audit (2026-09-04) against three real `train_config.json` files
-(sizes 10, 40, 100), all recording `epochs=300, max_item=10,
-item_dropout_rate=0.7`. The evaluation clause is from S8 / D30: the published
+(sizes 10, 40, 100), all recording `epochs=300, max_item=10, item_dropout_rate=0.7`. The evaluation clause is from S8 / D30: the published
 number is produced by `plot_llmrubric_cpm_sigmoid.py`, which recomputes at
 `max_item=10`; re-scoring the same checkpoints at 225 is **+0.50 nats worse**,
 because the model never saw a 225-item context in training.
 
+REMOVES (main.tex today — the whole sentence and the \tom{} note attached to it):
+
+```latex
+The batch size is $1$ due to GPU memory constraints, and training runs for 400 epochs.\tom{Masked loss weight 15 with observed loss weight 1 is a 15$\times$ scaling of the masked loss; normalized as in \cref{eq:trainreg} that is $\lambda_\mathrm{copy}=1/15$.  Also, our local LLM-Rubric config says 300 epochs (not 400), $\delta_\mathrm{item}=0.7$, and \texttt{max\_item=10}, I should run replication to see which one we use, but @prabhav, you might know which config we use to run LLM-rubric?}
+```
+
+(The following sentence, "We use standard Transformer dropout $0.1$ throughout.", is untouched.)
+
+ADDS:
+
 ```latex
 The batch size is $1$ due to GPU memory constraints, and training runs for 300 epochs.
 We set the item dropout rate $\delta_\mathrm{item}=0.7$, and restrict the item graph to
-$10$ items per forward pass---both during training and at evaluation, so that the model
-is evaluated on the context size it was trained for.
+$10$ items per forward pass---both during training and at evaluation.
 ```
 
 ---
+
 
 
 ## B2 — Domain 3 chunking footnote: one size stated, two used, and "the gap is small"  [rewrite]  L1317
@@ -55,6 +71,14 @@ two settings are bit-identical (0.0000). Above it, eval chunk 500 beats 300 by
 than 600 by 0.0098. Separately, *training* chunk 600 is worse than 300 by
 0.0094 at K=4000 — so 300/500 is not a compromise, both numbers are preferred.
 
+REMOVES (main.tex today):
+
+```latex
+\footnote{For training sets beyond 500 items, we restrict the item graph to at most 500 items per forward pass (chunking) to control memory. Full passes over all items would yield marginally better results but are computationally prohibitive at $K=5000$; empirically the gap is small.}
+```
+
+ADDS:
+
 ```latex
 \footnote{We restrict the item graph to $300$ items per forward pass during training,
 to bound the memory of the backward pass.  Inference has no backward pass and can
@@ -66,6 +90,7 @@ interior, and evaluating with chunks of $1200$ is worse than with $600$.}
 ```
 
 ---
+
 
 
 ## B3 — Domain 3 epoch budget: the reported numbers are undertrained at large $K$  [insert]  L952
@@ -82,6 +107,12 @@ reach $-0.022$ nats at $K=4000$ and $+0.003$ (i.e. nothing) at $K=1000$. A flat
 1200-epoch budget is $+0.083$ **worse** at $K=1000$. This is the one design
 change in the sweep that moves a headline number.
 
+REMOVES: nothing. The text below is appended inside your existing
+`\response{Tom}`, immediately after the sentence quoted in ANCHOR, which stays
+exactly as it is.
+
+ADDS:
+
 ```latex
   The selected budget is not a constant: it grows with the training set, from roughly
   500 epochs at $K=1000$ to roughly 900 at $K=4000$.  Reaching it is worth $0.022$ nats
@@ -93,6 +124,7 @@ change in the sweep that moves a headline number.
 ```
 
 ---
+
 
 
 ## B4 — LayerNorm on $\vpsi$: your question, now with evidence  [rewrite]  L811
@@ -109,6 +141,15 @@ residual settings, while the residual setting itself moves it by up to $0.143$.
 The hypothesis that the outer residual exists to compensate for normalizing
 $\vpsi$ predicts the variants would converge once $\vpsi$ is excluded. They do not.
 
+REMOVES (main.tex today — Jason's question and your inline answer, which the
+replacement folds into running prose plus a footnote):
+
+```latex
+\jason{Is LayerNorm really applied to the parameters $\vpsi$?  I thought not.\response{Tom} It is. LayerNorm is applied to the combined stream.}
+```
+
+ADDS:
+
 ```latex
 LayerNorm is applied to the combined stream, so the parameter component $\vpsi$ is
 normalized along with the features.\footnote{We also tried normalizing only the feature
@@ -120,6 +161,7 @@ $\vpsi$.}
 ```
 
 ---
+
 
 
 ## B5 — the $\delta_\tau$ rule, stated as a convention rather than a tuned gain  [insert]  L958
@@ -136,6 +178,14 @@ Annotator axis, two independent data draws: $0.7$ vs the shipped $0.8$ is
 $+0.0002 \pm 0.0008$ ($n=6$). Turning dropout off entirely is also within noise
 once both draws are pooled ($-0.0009 \pm 0.0082$).
 
+REMOVES: nothing. The anchor sentence stays as it is:
+
+```latex
+Thus, for each attribute type $\tau$, we define a \defn{dropout rate} $\delta_\tau \in [0,1]$.
+```
+
+ADDS (immediately after it, or at the end of that paragraph — your call):
+
 ```latex
 In practice we set $\delta_\tau = 0.7$ for the attribute type being generalized over and
 $\delta_\tau = 0$ for the remaining types.  This choice is a convention rather than a
@@ -146,6 +196,7 @@ domains rather than reporting per-domain values.
 ```
 
 ---
+
 
 
 ## B6 — Figure 6 protocol: draws, error bands, and Stan's range  [insert]  near the domain 3 results figure
@@ -160,6 +211,11 @@ model-seed sd of 0.014 and a Marformer/Stan gap of ~0.11. One unlucky draw moves
 a curve by most of the effect being argued about; the original seed 42 is such a
 draw. On fresh draws Stan keeps descending past $K=500$ and overtakes Marformer.
 
+REMOVES: nothing — this is new text, and I have not identified the anchor
+sentence. Please point me at it.
+
+ADDS:
+
 ```latex
 Each point is the mean over three independently generated data sets, with the shaded
 band showing their spread; the seed-to-seed variation of the model itself is roughly six
@@ -168,6 +224,7 @@ stopping at $K=500$, since the two methods cross beyond that point.
 ```
 
 ---
+
 
 
 ## B7 — loss weights: no paper change, but a note for the record  [reply]  L1035
@@ -184,6 +241,16 @@ learning rate track each other epoch by epoch for 400 epochs, maximum absolute
 difference 0.003 nats. AdamW is invariant to a global rescale of the loss, so no
 learning-rate compensation is needed.
 
+REMOVES: nothing. The text below is appended inside the existing
+`\response{Tom}` in Jason's note, which currently reads:
+
+```latex
+\jason{What is the value of $\lambda_\mathrm{copy}$?  Unless we already gave a default value when we first introduced it\response{Tom} \texttt{weight\_decay=0.01} in all domains, so $\lambda_{L_2}=0.005$.  $\lambda_\mathrm{copy}=1/15$ in domain 3.  ...}
+```
+
+ADDS (replacing the `$\lambda_\mathrm{copy}=1/15$ in domain 3.` sentence with a
+fuller version):
+
 ```latex
 \response{Tom} $\lambda_\mathrm{copy}=1/15$ in domain 3.  The released code applies the
 equivalent unnormalized weights ($15$ on masked, $1$ on observed); under AdamW a global
@@ -193,6 +260,7 @@ epoch with no change to the learning rate.
 ```
 
 ---
+
 
 
 ## B8 — LLM-Rubric figure reproducibility  [no paper change — note for us]
