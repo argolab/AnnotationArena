@@ -63,23 +63,66 @@ the ten sizes, because the model never saw a 225-item context in training. That
 train/eval chunks must match is a real methodological detail currently stated
 nowhere in the paper.
 
-REMOVES: nothing. This is new text. For orientation, the sentence it follows:
+REMOVES: nothing. This is new text. For orientation, it follows the dataset
+paragraph ending "...with item dropout $\delta_\itemidx = 0.7$ for the \oursys."
+and precedes the two figures and the results paragraph.
 
-```latex
-We use a 175/25/25 train/validation/test split over conversations and follow the item generalization protocol of \cref{sec:data-annot}, varying $\nitem_{\mathrm{train}} \in \{10, 20, 30, 40, 50, 75, 100, 125, 150, 175\}$ with item dropout $\delta_\itemidx = 0.7$ for the \oursys.
-```
+GROUNDING: every number below comes from the ten `train_config.json` files under
+`runs/legacy/replicate-01/RESULTS/MARFORMER/LLM_RUBRIC/` (sizes 10-175). **All
+ten are byte-identical in configuration**, so there is a single setup to state.
 
 ADDS:
 
 ```latex
-The \oursys configuration follows \cref{sec:marformer-annot}, with two differences
-forced by the smaller data. Training runs for $300$ epochs. The item graph is
-restricted to $10$ items per forward pass, and---unlike the synthetic setting, where
-evaluation can afford more context than training---evaluation uses the same $10$-item
-restriction. Matching the two matters: re-scoring the same checkpoints with the full
-$225$-item context costs $0.50$ nats, because the model is never exposed to a context
-of that size during training.
+\subsubsection*{\oursys Configuration}
+\label{sec:marformer-real}
+
+The architecture is exactly that of \cref{sec:marformer-annot}: feature-stream
+dimension $75$ and parameter-stream dimension $C+1=5$, giving total token dimension
+$d=80$; $L=8$ Transformer layers, $H=4$ attention heads, and a feedforward module of
+dimension $d_{\mathrm{ff}}=128$ with a single hidden layer; relational attention
+scores shared across heads and scaled by $1/\sqrt{d_h}$; and standard Transformer
+dropout $0.1$ throughout. The index set is
+$\{1,\dots,\ncrit\}\times\{1,\dots,\njudge\}\times\{1,\dots,\nitem\}$ with
+$\ncrit=9$, $\njudge=25$, $\nitem=225$, carrying the same criterion, judge and item
+entity tokens and the same relations.
+
+One encoding detail is specific to this domain. The LLM judge supplies a
+distribution rather than a label, and the \oursys consumes it as one: the encoding
+function receives the LLM's full categorical distribution over $\{1,\ldots,C\}$ in
+place of the one-hot $e(c)=20\cdot\mathbf{1}_c$ used for human ratings. The dense
+LLM slice therefore enters the graph as soft evidence.
+
+Optimization follows \cref{sec:marformer-annot}: AdamW with learning rate
+$2\times10^{-4}$ and weight decay $0.01$, masking probability $0.15$, five
+independently masked versions of the annotation tensor per epoch, batch size $1$,
+and observed-loss carry weight $\lambda_\mathrm{copy}=\frac{1}{15}$. Training runs
+for $300$ epochs, and the reported checkpoint is the one minimizing loss on the
+$25$-conversation validation split. Item embeddings are dropped with
+$\delta_\itemidx=0.7$ and judge embeddings are always retained
+($\delta_\judgeidx=0$), as in the item-generalization setting of
+\cref{sec:marformer-annot}.
+
+The item graph is restricted to $10$ items per forward pass. Unlike the synthetic
+setting, where inference can afford more context than training, evaluation here uses
+the same $10$-item restriction. Matching the two is necessary rather than
+incidental: re-scoring the same checkpoints with the full $225$-item context costs
+$0.50$ nats, because the model is never exposed to a context of that size during
+training.
 ```
+
+TWO THINGS TO CONFIRM BEFORE THIS GOES IN — I did not want to assert either:
+
+1. **`transductive_learning=False` in every LLM-Rubric config**, where the
+   synthetic Domain 3 runs use `True`. If that carries the same meaning here as
+   in \cref{sec:data-annot} then LLM-Rubric is the *non*-transductive protocol
+   and the paper should say so, because the current text says only "follow the
+   item generalization protocol of \cref{sec:data-annot}" without picking a
+   variant. I have not traced the flag through the LLM-Rubric data builder.
+
+2. **The validation-selection sentence** is true of the checkpoint the trainer
+   saves (`best-epoch=0173.ckpt`, monitored on `val/missing_ce`), but see B9 —
+   the plot script does not straightforwardly use it.
 
 ---
 
@@ -346,3 +389,37 @@ regenerates a **two-curve** version of the LLM-Rubric figure, because Stan CPM,
 MIWAE and REMASKER were never re-run there (D29). The paper's own figure has all
 five series and the result stands --- Marformer is below Stan CPM at every size
 but the smallest. Only the end-to-end reproducibility of that figure is missing.
+
+
+
+## B9 — the published LLM-Rubric number is partly selected on test  [no paper change yet — decide first]
+
+SECTION: not a text anchor. This concerns
+`imputer/ranking/scripts/LLMRubric/plot_llmrubric_cpm_sigmoid.py`, which produces
+\cref{fig:llmrubric-results}.
+
+FOUND 2026-09-10 while grounding B1. `_select_marformer_result_json` scores both
+`TEST_RESULTS/best.json` and `TEST_RESULTS/last.json` and returns **whichever has
+the lower test log-loss**:
+
+```python
+candidates.append((float(log_loss), name, path))   # log_loss is on TEST
+candidates.sort(key=lambda item: (item[0], item[1]))
+return candidates[0][2]
+```
+
+So although `best.ckpt` is itself chosen on the validation split, the *published
+point* is the better of two candidates measured on test. This is the same class
+of error as D14 in Domain 3, but much smaller: an argmin over two, not eighteen.
+
+**Why it still matters.** Only the \oursys arm gets this two-way choice; the
+baselines do not. Whatever it is worth, it is worth it to us and not to them.
+
+**What to do.** The script already has `--best`, which forces `best.json` and
+removes the leak entirely. Rerunning the figure with `--best` is cheap (no
+retraining, the scored JSONs are all on disk). I have NOT done it, because it may
+move published numbers and that is your call. If the two agree at every size the
+issue is moot and worth one sentence saying so; if they do not, `--best` is the
+defensible curve.
+
+---
