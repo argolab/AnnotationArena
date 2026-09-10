@@ -37,23 +37,99 @@ def _anneal_table(summary) -> str:
     if not summary:
         return ("<p class=note>The learning-rate anneal is still running; this section "
                 "fills in when the last cell lands.</p>")
-    body = "".join(
-        '<tr><td class=k>{size}</td><td>{start:.4f}</td><td>{const:.4f}</td>'
-        '<td>{cos:.4f}</td><td class="{cls}">{delta:+.4f}</td></tr>'.format(
-            cls=("g" if r["delta"] < 0 else "d"), **r)
-        for r in summary["rows"])
+    def cell(v, fmt="{:.4f}"):
+        return fmt.format(v) if v is not None else "&mdash;"
+
+    body = ""
+    for r in summary["rows"]:
+        cd = r.get("corner_delta")
+        body += (
+            f'<tr><td class=k>{r["size"]}</td>'
+            f'<td>{r["start"]:.4f}</td><td>{r["const"]:.4f}</td><td>{r["cos"]:.4f}</td>'
+            f'<td class="{"g" if r["delta"] < 0 else "d"}">{r["delta"]:+.4f}</td>'
+            f'<td>{cell(r.get("corner_const"))}</td><td>{cell(r.get("corner_cos"))}</td>'
+            f'<td class="{"sd" if cd is None else ("g" if cd < 0 else "d")}">'
+            f'{cell(cd, "{:+.4f}")}</td></tr>')
     return f"""<div class=tw><table>
 <caption>Terminal cosine decay vs continuing at the flat lr, {summary['epochs']} extra epochs
 from the same checkpoint and the same AdamW state</caption>
-<thead><tr><th>K</th><th>start (shipped ckpt)</th><th>+{summary['epochs']} flat</th>
-<th>+{summary['epochs']} cosine</th><th>&Delta; cosine&minus;flat</th></tr></thead>
-<tbody>{body}</tbody></table></div>"""
+<thead><tr><th rowspan=2>K</th><th colspan=4>whole-graph missing CE (~13.6k cells)</th>
+<th colspan=3>test corner (316 cells) &mdash; the reported metric</th></tr>
+<tr><th>shipped</th><th>+flat</th><th>+cosine</th><th>&Delta;</th>
+<th>+flat</th><th>+cosine</th><th>&Delta;</th></tr></thead>
+<tbody>{body}</tbody></table></div>
+<p class=note><b>The two metrics disagree, and that is the result.</b> On the quiet
+whole-graph metric the schedule is worth 0.013 at K=500 and nothing
+(&le;0.003) at K&nbsp;&ge;&nbsp;1000. On the corner &mdash; what the paper reports &mdash;
+the sign flips across sizes and every value sits inside the 0.035 paired between-arm
+sd measured in Part&nbsp;0. An effect visible only in the metric we do not report,
+at a magnitude the metric we do report cannot resolve, is not an effect to ship.
+The epoch budget (F13) already collects what there is to collect here.</p>"""
+
+
+def _runtime_section(outdir: Path) -> str:
+    rt = outdir / "runtime_table.json"
+    if not rt.is_file() or not (outdir / "runtime_curves.png").is_file():
+        return ""
+    data = json.loads(rt.read_text())
+    by = {}
+    for r in data["rows"]:
+        by.setdefault(r["method"], {}).setdefault(r["size"], {})[r["draw"]] = r["minutes"]
+    order = ["Marformer (T)", "Marformer NT", "Stan Oracle", "Stan Bin",
+             "Stan Proj", "Stan Both"]
+    body = ""
+    for m in order:
+        row = by.get(m, {}).get(4000)
+        if not row:
+            continue
+        a, b = row.get("101"), row.get("105")
+        cell = lambda v: f"{v:,.0f}" if v else "&mdash;"
+        ratio = ""
+        base = by.get("Marformer (T)", {}).get(4000, {}).get("101")
+        if a and base:
+            ratio = f"{a / base:.1f}x"
+        body += (f'<tr><td class=k>{m}</td><td>{data["hardware"]["stan" if m.startswith("Stan") else "marformer"]}</td>'
+                 f'<td>{cell(a)}</td><td>{cell(b)}</td><td class=sd>{ratio}</td></tr>')
+    png = img(outdir / "runtime_curves.png")
+    return f"""
+<h3>What each method cost to fit <span style="font-weight:400;color:var(--ink-faint)">&mdash; temporary, rough</span></h3>
+<div class="box warn">
+<p><b>Treat every number here as an order of magnitude, not a measurement.</b> These are
+<code>elapsed_seconds</code> and <code>fit_elapsed_seconds</code> scraped from the launcher
+metadata of runs submitted for other purposes, on a shared cluster, n=1, with no control
+over node contention. Draw 105's Stan Oracle is <em>slower</em> at K=3000 than at K=4000,
+which is not a property of the model. The paper's runtime figure needs a controlled pass.</p>
+<p>Two asymmetries are deliberate and stated rather than hidden. <b>Different hardware:</b>
+Marformer gets a GPU and Stan does not, because HMC here is CPU-only &mdash; that is the
+comparison being made ("what does this curve cost to produce"), not a per-core one.
+<b>Different work:</b> every Stan fit here is <b>one chain</b>. The final run moves to 4
+chains and 2000 sampling iterations, so these are a <em>lower bound</em> on the shipped
+configuration.</p>
+</div>
+<figure><img alt="Wall clock to fit against training size, both draws" src="{png}">
+<figcaption>Log&ndash;log. Hardware is in the legend. Marformer's two curves overlap almost
+exactly &mdash; the transductive and non-transductive arms cost the same.</figcaption></figure>
+<div class=tw><table>
+<caption>At K=4000, the largest size both families share</caption>
+<thead><tr><th>method</th><th>hardware</th><th>draw 101 (min)</th><th>draw 105 (min)</th>
+<th>vs Marformer (T)</th></tr></thead>
+<tbody>{body}</tbody></table></div>
+<p class=note><b>The headline is real but narrower than it looks.</b> Against <b>Stan
+Oracle</b> &mdash; the well-specified model, the one the gap is measured against &mdash;
+Marformer is ~20x faster at K=4000 (37 min against 12.6 hours), and the ratio grows with K.
+Against the <em>misspecified</em> Stan variants it is not: Proj and Both fit in 26&ndash;27
+minutes, comparable to Marformer or better. So the amortisation argument should be made
+against the model that is actually competitive on accuracy, not against Stan in general.</p>"""
 
 
 def panel_html(outdir: Path, side_out: Path) -> str:
     data = json.loads((outdir / "update_table.json").read_text())
     rows, f13 = data["rows"], data["f13_delta"]
     png = img(outdir / "update_curves.png")
+    # Computed out of line: nesting a conditional and a format spec inside the
+    # page f-string is a parse hazard for no benefit.
+    f13_1k = f"{abs(f13.get('1000', 0.0022)):.4f}"
+    f13_4k = f"{abs(f13.get('4000', 0.0228)):.4f}"
     ap = side_out / "anneal_summary.json"
     summary = json.loads(ap.read_text()) if ap.is_file() else None
 
@@ -73,8 +149,8 @@ draw-to-draw sd. The Marformer&minus;Stan <em>difference</em> moves 0.001&ndash;
 K&nbsp;&ge;&nbsp;1000. A hard draw is hard for both models, so the draw effect is
 common-mode and cancels.</p>
 <p><b>3. The epoch fix lands where Stan is not drawn.</b> F13 (raised cap, per-run carve
-selection, refit) is worth {abs(f13['1000']) if '1000' in f13 else 0.0022:.4f} nats at
-K=1000 and {abs(f13.get('4000', 0.0228)):.4f} at K=4000 &mdash; entirely in the region past
+selection, refit) is worth {f13_1k} nats at
+K=1000 and {f13_4k} at K=4000 &mdash; entirely in the region past
 the Stan cutoff. It is worth having and it is not the answer to the gap.</p>
 </div>
 
@@ -104,6 +180,8 @@ phase, against a control that continues at the flat rate for exactly the same nu
 extra steps. Without that control the comparison is unreadable: the annealed arm has also
 had more training, and that alone moves the metric.</p>
 {_anneal_table(summary)}
+
+{_runtime_section(outdir)}
 
 <h3>One thing to check before the paper goes out</h3>
 <div class="box warn">

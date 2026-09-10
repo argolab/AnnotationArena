@@ -34,8 +34,32 @@ def tail_mean(xs):
     return statistics.fmean(xs[-TAIL:])
 
 
+def corner_table():
+    """
+    The REPORTED metric, from side/out/arms_anneal-s101.json (eval_arms.sbatch).
+
+    Kept alongside the whole-graph number rather than replacing it, because the
+    two disagree and the disagreement is the finding. The corner is 316 cells and
+    carries a paired between-arm sd of ~0.035 (Part 0); the whole-graph metric is
+    ~40x larger and correspondingly quieter, but it is not what the paper reports.
+    An effect that shows up in one and not the other is, at these magnitudes, an
+    effect that has not been demonstrated.
+    """
+    src = RERUN / "side/out/arms_anneal-s101.json"
+    if not src.is_file():
+        return {}
+    out = {}
+    for r in json.loads(src.read_text()):
+        arm = "anneal_cos" if "/anneal_cos/" in r["run"] else "cont_const"
+        pts = [p["corner"] for p in r["series"] if p["epoch"] >= 0]
+        if pts:
+            out.setdefault(r["size"], {})[arm] = statistics.fmean(pts[-TAIL:])
+    return out
+
+
 def main() -> None:
     rows, epochs = [], None
+    corner = corner_table()
     for k in SIZES:
         rn = f"DOMAIN3-SIGMOID_Item_T_{k}_MARFORMER"
         src = RERUN / ("runs/legacy/dataseed-s101/RESULTS/MARFORMER/DOMAIN3-SIGMOID/ITEM/"
@@ -47,16 +71,23 @@ def main() -> None:
             continue
         c, a = xents(arms["cont_const"]), xents(arms["anneal_cos"])
         epochs = len(a)
+        cc = corner.get(k, {})
         rows.append({"size": k, "start": tail_mean(xents(src)),
                      "const": tail_mean(c), "cos": tail_mean(a),
-                     "delta": tail_mean(a) - tail_mean(c)})
+                     "delta": tail_mean(a) - tail_mean(c),
+                     "corner_const": cc.get("cont_const"),
+                     "corner_cos": cc.get("anneal_cos"),
+                     "corner_delta": (cc["anneal_cos"] - cc["cont_const"]
+                                      if len(cc) == 2 else None)})
     out = {"epochs": epochs, "tail": TAIL, "metric": "whole-graph missing xent",
            "rows": rows}
     (RERUN / "side/out/anneal_summary.json").write_text(json.dumps(out, indent=1))
-    print(f"{'K':>5} {'start':>8} {'+flat':>8} {'+cosine':>8} {'cos-flat':>9} {'cos-start':>10}")
+    print(f"{'K':>5} {'start':>8} {'+flat':>8} {'+cosine':>8} {'cos-flat':>9} "
+          f"{'cos-start':>10} | {'CORNER cos-flat':>16}")
     for r in rows:
+        cd = f"{r['corner_delta']:+16.4f}" if r["corner_delta"] is not None else " " * 16
         print(f"{r['size']:>5} {r['start']:8.4f} {r['const']:8.4f} {r['cos']:8.4f} "
-              f"{r['delta']:+9.4f} {r['cos']-r['start']:+10.4f}")
+              f"{r['delta']:+9.4f} {r['cos']-r['start']:+10.4f} | {cd}")
 
 
 if __name__ == "__main__":
