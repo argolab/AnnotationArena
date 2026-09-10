@@ -14,8 +14,11 @@ as new seeds land without nesting shells.
     python add_seed_tabs.py --report fig6/out/fig6_report.html --seeds 101,105
 """
 from __future__ import annotations
-import argparse, base64, json, re
+import argparse, base64, json, re, sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from update_tab import panel_html as update_panel_html
 
 ORIG_START, ORIG_END = "<!--ORIG-START-->", "<!--ORIG-END-->"
 
@@ -127,6 +130,9 @@ def main():
     ap.add_argument("--report", default="fig6/out/fig6_report.html")
     ap.add_argument("--seeds", default="101,105")
     ap.add_argument("--outdir", default="dataseed/out")
+    ap.add_argument("--side-out", default="side/out",
+                    help="where anneal_summary.json lives, for the September tab")
+    ap.add_argument("--no-update-tab", action="store_true")
     a = ap.parse_args()
     seeds = [int(s) for s in a.seeds.split(",") if s]
     src = Path(a.report).read_text()
@@ -151,9 +157,19 @@ def main():
     if ".tabs{" not in head:
         head = head.replace("</style>", TAB_CSS + "</style>")
 
-    btns = ['<button data-target="tab-orig" role=tab>Seed 42 &middot; as published</button>']
-    panels = [f'<div class=tabpanel id=tab-orig role=tabpanel>'
-              f'{ORIG_START}{body_rest}{ORIG_END}</div>']
+    btns, panels = [], []
+    # The newest material goes first so the page opens on it. Returning readers
+    # land on whatever tab they last chose (localStorage), so this only changes
+    # the default for someone opening the link fresh -- which, for a page that is
+    # circulated before a meeting, is most of them.
+    if not a.no_update_tab and (outdir / "update_table.json").is_file():
+        btns.append('<button data-target="tab-update" role=tab>September update</button>')
+        panels.append('<div class=tabpanel id=tab-update role=tabpanel>'
+                      + update_panel_html(outdir, Path(a.side_out)) + '</div>')
+    hidden = " hidden" if panels else ""
+    btns.append('<button data-target="tab-orig" role=tab>Seed 42 &middot; as published</button>')
+    panels.append(f'<div class=tabpanel id=tab-orig role=tabpanel{hidden}>'
+                  f'{ORIG_START}{body_rest}{ORIG_END}</div>')
     for s in seeds:
         if not (outdir / f"seed{s}_table.json").is_file():
             print(f"  skip seed {s}: no payload yet"); continue
