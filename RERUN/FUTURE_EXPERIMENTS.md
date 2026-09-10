@@ -43,6 +43,8 @@ seeds; the decision threshold is 0.015 nats. Full detail in the linked sections.
 | **W3b** | Is forced amortisation (delta_item=1) the plateau? | **No** | ±0.003 at K=4000 | — |
 | **W3e** | Is capacity the plateau? | **No** — 5 architectures, none beats base | largest arm **+0.021** worse | keep 80/8/4/128 |
 | **S8** | Is LLM-Rubric's `max_item=10` costing us? | **No** — and train/eval chunk must MATCH | **-0.018 ±0.013**, n=8 | keep 10; state it in the paper |
+| **S5b** | Is a 10–20x larger lr simply better? | **No** — worse and less stable across seeds | **+0.172 / +0.312** at 10x / 20x | lr stays 2e-4; internal only |
+| **S9** | Does a larger effective batch stabilise training? | **No, and not worse either** — a wash at matched steps | **−0.006** matched steps; **+0.034/+0.045** matched compute | keep sequential; internal only |
 
 **The two things that actually changed the design:** the epoch budget (F13) and
 the loss-weight form (F3). Everything else was confirmed as shipped or is a
