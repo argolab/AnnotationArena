@@ -48,6 +48,12 @@ STAN_STYLE = {
     "Stan Proj":   dict(color="#42a5f5", marker="X", ls="-"),
     "Stan Both":   dict(color="#1565c0", marker="s", ls="-"),
 }
+MARF_STYLE = {
+    "Marformer":    dict(color="#B02A37", marker="o", ls="-",
+                         label="Marformer (T), 400 epochs"),
+    "MarformerNT":  dict(color="#E08379", marker="s", ls="-",
+                         label="Marformer NT, 400 epochs"),
+}
 
 
 def load():
@@ -57,7 +63,9 @@ def load():
     marf = {}
     for ds in (101, 105):
         t = json.loads((OUT / f"seed{ds}_table.json").read_text())
-        marf[ds] = {r["size"]: r["corner"] for r in t["rows"] if r["family"] == "Marformer"}
+        for fam in MARF_STYLE:
+            marf.setdefault(ds, {})[fam] = {
+                r["size"]: r["corner"] for r in t["rows"] if r["family"] == fam}
     return marf, stan
 
 
@@ -71,13 +79,16 @@ def main() -> None:
 
     fig, axes = plt.subplots(1, 2, figsize=(13, 5.2), sharey=True)
     for ax, ds in zip(axes, (101, 105)):
-        ks = sorted(marf[ds])
-        ax.plot(ks, [marf[ds][k] for k in ks], color="#B02A37", marker="o",
-                lw=2, label="Marformer (T), 400 epochs")
+        for fam, style in MARF_STYLE.items():
+            m = marf[ds][fam]
+            ks = sorted(m)
+            ax.plot(ks, [m[k] for k in ks], lw=2, ms=5, **style)
+        # F13 is a transductive measurement; it is not carried over to NT.
+        base = marf[ds]["Marformer"]
         fk = sorted(F13_DELTA)
-        ax.plot(fk, [marf[ds][k] + F13_DELTA[k] for k in fk], color="#B02A37",
+        ax.plot(fk, [base[k] + F13_DELTA[k] for k in fk], color="#B02A37",
                 marker="o", mfc="white", ls="--", lw=1.6,
-                label="Marformer + F13 epoch budget (est.)")
+                label="Marformer (T) + F13 epoch budget (est.)")
         for name, style in STAN_STYLE.items():
             m = stan[ds].get(name, {})
             if not m:
@@ -86,7 +97,11 @@ def main() -> None:
             ax.plot(sk, [m[k] for k in sk], lw=1.8, ms=5, label=name, **style)
         # Where the published figure stops measuring Stan and starts drawing it flat.
         ax.axvline(500, color="#787F92", lw=1, ls=":")
-        ax.text(520, 0.57, "paper stops\nmeasuring Stan here", fontsize=8, color="#787F92")
+        # Not "where Stan stops" -- the fits exist to K=4000 and always did.
+        # This is only where the PAPER's curve stops.
+        ax.text(560, 0.98, "paper's Stan curve stops here", rotation=90, fontsize=8,
+                color="#787F92", va="top", ha="left",
+                transform=ax.get_xaxis_transform())
         ax.set_xscale("log")
         ax.set_xlabel(r"$K_\mathrm{train}$ (items available for training)")
         ax.set_title(f"Data draw {ds}")
@@ -101,16 +116,17 @@ def main() -> None:
 
     # The gap table: absolute level swings with the draw, the difference does not.
     rows = []
-    for k in sorted(set(marf[101]) & set(marf[105])):
+    for k in sorted(set(marf[101]["Marformer"]) & set(marf[105]["Marformer"])):
         b1, b5 = best_stan(stan[101], k), best_stan(stan[105], k)
         rows.append({
             "size": k,
-            "marf_101": marf[101][k], "marf_105": marf[105][k],
-            "marf_spread": abs(marf[101][k] - marf[105][k]),
+            "marf_101": marf[101]["Marformer"][k], "marf_105": marf[105]["Marformer"][k],
+            "marf_spread": abs(marf[101]["Marformer"][k] - marf[105]["Marformer"][k]),
             "stan_101": b1, "stan_105": b5,
-            "gap_101": (marf[101][k] - b1) if b1 else None,
-            "gap_105": (marf[105][k] - b5) if b5 else None,
-            "gap_spread": (abs((marf[101][k] - b1) - (marf[105][k] - b5))
+            "gap_101": (marf[101]["Marformer"][k] - b1) if b1 else None,
+            "gap_105": (marf[105]["Marformer"][k] - b5) if b5 else None,
+            "gap_spread": (abs((marf[101]["Marformer"][k] - b1)
+                               - (marf[105]["Marformer"][k] - b5))
                            if b1 and b5 else None),
         })
     (OUT / "update_table.json").write_text(json.dumps({"rows": rows,

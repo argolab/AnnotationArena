@@ -1865,8 +1865,31 @@ things still gating a launch.
 | 11 | residual variant | `all` (shipped) | SETTLED | resid ablation, **S1** |
 | 12 | **epoch budget** | **cap 2000, stopping epoch chosen per run by the block carve, refit on full training partition** | SETTLED | **W3d** |
 | 13 | **capacity** | **80 / 8 / 4 / 128, unchanged** | SETTLED — five architectures, none beats base; the largest is +0.021 worse | **W3e** |
+| 14 | **Stan sampling** | **4 chains, 500 warmup, 2000 sampling** per fit | SETTLED — user decision 2026-09-10 | chains audit, this section |
 
 **Both gates are closed. The final run is unblocked.**
+
+*Stan sampling (14).* Every Stan fit behind the current curves used **one
+chain**: `run_stan_group.sh` defaults to `CHAINS=1`, nothing in the harness
+overrides it, and every run directory on both draws holds exactly one draw CSV.
+The paper's appendix meanwhile describes 4 chains and 2000 post-warmup draws and
+reports split-R-hat -- which is the statistic you are forced to use when you have
+one chain. So the text and the runs disagree, and the final run resolves it in
+the text's favour: **4 chains, 500 warmup, 2000 sampling**.
+
+The result does not depend on this. K=4000 gives 0.6190 / 0.6178 / 0.6180 across
+1-chain, 4-chain, and 4-chain-with-long-warmup -- 0.0012 nats across an eightfold
+range of draws. What changes is what can be *claimed*: with 4 chains there is a
+real between-chain R-hat, and at the shipped budget it is 1.12 on `lp__` at both
+K=1000 and K=4000, with `sigma_uit` at 1.58 at K=4000. A longer warmup pulls
+`lp__` to 1.03 and `sigma_uit` to 1.11, which is why the warmup rises to 500 here
+rather than staying at 300.
+
+*Cost, and why the user asked for it.* 4 chains at K=4000 took 1h15 against 27
+min for one chain, and the long-warmup variant 2h49. The heavier setting makes
+the runtime panel (\cref{fig:dom3-runtime}) a stronger result rather than a
+weaker one: it is the honest cost of the convergence the appendix already claims,
+and the wider the Stan runtime bar, the sharper the amortisation argument.
 
 *Budget (12).* Criterion 1 met, and criterion 2 met on 2026-09-06: inside a
 2000-epoch cap the block carve picks a stopping epoch that beats a flat 400 by

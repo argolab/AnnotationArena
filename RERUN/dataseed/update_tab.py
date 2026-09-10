@@ -108,14 +108,14 @@ had more training, and that alone moves the metric.</p>
 <h3>One thing to check before the paper goes out</h3>
 <div class="box warn">
 <p>The appendix says Stan Oracle is fit with <b>4 chains</b> and 500 sampling iterations
-each, for 2000 post-warmup draws, and reports split-$\\hat{{R}}$. The runner in this
+each, for 2000 post-warmup draws, and reports split-R&#770;. The runner in this
 repository defaults to <code>CHAINS=1</code>, nothing in the harness overrides it, and every
 Stan run directory on both draws contains exactly one draw CSV. So the runs behind the
 curves above are <b>1 chain, 300 warmup, 500 sampling</b> &mdash; which is also why
-split-$\\hat{{R}}$ is what got reported: with one chain it is the only $\\hat{{R}}$ available.</p>
+split-R&#770; is what got reported: with one chain it is the only R&#770; available.</p>
 <p>Refits with 4 chains have since been done at K=1000 and K=4000. The predictive number is
 safe: K=4000 gives 0.6190 / 0.6178 / 0.6180 across 1-chain, 4-chain, and 4-chain-with-long-warmup
-&mdash; 0.0012 nats across an eightfold range of draws. But between-chain $\\hat{{R}}$ on
+&mdash; 0.0012 nats across an eightfold range of draws. But between-chain R&#770; on
 <code>lp__</code> is 1.12 at both sizes at the shipped budget, and <code>sigma_uit</code>
 reaches 1.58 at K=4000; a longer warmup brings <code>lp__</code> to 1.03 and
 <code>sigma_uit</code> to 1.11. One chain could not have shown any of this.</p>
