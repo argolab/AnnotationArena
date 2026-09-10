@@ -1,7 +1,18 @@
 # Paper edits from the pre-final-run sweep — for Tom to edit, then hand back to apply
 
-Baseline: `Marformer-Paper` @ HEAD as of 2026-09-08. Line numbers drift; each
-item is anchored by quoted text, which is what will actually be searched for.
+Baseline: `Marformer-Paper` @ **f990f22**, pulled 2026-09-10 (five commits of
+Tom's edits since the 09-08 baseline). Line numbers drift; each item is anchored
+by quoted text, which is what will actually be searched for.
+
+**Every item now names its enclosing `\section`/`\subsection`, resolved against
+that commit.** This is because B1 was anchored in the wrong section — it would
+have written LLM-Rubric's hyperparameters into the *synthetic* Domain 3 setup —
+and B2 turned out to be anchored on `%`-commented-out LaTeX. Read the SECTION
+line before the ADDS block; it is the check that caught both.
+
+**What Tom's edits already superseded:** B2 entirely (the live chunking sentence
+is now correct at L1536), and the epoch half of B1 (Domain 3 now says "early
+stopping" rather than "400 epochs").
 
 **How to edit:** change anything inside the ```latex blocks — that text is
 inserted verbatim. Delete an item (or put `SKIP` on its heading line) to drop
@@ -23,70 +34,111 @@ or `RERUN/DISCREPANCIES.md`. Nothing here is proposed without a number behind it
 
 
 
-## B1 — LLM-Rubric hyperparameters: three unstated or wrong numbers  [rewrite]  L1533
+## B1 — LLM-Rubric \oursys configuration: state it, in the LLM-Rubric section  [insert]  after L1899
 
-ANCHOR: `The batch size is $1$ due to GPU memory constraints, and training runs for 400 epochs.`
+SECTION (verified 2026-09-10 against `Marformer-Paper` @ f990f22):
+`\section{Appling \oursys on Real Annotation Data}` -> `\subsection{LLM-Rubric}`
+(heading L1888). Insert after the dataset paragraph ending
+"...with item dropout $\delta_\itemidx = 0.7$ for the \oursys."
 
-CONTEXT: §LLM-Rubric experimental setup, the paragraph beginning "We train with
-AdamW using learning rate $2\times10^{-4}$...". Your existing `\tom{}` note on
-this sentence asks which config we actually use; this resolves it.
+**This item was wrong and has been rewritten. Tom caught it.** The previous
+version anchored on L1533, which is inside
+`\subsection{\oursys Configuration for the Annotation Domain}` — the **synthetic**
+Domain 3 configuration. Applying it would have written LLM-Rubric's 300 epochs and
+`max_item=10` into the synthetic domain's setup, where they are simply false.
+The LLM-Rubric section has no \oursys configuration paragraph at all, which is
+the actual defect; this adds one.
+
+Nothing needs removing from the Domain 3 section any more: Tom has already
+changed "training runs for 400 epochs" to "training runs with early stopping"
+there, and marked the `\tom{}` note resolved. The only leftover is that the
+resolved note still carries the LLM-Rubric numbers inside it — see B1b.
 
 EVIDENCE: S6 audit (2026-09-04) against three real `train_config.json` files
-(sizes 10, 40, 100), all recording `epochs=300, max_item=10, item_dropout_rate=0.7`. The evaluation clause is from S8 / D30: the published
-number is produced by `plot_llmrubric_cpm_sigmoid.py`, which recomputes at
-`max_item=10`; re-scoring the same checkpoints at 225 is **+0.50 nats worse**,
-because the model never saw a 225-item context in training.
+(sizes 10, 40, 100), all recording `epochs=300, max_item=10,
+item_dropout_rate=0.7`. The matched-chunk clause is S8: the published number is
+produced by `plot_llmrubric_cpm_sigmoid.py`, which recomputes at `max_item=10`;
+re-scoring the same checkpoints at 225 is **+0.5043 nats worse** averaged over
+the ten sizes, because the model never saw a 225-item context in training. That
+train/eval chunks must match is a real methodological detail currently stated
+nowhere in the paper.
 
-REMOVES (main.tex today — the whole sentence and the \tom{} note attached to it):
+REMOVES: nothing. This is new text. For orientation, the sentence it follows:
 
 ```latex
-The batch size is $1$ due to GPU memory constraints, and training runs for 400 epochs.\tom{Masked loss weight 15 with observed loss weight 1 is a 15$\times$ scaling of the masked loss; normalized as in \cref{eq:trainreg} that is $\lambda_\mathrm{copy}=1/15$.  Also, our local LLM-Rubric config says 300 epochs (not 400), $\delta_\mathrm{item}=0.7$, and \texttt{max\_item=10}, I should run replication to see which one we use, but @prabhav, you might know which config we use to run LLM-rubric?}
+We use a 175/25/25 train/validation/test split over conversations and follow the item generalization protocol of \cref{sec:data-annot}, varying $\nitem_{\mathrm{train}} \in \{10, 20, 30, 40, 50, 75, 100, 125, 150, 175\}$ with item dropout $\delta_\itemidx = 0.7$ for the \oursys.
 ```
-
-(The following sentence, "We use standard Transformer dropout $0.1$ throughout.", is untouched.)
 
 ADDS:
 
 ```latex
-The batch size is $1$ due to GPU memory constraints, and training runs for 300 epochs.
-We set the item dropout rate $\delta_\mathrm{item}=0.7$, and restrict the item graph to
-$10$ items per forward pass---both during training and at evaluation.
+The \oursys configuration follows \cref{sec:marformer-annot}, with two differences
+forced by the smaller data. Training runs for $300$ epochs. The item graph is
+restricted to $10$ items per forward pass, and---unlike the synthetic setting, where
+evaluation can afford more context than training---evaluation uses the same $10$-item
+restriction. Matching the two matters: re-scoring the same checkpoints with the full
+$225$-item context costs $0.50$ nats, because the model is never exposed to a context
+of that size during training.
 ```
 
 ---
 
 
 
-## B2 — Domain 3 chunking footnote: one size stated, two used, and "the gap is small"  [rewrite]  L1317
+## B1b — the resolved `\tom{}` note in the Domain 3 config still carries LLM-Rubric numbers  [rewrite]  L1532
 
-ANCHOR: `For training sets beyond 500 items, we restrict the item graph to at most 500 items per forward pass (chunking) to control memory.`
+SECTION (verified 2026-09-10): `\subsection{\oursys Configuration for the Annotation Domain}`
+— the synthetic Domain 3 setup. This is the note Tom has already marked
+`\response{Tom} Done replicating, text updated.`
 
-CONTEXT: currently inside the commented-out Domain 3 architecture paragraph. If
-that paragraph is reinstated, this footnote needs replacing; if it stays
-commented out, the same text belongs wherever chunking is finally described.
+The prose around it is now correct. The note itself is spent: its first half
+(the $15\times$ / $\lambda_\mathrm{copy}=1/15$ identity) is now stated in the
+sentence it annotates, and its second half asks about LLM-Rubric, which B1
+answers in the right section. Suggest deleting it. If you would rather keep the
+$\lambda_\mathrm{copy}$ reasoning visible, keep only that half.
 
-EVIDENCE: S4 (job 299893, 684 corner-scored rows, no training). Below K=500 the
-two settings are bit-identical (0.0000). Above it, eval chunk 500 beats 300 by
-0.018 nats at K=2000 and K=4000. The optimum is interior: chunk 1200 is worse
-than 600 by 0.0098. Separately, *training* chunk 600 is worse than 300 by
-0.0094 at K=4000 — so 300/500 is not a compromise, both numbers are preferred.
+EVIDENCE: S5 — the two forms are the same optimisation under AdamW (max
+$\lVert\mathrm{diff}\rVert$ 0.003 over 400 epochs), so $15{:}1$ and
+$1{:}1/15$ describe one objective, not two.
 
-REMOVES (main.tex today):
+REMOVES:
 
 ```latex
-\footnote{For training sets beyond 500 items, we restrict the item graph to at most 500 items per forward pass (chunking) to control memory. Full passes over all items would yield marginally better results but are computationally prohibitive at $K=5000$; empirically the gap is small.}
+\tom{Masked loss weight 15 with observed loss weight 1 is a 15$\times$ scaling of the masked loss; normalized as in \cref{eq:trainreg} that is $\lambda_\mathrm{copy}=1/15$.  Also, our local LLM-Rubric config says 300 epochs (not 400), $\delta_\mathrm{item}=0.7$, and \texttt{max\_item=10}, I should run replication to see which one we use, but @prabhav, you might know which config we use to run LLM-rubric?\response{Tom} Done replicating, text updated.}
 ```
 
-ADDS:
+ADDS: (nothing — delete the note)
 
 ```latex
-\footnote{We restrict the item graph to $300$ items per forward pass during training,
-to bound the memory of the backward pass.  Inference has no backward pass and can
-afford more context, so evaluation uses $500$; Stan is given the whole tensor at once
-regardless, so this is the fair comparison rather than a thumb on the scale.  Below
-$K=500$ the two settings are identical.  Above it the larger evaluation chunk is worth
-$0.018$ nats at $K=4000$.  More context is not uniformly better: the optimum is
-interior, and evaluating with chunks of $1200$ is worse than with $600$.}
+```
+
+---
+
+
+
+## B2 — SUPERSEDED, do not apply. Its anchor is commented-out LaTeX.
+
+SECTION (verified 2026-09-10): the anchor text
+"For training sets beyond 500 items, we restrict the item graph to at most 500
+items per forward pass (chunking) to control memory." survives **only** at L1316,
+inside a `%`-commented block that ends `% END OF BLUE`. It is not in the rendered
+paper. Editing it would have changed dead text and left the live statement alone.
+
+The live statement is at L1536 and Tom has **already corrected it**:
+
+```latex
+For larger training sets, each forward pass is restricted to at most 300 items to control memory usage. Inference can afford more context, so evaluation uses $500$ items. We empirically find the raise from $300$ to $500$ at evaluation time improve log loss.
+```
+
+That says what S4 measured (identical below K=500, 0.018 in favour of 500 above),
+so B2's content has landed. **Nothing to do.** One optional tightening, since
+"We empirically find the raise ... improve log loss" is slightly loose and the
+effect is size-dependent:
+
+ADDS (optional replacement for the third sentence only):
+
+```latex
+The two sizes give identical results below $\nitem_{\mathrm{train}}=500$; above it, the larger evaluation context is worth $0.018$ nats.
 ```
 
 ---
@@ -94,6 +146,13 @@ interior, and evaluating with chunks of $1200$ is worse than with $600$.}
 
 
 ## B3 — Domain 3 epoch budget: the reported numbers are undertrained at large $K$  [insert]  L952
+
+SECTION (verified 2026-09-10 against `Marformer-Paper` @ f990f22):
+`\section{A Neural Architecture for Posterior Marginal Prediction}` ->
+`\subsection{\oursys Training}` (heading L928). This is the **shared** training
+section, not a domain-specific one, which is the right home for a protocol
+statement that applies to Domain 3.
+
 
 ANCHOR: `Domain 3 as reported trains the full 400 epochs with no validation split.  In the new results we have switched domain 3 to the standard setting: carve a validation block out of the training partition, select the epoch budget on it, then merge it back and refit on the full training set for that many epochs.`
 
@@ -128,6 +187,11 @@ ADDS:
 
 
 ## B4 — LayerNorm on $\vpsi$: your question, now with evidence  [rewrite]  L811
+
+SECTION (verified 2026-09-10): `\subsection{\mbox{\oursys} Architecture}`
+(heading L766, `\label{sec:architecture}`). Correct home — this is an
+architecture claim.
+
 
 ANCHOR: `\jason{Is LayerNorm really applied to the parameters $\vpsi$?  I thought not.\response{Tom} It is. LayerNorm is applied to the combined stream.}`
 
@@ -165,6 +229,10 @@ $\vpsi$.}
 
 
 ## B5 — the $\delta_\tau$ rule, stated as a convention rather than a tuned gain  [insert]  L958
+
+SECTION (verified 2026-09-10): `\subsection{\oursys Training}` (heading L928),
+same shared section as B3. Correct home — $\delta_\tau$ is defined there.
+
 
 ANCHOR: `Thus, for each attribute type $\tau$, we define a \defn{dropout rate} $\delta_\tau \in [0,1]$.`
 
@@ -228,6 +296,14 @@ stopping at $K=500$, since the two methods cross beyond that point.
 
 
 ## B7 — loss weights: no paper change, but a note for the record  [reply]  L1035
+
+SECTION (verified 2026-09-10): `\subsection{\oursys Configuration}`
+(heading L1025, `\label{sec:marformer-bn}`) — this is **Domain 1**, graphical
+models, not Domain 3. That is correct for this item: the `\jason{}` question
+about $\lambda_\mathrm{copy}$ is asked there. Be aware the reply concerns the
+objective in general, so if it reads as Domain-1-specific it may belong in
+\cref{sec:marformer-annot} instead.
+
 
 ANCHOR: `\jason{What is the value of $\lambda_\mathrm{copy}$?}`
 
