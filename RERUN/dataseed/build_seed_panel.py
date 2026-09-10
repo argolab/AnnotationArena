@@ -32,6 +32,13 @@ STAN_STYLE = {
     "Stan Proj":   dict(color="#42a5f5", marker="X"),
 }
 
+# Measured F13 gain over the flat 400-epoch budget, mean of model seeds 42 and
+# 43 (FUTURE_EXPERIMENTS, "How F13 is implemented"). Only defined where W3d
+# measured it; there is no F13 point below K=1000 because the raised cap buys
+# nothing there.
+F13_DELTA = {1000: -0.0022, 2000: -0.0116, 4000: -0.0228}
+
+
 def draw_spread(all_rows, kmax):
     """Across-draw sd of corner log-loss, pooled over arms and sizes <= kmax."""
     per = {}
@@ -97,6 +104,21 @@ def main():
         ax.plot([p[0] for p in pts], [p[1] for p in pts], "-", lw=2.6, ms=6.5,
                 color=style["color"], marker=style["marker"],
                 label=f"{style['label']} — data seed {a.seed}", zorder=4)
+        # F13: what the same runs reach once the epoch budget is raised and the
+        # stopping epoch is chosen per run on the block carve. Hollow markers
+        # because this is the MEASURED GAIN carried over from the w3budget /
+        # w3long trees (seed 42 and 43 on draw s101), not an independently
+        # scored curve on this draw -- so it says "here is where the shipped
+        # protocol puts the point", not "here is a measurement of this draw".
+        if fam != "Marformer":
+            continue
+        by = dict(pts)
+        fk = sorted(k for k in F13_DELTA if k in by)
+        if fk:
+            ax.plot(fk, [by[k] + F13_DELTA[k] for k in fk], "--", lw=1.8, ms=7.5,
+                    color=style["color"], marker=style["marker"], mfc="white",
+                    mew=1.6, zorder=5,
+                    label="Marformer (T) trained longer (F13 budget, est.)")
 
     ax.set_xscale("log")
     ticks = sorted({r["size"] for r in mine})

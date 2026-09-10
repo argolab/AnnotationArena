@@ -45,6 +45,7 @@ seeds; the decision threshold is 0.015 nats. Full detail in the linked sections.
 | **S8** | Is LLM-Rubric's `max_item=10` costing us? | **No** — and train/eval chunk must MATCH | **-0.018 ±0.013**, n=8 | keep 10; state it in the paper |
 | **S5b** | Is a 10–20x larger lr simply better? | **No** — worse and less stable across seeds | **+0.172 / +0.312** at 10x / 20x | lr stays 2e-4; internal only |
 | **S9** | Does a larger effective batch stabilise training? | **No, and not worse either** — a wash at matched steps | **−0.006** matched steps; **+0.034/+0.045** matched compute | keep sequential; internal only |
+| **S10** | Does a terminal lr decay buy anything? | **No** — invisible on the reported metric, sign inconsistent | corner **−0.001 to +0.006**, inside the 0.035 noise floor | constant 2e-4; F13 already collects it |
 
 **The two things that actually changed the design:** the epoch budget (F13) and
 the loss-weight form (F3). Everything else was confirmed as shipped or is a
@@ -1498,6 +1499,66 @@ default. All four arms would have been byte-identical and the sweep would have
 reported a clean null. This is the same failure `DOMAIN3_EPOCHS` had earlier in
 this project; the export was added and the arms verified distinct in their
 `train_config.json` before the numbers were read.
+
+
+### S10 — does a terminal learning-rate decay buy anything? (2026-09-10) NO. **Internal only.**
+
+Revives S3, which was dropped on 2026-09-06, in a form that costs ~10 GPU-minutes
+a cell instead of a full sweep. S3 asked "tune lr, or remove the need to?" and
+was closed on the grounds that nothing pointed at lr. This asks a narrower
+question that survived that closure: the shipped configuration trains at a
+**constant 2e-4 for its whole budget** (`"lr_schedule": "none"` in every
+`train_config.json`, verified at K=100/500/1000/2000/4000), and essentially
+every other transformer training recipe anneals at the end. If the iterate is
+bouncing in a basin it could descend further, that is free accuracy.
+
+**Design.** Copy each finished run's final checkpoint to an isolated tree, resume
+it -- weights *and* AdamW moments -- and run 100 more epochs with cosine decay
+from 2e-4 to 1e-6. Restoring the optimizer state is not optional: an epoch here
+is 5 batch-1 steps, so beta2's 1000-step horizon is ~200 epochs, longer than the
+decay phase being measured, and a fresh optimizer would confound the anneal with
+its own re-warming.
+
+**The control is the whole experiment.** `cont_const` resumes the *same*
+checkpoint for the *same* 100 epochs at the flat rate. Without it, "annealed
+beats the shipped checkpoint" is unreadable, because the annealed arm has also
+had 100 more epochs and that alone moves the metric. This is the S8/S9 error,
+not repeated.
+
+| K | whole-graph delta (cos - flat) | **corner delta (cos - flat)** |
+| --- | --- | --- |
+| 500 | -0.0127 | -0.0001 |
+| 1000 | -0.0031 | +0.0057 |
+| 2000 | -0.0001 | +0.0052 |
+| 4000 | -0.0004 | -0.0012 |
+
+**The two metrics disagree, and that is the answer.** On the whole-graph missing
+CE (~13.6k cells, and correspondingly quiet) the schedule is worth 0.013 at
+K=500 and nothing at K >= 1000. On the **corner**, which is what the paper
+reports, the sign flips across sizes and every value sits inside the 0.035 paired
+between-arm sd from Part 0. An effect visible only in the metric we do not
+report, at a magnitude the metric we do report cannot resolve, has not been
+demonstrated.
+
+**An earlier reading of this was wrong and is withdrawn.** The whole-graph
+numbers were reported first, with the conclusion "the decay is worth 0.013 at
+K=500 by preventing the drift that continued flat training causes". The corner
+scoring does not support it: at K=500 the two arms land 0.0001 apart. The
+mechanism may still be real -- flat continuation *does* degrade on the
+whole-graph metric at K=500 while cosine holds -- but it is not visible where we
+measure.
+
+**Decision: no schedule. lr stays a constant 2e-4**, and S3's original
+disposition stands. What there was to collect here, **F13 already collects**:
+raising the epoch cap and selecting the stopping epoch per run on the block carve
+is worth 0.022 at K=4000, against <=0.003 for adding a schedule on top.
+
+**What this cost, and what it leaves behind.** 8 runs, ~40 GPU-minutes total.
+`--init-from` (weights + AdamW state, fresh epoch counter so a decay-phase-only
+continuation is expressible) lives on the `side/anneal` worktree and is worth
+keeping: any future "what if we trained this checkpoint differently" question is
+now a 10-minute experiment rather than a retrain. It is deliberately NOT merged
+to `patches`, which has jobs running against it.
 
 **Naming, for the write-up.** With $N=1$, "5 mask augmentations per epoch" is not
 a batching mechanism -- it is a relabelling of the step count. 400 epochs x 5
