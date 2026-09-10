@@ -117,11 +117,12 @@ dotted: the same four variants as published, on seed 42.</figcaption></figure>
 {tbl("MarformerNT", "Non-transductive")}
 <p class=note>Marformer protocol matches the corrected panels: training chunk 300, no shuffling,
 400 epochs, model seed 42, last checkpoint, corner held whole in a chunk that carries training
-context. Stan: 1 chain, 300 warmup, 500 sampling, stopping at K=500 where the paper stopped for
-HMC cost &mdash; there is no Stan point beyond that, so the Marformer curve past 500 has no
-comparison line. A cross-check refitting Stan on seed&nbsp;42, whose data is byte-identical to
-the published dataset, is running; until it lands, treat the absolute Stan level here as
-provisional.</p>
+context. Stan: <b>1 chain</b>, 300 warmup, 500 sampling &mdash; which is what the runner defaults
+to and what every run directory on both draws contains, though the paper's appendix describes 4
+chains; see the September tab. An earlier version of this note said Stan stopped at K=500 because
+the paper stops there. That was wrong: the fits exist at every size out to K=4000 and had simply
+landed after the scoring pass ran, so they were missing from the table rather than from the
+cluster.</p>
 </section>"""
 
 
