@@ -148,10 +148,13 @@ log-loss moves ~0.08 nats between generative draws, which is the entire measured
 draw-to-draw sd. The Marformer&minus;Stan <em>difference</em> moves 0.001&ndash;0.02 at
 K&nbsp;&ge;&nbsp;1000. A hard draw is hard for both models, so the draw effect is
 common-mode and cancels.</p>
-<p><b>3. The epoch fix lands where Stan is not drawn.</b> F13 (raised cap, per-run carve
-selection, refit) is worth {f13_1k} nats at
-K=1000 and {f13_4k} at K=4000 &mdash; entirely in the region past
-the Stan cutoff. It is worth having and it is not the answer to the gap.</p>
+<p><b>3. The epoch fix closes about a sixth of the gap.</b> F13 (raised cap, per-run
+carve selection, refit) is worth {f13_1k} nats at K=1000 and {f13_4k} at K=4000,
+against a K=4000 gap of 0.126. It is worth having and it is not the answer.
+<em>An earlier version of this panel said the fix "lands where Stan is not drawn" &mdash;
+true only while Oracle stopped at K=500 in our scoring, which was the bookkeeping
+error described above. Oracle runs to K=4000, so F13's gains sit squarely inside the
+compared region.</em></p>
 </div>
 
 <figure><img alt="Marformer against Stan refit on the same draw, item axis, both draws" src="{png}">
@@ -167,7 +170,7 @@ Stan.</figcaption></figure>
 <p class=note>Read the last two columns against each other. At K&nbsp;&ge;&nbsp;1000 the
 level disagrees between draws by 0.07&ndash;0.09 while the gap disagrees by
 0.001&ndash;0.02. If the figure reports absolute curves with a draw-spread band, three
-draws give a standard error of 0.085/&radic;3 &asymp; 0.049 against an effect of 0.11
+draws give a standard error of 0.085/&radic;3 &asymp; 0.049 against an effect of 0.126
 &mdash; barely two sigma. If it reports the paired gap, two draws already pin it to
 &plusmn;0.01. K&nbsp;&le;&nbsp;500 is visibly noisier on both, matching the measured noise
 floor.</p>

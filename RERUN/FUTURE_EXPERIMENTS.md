@@ -51,13 +51,22 @@ seeds; the decision threshold is 0.015 nats. Full detail in the linked sections.
 the loss-weight form (F3). Everything else was confirmed as shipped or is a
 paper-text fix.
 
-**What none of it explains.** Stan reaches 0.619 at K=4000 where Marformer
-reaches 0.731. The budget change claims 0.022 of that 0.112. Every other proposed
+**What none of it explains.** At K=4000 Marformer reaches 0.731 / 0.653 on the
+two draws against **Stan Oracle** at 0.600 / 0.532 — a gap of **0.126** averaged
+over the draws. The budget change claims 0.022 of it. Every other proposed
 mechanism — context starvation, forced amortisation, normalisation placement,
-capacity in width, depth and both — is dead. **~0.09 nats is unexplained and there is
-no configuration left to blame**, which makes it a property of the amortised
-model class rather than a tuning failure, and something to state in the paper
-rather than leave as an unexplained divergence.
+capacity in width, depth and both, and now the learning-rate schedule (S10) — is
+dead. **~0.104 nats is unexplained and there is no configuration left to blame**,
+which makes it a property of the amortised model class rather than a tuning
+failure, and something to state in the paper rather than leave as an unexplained
+divergence.
+
+*Corrected 2026-09-10, and the correction widened the gap.* This paragraph used
+to compare against **Stan Proj** at 0.619 and quote 0.112 / ~0.09. Oracle is the
+best Stan variant at every size, but `score_stan.py` had run two minutes before
+the K=1000 Oracle fit landed, so Oracle was absent past K=500 in every downstream
+table and "best Stan" silently became Proj. The fits were on disk the whole time;
+no new sampling was needed. See the September tab of the Figure 6 report.
 
 **Method results that paid for the sweep** (see Part 0): the true paired
 between-arm sd is **0.035**, not the 0.02 assumed from re-scoring; and averaging
@@ -437,7 +446,7 @@ the gap from **0.112 to about 0.096 -- roughly 15% of it.** This is a real
 effect that is worth having and worth correcting in the paper, and it is *not*
 the explanation for the Stan gap. Anyone reading this section later should not
 come away thinking the plateau has been explained; 85% of it is still
-unaccounted for, and **capacity remains the only untested candidate**.
+unaccounted for, and **capacity remains the only untested candidate**. *[2026-09-10: the reference Stan variant here is Proj; against Stan Oracle, which is better at every size, the gap is 0.126 and the residual ~0.104. See the results-index note.]*
 
 **Consequence for the paper regardless of the final figure:** the published
 large-K Marformer points are **undertrained by ~0.02 nats**, because a
@@ -766,7 +775,7 @@ past 940.
 **What this does to the Stan gap.** At K=4000, 0.022 nats off a 0.112 gap is
 about **20%** of it, and unlike the earlier -0.034 estimate this one is claimable
 under a protocol that never looks at the corner. The gap remains ~0.09 and
-capacity is the last hypothesis standing.
+capacity is the last hypothesis standing. *[2026-09-10: the reference Stan variant here is Proj; against Stan Oracle, which is better at every size, the gap is 0.126 and the residual ~0.104. See the results-index note.]*
 
 ### How F13 is implemented: per-run vs pooled selection (2026-09-06)
 
@@ -962,7 +971,7 @@ is not explained by anything in this sweep, and the honest framing for the paper
 is that Stan's per-item parameters buy something Marformer's amortised
 representation does not recover at these sizes -- a property of the model class,
 not of the configuration. That is a finding, not a failure, but it should be
-stated rather than left as an unexplained gap in a figure.
+stated rather than left as an unexplained gap in a figure. *[2026-09-10: the reference Stan variant here is Proj; against Stan Oracle, which is better at every size, the gap is 0.126 and the residual ~0.104. See the results-index note.]*
 
 
 ## Is every suite worth running? — recommendation

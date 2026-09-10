@@ -19,6 +19,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from update_tab import panel_html as update_panel_html
+from extrap_tab import section_html as extrap_section_html
 
 ORIG_START, ORIG_END = "<!--ORIG-START-->", "<!--ORIG-END-->"
 
@@ -169,8 +170,12 @@ def main():
                       + update_panel_html(outdir, Path(a.side_out)) + '</div>')
     hidden = " hidden" if panels else ""
     btns.append('<button data-target="tab-orig" role=tab>Seed 42 &middot; as published</button>')
+    # Appended AFTER the ORIG sentinels, never inside them: re-running this
+    # script re-extracts body_rest from between them, so the appended section is
+    # regenerated rather than nested, and the published panels stay verbatim.
     panels.append(f'<div class=tabpanel id=tab-orig role=tabpanel{hidden}>'
-                  f'{ORIG_START}{body_rest}{ORIG_END}</div>')
+                  f'{ORIG_START}{body_rest}{ORIG_END}'
+                  f'{extrap_section_html(outdir)}</div>')
     for s in seeds:
         if not (outdir / f"seed{s}_table.json").is_file():
             print(f"  skip seed {s}: no payload yet"); continue
