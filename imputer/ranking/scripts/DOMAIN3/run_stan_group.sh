@@ -102,8 +102,11 @@ domain3_enter_repo
 SCRIPT_START=$SECONDS
 
 CHAINS="${DOMAIN3_CHAINS:-1}"
-ITER_WARMUP=300
-ITER_SAMPLING=500
+# Overridable so the number of chains and the sampling budget can be varied
+# without editing this script. Defaults are the shipped values, so every
+# existing caller is unaffected.
+ITER_WARMUP="${DOMAIN3_ITER_WARMUP:-300}"
+ITER_SAMPLING="${DOMAIN3_ITER_SAMPLING:-500}"
 ADAPT_DELTA=0.85
 MAX_TREEDEPTH=12
 SEED=42
