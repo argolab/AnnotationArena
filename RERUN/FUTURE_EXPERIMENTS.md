@@ -1413,7 +1413,7 @@ hyperparameter the paper does not discuss, and reporting it would invite the
 reader to wonder what else we swept. It belongs here.
 
 
-### S9 — does a larger effective batch stabilise training? (2026-09-08) NO, it is clearly worse. **Internal only.**
+### S9 — does a larger effective batch stabilise training? (2026-09-08) NO, but it is not worse either. **Internal only.**
 
 **The question.** With one training instance ($N=1$), an epoch is
 `mask_augmentations=5` **separate** batch-of-one steps: 5 masks, 5 forwards, 5
@@ -1435,18 +1435,50 @@ different questions:
 
 Reference arm's absolute corner log-loss: 0.8070 (n=2, sd 0.0023).
 
-**The matched-steps arm is the worst, and it is the only one that clears two
-standard errors.** That is the arm which isolates the hypothesis: identical
-number of updates, each averaged over 5 masks instead of 1, at five times the
-compute. It is 0.128 nats worse. Averaging the masking noise away does not
-stabilise training, it degrades it.
+**RETRACTED: the +0.1277 reading above, and the conclusion drawn from it.**
+That table is a **fixed-budget** comparison -- tail-averaged over the last 5
+checkpoints -- and it is not a fair one here, because the arms have different
+steps per epoch. "Last 5 checkpoints" is the last 25 gradient steps for the
+sequential arm and the last 5 for a batched one, and the 2000-epoch arm was read
+1000 steps past its own optimum, deep in overfitting. Tom asked whether early
+stopping had been applied; it had not. It should have been, since W3d had
+already established exactly this for the budget question.
 
-**Reading:** the per-mask gradient noise is doing useful work rather than being
-something to smooth out. Each mask is a different subproblem, and five separate
-steps explore more than one averaged step. This is consistent with
+**Corrected, each arm at its own best checkpoint** (5-checkpoint smoothed, so
+this is early stopping in the sense the rest of the project uses):
+
+| arm | best at (steps) | best corner | final corner | overfit gap | vs base |
+| --- | --- | --- | --- | --- | --- |
+| `b_seq_base` (shipped) | 1682 | 0.7997 | 0.8098 | 0.010 | -- |
+| `b_batch_e400_lr1` | 362 | 0.8443 | 0.8476 | 0.003 | +0.0446 |
+| `b_batch_e400_lr5` | 312 | 0.8337 | 0.8481 | 0.014 | +0.0340 |
+| `b_batch_e2000` (matched steps) | 1012 | **0.7933** | 0.9365 | **0.143** | **-0.0064** |
+
+**At matched steps, batching is a wash (-0.006), not worse.** The matched-steps
+arm actually peaks slightly *below* the baseline and then collapses to 0.9365 by
+the end -- an overfit gap of 0.143, fourteen times the baseline's. The +0.128
+was that collapse, not the batching.
+
+**What is actually true, and it is narrower than the retracted claim:**
+
+* at **matched compute**, batching is worse (+0.034 to +0.045), because it takes
+  5x fewer optimizer steps and this model wants steps;
+* at **matched steps**, it is equivalent -- but costs 5x the compute for nothing;
+* it overfits far more aggressively, so it would need tighter early stopping.
+
+**The "masking noise is doing useful work" reading is withdrawn.** It was built
+on the bad number. Nothing here says noise helps; only that steps matter more
+than batch size at this scale.
+
+**Decision is unchanged: keep the sequential default**, because it reaches the
+same place at a fifth of the compute. Consistent with
 `reports/TRAINING_SPEED.md` §3.1, which found batching no better at equal wall
-clock at this chunk size, but S9 is the stronger statement -- batching is worse
-even when *given* the extra compute to match step count.
+clock at this chunk size.
+
+**The general lesson, which cost two retractions in this project (see also S8):**
+a fixed-budget comparison between arms that differ in step count, capacity or
+context is not a fair comparison. Early-stop each arm on its own curve before
+comparing anything.
 
 **Decision: keep the sequential default.** The final run inherits the shipped
 optimisation unchanged.
