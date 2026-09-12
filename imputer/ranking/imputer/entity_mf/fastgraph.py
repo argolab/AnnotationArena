@@ -95,6 +95,25 @@ class GraphTensors:
         self.mask_row = mask_row.to(device)
         self.is_variable = is_variable.to(device)
 
+        # The typed value codec reads the same token through build_simple_value
+        # (wildcard bit, then a one-hot over the classes) instead of build_param
+        # (wildcard bit, then logit_high in the observed class). Precomputed the
+        # same way so the codec's layer 0 is a gather, not a Python loop.
+        simple_obs = torch.zeros(L, global_param_dim)
+        for i, tok in enumerate(tokens):
+            t = types[tok.type_name]
+            if not getattr(t, "is_variable", False):
+                continue
+            raw = tok.raw_data or {}
+            if raw.get("is_missing", False):
+                continue
+            unmasked = dict(raw)
+            unmasked["is_masked"] = False
+            simple_obs[i] = t.build_simple_value(
+                unmasked, device=torch.device("cpu"),
+                global_param_dim=global_param_dim).cpu()
+        self.simple_obs = simple_obs.to(device)
+
         # Deviation lookups, one index tensor per type that has a table.
         # Annotator id per token (-1 for entity tokens), for structured masking.
         annot = torch.full((L,), -1, dtype=torch.long)

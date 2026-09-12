@@ -385,11 +385,12 @@ class EntityMarformerLightningModule(pl.LightningModule):
     def configure_optimizers(self):
         # fused: the model is ~100 small parameter tensors, so an unfused AdamW
         # launches hundreds of tiny kernels and shows up as ~15% of GPU time.
+        trainable = [p for p in self.parameters() if p.requires_grad]
         fused = torch.cuda.is_available() and all(
-            p.is_cuda and p.dtype.is_floating_point for p in self.parameters()
+            p.is_cuda and p.dtype.is_floating_point for p in trainable
         )
         optimizer = torch.optim.AdamW(
-            self.parameters(), lr=self.learning_rate,
+            trainable, lr=self.learning_rate,
             weight_decay=self.weight_decay, fused=fused,
         )
         if self.lr_schedule == "cosine":
@@ -993,6 +994,39 @@ def main():
         ),
     )
     parser.add_argument(
+        "--logit-high", type=float, default=20.0,
+        help=(
+            "The magnitude layer 0 writes into an observed value's slot (the "
+            "wildcard slot always gets 1.0). 20.0 is the shipped value and was "
+            "never chosen deliberately; 1.0 makes layer 0 a plain one-hot, which "
+            "is what the typed codec's encoding is."
+        ),
+    )
+    parser.add_argument(
+        "--value-codec", choices=["dual", "typed"], default="dual",
+        help=(
+            "How a variable's value enters and leaves the residual stream. 'dual' "
+            "is the shipped hand-built parameter stream. 'typed' learns, per "
+            "variable type, an encoder from the value's binary encoding (wildcard "
+            "bit + one-hot over C classes) into R^d and a separate untied decoder "
+            "R^d -> R^C read out with a softmax. The block stack is identical."
+        ),
+    )
+    parser.add_argument(
+        "--codec-init", choices=["random", "scaled", "orthogonal", "aligned"], default="scaled",
+        help=(
+            "Typed codec only. 'random' is the real configuration. 'aligned' "
+            "places the encoder in the last 1+C dimensions and reads the last C "
+            "back, which reproduces the dual stream exactly when frozen."
+        ),
+    )
+    parser.add_argument(
+    )
+    parser.add_argument(
+        "--codec-freeze", action="store_true",
+        help="Typed codec only. Hold the encoders and decoders at their initial values.",
+    )
+    parser.add_argument(
         "--dual-outer-residual",
         choices=["all", "not_last", "none", "none_id", "not_last_id"],
         default="all",
@@ -1122,13 +1156,6 @@ def main():
         help="Predict final params from the last combined hidden state instead of reading them directly from the residual param stream.",
     )
     parser.add_argument(
-        "--use-embed-unembed",
-        action="store_true",
-        help="Use embedding/unembedding architecture: single residual stream, value embedded via "
-             "learned A*x+b at layer 0, unembedded via per-type linear at output. "
-             "Removes the prescribed param-stream scale (logit_high) and lets LayerNorm operate naturally.",
-    )
-    parser.add_argument(
         "--lr-schedule",
         type=str,
         default="none",
@@ -1237,6 +1264,10 @@ def main():
     if args.dropout is not None:
         config.dropout = args.dropout
     config.dual_outer_residual   = args.dual_outer_residual
+    config.logit_high            = args.logit_high
+    config.value_codec           = args.value_codec
+    config.codec_init            = args.codec_init
+    config.codec_freeze          = args.codec_freeze
     config.inner_residual        = args.inner_residual
     config.use_per_head_rel      = args.use_per_head_rel
     config.use_pointer           = args.use_pointer
@@ -1247,7 +1278,6 @@ def main():
     config.scale_shared_rel      = args.scale_shared_rel
     config.use_graph_mask        = args.use_graph_mask
     config.use_param_output_head = args.use_param_output_head
-    config.use_embed_unembed     = args.use_embed_unembed
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -1301,6 +1331,9 @@ def main():
             "num_ffn_layers": config.num_ffn_layers,
             "dropout": config.dropout,
             "dual_outer_residual": config.dual_outer_residual,
+            "value_codec": config.value_codec,
+            "codec_init": config.codec_init,
+            "codec_freeze": config.codec_freeze,
             "inner_residual": config.inner_residual,
             "use_per_head_rel": config.use_per_head_rel,
             "use_pointer": config.use_pointer,
@@ -1311,7 +1344,6 @@ def main():
             "scale_shared_rel": config.scale_shared_rel,
             "use_graph_mask": config.use_graph_mask,
             "use_param_output_head": config.use_param_output_head,
-            "use_embed_unembed": config.use_embed_unembed,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,
