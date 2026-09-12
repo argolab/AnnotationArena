@@ -79,6 +79,10 @@ def _reconstruct(run_dir: Path) -> tuple:
     config.num_ffn_layers       = mcfg["num_ffn_layers"]
     config.dropout              = mcfg["dropout"]
     config.dual_outer_residual  = mcfg.get("dual_outer_residual", "all")
+    config.logit_high           = mcfg.get("logit_high", 20.0)
+    config.value_codec          = mcfg.get("value_codec", "dual")
+    config.codec_init           = mcfg.get("codec_init", "random")
+    config.codec_freeze         = mcfg.get("codec_freeze", False)
     config.inner_residual       = mcfg.get("inner_residual", "both")
     config.use_per_head_rel     = mcfg["use_per_head_rel"]
     config.use_pointer          = mcfg["use_pointer"]
@@ -89,7 +93,6 @@ def _reconstruct(run_dir: Path) -> tuple:
     config.scale_shared_rel     = mcfg["scale_shared_rel"]
     config.use_graph_mask       = mcfg["use_graph_mask"]
     config.use_param_output_head = mcfg.get("use_param_output_head", False)
-    config.use_embed_unembed     = mcfg.get("use_embed_unembed", False)
 
     # ── DataConverter + bundle ────────────────────────────────────────────────
     converter = DataConverter(
