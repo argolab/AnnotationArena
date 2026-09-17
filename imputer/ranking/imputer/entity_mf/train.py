@@ -1013,7 +1013,7 @@ def main():
         ),
     )
     parser.add_argument(
-        "--codec-init", choices=["random", "scaled", "orthogonal", "aligned"], default="scaled",
+        "--codec-init", choices=["random", "unit", "scaled", "orthogonal", "aligned"], default="scaled",
         help=(
             "Typed codec only. 'random' is the real configuration. 'aligned' "
             "places the encoder in the last 1+C dimensions and reads the last C "
