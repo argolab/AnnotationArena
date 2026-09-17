@@ -37,7 +37,12 @@ class EntityMarformerConfig:
                                          #              encoding (wildcard bit + one-hot over C classes) into
                                          #              R^d, and a separate untied decoder maps R^d -> R^C,
                                          #              read out with a softmax. The block stack is identical.
-    codec_init: str = "scaled"           # "scaled" -> Gaussian encoder at std logit_high/sqrt(d), so the
+    codec_init: str = "unit"             # "unit" -> Gaussian encoder at std 1.0. The default because it
+                                         #           carries no constant at all: output norm sqrt(d)~=8.9,
+                                         #           and B10 measured it at parity with the dual stream at
+                                         #           K=2000 (-0.009 +/-0.003, n=6). The requirement is
+                                         #           "loud enough", not "exactly logit_high".
+                                         # "scaled" -> Gaussian encoder at std logit_high/sqrt(d), so the
                                          #             value arrives at the magnitude the stream expects.
                                          #             This is the default because "random" (std 0.02) is
                                          #             ~1000x too quiet and costs 0.09 nats; see
