@@ -1013,7 +1013,7 @@ def main():
         ),
     )
     parser.add_argument(
-        "--codec-init", choices=["random", "unit", "scaled", "orthogonal", "aligned"], default="scaled",
+        "--codec-init", choices=["random", "unit", "scaled", "orthogonal", "aligned"], default="unit",
         help=(
             "Typed codec only. 'scaled' (default) draws the encoder at "
             "std = logit_high / sqrt(model_dim) so the value reaches the stream "

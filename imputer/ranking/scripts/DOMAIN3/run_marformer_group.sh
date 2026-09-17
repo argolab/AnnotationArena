@@ -122,7 +122,7 @@ DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
 INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
 LOGIT_HIGH="${DOMAIN3_LOGIT_HIGH:-20.0}"
 VALUE_CODEC="${DOMAIN3_VALUE_CODEC:-dual}"
-CODEC_INIT="${DOMAIN3_CODEC_INIT:-scaled}"
+CODEC_INIT="${DOMAIN3_CODEC_INIT:-unit}"
 CODEC_FREEZE="${DOMAIN3_CODEC_FREEZE:-false}"
 # Transductive only. Put test_missing in the training graph as status-0 nodes
 # (no labels, no loss), the way train_missing already is, so test items are
