@@ -1015,12 +1015,14 @@ def main():
     parser.add_argument(
         "--codec-init", choices=["random", "unit", "scaled", "orthogonal", "aligned"], default="scaled",
         help=(
-            "Typed codec only. 'random' is the real configuration. 'aligned' "
-            "places the encoder in the last 1+C dimensions and reads the last C "
-            "back, which reproduces the dual stream exactly when frozen."
+            "Typed codec only. 'scaled' (default) draws the encoder at "
+            "std = logit_high / sqrt(model_dim) so the value reaches the stream "
+            "at the magnitude the hand-built slots use; 'unit' is plain N(0,1), "
+            "which carries no constant; 'random' is the old N(0,0.02) default "
+            "and reproduces the regression; 'aligned' places the encoder in the "
+            "last 1+C dimensions and reads the last C back, which reproduces the "
+            "dual stream exactly when frozen."
         ),
-    )
-    parser.add_argument(
     )
     parser.add_argument(
         "--codec-freeze", action="store_true",
