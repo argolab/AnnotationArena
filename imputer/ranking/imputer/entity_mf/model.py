@@ -415,6 +415,17 @@ class EntityMarformer(nn.Module):
                 nn.init.normal_(enc.weight.data, mean=0.0,
                                 std=logit_high / math.sqrt(self.model_dim))
                 continue
+            if self.codec_init == "unit":
+                # The scale question, stripped of the magic number. "scaled" works
+                # but reads logit_high to do it, so the hand-built constant is
+                # still in the loop -- which defeats half the point of learning
+                # the code. N(0, 1) has no constant in it at all: output norm is
+                # sqrt(model_dim) ~= 8.9, against 20 for the hand-built slot and
+                # 0.18 for the old default. If this matches, the requirement is
+                # only "loud enough", not "exactly logit_high", and logit_high
+                # can leave the codec path entirely.
+                nn.init.normal_(enc.weight.data, mean=0.0, std=1.0)
+                continue
             if self.codec_init == "orthogonal":
                 # Loud AND well separated. "scaled" fixed the magnitude and
                 # removed the systematic penalty, but left roughly one run in six
