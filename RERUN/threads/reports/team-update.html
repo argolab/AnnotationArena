@@ -1,0 +1,299 @@
+<title>Three Architecture Decisions</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Zilla+Slab:wght@400;500;600&family=Libre+Franklin:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --paper:#F4F5F7; --surface:#FFFFFF; --sunken:#E9EBEE; --ink:#1A1D21; --soft:#4E555E;
+  --faint:#7E868F; --rule:#DBDEE3; --firm:#B9BEC6;
+  --accent:#33566E; --accent-dim:#DFE7EC; --rust:#A65D3A; --ok:#3B7A5E; --alarm:#A33B3B;
+  --fd:'Zilla Slab',Georgia,serif; --fb:'Libre Franklin',system-ui,sans-serif;
+  --fm:'JetBrains Mono',ui-monospace,Menlo,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --paper:#14171A; --surface:#1C2025; --sunken:#252A30; --ink:#E6E9ED; --soft:#A6AEB7;
+  --faint:#79818B; --rule:#2C323A; --firm:#454D57;
+  --accent:#7FA8C4; --accent-dim:#1E2B35; --rust:#D79067; --ok:#6DB48F; --alarm:#DE7F7F;
+}}
+:root[data-theme="dark"]{
+  --paper:#14171A; --surface:#1C2025; --sunken:#252A30; --ink:#E6E9ED; --soft:#A6AEB7;
+  --faint:#79818B; --rule:#2C323A; --firm:#454D57;
+  --accent:#7FA8C4; --accent-dim:#1E2B35; --rust:#D79067; --ok:#6DB48F; --alarm:#DE7F7F;
+}
+*{box-sizing:border-box}
+body{background:var(--paper);color:var(--ink);font-family:var(--fb);font-weight:300;
+ font-size:16.5px;line-height:1.62;margin:0;padding-inline:22px;padding-block:0 90px;-webkit-font-smoothing:antialiased}
+.wrap{max-width:780px;margin:0 auto}
+header{padding-block:58px 30px;border-bottom:2px solid var(--ink)}
+.eyebrow{font-family:var(--fm);font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--accent);margin:0 0 16px}
+h1{font-family:var(--fd);font-weight:600;font-size:clamp(2.2rem,6.5vw,3.2rem);line-height:1.05;
+ letter-spacing:-.015em;margin:0 0 18px;text-wrap:balance}
+.standfirst{font-size:1.12rem;line-height:1.55;color:var(--soft);margin:0;max-width:60ch}
+.standfirst strong{color:var(--ink);font-weight:500}
+section{padding-block:40px;border-bottom:1px solid var(--rule)}
+section:last-of-type{border-bottom:0}
+h2{font-family:var(--fd);font-size:1.62rem;font-weight:600;line-height:1.2;margin:0 0 6px;text-wrap:balance}
+h3{font-family:var(--fb);font-weight:600;font-size:1rem;margin:26px 0 8px}
+.kicker{font-family:var(--fm);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--faint);margin:0 0 12px}
+p{margin:0 0 1.05em;max-width:68ch}
+p:last-child{margin-bottom:0}
+code{font-family:var(--fm);font-size:.86em;background:var(--sunken);padding:1px 5px;border-radius:2px}
+a{color:var(--accent)}
+.decisions{display:grid;grid-template-columns:repeat(auto-fit,minmax(215px,1fr));gap:1px;
+ background:var(--rule);border:1px solid var(--rule);margin-top:30px}
+.dec{background:var(--surface);padding:18px 19px;display:flex;flex-direction:column;gap:7px}
+.dec .t{font-family:var(--fm);font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--faint)}
+.dec .v{font-family:var(--fd);font-size:1.12rem;font-weight:600;line-height:1.25}
+.dec .v.y{color:var(--ok)} .dec .v.n{color:var(--alarm)} .dec .v.w{color:var(--rust)}
+.dec .n2{font-size:13.5px;color:var(--soft);line-height:1.45}
+.tablewrap{overflow-x:auto;margin:20px 0 0}
+table{border-collapse:collapse;width:100%;font-size:14px;min-width:520px}
+th,td{text-align:right;padding:8px 11px;border-bottom:1px solid var(--rule)}
+th:first-child,td:first-child{text-align:left}
+thead th{font-family:var(--fm);font-size:10px;letter-spacing:.08em;text-transform:uppercase;
+ color:var(--faint);font-weight:400;border-bottom:1px solid var(--firm)}
+tbody td{font-variant-numeric:tabular-nums;font-family:var(--fm);font-size:13px}
+tbody td:first-child{font-family:var(--fb);font-size:14.5px}
+tbody tr:last-child td{border-bottom:0}
+tr.hi td{background:var(--accent-dim)}
+tr.bad td:not(:first-child){color:var(--alarm)}
+tr.good td:not(:first-child){color:var(--ok)}
+caption{caption-side:bottom;text-align:left;font-size:13px;color:var(--faint);padding-top:11px;line-height:1.5}
+.callout{border-left:3px solid var(--rust);padding:3px 0 3px 19px;margin:26px 0;
+ font-family:var(--fd);font-size:1.1rem;line-height:1.5}
+.callout p{max-width:58ch}
+.files{margin-top:26px;padding:14px 17px;background:var(--sunken);font-size:13.5px;line-height:1.7}
+.files .l{font-family:var(--fm);font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--faint);display:block;margin-bottom:5px}
+.files code{background:transparent;padding:0}
+footer{padding-top:30px;border-top:1px solid var(--firm);font-size:13.5px;color:var(--faint)}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">Team update &middot; Annotation domain &middot; September 2026</p>
+  <h1>Three architecture decisions before the final runs</h1>
+  <p class="standfirst">Three threads ran in parallel, each asking whether a piece of the model earns its place. All three are now settled. Headline: <strong>the model simplifies to a standard Transformer block</strong>, the learned value codec works wherever there is enough data but is not yet safe on small data, and the context window should be fixed at 500 items.</p>
+  <div class="decisions">
+    <div class="dec"><span class="t">Thread 3 &middot; Block</span><span class="v y">Adopt the standard block</span><span class="n2">Drop the outer residual and the trailing linear together. Better by 0.021 nats at K=2000.</span></div>
+    <div class="dec"><span class="t">Thread 2 &middot; Value codec</span><span class="v w">Works, not yet shippable</span><span class="n2">Parity at K=2000 with a plain N(0,1) encoder &mdash; no magic constant. One run in six still fails at K=300.</span></div>
+    <div class="dec"><span class="t">Thread 1 &middot; Context window</span><span class="v y">Train and evaluate at 500</span><span class="n2">Worth 0.016 nats at K=4000. Dynamic windows tested and rejected: no gain, 4.2&times; cost.</span></div>
+  </div>
+</header>
+
+<section>
+  <p class="kicker">Thread 3</p>
+  <h2>Does the block need its extra linear and its duplicated residual?</h2>
+  <p>The block we have been shipping is not a standard Transformer block. It carries two extra pieces. First, a trailing <strong>d&times;d linear projection</strong> applied to the block&rsquo;s output. Second, an <strong>outer residual add</strong> that re-injects the input around that projection, so the block computes <code>h&prime; = h + M(c)</code> where <code>c = h + attn + ff</code> &mdash; the input is added twice, once inside <code>c</code> and once outside. A standard block is just <code>h&prime; = c</code>.</p>
+  <p>We ran four variants at K=300 and K=2000, three model seeds &times; two independent data draws, six paired runs per cell.</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>Nats worse than the shipped block; negative is better. Three readings of the same runs: the epoch a held-out dev block selects (what the protocol actually does), the average of the last five checkpoints, and the best epoch judged on test (an unreachable ceiling, shown to separate architecture from stopping).</caption>
+    <thead><tr><th>Variant</th><th>What it is</th><th>dev-selected</th><th>tail avg</th><th>best epoch</th></tr></thead>
+    <tbody>
+      <tr><td colspan="5" style="font-family:var(--fm);font-size:11px;letter-spacing:.09em;color:var(--faint);text-align:left;background:var(--sunken)">K = 300</td></tr>
+      <tr><td><code>proj_keep_add</code></td><td style="text-align:left;font-size:13px;color:var(--soft)">shipped: outer add + linear</td><td>0 (ref)</td><td>0 (ref)</td><td>0 (ref)</td></tr>
+      <tr class="bad"><td><code>proj_keep_rot</code></td><td style="text-align:left;font-size:13px;color:var(--soft)">linear only, no outer add</td><td>+0.150</td><td>+0.027</td><td>+0.035</td></tr>
+      <tr><td><code>proj_drop_rot</code></td><td style="text-align:left;font-size:13px;color:var(--soft)"><strong>standard block</strong> &mdash; neither</td><td>+0.052</td><td>+0.016</td><td>+0.007</td></tr>
+      <tr><td><code>proj_frozen_add</code></td><td style="text-align:left;font-size:13px;color:var(--soft)">outer add + linear, linear frozen</td><td>+0.035</td><td>&minus;0.005</td><td>+0.000</td></tr>
+      <tr><td colspan="5" style="font-family:var(--fm);font-size:11px;letter-spacing:.09em;color:var(--faint);text-align:left;background:var(--sunken)">K = 2000</td></tr>
+      <tr><td><code>proj_keep_add</code></td><td style="text-align:left;font-size:13px;color:var(--soft)">shipped</td><td>0 (ref)</td><td>0 (ref)</td><td>0 (ref)</td></tr>
+      <tr class="good"><td><code>proj_keep_rot</code></td><td style="text-align:left;font-size:13px;color:var(--soft)">linear only, no outer add</td><td>&minus;0.014</td><td>&minus;0.013</td><td>&minus;0.010</td></tr>
+      <tr class="good hi"><td><code>proj_drop_rot</code></td><td style="text-align:left;font-size:13px;color:var(--soft)"><strong>standard block</strong></td><td>&minus;0.021</td><td>&minus;0.023</td><td>&minus;0.020</td></tr>
+      <tr><td><code>proj_frozen_add</code></td><td style="text-align:left;font-size:13px;color:var(--soft)">linear frozen at init</td><td>&minus;0.008</td><td>+0.001</td><td>+0.001</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Takeaway 1 &mdash; at K=2000 the standard block is not merely equal, it is better</h3>
+  <p>Removing both pieces buys <strong>0.021 nats</strong>, and all three readings agree to within 0.003, so this is not an artefact of how the checkpoint was chosen. Both variants that drop the outer add beat the shipped block at this size; the one that also drops the linear wins by the most. Freezing the linear rather than removing it recovers almost nothing, which tells us the projection is not doing something that merely needs to <em>exist</em> &mdash; when it is on the residual path at all, it is in the way.</p>
+
+  <h3>Takeaway 2 &mdash; the old &ldquo;remove the outer residual&rdquo; regression was the linear, not the residual</h3>
+  <p>Earlier we saw that removing the outer add alone (<code>proj_keep_rot</code>) hurt at small data, and that was the reason we had not simplified. It reproduces here: +0.150 at K=300 under the real protocol. But removing the linear <em>as well</em> cuts that to +0.052 &mdash; and at the best epoch, to +0.007. The mechanism is visible in the trained weights: the projection <strong>has no identity component</strong> (its alignment with the identity is &minus;0.003, and its effective rank is 57.5 of 80). So when the outer add is removed, every layer&rsquo;s identity path is pushed through a dense, near-random rotation, eight times over the stack. The skip connection stops being a skip. Remove the rotation too and the path is clean again.</p>
+
+  <div class="callout">
+    <p>The two pieces were never independent. Taken one at a time each looks load-bearing; taken together they cancel, and what is left is the standard block.</p>
+  </div>
+
+  <h3>Correction worth carrying &mdash; the linear is <em>not</em> free to delete</h3>
+  <p>It was suggested that since the feed-forward ends in a linear with no activation after it, the block&rsquo;s trailing projection composes with it and can be deleted without changing the function. That is true only when the inner residual is off. In the shipped block the projection is applied to <code>h + attn + ff</code>, not to the feed-forward output alone, so there is no adjacent linear to absorb it. Checked numerically against the real forward pass: with the inner residual off the fold is exact (relative error 1.8&times;10<sup>&minus;7</sup>); with it on, the same substitution moves the output by a <strong>relative 162</strong>. Deleting the linear is a real ablation &mdash; which is why it had to be run.</p>
+
+  <h3>Caveat &mdash; at K=300 the simplified block is harder to stop</h3>
+  <p>At its best epoch <code>proj_drop_rot</code> is at parity at K=300 (+0.007). Under the actual protocol it costs +0.052. The difference between those two numbers is stopping regret, and it is much larger for the variants without the outer add than for the shipped block, whose regret at this size we measured separately at about +0.018. With a dev block of only ~110 targets at K=300, these variants are harder to early-stop reliably. If the paper reports small-K rows, this is the honest qualifier: <strong>equal architecture, worse stoppability</strong>.</p>
+
+  <div class="files"><span class="l">Where to look</span>
+  <code>RERUN/threads/block-projection/</code> &mdash; <code>c0_fold.py</code> (the fold check), <code>c3_implementation_check.py</code>, <code>c4_matrix_anatomy.py</code> (the identity/rank analysis), <code>out/</code> for raw JSON. Implementation on branch <code>side/block-projection</code>.</div>
+</section>
+
+<section>
+  <p class="kicker">Thread 2</p>
+  <h2>Replacing the hand-built value slots with a learned codec</h2>
+  <p>Today a rating enters the model through a hand-built layout: one slot marking &ldquo;hidden&rdquo;, then one slot per rating level, filled in by hand and read back at the end. It works and it only works for ratings. The alternative is a per-type <strong>encoder</strong> into the model&rsquo;s space and an untied <strong>decoder</strong> back out to a distribution &mdash; nothing type-specific written by hand.</p>
+  <p>We first proved the new design contains the old one: initialise the encoder to write into exactly the hand-built slots, freeze it, and the two are the same function, bit for bit, including through the batched training path. So any difference had to come from how it trains.</p>
+
+  <h3>The regression was on the input side, not the output side</h3>
+  <p>The working theory had been that the codec regressed because the decoder could not produce a sharply peaked distribution. <strong>That turned out not to be the cause.</strong> The cause is at layer zero: the hand-built layout writes the observed value into the stream with magnitude <strong>20</strong> &mdash; a deliberate constant that has been in the code from the start &mdash; while a freshly initialised encoder, using the default convention for a new layer, writes about <strong>0.02</strong> per entry. The observation the model is supposed to condition on arrived essentially inaudible, and training spent its budget turning the volume up instead of learning to use the value.</p>
+  <p>Three pieces of evidence pin this down. Arms that start from the hand-built layout land at parity whether frozen or free to move, so the architecture and training path are sound. Only arms that start random fail. And scaling the encoder &mdash; one line, still fully random, just no longer whispering &mdash; closes the <em>entire</em> gap at K=2000.</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>Nats worse than the hand-built dual stream, paired. Twelve runs per cell at K=300 for the scaled arms, six elsewhere. These runs were trained without a dev carve, so &ldquo;best epoch&rdquo; is selected on test; the tail average is the honest column and the two agree closely throughout.</caption>
+    <thead><tr><th>Encoder</th><th>K=300 tail</th><th>K=300 best ep</th><th>K=2000 tail</th><th>K=2000 best ep</th></tr></thead>
+    <tbody>
+      <tr class="bad"><td>Random, default scale (~0.02)</td><td>+0.066</td><td>+0.069</td><td>+0.097</td><td>+0.095</td></tr>
+      <tr class="good"><td>Random, volume-matched</td><td>+0.032</td><td>+0.023</td><td>+0.002</td><td>+0.003</td></tr>
+      <tr><td>Random, orthogonal &amp; volume-matched</td><td>+0.031</td><td>+0.021</td><td>+0.003</td><td>+0.004</td></tr>
+      <tr><td style="color:var(--faint)">Starts at hand-built layout (ceiling)</td><td style="color:var(--faint)">+0.026</td><td style="color:var(--faint)">+0.006</td><td style="color:var(--faint)">&minus;0.001</td><td style="color:var(--faint)">&minus;0.002</td></tr>
+      <tr class="bad"><td>Volume-matched + learned temperature</td><td>+0.272</td><td>+0.276</td><td>+0.195</td><td>+0.185</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>The scale is a threshold, not a calibration &mdash; so the constant is gone</h3>
+  <p>The first fix that worked set the encoder&rsquo;s std to <code>logit_high / sqrt(model_dim)</code>, which puts the value in the stream at norm 20 &mdash; matching the hand-built slot exactly. That works, but it leaves the hand-built constant in the loop, which defeats half the point of learning the code rather than writing it.</p>
+  <p>So we tested whether the exact magnitude matters, with a plain <code>N(0,1)</code> encoder that contains no constant at all. Six paired runs at K=2000, two draws &times; three seeds:</p>
+  <div class="tablewrap">
+  <table>
+    <caption>Nats against the hand-built dual stream, paired on the same draw and seed. The encoder is <code>Linear(param_dim, model_dim)</code> with no bias, so a one-hot value reads out one column and the magnitude that matters is <code>std &times; sqrt(model_dim)</code>.</caption>
+    <thead><tr><th>encoder</th><th>output norm</th><th>tail avg</th><th>best epoch</th></tr></thead>
+    <tbody>
+      <tr class="bad"><td><code>N(0, 0.02)</code> &mdash; old default</td><td>0.18</td><td>+0.0965 &plusmn;0.0225</td><td>+0.0945</td></tr>
+      <tr class="good hi"><td><strong><code>N(0, 1)</code> &mdash; no constant</strong></td><td>8.94</td><td><strong>&minus;0.0088 &plusmn;0.0033</strong></td><td>&minus;0.0067</td></tr>
+      <tr class="good"><td><code>N(0, logit_high/&radic;d)</code></td><td>20.0</td><td>+0.0016 &plusmn;0.0039</td><td>+0.0030</td></tr>
+      <tr class="good"><td>orthogonal at norm 20</td><td>20.0</td><td>+0.0027 &plusmn;0.0069</td><td>+0.0039</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p style="margin-top:20px;"><strong><code>N(0,1)</code> is at parity</strong> &mdash; at or below the reference in five of six cells, and the &minus;0.009 is under the 0.015 decision threshold, so it should be read as a match rather than an improvement. What matters is where the <em>failure</em> sits: norm 8.9 clears the bar at less than half the hand-built magnitude, norm 0.18 does not, and the crossing is somewhere between.</p>
+
+  <div class="callout">
+    <p>The encoder has to be loud enough, not calibrated to any particular number. <code>logit_high</code> can leave the codec path entirely &mdash; which was the point of learning the code in the first place.</p>
+  </div>
+
+  <p><code>codec_init</code> now defaults to <code>unit</code>. Two limits worth stating: this was measured at K=2000 only, so it says nothing about the small-data failures below; and <code>logit_high</code> still governs the hand-built dual stream, which remains the default. The constant is out of the codec path, not out of the codebase.</p>
+
+  <h3>Did we ultimately match the old system? At K=2000, yes</h3>
+  <p><strong>+0.002 nats, with zero failures in six runs.</strong> One line of initialisation, and the learned codec is indistinguishable from the hand-built stream. At K=300 the mean is +0.032 but the mean is the wrong summary, which is the next point.</p>
+
+  <h3>The temperature idea did not work, and its failure is informative</h3>
+  <p>The proposal was to give the decoder one extra output, treat it as a softmax temperature, and let it learn to emit 0.05 &mdash; reproducing the 20&times; sharpening the constant provides for free. It is implemented correctly (the head is there, the decoder gains a row) but <strong>the model never learns to use it</strong>: after 400 epochs the temperature sits at <strong>0.976</strong>, no sharpening at all. Worse, its presence costs 0.19&ndash;0.27 nats over the same architecture without it, because dividing every logit by a still-noisy quantity makes the early objective harder.</p>
+  <p>This is the expected outcome once the diagnosis is corrected: the temperature head was designed to fix an output-side problem, and the problem is on the input side. <strong>It has now been purged from the code</strong> rather than left switched off, and <code>codec_init</code> defaults to the volume-matched draw. Committed on <code>side/value-codec</code> as <code>4d6841f</code>; the equivalence check still passes at max abs diff 0.0.</p>
+
+  <h3>Would training longer help? Probably not &mdash; but we did not test it directly</h3>
+  <p>Stating this plainly since it is a natural question. We did not run a longer-budget arm. The indirect evidence argues against a budget explanation: the arm that starts from the hand-built layout reaches parity <em>within the same 400 epochs</em>, so there is no slow-convergence penalty intrinsic to the architecture; and the small-data failures below are seed-locked basins rather than incomplete descent. If we want this closed properly it is one cheap arm.</p>
+
+  <h3>What is actually left &mdash; instability at small data, and initialisation cannot fix it</h3>
+  <p>We tested the obvious suspect: a random encoder can be loud and still have its directions bunched together, so we drew it orthogonally &mdash; loud <em>and</em> well-conditioned. It changes nothing. Twelve paired runs per arm at K=300:</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>Nats worse than the reference at K=300, tail average. Two failures out of twelve in each column &mdash; and the same two runs.</caption>
+    <thead><tr><th>Run</th><th>Volume-matched</th><th>Orthogonal &amp; volume-matched</th></tr></thead>
+    <tbody>
+      <tr><td>draw A, seed 42</td><td>+0.011</td><td>&minus;0.004</td></tr>
+      <tr><td>draw A, seed 43</td><td>+0.016</td><td>+0.008</td></tr>
+      <tr class="bad"><td>draw A, seed 44</td><td>+0.055</td><td>+0.054</td></tr>
+      <tr><td>draw A, seed 45</td><td>&minus;0.027</td><td>&minus;0.027</td></tr>
+      <tr><td>draw A, seed 46</td><td>+0.031</td><td>+0.035</td></tr>
+      <tr><td>draw A, seed 47</td><td>&minus;0.026</td><td>&minus;0.035</td></tr>
+      <tr><td>draw B, seed 42</td><td>+0.040</td><td>+0.034</td></tr>
+      <tr><td>draw B, seed 43</td><td>&minus;0.043</td><td>&minus;0.045</td></tr>
+      <tr class="bad"><td>draw B, seed 44</td><td>+0.326</td><td>+0.360</td></tr>
+      <tr><td>draw B, seed 45</td><td>+0.003</td><td>+0.007</td></tr>
+      <tr><td>draw B, seed 46</td><td>&minus;0.002</td><td>&minus;0.020</td></tr>
+      <tr><td>draw B, seed 47</td><td>+0.007</td><td>+0.007</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <div class="callout">
+    <p>Both encoders fail on exactly the same seeds, by nearly the same amount. Whatever decides these runs, it is not how the encoder was drawn &mdash; so conditioning was the wrong hypothesis, cleanly refuted.</p>
+  </div>
+
+  <p>At K=2000 neither encoder fails at all, zero out of six. So this is a property of <strong>small data</strong>, not of the representation: with 300 items the optimiser occasionally walks into a basin it cannot leave, regardless of starting point. The remaining levers are more data or a <strong>warm start</strong> &mdash; initialising the encoder from a code the model has already learned elsewhere. Since orthogonality buys nothing, the simpler recipe wins: scale the encoder and leave it otherwise random.</p>
+  <p><strong>Status: the codec is correct when selected, but <code>value_codec</code> still defaults to the hand-built dual stream.</strong> Switching the model over stays blocked on the small-K failure rate.</p>
+
+  <div class="files"><span class="l">Where to look</span>
+  <code>RERUN/threads/value-codec/</code> &mdash; <code>b2_equivalence.py</code> (the bit-exactness proof), <code>out/</code> for raw JSON. Implementation committed on <code>side/value-codec</code> (<code>4d6841f</code>).</div>
+</section>
+
+<section>
+  <p class="kicker">Thread 1</p>
+  <h2>How wide should the context window be?</h2>
+  <p>Training splits the item graph into chunks of at most <code>max_item</code> items. We had been training at 300 and evaluating at 500. The question was whether a wider window helps at the large training sizes where the gap against the reference method is widest.</p>
+
+  <h3>It does, by a small and completely reliable margin</h3>
+  <div class="tablewrap">
+  <table>
+    <caption>Held-out log-loss at K=4000, each arm scored at evaluation chunks 300/500/600 and read at its own best. Twelve runs: two draws &times; three seeds.</caption>
+    <thead><tr><th>draw</th><th>seed</th><th>trained at 300</th><th>trained at 500</th><th>difference</th></tr></thead>
+    <tbody>
+      <tr><td>A</td><td>42</td><td>0.7281</td><td>0.6987</td><td>&minus;0.029</td></tr>
+      <tr><td>A</td><td>43</td><td>0.7255</td><td>0.7130</td><td>&minus;0.013</td></tr>
+      <tr><td>A</td><td>44</td><td>0.7347</td><td>0.7182</td><td>&minus;0.017</td></tr>
+      <tr><td>B</td><td>42</td><td>0.6486</td><td>0.6384</td><td>&minus;0.010</td></tr>
+      <tr><td>B</td><td>43</td><td>0.6423</td><td>0.6308</td><td>&minus;0.011</td></tr>
+      <tr><td>B</td><td>44</td><td>0.6558</td><td>0.6417</td><td>&minus;0.014</td></tr>
+      <tr class="hi"><td colspan="4"><strong>mean</strong></td><td><strong>&minus;0.016 &plusmn;0.003</strong></td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p style="margin-top:20px;">Six of six cells agree in sign and the mean is five standard errors from zero. The paired standard deviation is 0.0071 &mdash; five times tighter than the 0.035 we see between different architectures &mdash; because this varies one knob rather than training a different model. <strong>The figure is 0.016 nats, not 0.02.</strong> Small in absolute terms, but the residual gap against the reference method is about 0.10 nats, so this single knob is roughly a sixth of the thing we are trying to close.</p>
+  <p>One incidental finding that matters for any future comparison: <strong>each arm prefers an evaluation chunk at or above the one it trained with</strong>. Training and evaluation window are not independent knobs, so every arm has to be read at its own best rather than at a shared chunk.</p>
+
+  <h3>Why not go wider than 500</h3>
+  <div class="tablewrap">
+  <table>
+    <caption>Peak GPU memory at K=4000 on an 80 GB H100.</caption>
+    <thead><tr><th>chunk</th><th>peak memory</th><th>headroom</th><th>s / epoch</th></tr></thead>
+    <tbody>
+      <tr><td>300</td><td>36.2 GB</td><td>45 GB</td><td>3.14</td></tr>
+      <tr class="hi"><td>500</td><td>57.4 GB</td><td>24 GB</td><td>3.20</td></tr>
+      <tr><td>600</td><td>70.6 GB</td><td>10 GB</td><td>3.30</td></tr>
+      <tr class="bad"><td>900</td><td>&mdash;</td><td>out of memory</td><td>&mdash;</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p style="margin-top:20px;">500 costs 5% more wall clock than 300 and leaves 24 GB of headroom. 600 fits but with almost none, and 900 does not fit at all. <strong>Decision: train and evaluate at 500.</strong></p>
+
+  <h3>Does a dynamic window buy more? No &mdash; and it costs 4.2&times;</h3>
+  <p>The idea: draw the chunk size fresh each epoch from a range (we used 100&ndash;500, one draw per epoch so nothing zigzags inside a forward pass), and hope the model learns to handle windows wider than any it trained on &mdash; letting evaluation run at 700, 900, 1200 where memory during <em>training</em> is not the constraint.</p>
+
+  <div class="tablewrap">
+  <table>
+    <caption>Held-out log-loss at K=4000, each arm scored at every evaluation width. Two draws &times; two seeds, tail-averaged.</caption>
+    <thead><tr><th>trained with</th><th>eval 300</th><th>eval 500</th><th>eval 700</th><th>eval 900</th><th>eval 1200</th><th>best</th></tr></thead>
+    <tbody>
+      <tr><td>fixed 300</td><td>0.6889</td><td>0.6907</td><td>0.6896</td><td>0.6949</td><td>0.7104</td><td>0.6889</td></tr>
+      <tr class="hi"><td><strong>fixed 500</strong></td><td>0.6846</td><td>0.6805</td><td><strong>0.6720</strong></td><td>0.6720</td><td>0.6802</td><td><strong>0.6720</strong></td></tr>
+      <tr><td>dynamic 100&ndash;500</td><td>0.6920</td><td>0.6861</td><td>0.6759</td><td>0.6748</td><td>0.6792</td><td>0.6748</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p style="margin-top:20px;">Read each arm at its own best and pair the runs: dynamic is <strong>+0.0021 &plusmn;0.0016</strong> against fixed-500 &mdash; indistinguishable, with the sign the wrong way. It does not win at <em>any</em> evaluation width, including 900 and 1200 where neither arm trained. The extrapolation rationale is simply absent.</p>
+  <p>Against that it costs <strong>4.2&times; in training time</strong>: 10.3&ndash;10.8 s/epoch versus 2.45 for both fixed arms at K=4000, because re-sampling the window each epoch rebuilds the item graph and that dominates the step. <strong>Decision: do not adopt dynamic chunking.</strong></p>
+
+  <div class="callout">
+    <p>The reason the idea had nothing to buy: fixed-500 <em>already</em> extrapolates. Its best evaluation width is 700&ndash;900, not the 500 it trained at, and it is still better at 1200 than at 300. Training at a fixed wide window teaches the generalisation a dynamic schedule was meant to teach.</p>
+  </div>
+
+  <p>A useful cross-check falls out of this sweep: fixed-300 against fixed-500 comes out at +0.0155 &plusmn;0.0046 here, against the &minus;0.016 &plusmn;0.003 measured earlier on separate scoring machinery. Two independent readings of the same knob agreeing to a thousandth of a nat.</p>
+
+  <div class="files"><span class="l">Where to look</span>
+  <code>RERUN/threads/context-window/</code> &mdash; <code>a1_audit.py</code> and <code>a1_rescore.py</code> (resolving contradictory historical evidence), <code>a4_memory.sh</code> (the memory ceiling), <code>a3_extrap.sbatch</code> (the extrapolation scoring), <code>out/</code> for raw JSON. Implementation on branch <code>side/dynamic-chunk</code>, unmerged.</div>
+</section>
+
+<section>
+  <p class="kicker">Also settled along the way</p>
+  <h2>Early stopping does land in the basin</h2>
+  <p>A question raised in review: the stopping epoch must be chosen on a validation set, not on test, and the charitable assumption is that validation finds a point close to the test minimum. We measured it rather than assuming it, on paired runs sharing a data draw and model seed. Across twelve training sizes the dev-chosen epoch costs <strong>0.016 nats</strong> against the best epoch the test curve could have given, worst case 0.029 &mdash; inside the noise of a single architecture comparison.</p>
+  <p>The mechanism is worth stating correctly, because it is a stronger argument than accuracy: the selection is often badly off (at K=700 it picks epoch 362 where the test minimum is at 200) and it barely matters, because the basin is flat across 100&ndash;250 epochs. <strong>The selector does not have to be right, only to land in the basin.</strong> One exception: at K=100 the training partition has no items to carve a validation block from, so there is no signal to select on at all and the protocol falls back to an axis median.</p>
+  <p>Observed-token loss sits at 10<sup>&minus;5</sup> and below at every size and every epoch in every arm, so all movement in these curves is the missing-rating term.</p>
+  <div class="files"><span class="l">Where to look</span>
+  <code>RERUN/threads/early-stopping/</code> &mdash; <code>e1_stopping_regret.py</code>, which imports the shipped selector rather than reimplementing it.</div>
+</section>
+
+<footer>
+  <p><strong>How everything above was measured.</strong> All comparisons are paired: each arm trains on the same data draws and model seeds as its reference and is compared run by run, because the choice of draw alone moves this metric by 0.085 nats &mdash; several times the effects in question. Where a column says &ldquo;dev-selected&rdquo;, the stopping epoch came from a block of held-out training items and nothing was chosen on test. Where it says &ldquo;best epoch&rdquo;, the checkpoint was chosen on test and the number is a ceiling, shown only to separate an architecture effect from a stopping effect.</p>
+  <p style="margin-top:14px;">Running status, per-experiment result blocks and the full decision log: <code>RERUN/threads/PLAN.md</code>. Source for this page: <code>RERUN/threads/reports/team-update.html</code>.</p>
+</footer>
+</div>
