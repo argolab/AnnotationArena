@@ -366,3 +366,8 @@ imputer/ranking/STAN/stan_models/*
 # Built interactive reports: several MB of embedded JSON, reproducible from a
 # run tree with RERUN/analysis/{collect_domain3,build_report}.py
 RERUN/reports/build/
+
+# Task-pool runtime state: per-task done/failed markers and the per-submission
+# snapshots of the worker scripts. The pool's source lives in RERUN/pool/*.
+RERUN/pool/queue/state/
+RERUN/pool/queue/rev_*/
