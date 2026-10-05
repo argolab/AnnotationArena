@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -55,6 +56,11 @@ def _json_default(o: Any) -> Any:
 
 
 # ── Reconstruction ────────────────────────────────────────────────────────────
+
+# Fallback when a run's train_config.json predates max_item being recorded.
+# 500 is what this file used to hardcode, so an old run scores as it always did.
+DEFAULT_EVAL_MAX_ITEM = 500
+
 
 def _reconstruct(run_dir: Path) -> tuple:
     """
@@ -236,6 +242,22 @@ def _evaluate_checkpoint(
     _load_checkpoint(model, ckpt_path, device)
     model.to(device)
 
+    # D20. This was the literal 500 regardless of what the run trained with, so
+    # a model trained on 10-item graphs (LLM-Rubric) was scored on a 225-item
+    # one and best.json was wrong by up to 0.8 nats at K=175 -- in a
+    # size-dependent way, which would invert the trend if anyone plotted it.
+    # The published figures escaped it only because the plot script re-scores at
+    # the trained value, so selection and reporting disagreed.
+    #
+    # Inheriting the trained value fixes both sides at once and is now also the
+    # right number for the synthetic domain, where training moved to 500
+    # (thread 1). EVAL_MAX_ITEM overrides it for the chunk sweeps that vary this
+    # knob deliberately.
+    eval_max_item = int(os.environ.get(
+        "EVAL_MAX_ITEM", train_cfg.get("max_item") or DEFAULT_EVAL_MAX_ITEM))
+    print(f"  eval chunk : max_item={eval_max_item}"
+          f"{' (trained value)' if 'EVAL_MAX_ITEM' not in os.environ else ' (EVAL_MAX_ITEM)'}")
+
     result = evaluate_entity_marformer_split(
         model=model,
         split="test",
@@ -243,7 +265,7 @@ def _evaluate_checkpoint(
         types=model.types,
         global_param_dim=model.global_param_dim,
         device=device,
-        max_item=500
+        max_item=eval_max_item,
     )
 
     metrics = _compute_metrics(result)
