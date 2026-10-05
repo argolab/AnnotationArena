@@ -28,7 +28,6 @@ OUTPUT_ROOT=""
 AXIS=""
 PROTOCOL=""
 SIZES_CSV=""
-USE_EMBED_UNEMBED=false
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -51,10 +50,6 @@ while [[ $# -gt 0 ]]; do
         --sizes)
             SIZES_CSV="$2"
             shift 2
-            ;;
-        --use-embed-unembed)
-            USE_EMBED_UNEMBED=true
-            shift 1
             ;;
         *)
             echo "Unknown argument: $1" >&2
@@ -127,6 +122,10 @@ DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
 INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
 BLOCK_OUTPUT_PROJECTION="${DOMAIN3_BLOCK_OUTPUT_PROJECTION:-full}"
 BLOCK_PROJ_FREEZE="${DOMAIN3_BLOCK_PROJ_FREEZE:-false}"
+LOGIT_HIGH="${DOMAIN3_LOGIT_HIGH:-20.0}"
+VALUE_CODEC="${DOMAIN3_VALUE_CODEC:-dual}"
+CODEC_INIT="${DOMAIN3_CODEC_INIT:-unit}"
+CODEC_FREEZE="${DOMAIN3_CODEC_FREEZE:-false}"
 # Transductive only. Put test_missing in the training graph as status-0 nodes
 # (no labels, no loss), the way train_missing already is, so test items are
 # structurally identical to training items. Default off = shipped behaviour.
@@ -206,12 +205,12 @@ TF32_FLAG=""
 [ "${TF32}" = "true" ] && TF32_FLAG="--tf32"
 BLOCK_FREEZE_FLAG=""
 [ "${BLOCK_PROJ_FREEZE}" = "true" ] && BLOCK_FREEZE_FLAG="--block-output-projection-freeze"
+CODEC_FREEZE_FLAG=""
+[ "${CODEC_FREEZE}" = "true" ] && CODEC_FREEZE_FLAG="--codec-freeze"
 OVERWRITE_FLAG=""
 [ "${OVERWRITE_EXISTING}" = "true" ] && OVERWRITE_FLAG="--overwrite-existing-data"
 TRANSDUCTIVE_FLAG=""
 [ "${PROTOCOL}" = "transductive" ] && TRANSDUCTIVE_FLAG="--transductive-learning"
-EMBED_UNEMBED_FLAG=""
-[ "${USE_EMBED_UNEMBED}" = "true" ] && EMBED_UNEMBED_FLAG="--use-embed-unembed"
 
 IFS=',' read -r -a SIZE_LIST <<< "${SIZES_CSV}"
 
@@ -243,7 +242,6 @@ echo " TYPE_EMBEDDING_INIT : ${TYPE_EMBEDDING_INIT}"
 echo " USE_POINTER         : ${USE_POINTER}"
 echo " SCALE_SHARED_REL    : ${SCALE_SHARED_REL}"
 echo " TRANSDUCTIVE        : $([ "${PROTOCOL}" = "transductive" ] && echo "true" || echo "false")"
-echo " USE_EMBED_UNEMBED   : ${USE_EMBED_UNEMBED}"
 echo " VAL_PROTOCOL        : ${VAL_PROTOCOL} (frac ${VAL_FRAC}, split seed ${VAL_SPLIT_SEED})"
 echo " BATCH_AUGMENTATIONS : ${BATCH_AUGMENTATIONS}"
 echo " TF32 / COMPILE      : ${TF32} / ${COMPILE_MODE}"
@@ -312,6 +310,10 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
         --inner-residual         "${INNER_RESIDUAL}"        \
         --block-output-projection "${BLOCK_OUTPUT_PROJECTION}" \
         ${BLOCK_FREEZE_FLAG}                               \
+        --logit-high             "${LOGIT_HIGH}"            \
+        --value-codec            "${VALUE_CODEC}"           \
+        --codec-init             "${CODEC_INIT}"            \
+        ${CODEC_FREEZE_FLAG}                               \
         --compile                "${COMPILE_MODE}"          \
         --eval-every             "${EVAL_EVERY}"            \
         --val-protocol           "${VAL_PROTOCOL}"          \
@@ -328,7 +330,6 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
         ${DEVNORM_FLAG}                                    \
         ${GRAPHMASK_FLAG}                                  \
         ${LLM_DIST_FLAG}                                   \
-        ${EMBED_UNEMBED_FLAG}                              \
         ${TEST_MISSING_FLAG}                               \
         ${RANDOM_CHUNK_FLAG}                               \
         ${OVERWRITE_FLAG}
@@ -349,6 +350,9 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
     "dual_outer_residual": "${DUAL_OUTER_RESIDUAL}",
     "block_output_projection": "${BLOCK_OUTPUT_PROJECTION}",
     "block_output_projection_freeze": ${BLOCK_PROJ_FREEZE},
+    "logit_high": ${LOGIT_HIGH},
+    "value_codec": "${VALUE_CODEC}",
+    "codec_init": "${CODEC_INIT}",
     "inner_residual": "${INNER_RESIDUAL}",
     "seed": ${SEED},
     "embedding_dim": ${EMBEDDING_DIM},
@@ -382,8 +386,7 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
     "use_deviation_norm": ${USE_DEVIATION_NORM},
     "use_graph_mask": ${USE_GRAPH_MASK},
     "llm_input_dist": ${LLM_INPUT_DIST},
-    "transductive_learning": $([ "${PROTOCOL}" = "transductive" ] && echo true || echo false),
-    "use_embed_unembed": ${USE_EMBED_UNEMBED}
+    "transductive_learning": $([ "${PROTOCOL}" = "transductive" ] && echo true || echo false)
   }
 }
 EOF

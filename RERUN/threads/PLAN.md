@@ -51,10 +51,10 @@ the background behind them.
 | B6 | Purge the old `use_embed_unembed` path | code | **done** | gone from model, config, trainer, evaluator and runner; equivalence re-verified after |
 | C0 | Weight-folding proof of the projection claim | free | **done** | fold is exact (rel. 1.8e-7) with the inner residual off; impossible with it on (162x output change) |
 | C1 | ~~Train with the block output projection removed~~ | 24 runs | **RETRACTED** | the "no projection" arm doubled the residual stream every layer; it measured a broken model |
-| C2 | Corrected: projection kept vs removed at matched stream semantics, 4 sizes, dev-set early stopping | 48 runs | **running** | |
+| C2 | Corrected: projection kept vs removed at matched stream semantics, 4 sizes, dev-set early stopping | 48 runs | **done** | **the standard block wins**: drop the outer add and the linear together, -0.021 at K=2000 |
 | C3 | Implementation audit of both arms | free | **done** | found the retraction: initial loss 2067 vs 5.7 |
 | C4 | What the learned projection looks like | free | **done** | it keeps its initialisation statistics almost exactly |
-| C5 | Freeze the projection at init -- learned transform or random mixer? | 16 runs | **running** | |
+| C5 | Freeze the projection at init -- learned transform or random mixer? | 16 runs | **done** | freezing recovers almost nothing (-0.008 dev-sel at K=2000); on the residual path at all, it is in the way |
 | C2 | Parameter count and step time with it removed | interactive | not started | |
 
 ---
@@ -1409,3 +1409,87 @@ not from the codebase.
    seconds. Symlink the leaf `*_MARFORMER` run dirs instead. Worth hardening:
    a scorer that returns an empty list for an unreadable tree can quietly drop
    arms from a sweep.
+
+---
+
+### C2/C5 result (2026-09-18) — ADOPT THE STANDARD BLOCK. Thread 3 closed.
+
+Written up at the time in `threads/reports/team-update.html` and the artifact
+https://claude.ai/artifact/YFdhZZZ2fWZVBqUQbsNRkG, but **never recorded here**,
+so the status board above said "running" for two weeks and the decision looked
+open when it was not. Recorded now; the scored JSON is being regenerated into
+`side/out/arms_proj-c2-s{101,105}.json` because the original was never saved.
+
+Four arms, K=300 and K=2000, three model seeds x two draws, paired. Nats worse
+than `proj_keep_add` (the old shipped block); negative is better.
+
+| arm | what it is | K=300 dev-sel | K=2000 dev-sel | K=2000 tail |
+| --- | --- | --- | --- | --- |
+| `proj_keep_add` | outer add + trailing linear | 0 ref | 0 ref | 0 ref |
+| `proj_keep_rot` | linear only, no outer add | +0.150 | −0.014 | −0.013 |
+| **`proj_drop_rot`** | **standard block — neither** | +0.052 (+0.007 best ep) | **−0.021** | **−0.023** |
+| `proj_frozen_add` | linear frozen at init | +0.035 | −0.008 | +0.001 |
+
+**The two pieces were never independent.** Removing the outer add alone costs
++0.150 at K=300 — that is the regression that stopped this being simplified
+before, and it reproduces here. Removing the linear *as well* cuts it to +0.052,
+and to +0.007 at the best epoch. The mechanism is C4's: the projection has no
+identity component (alignment −0.003, effective rank 57.5/80), so without the
+outer add every layer's identity path is pushed through a dense near-random
+rotation eight times over. Taken one at a time each piece looks load-bearing;
+taken together they cancel, and what is left is the standard block.
+
+**Caveat for the paper, not for the decision.** At K=300 the standard block is
+at parity only at its best epoch; under the dev-selected protocol it costs
++0.052, because a ~110-target dev block early-stops these variants less
+reliably (the shipped block's own regret at this size is ~+0.018). K=100 has no
+dev block at all. Honest phrasing: **equal architecture, worse stoppability**.
+
+**Consequence for the final run:** `block_output_projection` exists only on
+`side/block-projection`. That branch has to be merged into `patches` before the
+final grid is launched, and `RERUN/FUTURE_EXPERIMENTS.md` row 11 (`residual
+variant: all`) is superseded by this.
+
+### B11 (2026-10-05) — `unit` at small K: no gain, and the 1-in-N blow-up is still there. **Codec stays off.**
+
+B10 established parity at K=2000 and said in its own limits that it measured
+nothing below that. The final grid's item axis starts at K=100 and the
+annotator axis at J=10, so this closes the gap. `codec_unit` against
+`codec_dual`, paired on (seed, cell), draw s101, six model seeds, scored on the
+corner at eval chunk 500, tail-averaged over 5 checkpoints.
+
+| seed | J=10 | J=30 | J=50 | K=100 | K=300 |
+| --- | --- | --- | --- | --- | --- |
+| 42 | −0.0098 | +0.0823 | +0.0702 | −0.0045 | **+0.2018** |
+| 43 | +0.0253 | +0.0602 | +0.0179 | +0.0247 | +0.0224 |
+| 44 | −0.0264 | −0.0259 | +0.0153 | −0.0195 | −0.0006 |
+| 45 | −0.0327 | −0.0212 | +0.0132 | −0.0355 | −0.0164 |
+| 46 | +0.0121 | +0.0578 | −0.0274 | +0.0119 | +0.0405 |
+| 47 | +0.0532 | −0.0479 | −0.0223 | +0.0559 | −0.0351 |
+
+30 cells: `unit` worse in 16, mean **+0.0146**, median +0.0120 — under the
+0.015 threshold, and the sign is close to a coin flip. So there is no
+systematic penalty and no gain either: **parity at small K on average.**
+
+**But one cell in 30 blew up**: seed 42 at K=300, **+0.202 nats**. Drop it and
+the mean falls to +0.0082 over 29 cells, which is the whole story — the central
+tendency is fine and the tail is not. This is B7's signature at a lower rate
+(B7 saw 2 in 12 for `scaled`); `unit` is better behaved than `scaled` but not
+clean.
+
+**Why that decides it against shipping.** The final run is **one model seed**,
+so nothing in the grid would reveal a collapsed cell. At p ≈ 1/30 per cell
+across the ~36 cells at K ≤ 1000, the chance of at least one visibly broken
+point on the headline curve is roughly 70%, with no replicate to catch it.
+`value_codec=dual` ships.
+
+The paper claim survives intact and is the one worth making: the learned codec
+**matches** the hand-built stream wherever there is enough data, and
+`logit_high` leaves the codec path entirely (B10) — the architecture is more
+principled without betting the figure on a tail risk. `side/value-codec` stays
+unmerged.
+
+**Note on an intermediate read.** A quick proxy over the tail-averaged *training*
+objective flagged seed 44 as the failure; the corner metric says seed 42 at
+K=300. The proxy got the existence of a failure right and the cell wrong — it is
+not a substitute for corner scoring.

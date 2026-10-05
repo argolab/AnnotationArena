@@ -30,7 +30,29 @@ class EntityMarformerConfig:
     scale_shared_rel: bool = False       # In shared-bias mode: scale rel_scores by 1/sqrt(head_dim), matching per-head normalization
     use_graph_mask: bool = False         # Hard graph attention mask: allow attention only where edge_mask or K_aug pointer exists (+ self)
     use_param_output_head: bool = False  # Predict final params from the last combined hidden state instead of using the residual param stream directly
-    use_embed_unembed: bool = False      # Embedding/unembedding architecture: single residual stream; value embedded via learned A*x+b at layer 0, unembedded via per-type linear at output
+    value_codec: str = "dual"            # How a variable's value enters and leaves the residual stream.
+                                         #   "dual"  -> shipped: a hand-built parameter stream carries the value,
+                                         #              and its final value IS the prediction.
+                                         #   "typed" -> a learned per-type encoder maps the value's binary
+                                         #              encoding (wildcard bit + one-hot over C classes) into
+                                         #              R^d, and a separate untied decoder maps R^d -> R^C,
+                                         #              read out with a softmax. The block stack is identical.
+    codec_init: str = "unit"             # "unit" -> Gaussian encoder at std 1.0. The default because it
+                                         #           carries no constant at all: output norm sqrt(d)~=8.9,
+                                         #           and B10 measured it at parity with the dual stream at
+                                         #           K=2000 (-0.009 +/-0.003, n=6). The requirement is
+                                         #           "loud enough", not "exactly logit_high".
+                                         # "scaled" -> Gaussian encoder at std logit_high/sqrt(d), so the
+                                         #             value arrives at the magnitude the stream expects.
+                                         #             This is the default because "random" (std 0.02) is
+                                         #             ~1000x too quiet and costs 0.09 nats; see
+                                         #             threads/PLAN.md, thread 2.
+                                         # "random" -> Gaussian encoder at std 0.02, default Linear decoder.
+                                         #             Kept only to reproduce the regression.
+                                         # "aligned" -> encoder writes into the last 1+C dimensions and the
+                                         #              decoder reads the last C, reproducing the dual stream
+                                         #              exactly (see threads/value-codec/b2_equivalence.py).
+    codec_freeze: bool = False           # Hold the encoder and decoder fixed at their initial values.
     dual_outer_residual: str = "all"     # Dual-stream only. Which layers keep the OUTER residual add (features/params += proj(combined)).
                                          #   "all"      -> baseline: every layer adds (double residual stream: inner on `combined`, outer on features/params)
                                          #   "not_last" -> every layer but the last adds; the last layer emits only [proj_out; W_param](combined)
