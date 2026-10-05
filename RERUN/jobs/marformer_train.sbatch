@@ -81,6 +81,7 @@ export DOMAIN3_MAX_ITEM="${DOMAIN3_MAX_ITEM:-300}"   # see FIGURES.md discrepanc
 # Architecture / optimisation knobs the ablations vary; defaults reproduce the paper.
 export DOMAIN3_DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
 export DOMAIN3_INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
+export DOMAIN3_BLOCK_OUTPUT_PROJECTION="${DOMAIN3_BLOCK_OUTPUT_PROJECTION:-full}"
 export DOMAIN3_TEST_MISSING_IN_GRAPH="${DOMAIN3_TEST_MISSING_IN_GRAPH:-false}"
 export DOMAIN3_RANDOM_ITEM_CHUNKS="${DOMAIN3_RANDOM_ITEM_CHUNKS:-false}"
 # Architecture knobs for the capacity sweep. Unset, these are the shipped
@@ -147,6 +148,7 @@ echo " DATA_ROOT   : ${DOMAIN3_DATA_ROOT}"
 echo " MAX_ITEM    : ${DOMAIN3_MAX_ITEM}"
 echo " RESIDUAL    : ${DOMAIN3_DUAL_OUTER_RESIDUAL}"
 echo " INNER RESID : ${DOMAIN3_INNER_RESIDUAL}"
+echo " BLOCK PROJ  : ${DOMAIN3_BLOCK_OUTPUT_PROJECTION}"
 echo " SEED        : ${DOMAIN3_SEED}"
 echo " VAL         : ${DOMAIN3_VAL_PROTOCOL}"
 echo " DELTA_TAU   : item=${DOMAIN3_ITEM_DROPOUT:-<axis default>} annot=${DOMAIN3_ANNOT_DROPOUT:-<axis default>}"

@@ -313,6 +313,28 @@ class EntityMarformer(nn.Module):
         self._amp_dtype = None
         self.dual_outer_residual = getattr(config, "dual_outer_residual", "all")
         self.inner_residual = getattr(config, "inner_residual", "both")
+        self.block_output_projection = getattr(config, "block_output_projection", "full")
+        if self.block_output_projection not in ("full", "none"):
+            raise ValueError(
+                f"Unknown block_output_projection: {self.block_output_projection!r}. "
+                "Choose 'full' or 'none'."
+            )
+        if self.block_output_projection == "none" and self.dual_outer_residual != "none":
+            # Removing the projection means the block body IS the new stream
+            # value: h' = c = h + attn + ff, the textbook block. That is the
+            # "replace" outer mode, i.e. dual_outer_residual='none'.
+            #
+            # Pairing it with 'all' instead gives h' = h + c = 2h + attn + ff,
+            # which doubles the residual stream at every layer -- 2^8 = 256x over
+            # the stack. That is not an ablation of the projection, it is a
+            # broken model: it starts at a cross-entropy of 2067 against 5.7 for
+            # the shipped architecture, and the first version of this experiment
+            # measured its failure and called it the cost of removing the
+            # projection.
+            raise ValueError(
+                "block_output_projection='none' requires dual_outer_residual='none' "
+                "(h' = h + attn + ff). With 'all' the residual stream doubles every layer."
+            )
         if self.inner_residual not in ("both", "ff_only", "none"):
             raise ValueError(
                 f"Unknown inner_residual: {self.inner_residual!r}. "
@@ -370,11 +392,21 @@ class EntityMarformer(nn.Module):
                     "attn":      self._make_attn_block(config, num_relationships),
                     "norm_2":    NormLayer(self.model_dim),
                     "ff":        FeedForward(self.model_dim, d_ff=config.d_ff, dropout=config.dropout, num_layers=config.num_ffn_layers),
-                    "proj_out":  nn.Linear(self.model_dim, self.feature_dim),
-                    "W_param":   nn.Linear(self.model_dim, self.param_dim),
                     "dropout_2": nn.Dropout(config.dropout),
                 }))
+                if self.block_output_projection == "full":
+                    blocks[-1]["proj_out"] = nn.Linear(self.model_dim, self.feature_dim)
+                    blocks[-1]["W_param"] = nn.Linear(self.model_dim, self.param_dim)
             self.blocks = nn.ModuleList(blocks)
+            if getattr(config, "block_output_projection_freeze", False):
+                if self.block_output_projection != "full":
+                    raise ValueError(
+                        "block_output_projection_freeze needs a projection to freeze."
+                    )
+                for b in self.blocks:
+                    for mod in (b["proj_out"], b["W_param"]):
+                        for prm in mod.parameters():
+                            prm.requires_grad_(False)
 
         # ── Embedding/unembedding path parameters ─────────────────────────────
         else:
@@ -798,8 +830,15 @@ class EntityMarformer(nn.Module):
             # adding proj_out/W_param back onto features/params gives a second, parallel
             # stream -- the "double residual stream". dual_outer_residual selects which
             # layers keep that outer add; dropping it leaves only the rotated part.
-            feat_update  = block["dropout_2"](block["proj_out"](combined))
-            param_update = block["dropout_2"](block["W_param"](combined))
+            if self.block_output_projection == "full":
+                feat_update  = block["dropout_2"](block["proj_out"](combined))
+                param_update = block["dropout_2"](block["W_param"](combined))
+            else:
+                # Identity in place of [proj_out; W_param]: the block body reaches
+                # the outer stream unrotated, giving h' = h + attn + ff.
+                upd          = block["dropout_2"](combined)
+                feat_update  = upd[..., : self.feature_dim]
+                param_update = upd[..., self.feature_dim :]
             mode = self._outer_residual_mode(layer_idx, num_blocks)
             if mode == "add_h":
                 # Baseline: add onto the stream as it entered the layer.
