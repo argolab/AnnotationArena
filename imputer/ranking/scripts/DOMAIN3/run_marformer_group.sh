@@ -112,7 +112,11 @@ MASK_AUGMENTATIONS=5
 MASKED_LOSS_WEIGHT="${DOMAIN3_MASKED_LOSS_WEIGHT:-15.0}"
 OBSERVED_LOSS_WEIGHT="${DOMAIN3_OBSERVED_LOSS_WEIGHT:-1.0}"
 DEVICE="$(domain3_choose_torch_device)"
-MAX_ITEM="${DOMAIN3_MAX_ITEM:-100}"
+# 500 is the final-run chunk (thread 1). This used to default to 100, which
+# disagreed with every caller that sets it and silently chunked a direct
+# invocation at 100 -- caught by the final-run smoke cell, which wrote
+# max_item=100 into train_config.json while the job script said 500.
+MAX_ITEM="${DOMAIN3_MAX_ITEM:-500}"
 # Which layers keep the outer residual add (features/params += proj(combined)).
 # "all" is the shipped architecture; "not_last" / "none" are the residual-stream
 # ablation. Overridable so the ablation does not need its own runner.
