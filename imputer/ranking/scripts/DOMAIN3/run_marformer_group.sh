@@ -125,6 +125,8 @@ DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
 # Residual adds inside the block: both | ff_only | none. "none" leaves the outer
 # add as the only skip connection.
 INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
+BLOCK_OUTPUT_PROJECTION="${DOMAIN3_BLOCK_OUTPUT_PROJECTION:-full}"
+BLOCK_PROJ_FREEZE="${DOMAIN3_BLOCK_PROJ_FREEZE:-false}"
 # Transductive only. Put test_missing in the training graph as status-0 nodes
 # (no labels, no loss), the way train_missing already is, so test items are
 # structurally identical to training items. Default off = shipped behaviour.
@@ -202,6 +204,8 @@ TEST_MISSING_FLAG=""
 [ "${TEST_MISSING_IN_GRAPH}" = "true" ] && TEST_MISSING_FLAG="--test-missing-in-graph"
 TF32_FLAG=""
 [ "${TF32}" = "true" ] && TF32_FLAG="--tf32"
+BLOCK_FREEZE_FLAG=""
+[ "${BLOCK_PROJ_FREEZE}" = "true" ] && BLOCK_FREEZE_FLAG="--block-output-projection-freeze"
 OVERWRITE_FLAG=""
 [ "${OVERWRITE_EXISTING}" = "true" ] && OVERWRITE_FLAG="--overwrite-existing-data"
 TRANSDUCTIVE_FLAG=""
@@ -306,6 +310,8 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
         --annotator-reg-weight   "${ANNOTATOR_REG_WEIGHT}" \
         --dual-outer-residual    "${DUAL_OUTER_RESIDUAL}"    \
         --inner-residual         "${INNER_RESIDUAL}"        \
+        --block-output-projection "${BLOCK_OUTPUT_PROJECTION}" \
+        ${BLOCK_FREEZE_FLAG}                               \
         --compile                "${COMPILE_MODE}"          \
         --eval-every             "${EVAL_EVERY}"            \
         --val-protocol           "${VAL_PROTOCOL}"          \
@@ -341,6 +347,8 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
   "elapsed_seconds": ${RUN_ELAPSED},
   "hyperparameters": {
     "dual_outer_residual": "${DUAL_OUTER_RESIDUAL}",
+    "block_output_projection": "${BLOCK_OUTPUT_PROJECTION}",
+    "block_output_projection_freeze": ${BLOCK_PROJ_FREEZE},
     "inner_residual": "${INNER_RESIDUAL}",
     "seed": ${SEED},
     "embedding_dim": ${EMBEDDING_DIM},
