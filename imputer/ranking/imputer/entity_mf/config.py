@@ -37,6 +37,27 @@ class EntityMarformerConfig:
                                          #   "none"     -> no layer adds; the stream is carried purely by `combined`'s inner residual, rotated each layer
                                          #   "none_id" / "not_last_id" -> identity folded into the projection: h' = c + [W1;W2]c
 
+    block_output_projection_freeze: bool = False
+                                         # Hold every block's output projection at its random
+                                         # initialisation. Tests whether the projection is a
+                                         # LEARNED transform or a fixed random mixing: the trained
+                                         # matrices keep their initialisation statistics almost
+                                         # exactly (effective rank ~57/80, no identity component,
+                                         # all four row/column blocks at the same RMS), so the
+                                         # question is whether training it matters at all.
+    block_output_projection: str = "full"
+                                         # Dual-stream only. The trailing d -> d projection
+                                         # [proj_out; W_param] applied to the block body.
+                                         #   "full" -> shipped: the projection is learned
+                                         #   "none" -> the projection is the identity, so the
+                                         #             block is h' = h + attn + ff. Removes
+                                         #             num_layers * d * d parameters. Exactly
+                                         #             foldable into the feed-forward's output
+                                         #             linear ONLY when inner_residual="none";
+                                         #             with an inner residual it is a real
+                                         #             change of function class (see
+                                         #             RERUN/threads/block-projection/c0_fold.py).
+
     inner_residual: str = "both"          # Dual-stream only. The residual adds INSIDE the block.
                                          #   "both"    -> c = h + attn; c = c + ff   (shipped)
                                          #   "ff_only" -> c = attn;     c = c + ff

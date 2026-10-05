@@ -385,11 +385,12 @@ class EntityMarformerLightningModule(pl.LightningModule):
     def configure_optimizers(self):
         # fused: the model is ~100 small parameter tensors, so an unfused AdamW
         # launches hundreds of tiny kernels and shows up as ~15% of GPU time.
+        trainable = [p for p in self.parameters() if p.requires_grad]
         fused = torch.cuda.is_available() and all(
-            p.is_cuda and p.dtype.is_floating_point for p in self.parameters()
+            p.is_cuda and p.dtype.is_floating_point for p in trainable
         )
         optimizer = torch.optim.AdamW(
-            self.parameters(), lr=self.learning_rate,
+            trainable, lr=self.learning_rate,
             weight_decay=self.weight_decay, fused=fused,
         )
         if self.lr_schedule == "cosine":
@@ -993,6 +994,23 @@ def main():
         ),
     )
     parser.add_argument(
+        "--block-output-projection-freeze", action="store_true",
+        help="Hold every block's output projection at its random initialisation.",
+    )
+    parser.add_argument(
+        "--block-output-projection",
+        choices=["full", "none"],
+        default="full",
+        help=(
+            "Dual-stream only. The trailing d -> d projection [proj_out; W_param] "
+            "applied to the block body. 'full' is the current architecture; 'none' "
+            "replaces it with the identity, so the block is h' = h + attn + ff and "
+            "num_layers * d * d parameters disappear. It is exactly foldable into "
+            "the feed-forward's output linear only when --inner-residual none; with "
+            "an inner residual present it is a real change of function class."
+        ),
+    )
+    parser.add_argument(
         "--dual-outer-residual",
         choices=["all", "not_last", "none", "none_id", "not_last_id"],
         default="all",
@@ -1237,6 +1255,8 @@ def main():
     if args.dropout is not None:
         config.dropout = args.dropout
     config.dual_outer_residual   = args.dual_outer_residual
+    config.block_output_projection = args.block_output_projection
+    config.block_output_projection_freeze = args.block_output_projection_freeze
     config.inner_residual        = args.inner_residual
     config.use_per_head_rel      = args.use_per_head_rel
     config.use_pointer           = args.use_pointer
@@ -1301,6 +1321,8 @@ def main():
             "num_ffn_layers": config.num_ffn_layers,
             "dropout": config.dropout,
             "dual_outer_residual": config.dual_outer_residual,
+            "block_output_projection": config.block_output_projection,
+            "block_output_projection_freeze": config.block_output_projection_freeze,
             "inner_residual": config.inner_residual,
             "use_per_head_rel": config.use_per_head_rel,
             "use_pointer": config.use_pointer,
