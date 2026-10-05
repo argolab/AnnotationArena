@@ -116,14 +116,14 @@ MAX_ITEM="${DOMAIN3_MAX_ITEM:-100}"
 # Which layers keep the outer residual add (features/params += proj(combined)).
 # "all" is the shipped architecture; "not_last" / "none" are the residual-stream
 # ablation. Overridable so the ablation does not need its own runner.
-DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
+DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-none}"
 # Residual adds inside the block: both | ff_only | none. "none" leaves the outer
 # add as the only skip connection.
 INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
-BLOCK_OUTPUT_PROJECTION="${DOMAIN3_BLOCK_OUTPUT_PROJECTION:-full}"
+BLOCK_OUTPUT_PROJECTION="${DOMAIN3_BLOCK_OUTPUT_PROJECTION:-none}"
 BLOCK_PROJ_FREEZE="${DOMAIN3_BLOCK_PROJ_FREEZE:-false}"
 LOGIT_HIGH="${DOMAIN3_LOGIT_HIGH:-20.0}"
-VALUE_CODEC="${DOMAIN3_VALUE_CODEC:-dual}"
+VALUE_CODEC="${DOMAIN3_VALUE_CODEC:-typed}"
 CODEC_INIT="${DOMAIN3_CODEC_INIT:-unit}"
 CODEC_FREEZE="${DOMAIN3_CODEC_FREEZE:-false}"
 # Transductive only. Put test_missing in the training graph as status-0 nodes

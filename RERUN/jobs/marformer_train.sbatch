@@ -77,14 +77,26 @@ export DOMAIN3_DATASET_LABEL="DOMAIN3-SIGMOID"
 export DOMAIN3_DATA_ROOT="$(rerun_data_root "${DATA_RUN_ID:-${RUN_ID}}")"
 export DOMAIN3_SPLIT_PREFIX="DOMAIN3-SIGMOID"
 export DOMAIN3_EXP_PREFIX="domain3_sigmoid"
-export DOMAIN3_MAX_ITEM="${DOMAIN3_MAX_ITEM:-300}"   # see FIGURES.md discrepancy #1
-# Architecture / optimisation knobs the ablations vary; defaults reproduce the paper.
-export DOMAIN3_DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-all}"
+# FINAL RUN DEFAULTS. These are no longer the paper's values -- every one of
+# them is a decision from the September sweep and the post-meeting threads, and
+# an ablation that wants the old behaviour must now set the variable explicitly.
+#
+#   max_item 500        thread 1: 500 beats 300 by 0.016 nats at K=4000, measured
+#                       twice on independent scoring machinery. Train AND eval.
+#   outer residual none } thread 3, together: the standard Transformer block,
+#   block proj     none } h' = h + attn + ff. -0.021 nats at K=2000. Removing
+#                       either one ALONE is worse -- they only cancel as a pair.
+#   value codec typed   thread 2: per-type learned encoder/decoder in place of
+#   codec init  unit    the hand-built value slots, N(0,1) so no constant.
+#                       Parity at K=2000 and at small K on average; ~1 cell in 30
+#                       collapses at small K (B11), accepted by the user.
+export DOMAIN3_MAX_ITEM="${DOMAIN3_MAX_ITEM:-500}"
+export DOMAIN3_DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-none}"
 export DOMAIN3_INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
-export DOMAIN3_BLOCK_OUTPUT_PROJECTION="${DOMAIN3_BLOCK_OUTPUT_PROJECTION:-full}"
+export DOMAIN3_BLOCK_OUTPUT_PROJECTION="${DOMAIN3_BLOCK_OUTPUT_PROJECTION:-none}"
 export DOMAIN3_LOGIT_HIGH="${DOMAIN3_LOGIT_HIGH:-20.0}"
-export DOMAIN3_VALUE_CODEC="${DOMAIN3_VALUE_CODEC:-dual}"
-export DOMAIN3_CODEC_INIT="${DOMAIN3_CODEC_INIT:-random}"
+export DOMAIN3_VALUE_CODEC="${DOMAIN3_VALUE_CODEC:-typed}"
+export DOMAIN3_CODEC_INIT="${DOMAIN3_CODEC_INIT:-unit}"
 export DOMAIN3_CODEC_FREEZE="${DOMAIN3_CODEC_FREEZE:-false}"
 export DOMAIN3_TEST_MISSING_IN_GRAPH="${DOMAIN3_TEST_MISSING_IN_GRAPH:-false}"
 export DOMAIN3_RANDOM_ITEM_CHUNKS="${DOMAIN3_RANDOM_ITEM_CHUNKS:-false}"

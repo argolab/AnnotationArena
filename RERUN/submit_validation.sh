@@ -83,7 +83,7 @@ else
 MARFORMER_MATRIX=(
   "Marformer|item|transductive|100,200,300,400,500,600,700,800,900,1000,2000,3000,4000"
   "Marformer|annot|transductive|10,15,20,25,30,35,40,45,50"
-  "MarformerNT|item|nontransductive|100,200,300,400,500,600,700,800,900"
+  "MarformerNT|item|nontransductive|100,200,300,400,500,600,700,800,900,1000,2000,3000,4000"
   "MarformerNT|annot|nontransductive|10,15,20,25,30,35,40"
 )
 fi
