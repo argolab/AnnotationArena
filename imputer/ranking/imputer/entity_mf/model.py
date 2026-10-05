@@ -256,40 +256,15 @@ def _init_type_embedding(p: nn.Parameter, mode: str, feature_dim: int) -> None:
         )
 
 
-def _init_bias_as_type_centroid(bias_data: torch.Tensor, mode: str, dim: int) -> None:
-    """Initialize a 1-D bias tensor using the same scheme as type centroid embeddings."""
-    if mode == "normal":
-        nn.init.normal_(bias_data, mean=0.0, std=0.02)
-    elif mode == "scaled_normal":
-        nn.init.normal_(bias_data, mean=0.0, std=1.0 / math.sqrt(dim))
-    elif mode == "kaiming":
-        tmp = bias_data.unsqueeze(0)          # kaiming_normal_ requires >= 2D
-        nn.init.kaiming_normal_(tmp, mode="fan_out", nonlinearity="relu")
-        bias_data.copy_(tmp.squeeze(0))
-    else:
-        raise ValueError(
-            f"Unknown type_embedding_init: {mode!r}. "
-            f"Choose from 'normal', 'scaled_normal', 'kaiming'."
-        )
-
-
 class EntityMarformer(nn.Module):
     """
-    Entity Marformer with two selectable architectures (controlled by config.use_embed_unembed):
+    Entity Marformer.
 
-    Dual-stream (default, use_embed_unembed=False):
-      Layer-0: [feature_centroid + deviation | param_from_build_param]  (feature_dim + param_dim = model_dim)
-      Blocks:  attn+FFN on combined; explicit proj_out and W_param residuals back to each stream.
-      Output:  param stream at layer L.
-
-    Embedding/unembedding (use_embed_unembed=True):
-      Layer-0: value_embedder(simple_value) + deviation  (single model_dim vector)
-               value_embedder is nn.Linear(param_dim, model_dim) whose bias is the type centroid.
-               For entity types (param_dim=0) only the bias (type centroid) is used.
-               Name embedding = deviation of parent entities (summed), same dropout logic as before.
-      Blocks:  standard pre-norm attn+FFN on a single residual stream; no split/concat.
-      Output:  per-type unembedder (nn.Linear(model_dim, param_dim)) applied to final residual;
-               returns same [1, L, global_param_dim] shape as the dual-stream path.
+    Layer-0: [feature_centroid + deviation | value] (feature_dim + param_dim = model_dim),
+             where the value is either the hand-built parameter row (value_codec="dual")
+             or a learned per-type encoding of it (value_codec="typed").
+    Blocks:  attn+FFN on combined; explicit proj_out and W_param residuals back to each stream.
+    Output:  the param stream at layer L, or the typed decoder applied to the whole stream.
     """
 
     def __init__(
@@ -306,13 +281,19 @@ class EntityMarformer(nn.Module):
         self.use_rel_value = config.use_rel_value
         self.use_addone_attn = config.use_addone_attn
         self.use_param_output_head = config.use_param_output_head
-        self.use_embed_unembed = config.use_embed_unembed
         # Set by enable_compile(); None means run the eager block stack.
         self._compiled_blocks = None
         # Set by enable_amp(); None means run the block stack in fp32.
         self._amp_dtype = None
         self.dual_outer_residual = getattr(config, "dual_outer_residual", "all")
         self.inner_residual = getattr(config, "inner_residual", "both")
+        self.value_codec = getattr(config, "value_codec", "dual")
+        self.codec_init = getattr(config, "codec_init", "random")
+        self.codec_freeze = bool(getattr(config, "codec_freeze", False))
+        if self.value_codec not in ("dual", "typed"):
+            raise ValueError(
+                f"Unknown value_codec: {self.value_codec!r}. Choose 'dual' or 'typed'."
+            )
         self.block_output_projection = getattr(config, "block_output_projection", "full")
         if self.block_output_projection not in ("full", "none"):
             raise ValueError(
@@ -356,105 +337,285 @@ class EntityMarformer(nn.Module):
             f"embedding_dim {self.model_dim} must be divisible by attention_heads {config.attention_heads}"
         )
 
-        # ── Dual-stream path parameters ───────────────────────────────────────
-        if not config.use_embed_unembed:
-            assert self.model_dim > self.param_dim, (
-                f"embedding_dim {self.model_dim} must be > global_param_dim {self.param_dim}"
-            )
-            self.feature_dim = self.model_dim - self.param_dim
+        assert self.model_dim > self.param_dim, (
+            f"embedding_dim {self.model_dim} must be > global_param_dim {self.param_dim}"
+        )
+        self.feature_dim = self.model_dim - self.param_dim
 
-            self.type_embeddings = nn.ParameterDict(
-                {name: nn.Parameter(torch.empty(1, self.feature_dim)) for name in types.keys()}
-            )
-            for p in self.type_embeddings.values():
-                _init_type_embedding(p, config.type_embedding_init, self.feature_dim)
+        # With the typed codec the whole vector is one stream, so a type
+        # centroid and an entity deviation are model_dim wide rather than
+        # feature_dim wide. feature_dim itself is left alone: the block stack
+        # still splits at the same place, which is what keeps the two
+        # architectures comparable layer for layer.
+        self.embed_dim = self.model_dim if self.value_codec == "typed" else self.feature_dim
 
-            self.deviation_tables = nn.ParameterDict()
-            for name, t in types.items():
-                if t.variation.enabled and t.variation.num_entities > 0:
-                    self.deviation_tables[name] = nn.Parameter(
-                        torch.zeros(t.variation.num_entities, self.feature_dim)
-                    )
+        self.type_embeddings = nn.ParameterDict(
+            {name: nn.Parameter(torch.empty(1, self.embed_dim)) for name in types.keys()}
+        )
+        for p in self.type_embeddings.values():
+            _init_type_embedding(p, config.type_embedding_init, self.embed_dim)
 
-            self.deviation_norm = NormLayer(self.feature_dim)
-
-            if self.use_param_output_head:
-                self.param_output_head = nn.Sequential(
-                    nn.Linear(self.model_dim, 128),
-                    nn.ReLU(),
-                    nn.Linear(128, self.param_dim),
+        self.deviation_tables = nn.ParameterDict()
+        for name, t in types.items():
+            if t.variation.enabled and t.variation.num_entities > 0:
+                self.deviation_tables[name] = nn.Parameter(
+                    torch.zeros(t.variation.num_entities, self.embed_dim)
                 )
 
-            blocks: List[nn.Module] = []
-            for _ in range(config.num_layers):
-                blocks.append(nn.ModuleDict({
-                    "norm_1":    NormLayer(self.model_dim),
-                    "attn":      self._make_attn_block(config, num_relationships),
-                    "norm_2":    NormLayer(self.model_dim),
-                    "ff":        FeedForward(self.model_dim, d_ff=config.d_ff, dropout=config.dropout, num_layers=config.num_ffn_layers),
-                    "dropout_2": nn.Dropout(config.dropout),
-                }))
-                if self.block_output_projection == "full":
-                    blocks[-1]["proj_out"] = nn.Linear(self.model_dim, self.feature_dim)
-                    blocks[-1]["W_param"] = nn.Linear(self.model_dim, self.param_dim)
-            self.blocks = nn.ModuleList(blocks)
-            if getattr(config, "block_output_projection_freeze", False):
-                if self.block_output_projection != "full":
-                    raise ValueError(
-                        "block_output_projection_freeze needs a projection to freeze."
-                    )
-                for b in self.blocks:
-                    for mod in (b["proj_out"], b["W_param"]):
-                        for prm in mod.parameters():
-                            prm.requires_grad_(False)
+        self.deviation_norm = NormLayer(self.embed_dim)
 
-        # ── Embedding/unembedding path parameters ─────────────────────────────
-        else:
-            self.feature_dim = self.model_dim  # whole vector is the single residual stream
-
-            # Value embedders: nn.Linear(param_dim, model_dim) for variable types.
-            # The bias of each Linear serves as the type centroid.
-            # Entity types (param_dim==0) get a plain Parameter as their type centroid.
-            self.value_embedders = nn.ModuleDict()
-            self.type_embeddings_emb = nn.ParameterDict()
+        if self.value_codec == "typed":
+            # One encoder and one decoder per VARIABLE type. The encoder has
+            # no bias: the type centroid above is the bias, shared with the
+            # entity types so every token is "centroid + something".
+            # The decoder is untied from the encoder and never predicts the
+            # wildcard, so it emits C outputs for a type of param_dim 1 + C.
+            self.value_encoders = nn.ModuleDict()
+            self.value_decoders = nn.ModuleDict()
             for name, t in types.items():
-                if t.param_dim > 0:
-                    lin = nn.Linear(t.param_dim, self.model_dim, bias=True)
-                    nn.init.normal_(lin.weight.data, mean=0.0, std=0.02)
-                    _init_bias_as_type_centroid(lin.bias.data, config.type_embedding_init, self.model_dim)
-                    self.value_embedders[name] = lin
-                else:
-                    p = nn.Parameter(torch.empty(1, self.model_dim))
-                    _init_type_embedding(p, config.type_embedding_init, self.model_dim)
-                    self.type_embeddings_emb[name] = p
+                if not getattr(t, "is_variable", False) or t.param_dim <= 1:
+                    continue
+                self.value_encoders[name] = nn.Linear(t.param_dim, self.model_dim, bias=False)
+                self.value_decoders[name] = nn.Linear(self.model_dim, t.param_dim - 1)
+            self._init_value_codec(types)
 
-            # Deviation tables: model_dim-wide (name embeddings for each entity).
-            self.deviation_tables_emb = nn.ParameterDict()
-            for name, t in types.items():
-                if t.variation.enabled and t.variation.num_entities > 0:
-                    self.deviation_tables_emb[name] = nn.Parameter(
-                        torch.zeros(t.variation.num_entities, self.model_dim)
-                    )
+        if self.use_param_output_head:
+            self.param_output_head = nn.Sequential(
+                nn.Linear(self.model_dim, 128),
+                nn.ReLU(),
+                nn.Linear(128, self.param_dim),
+            )
 
-            self.emb_deviation_norm = NormLayer(self.model_dim)
+        blocks: List[nn.Module] = []
+        for _ in range(config.num_layers):
+            blocks.append(nn.ModuleDict({
+                "norm_1":    NormLayer(self.model_dim),
+                "attn":      self._make_attn_block(config, num_relationships),
+                "norm_2":    NormLayer(self.model_dim),
+                "ff":        FeedForward(self.model_dim, d_ff=config.d_ff, dropout=config.dropout, num_layers=config.num_ffn_layers),
+                "dropout_2": nn.Dropout(config.dropout),
+            }))
+            if self.block_output_projection == "full":
+                blocks[-1]["proj_out"] = nn.Linear(self.model_dim, self.feature_dim)
+                blocks[-1]["W_param"] = nn.Linear(self.model_dim, self.param_dim)
+        self.blocks = nn.ModuleList(blocks)
+        if getattr(config, "block_output_projection_freeze", False):
+            if self.block_output_projection != "full":
+                raise ValueError(
+                    "block_output_projection_freeze needs a projection to freeze."
+                )
+            for b in self.blocks:
+                for mod in (b["proj_out"], b["W_param"]):
+                    for prm in mod.parameters():
+                        prm.requires_grad_(False)
 
-            # Per-type unembedders: model_dim → param_dim (only for variable types).
-            self.unembedders = nn.ModuleDict()
-            for name, t in types.items():
-                if t.param_dim > 0:
-                    self.unembedders[name] = nn.Linear(self.model_dim, t.param_dim)
 
-            # Standard pre-norm blocks (no proj_out / W_param split).
-            emb_blocks: List[nn.Module] = []
-            for _ in range(config.num_layers):
-                emb_blocks.append(nn.ModuleDict({
-                    "norm_1":  NormLayer(self.model_dim),
-                    "attn":    self._make_attn_block(config, num_relationships),
-                    "norm_2":  NormLayer(self.model_dim),
-                    "ff":      FeedForward(self.model_dim, d_ff=config.d_ff, dropout=config.dropout, num_layers=config.num_ffn_layers),
-                    "dropout": nn.Dropout(config.dropout),
-                }))
-            self.emb_blocks = nn.ModuleList(emb_blocks)
+    def _init_value_codec(self, types: Dict[str, EntityType]) -> None:
+        """Initialise the per-type encoders and decoders.
+
+        "random" is the real configuration: a Gaussian encoder into R^d and a
+        default-initialised decoder out of it.
+
+        "aligned" is the diagnostic. It places the encoder in the LAST 1 + C
+        dimensions of R^d and has the decoder read the last C, which is exactly
+        where the dual stream keeps its value slice -- so with the codec frozen
+        the two architectures are the same function. The scale factor matters
+        and is easy to get wrong: the dual stream's layer 0 writes 1.0 in the
+        wildcard slot but `logit_high` in the observed class's slot, so the
+        aligned encoder is diag(1, logit_high, ..., logit_high), not the
+        identity.
+        """
+        for name, enc in self.value_encoders.items():
+            dec = self.value_decoders[name]
+            P = types[name].param_dim
+            C = P - 1
+            logit_high = float(getattr(types[name], "logit_high", self.config.logit_high))
+            if self.codec_init == "random":
+                nn.init.normal_(enc.weight.data, mean=0.0, std=0.02)
+                continue
+            if self.codec_init == "scaled":
+                # Same random code as "random", but at the magnitude the residual
+                # stream actually expects. The hand-built stream writes
+                # logit_high (20.0) into an observed value's slot, so the value
+                # arrives with L2 norm 20; a N(0, 0.02) encoder delivers ~0.02 --
+                # three orders of magnitude quieter. The debug ladder showed that
+                # is the whole problem: an aligned encoder matches the shipped
+                # model to within noise, a random one is 0.087 worse, and a random
+                # one that cannot adapt is 0.274 worse. std = logit_high /
+                # sqrt(model_dim) gives an output norm of about logit_high, so the
+                # code is random but arrives at the right volume.
+                nn.init.normal_(enc.weight.data, mean=0.0,
+                                std=logit_high / math.sqrt(self.model_dim))
+                continue
+            if self.codec_init == "unit":
+                # The scale question, stripped of the magic number. "scaled" works
+                # but reads logit_high to do it, so the hand-built constant is
+                # still in the loop -- which defeats half the point of learning
+                # the code. N(0, 1) has no constant in it at all: output norm is
+                # sqrt(model_dim) ~= 8.9, against 20 for the hand-built slot and
+                # 0.18 for the old default. If this matches, the requirement is
+                # only "loud enough", not "exactly logit_high", and logit_high
+                # can leave the codec path entirely.
+                nn.init.normal_(enc.weight.data, mean=0.0, std=1.0)
+                continue
+            if self.codec_init == "orthogonal":
+                # Loud AND well separated. "scaled" fixed the magnitude and
+                # removed the systematic penalty, but left roughly one run in six
+                # at small K landing somewhere training never leaves -- a
+                # Gaussian draw can start with two rating levels pointing in
+                # nearly the same direction, which is a bad code to be stuck
+                # with when there is little data to correct it. Orthonormal
+                # columns scaled to logit_high give every value its own
+                # direction at the magnitude the stream expects, with no
+                # hand-written layout: which direction each value gets is still
+                # arbitrary.
+                nn.init.orthogonal_(enc.weight.data)
+                enc.weight.data.mul_(logit_high)
+                continue
+            if self.codec_init != "aligned":
+                raise ValueError(
+                    f"Unknown codec_init: {self.codec_init!r}. "
+                    "Choose 'random', 'scaled', 'orthogonal' or 'aligned'."
+                )
+            enc.weight.data.zero_()
+            base = self.model_dim - P
+            enc.weight.data[base, 0] = 1.0                       # wildcard bit, unscaled
+            for j in range(C):
+                enc.weight.data[base + 1 + j, 1 + j] = logit_high
+            dec.weight.data.zero_()
+            for j in range(C):
+                dec.weight.data[j, base + 1 + j] = 1.0
+            dec.bias.data.zero_()
+
+        if self.codec_init == "aligned":
+            # The codec owns the last global_param_dim dimensions of the stream,
+            # so nothing else may write there at layer 0 -- including the
+            # centroids of the ENTITY types, which have no encoder of their own.
+            # Leaving those random was the one thing standing between this
+            # configuration and exact agreement with the dual stream.
+            for p in self.type_embeddings.values():
+                p.data[:, self.model_dim - self.param_dim :] = 0.0
+            for p in self.deviation_tables.values():
+                p.data[:, self.model_dim - self.param_dim :] = 0.0
+
+        if self.codec_freeze:
+            for mod in list(self.value_encoders.values()) + list(self.value_decoders.values()):
+                for p in mod.parameters():
+                    p.requires_grad_(False)
+
+        if self.codec_init == "aligned" and self.codec_freeze:
+            # Freezing the codec makes the FORWARD pass identical to the dual
+            # stream, but not training. The typed architecture is strictly more
+            # permissive at layer 0: its centroids and entity deviations are
+            # model_dim wide, so gradient can push them into the value slice --
+            # somewhere the dual stream's narrower centroids cannot reach. Left
+            # alone they drift by ~1e-4 per step and the two architectures
+            # separate. Pinning the tail restores an exact identity, which is
+            # what makes this configuration usable as a control.
+            tail = self.model_dim - self.param_dim
+
+            def _pin_tail(grad: torch.Tensor) -> torch.Tensor:
+                g = grad.clone()
+                g[..., tail:] = 0.0
+                return g
+
+            # Handles kept so the equivalence test can lift the pin and measure
+            # what it is worth.
+            self._tail_pin_hooks = [
+                p.register_hook(_pin_tail)
+                for p in list(self.type_embeddings.values())
+                + list(self.deviation_tables.values())
+            ]
+
+    def _build_initial_typed_stream(
+        self,
+        graph: EntityGraph,
+        device: torch.device,
+        status: torch.Tensor | None = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """Layer 0 for the typed codec, single stream, returned pre-split.
+
+        x = type_centroid + entity_deviation + encoder(value encoding)
+
+        The split into (features, params) at feature_dim is bookkeeping only --
+        the block stack immediately concatenates them again. Keeping the same
+        signature as the dual builder is what lets the two share every block.
+
+        status is [B, L] for the batched path and None for the single-mask path.
+        """
+        gt = graph_tensors(graph, self.types, self.param_dim, device)
+        gt.refresh(graph)
+        B = 1 if status is None else status.shape[0]
+
+        type_mat = torch.cat([self.type_embeddings[n] for n in gt.type_names], dim=0)  # [T, D]
+        x = type_mat.index_select(0, gt.type_ids).unsqueeze(0)                         # [1, L, D]
+        if B > 1:
+            x = x.expand(B, -1, -1)
+
+        for name, pos in gt.dev_positions.items():
+            table = self.deviation_tables.get(name, None)
+            if table is None:
+                continue
+            variation = self.types[name].variation
+            dev = table.index_select(0, gt.dev_entity_ids[name])                       # [M, D]
+            dev = dev.unsqueeze(0).expand(B, -1, -1)
+            if self.training and variation.dropout_rate > 0:
+                keep = (torch.rand(B, dev.shape[1], 1, device=device) >= variation.dropout_rate)
+                dev = dev * keep.to(dev.dtype)
+            if self.config.use_deviation_norm:
+                dev = self.deviation_norm(dev)
+            x = x.index_add(1, pos, dev)
+
+        # Hidden tokens present their wildcard encoding, observed ones their
+        # one-hot. Same selection rule as the dual stream's value row.
+        hidden = (gt.hidden.unsqueeze(0) if status is None
+                  else (gt.is_variable.unsqueeze(0) & (status != 2)))
+        value = torch.where(hidden.unsqueeze(-1), gt.mask_row, gt.simple_obs)          # [B, L, P]
+
+        for name, enc in self.value_encoders.items():
+            sel = (gt.type_ids == gt.type_names.index(name))
+            if not bool(sel.any()):
+                continue
+            pos = sel.nonzero(as_tuple=False).squeeze(-1)
+            P = self.types[name].param_dim
+            contrib = enc(value.index_select(1, pos)[..., :P])                         # [B, M, D]
+            x = x.index_add(1, pos, contrib)
+
+        return x[..., : self.feature_dim], x[..., self.feature_dim :], None
+
+    def _decode_typed(self, combined: torch.Tensor, graph: EntityGraph,
+                      device: torch.device) -> torch.Tensor:
+        """Per-type decode of the final residual stream.
+
+        Returns the same [B, L, global_param_dim] carrier every other part of the
+        codebase expects, with each type's C logits written into slots 1..C --
+        the slice the loss and the evaluation path already read. The decoder
+        itself is R^d -> R^C; the carrier is only where its output is parked.
+        """
+        gt = graph_tensors(graph, self.types, self.param_dim, device)
+        B, L, _ = combined.shape
+        out = torch.zeros(B, L, self.global_param_dim, device=device, dtype=combined.dtype)
+        for name, dec in self.value_decoders.items():
+            sel = (gt.type_ids == gt.type_names.index(name))
+            if not bool(sel.any()):
+                continue
+            pos = sel.nonzero(as_tuple=False).squeeze(-1)
+            logits = dec(combined.index_select(1, pos))                                # [B, M, C]
+            carrier = torch.zeros(B, pos.shape[0], self.global_param_dim,
+                                  device=device, dtype=combined.dtype)
+            carrier[..., 1 : 1 + logits.shape[-1]] = logits
+            out = out.index_add(1, pos, carrier)
+        return out
+
+    def _forward_typed(self, graph: EntityGraph, device: torch.device,
+                       status: torch.Tensor | None = None) -> torch.Tensor:
+        features, params, attn_mask = self._build_initial_typed_stream(graph, device, status)
+        edge_flat, edge_rel = graph.build_edge_index(device)
+        edge_mask = self._dense_edge_mask(graph, device)
+        K_aug = self._get_k_aug(graph, device)
+        combined = self._run_blocks(features, params, edge_flat, edge_rel,
+                                    attn_mask, K_aug, edge_mask)
+        return self._decode_typed(combined, graph, device)
 
     def enable_compile(self, mode: str = "default") -> None:
         """
@@ -469,8 +630,6 @@ class EntityMarformer(nn.Module):
         if mode in ("", "none"):
             self._compiled_blocks = None
             return
-        if self.use_embed_unembed:
-            raise ValueError("enable_compile only covers the dual-stream path")
         self._compiled_blocks = torch.compile(self._dual_blocks, mode=mode, dynamic=False)
 
     def enable_amp(self, dtype: str = "none") -> None:
@@ -624,58 +783,6 @@ class EntityMarformer(nn.Module):
 
         return features, params, attn_mask
 
-    def _build_initial_emb_stream(
-        self,
-        graph: EntityGraph,
-        device: torch.device,
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
-        Build initial single residual stream (embedding/unembedding path).
-
-        Layer-0 vector for each token = value_embedding(simple_value) + name_embedding(deviation).
-        For variable types: value_embedding = Linear(param_dim → model_dim) applied to build_simple_value output.
-        For entity types:   value_embedding = type centroid bias only.
-        Name embedding = deviation from deviation_tables_emb (same dropout logic as dual-stream).
-
-        Returns:
-            x:         [1, L, model_dim]
-            attn_mask: [1, L]
-        """
-        L = graph.num_tokens
-        x         = torch.zeros(1, L, self.model_dim, device=device)
-        attn_mask = torch.ones(1, L, dtype=torch.bool, device=device)
-
-        for idx, token in enumerate(graph.tokens):
-            t = self.types[token.type_name]
-
-            # Value embedding
-            if token.type_name in self.value_embedders:
-                # Variable type: A * simple_value + b_type  (b_type is the Linear bias)
-                simple_val = t.build_simple_value(
-                    token.raw_data or {}, device=device, global_param_dim=t.param_dim
-                )
-                val_emb = self.value_embedders[token.type_name](simple_val)  # [model_dim]
-            else:
-                # Entity type: type centroid only (bias b)
-                val_emb = self.type_embeddings_emb[token.type_name].squeeze(0)  # [model_dim]
-
-            # Name embedding: per-entity deviation (same dropout as dual-stream path)
-            name_emb = torch.zeros(self.model_dim, device=device)
-            if token.type_name in self.deviation_tables_emb and token.entity_id >= 0:
-                dev_table = self.deviation_tables_emb[token.type_name]
-                if 0 <= token.entity_id < dev_table.shape[0]:
-                    dev = dev_table[token.entity_id]
-                    if self.training and t.variation.dropout_rate > 0:
-                        if torch.rand(1).item() < t.variation.dropout_rate:
-                            dev = torch.zeros_like(dev)
-                    if self.config.use_deviation_norm:
-                        dev = self.emb_deviation_norm(dev.unsqueeze(0)).squeeze(0)
-                    name_emb = dev
-
-            x[0, idx] = val_emb + name_emb
-
-        return x, attn_mask
-
     def forward(
         self,
         graph: EntityGraph,
@@ -690,8 +797,8 @@ class EntityMarformer(nn.Module):
         if device is None:
             device = next(self.parameters()).device
 
-        if self.use_embed_unembed:
-            return self._forward_emb(graph, device)
+        if self.value_codec == "typed":
+            return self._forward_typed(graph, device)
         return self._forward_dual(graph, device)
 
     def forward_batched(
@@ -721,8 +828,8 @@ class EntityMarformer(nn.Module):
         """
         if device is None:
             device = next(self.parameters()).device
-        if self.use_embed_unembed:
-            raise NotImplementedError("forward_batched only covers the dual-stream path")
+        if self.value_codec == "typed":
+            return self._forward_typed(graph, device, status)
 
         features, params, attn_mask = self._build_initial_streams_batched(graph, status, device)
         edge_flat, edge_rel = graph.build_edge_index(device)
@@ -860,30 +967,8 @@ class EntityMarformer(nn.Module):
 
         if self.use_param_output_head:
             return self.param_output_head(combined)
-        return params
-
-    def _forward_emb(self, graph: EntityGraph, device: torch.device) -> torch.Tensor:
-        """Embedding/unembedding forward pass (single residual stream)."""
-        x, attn_mask = self._build_initial_emb_stream(graph, device=device)
-        edge_flat, edge_rel = graph.build_edge_index(device)
-        edge_mask    = self._dense_edge_mask(graph, device)
-        K_aug        = self._get_k_aug(graph, device)
-
-        for block in self.emb_blocks:
-            x = x + block["dropout"](block["attn"](
-                block["norm_1"](x), edge_flat=edge_flat, edge_rel=edge_rel,
-                attn_mask=attn_mask, K_aug=K_aug, edge_mask=edge_mask))
-            x = x + block["dropout"](block["ff"](block["norm_2"](x)))
-
-        # Unembed: apply per-type linear to each token's residual to recover param vectors.
-        L = graph.num_tokens
-        params = torch.zeros(1, L, self.global_param_dim, device=device)
-        for type_name, unembedder in self.unembedders.items():
-            type_indices = [i for i, tok in enumerate(graph.tokens) if tok.type_name == type_name]
-            if not type_indices:
-                continue
-            idx_t      = torch.tensor(type_indices, dtype=torch.long, device=device)
-            tok_params = unembedder(x[0, idx_t])                     # [N, param_dim]
-            params[0, idx_t, : self.types[type_name].param_dim] = tok_params
-
+        if self.value_codec == "typed":
+            # The decoder reads the whole residual vector, not just the slice the
+            # dual stream calls "params".
+            return combined
         return params

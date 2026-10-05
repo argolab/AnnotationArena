@@ -1011,6 +1011,41 @@ def main():
         ),
     )
     parser.add_argument(
+        "--logit-high", type=float, default=20.0,
+        help=(
+            "The magnitude layer 0 writes into an observed value's slot (the "
+            "wildcard slot always gets 1.0). 20.0 is the shipped value and was "
+            "never chosen deliberately; 1.0 makes layer 0 a plain one-hot, which "
+            "is what the typed codec's encoding is."
+        ),
+    )
+    parser.add_argument(
+        "--value-codec", choices=["dual", "typed"], default="dual",
+        help=(
+            "How a variable's value enters and leaves the residual stream. 'dual' "
+            "is the shipped hand-built parameter stream. 'typed' learns, per "
+            "variable type, an encoder from the value's binary encoding (wildcard "
+            "bit + one-hot over C classes) into R^d and a separate untied decoder "
+            "R^d -> R^C read out with a softmax. The block stack is identical."
+        ),
+    )
+    parser.add_argument(
+        "--codec-init", choices=["random", "unit", "scaled", "orthogonal", "aligned"], default="unit",
+        help=(
+            "Typed codec only. 'scaled' (default) draws the encoder at "
+            "std = logit_high / sqrt(model_dim) so the value reaches the stream "
+            "at the magnitude the hand-built slots use; 'unit' is plain N(0,1), "
+            "which carries no constant; 'random' is the old N(0,0.02) default "
+            "and reproduces the regression; 'aligned' places the encoder in the "
+            "last 1+C dimensions and reads the last C back, which reproduces the "
+            "dual stream exactly when frozen."
+        ),
+    )
+    parser.add_argument(
+        "--codec-freeze", action="store_true",
+        help="Typed codec only. Hold the encoders and decoders at their initial values.",
+    )
+    parser.add_argument(
         "--dual-outer-residual",
         choices=["all", "not_last", "none", "none_id", "not_last_id"],
         default="all",
@@ -1140,13 +1175,6 @@ def main():
         help="Predict final params from the last combined hidden state instead of reading them directly from the residual param stream.",
     )
     parser.add_argument(
-        "--use-embed-unembed",
-        action="store_true",
-        help="Use embedding/unembedding architecture: single residual stream, value embedded via "
-             "learned A*x+b at layer 0, unembedded via per-type linear at output. "
-             "Removes the prescribed param-stream scale (logit_high) and lets LayerNorm operate naturally.",
-    )
-    parser.add_argument(
         "--lr-schedule",
         type=str,
         default="none",
@@ -1257,6 +1285,10 @@ def main():
     config.dual_outer_residual   = args.dual_outer_residual
     config.block_output_projection = args.block_output_projection
     config.block_output_projection_freeze = args.block_output_projection_freeze
+    config.logit_high            = args.logit_high
+    config.value_codec           = args.value_codec
+    config.codec_init            = args.codec_init
+    config.codec_freeze          = args.codec_freeze
     config.inner_residual        = args.inner_residual
     config.use_per_head_rel      = args.use_per_head_rel
     config.use_pointer           = args.use_pointer
@@ -1267,7 +1299,6 @@ def main():
     config.scale_shared_rel      = args.scale_shared_rel
     config.use_graph_mask        = args.use_graph_mask
     config.use_param_output_head = args.use_param_output_head
-    config.use_embed_unembed     = args.use_embed_unembed
     types = build_default_domain3_types(
         num_attributes=sizes["num_attributes"],
         num_annotators=sizes["num_annotators"],
@@ -1323,6 +1354,9 @@ def main():
             "dual_outer_residual": config.dual_outer_residual,
             "block_output_projection": config.block_output_projection,
             "block_output_projection_freeze": config.block_output_projection_freeze,
+            "value_codec": config.value_codec,
+            "codec_init": config.codec_init,
+            "codec_freeze": config.codec_freeze,
             "inner_residual": config.inner_residual,
             "use_per_head_rel": config.use_per_head_rel,
             "use_pointer": config.use_pointer,
@@ -1333,7 +1367,6 @@ def main():
             "scale_shared_rel": config.scale_shared_rel,
             "use_graph_mask": config.use_graph_mask,
             "use_param_output_head": config.use_param_output_head,
-            "use_embed_unembed": config.use_embed_unembed,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,
