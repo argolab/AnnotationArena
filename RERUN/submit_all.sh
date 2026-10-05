@@ -86,6 +86,13 @@ MARFORMER_MATRIX=(
 # variants share thresholds (Bin), share the annotator projection (Proj), or
 # both. Item sizes stop at 500 and Oracle/annot at 40 -- beyond that MCMC did
 # not finish in the paper, and the plot script extends those curves as dotted.
+# STAN_MATRIX overrides this with a newline-separated list of
+# family|label|tag|stanfile|axis|sizes rows, the same way VAL_MATRIX overrides the
+# Marformer grid. The final run needs it: the item-axis fits are being reused, so
+# only the annotator rows are submitted.
+if [[ -n "${STAN_MATRIX:-}" ]]; then
+    mapfile -t STAN_MATRIX <<< "${STAN_MATRIX}"
+else
 STAN_MATRIX=(
   "StanOracle|Stan Oracle Sigmoid|TENSOR-SIG|STAN/stan_models/tensor_model_sigmoid.stan|item|100,200,300,400,500"
   "StanOracle|Stan Oracle Sigmoid|TENSOR-SIG|STAN/stan_models/tensor_model_sigmoid.stan|annot|10,15,20,25,30,35,40"
@@ -96,6 +103,7 @@ STAN_MATRIX=(
   "StanMisspecs|Stan Both|BOTH|STAN/stan_models/tensor_shared_annotator_projection_binning_raw_z_sigmoid.stan|item|100,200,300,400,500"
   "StanMisspecs|Stan Both|BOTH|STAN/stan_models/tensor_shared_annotator_projection_binning_raw_z_sigmoid.stan|annot|10,15,20,25,30,35,40,45,50"
 )
+fi
 
 # ------------------------------------------------------------------ plumbing
 CONF_DIR="${RUN_DIR}/conf"
