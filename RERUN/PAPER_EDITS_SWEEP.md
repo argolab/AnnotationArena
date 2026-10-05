@@ -423,3 +423,34 @@ issue is moot and worth one sentence saying so; if they do not, `--best` is the
 defensible curve.
 
 ---
+
+---
+
+## B12 — Stan sampling: say what was actually run, and footnote that it does not matter  [rewrite]  L1560, L2264, L2257
+
+**Status: drafted, deferred until the runs finish (user, 2026-10-05).**
+
+The final run reuses the existing item-axis Stan fits, and every one of them used
+**one chain** (`run_stan_group.sh` defaults to `CHAINS=1`). The paper says "four
+independent chains, 300 warmup iterations, and 500 sampling iterations per chain"
+in three places. Split-$\hat{R}$ is fine as written -- it is the statistic you use
+with a single chain, which is presumably why it is there -- but the chain count is
+not.
+
+**The edit:** state one chain, and add a footnote that the budget does not change
+the answer. The user asked specifically for the footnote.
+
+> We run Stan with a single chain, 300 warmup iterations, and 500 sampling
+> iterations.\footnote{The sampling budget does not materially affect these
+> results. At $\nitem_\mathrm{train}=4000$ the held-out log-loss is 0.6190 with one
+> chain, 0.6178 with four chains, and 0.6180 with four chains and a longer
+> warmup --- a spread of 0.0012 nats across an eightfold range in the number of
+> posterior draws. We report the single-chain fits because the full grid was run
+> that way; the four-chain variants were run as a check at
+> $\nitem_\mathrm{train}=1000$ and 4000.}
+
+Evidence on disk: `RERUN/runs/stan4chain` and `RERUN/runs/stan4chain-long`.
+
+**Also needs updating when the runtime panel is rebuilt** (L2257 and the ~100 min
+figure at L1807): those wall-clock numbers describe the four-chain setting. One
+chain at K=4000 took 27 min against 1h15 for four.
