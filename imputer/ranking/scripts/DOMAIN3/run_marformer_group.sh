@@ -86,6 +86,14 @@ domain3_enter_repo
 
 SCRIPT_START=$SECONDS
 
+# Wall clock is only comparable across cells if we know what produced it, and
+# nothing recorded that before 2026-10-06: final-dual's K=2000 search took 115
+# min and K=4000 took 74, an inversion that is hardware, not data.
+if command -v nvidia-smi >/dev/null 2>&1; then
+    DOMAIN3_GPU_NAME="$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)"
+fi
+export DOMAIN3_GPU_NAME="${DOMAIN3_GPU_NAME:-cpu}"
+
 SEED="${DOMAIN3_SEED:-42}"   # overridable so ablations can average over seeds
 TYPE_EMBEDDING_INIT="kaiming"
 # Architecture. The defaults are the shipped Domain 3 configuration, the one
@@ -153,7 +161,7 @@ EVAL_EVERY="${DOMAIN3_EVAL_EVERY:-1}"
 VAL_PROTOCOL="${DOMAIN3_VAL_PROTOCOL:-none}"
 VAL_FRAC="${DOMAIN3_VAL_FRAC:-0.15}"
 VAL_SPLIT_SEED="${DOMAIN3_VAL_SPLIT_SEED:-7}"
-ITEM_DROPOUT_RATE=1.0
+ITEM_DROPOUT_RATE=0.7
 ANNOTATOR_DROPOUT_RATE=0.0
 ITEM_REG_WEIGHT=0.0
 ATTRIBUTE_REG_WEIGHT=0.0
@@ -161,9 +169,11 @@ ANNOTATOR_REG_WEIGHT=0.0
 # Relational attention design. "bits" is the shipped frozen indicator; "learned"
 # is Shaw et al. (2018) S3.1, a learned per-head embedding of the relation added
 # to the key. REL_VALUE="learned" adds Shaw's other half, the relation embedding
-# added to the value. Both default to the shipped behaviour.
-REL_KEY="${DOMAIN3_REL_KEY:-bits}"
-REL_VALUE="${DOMAIN3_REL_VALUE:-none}"
+# added to the value. BOTH halves are the default as of 2026-10-06 (the final
+# run ships full Shaw); set DOMAIN3_REL_KEY=bits / DOMAIN3_REL_VALUE=none to get
+# the older frozen-indicator behaviour back.
+REL_KEY="${DOMAIN3_REL_KEY:-learned}"
+REL_VALUE="${DOMAIN3_REL_VALUE:-learned}"
 REL_INIT="${DOMAIN3_REL_INIT:-key_scale}"
 USE_PER_HEAD_REL=false
 SCALE_SHARED_REL=true
@@ -178,13 +188,15 @@ OVERWRITE_EXISTING=true
 if [[ "${AXIS}" == "annot" ]]; then
     ANNOTATOR_REG_WEIGHT=1e-3
     ITEM_DROPOUT_RATE=0.0
-    ANNOTATOR_DROPOUT_RATE=0.8
+    ANNOTATOR_DROPOUT_RATE=0.7
     ITEM_REG_WEIGHT=0.0
     ATTRIBUTE_REG_WEIGHT=0.0
 fi
 
 # delta_tau (paper: the per-type embedding dropout rate). The axis block above
-# picks the shipped per-axis values -- item axis 1.0/0.0, annotator axis 0.0/0.8
+# picks the shipped per-axis values -- 0.7 on the axis being generalised over
+# and 0 on the other, unified from the old 1.0/0.8 on 2026-10-06 to match
+# main.tex S959 --
 # -- so these overrides are applied last, after the axis has had its say.
 # FUTURE_EXPERIMENTS S2 uses them to look for a single rule of thumb.
 ITEM_DROPOUT_RATE="${DOMAIN3_ITEM_DROPOUT:-${ITEM_DROPOUT_RATE}}"
@@ -361,6 +373,8 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
   "run_name": "${RUN_NAME}",
   "output_dir": "${RUN_DIR}",
   "elapsed_seconds": ${RUN_ELAPSED},
+  "node": "${SLURMD_NODENAME:-$(hostname -s)}",
+  "gpu": "${DOMAIN3_GPU_NAME:-unknown}",
   "hyperparameters": {
     "dual_outer_residual": "${DUAL_OUTER_RESIDUAL}",
     "block_output_projection": "${BLOCK_OUTPUT_PROJECTION}",
