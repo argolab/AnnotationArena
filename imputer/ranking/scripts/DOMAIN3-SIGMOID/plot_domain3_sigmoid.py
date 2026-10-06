@@ -53,7 +53,12 @@ from scripts.utils import plot_domain3_generalization as shared
 
 ITEM_DISPLAY_SIZES = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 2000, 3000, 4000]
 ITEM_STAN_CUTOFF = 500
-ITEM_MARFORMER_NT_MAX = 500
+# No cap. This was 500, from a time when the item NT runs above 500 did not
+# exist; it silently truncated the NT curve at K=500 even after the final run
+# produced all 13 NT cells, so the figure showed five NT points against a
+# thirteen-point table. _available_marformer_nt_sizes already requires both the
+# run directory and the NT bundle to be on disk, which is the real gate.
+ITEM_MARFORMER_NT_MAX: int | None = None
 ITEM_X_BREAK_AFTER = 1000
 ITEM_EXCLUDED_SERIES: frozenset[str] = frozenset({"Naive Bayes IJK"})
 SPLIT_PREFIX = "DOMAIN3-SIGMOID"
@@ -536,9 +541,9 @@ def _collect_marformer_payloads(
         # other metric in the figure, so there is nothing to override -- using
         # it would reintroduce D22 for log-loss alone and leave log-loss and
         # mbr_l2 measured on different populations.
-        if (METRIC_POPULATION == "pooled"
-                and best.get("missing", {}).get("log_loss") is not None):
-            logloss_override[size] = float(best["missing"]["log_loss"])
+        ov = _pooled_logloss_override(best)
+        if ov is not None:
+            logloss_override[size] = ov
         total_s = _runtime_from_launcher(run_dir / "launcher_metadata.json", "elapsed_seconds")
         total_epochs = int(_read_json(run_dir / "train_config.json").get("training", {}).get("epochs", 300))
         if total_s is not None:
@@ -579,9 +584,13 @@ def _collect_one_marformer_nt_payload(
     probs, labels = _marformer_probs_all_missing(
         run_dir, ckpt, _marformer_eval_max_item(cfg, size), device_name
     )
-    logloss = None
-    if best.get("missing", {}).get("log_loss") is not None:
-        logloss = float(best["missing"]["log_loss"])
+    # Same gate as the transductive path: best.json's "missing" block is the
+    # POOLED metric, which mixes in the training partition's own held-out cells.
+    # Under the default corner population the curve must come from the probs
+    # computed above, or the NT series is measured on a different population
+    # from the T series beside it -- which is exactly D22/D23, surviving on the
+    # NT path alone after the T path was fixed.
+    logloss = _pooled_logloss_override(best)
     runtime = None
     total_s = _runtime_from_launcher(run_dir / "launcher_metadata.json", "elapsed_seconds")
     total_epochs = int(_read_json(run_dir / "train_config.json").get("training", {}).get("epochs", 300))
@@ -807,6 +816,24 @@ def _load_baseline_cache(path: Path) -> dict[str, dict[int, tuple[np.ndarray, np
 
 # ── Runtime metadata from Marformer JSON (used when loading from cache) ───────
 
+def _pooled_logloss_override(best: dict) -> float | None:
+    """best.json's pooled "missing" log-loss, but only if pooled was asked for.
+
+    This is the single place that decides. best.json reports the POOLED metric,
+    which mixes the training partition's own held-out cells in with the test
+    corner and whose share grows with K; the curve must otherwise come from the
+    corner probabilities, or the figures measure a different quantity from the
+    tables. There were FOUR copies of this decision -- the transductive
+    collector, the NT collector, and both halves of the cached path -- and
+    gating only the first left the NT arm wrong in the figures and left a
+    --cache rebuild able to revert both arms silently.
+    """
+    if METRIC_POPULATION != "pooled":
+        return None
+    v = best.get("missing", {}).get("log_loss")
+    return None if v is None else float(v)
+
+
 def _marformer_runtime_from_json(
     cfg: DatasetConfig,
     payloads: dict[int, tuple[str, np.ndarray, np.ndarray]],
@@ -822,9 +849,9 @@ def _marformer_runtime_from_json(
         best_json = run_dir / "TEST_RESULTS" / "best.json"
         if best_json.exists():
             best = _read_json(best_json)
-            ll = best.get("missing", {}).get("log_loss")
+            ll = _pooled_logloss_override(best)
             if ll is not None:
-                logloss[size] = float(ll)
+                logloss[size] = ll
             total_epochs = int(_read_json(run_dir / "train_config.json").get("training", {}).get("epochs", 300))
             if total_s is not None:
                 runtimes[size] = float(total_s) * (_parse_best_epoch(ckpt, total_epochs) / total_epochs) / 60.0
@@ -836,9 +863,9 @@ def _marformer_runtime_from_json(
         best_json = run_dir / "TEST_RESULTS" / "best.json"
         if best_json.exists():
             best = _read_json(best_json)
-            ll = best.get("missing", {}).get("log_loss")
+            ll = _pooled_logloss_override(best)
             if ll is not None:
-                nt_logloss[size] = float(ll)
+                nt_logloss[size] = ll
             total_epochs = int(_read_json(run_dir / "train_config.json").get("training", {}).get("epochs", 300))
             if total_s is not None:
                 nt_runtimes[size] = float(total_s) * (_parse_best_epoch(ckpt, total_epochs) / total_epochs) / 60.0
@@ -947,7 +974,9 @@ def _build_rows_and_payloads(
             if size in marformer_runtimes:
                 rows.append(_runtime_row("Marformer", size, size, marformer_runtimes[size]))
 
-        if size in nt_payloads and not (cfg.slug == "item" and size > ITEM_MARFORMER_NT_MAX):
+        nt_capped = (cfg.slug == "item" and ITEM_MARFORMER_NT_MAX is not None
+                     and size > ITEM_MARFORMER_NT_MAX)
+        if size in nt_payloads and not nt_capped:
             ckpt, probs, labels = nt_payloads[size]
             rows.append(_metric_row("Marformer NT", size, size, "log_loss",
                                     _per_example_nll(probs, labels), nt_logloss.get(size)))
