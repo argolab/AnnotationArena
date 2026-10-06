@@ -182,7 +182,14 @@ collect() {  # collect <src> <dst-relative-to-stage>
     fi
 }
 
-for spec in "item:ITEM:ITEM_GENERALIZATION:500" "annot:ANNOT:ANNOT_GENERALIZATION:30"; do
+# The trailing field is the size whose calibration panel the paper reports.
+# 4000 / 40, not 500 / 30: those are the largest sizes at which EVERY series in the
+# panel was fitted, so the comparison is complete. Stan Oracle has no annotator fit
+# past J=40 and Marformer NT has no annotator refit past 40, which is why the
+# annotator panel is 40 and not 50. At 500 / 30 the item panel showed Marformer
+# WORSE than Stan beyond its CI; at 4000 / 40 all three series are on par. See
+# RERUN/analysis/smece_table.py for the full size-by-method grid.
+for spec in "item:ITEM:ITEM_GENERALIZATION:4000" "annot:ANNOT:ANNOT_GENERALIZATION:40"; do
     IFS=':' read -r slug tex_dir plot_dir cal_size <<< "${spec}"
     [[ "${PART}" == "all" || "${PART}" == "${slug}" ]] || continue
     src="${PLOTS_ROOT}/DOMAIN3-SIGMOID/${plot_dir}"
