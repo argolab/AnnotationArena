@@ -64,6 +64,12 @@ reading the pipeline's conclusions, so it carried its own copy of every eval bug
 | runtime caption | "≈100 min at 500" | **"≈52 min at 500, rising to ≈757 min at 4000"** | same |
 | Marformer judge-axis runtime | below 15 min | **below 4 min** | `annot_generalization_summary.json` (max 3.68 at J=50) |
 | Stan chains (two places) | 4 | **1** | every Stan fit, including the published ones |
+| calibration figure, item | `item_calibration_size500.png` | **`..._size4000.png`** | `make_figures.sh` spec field |
+| calibration figure, judge | `annot_calibration_size30.png` | **`..._size40.png`** | same |
+| subcaption, item | $K_\text{train}=500$ | **4000** | matches the new panel |
+| subcaption, judge | $J_\text{train}=30$ | **40** | matches the new panel |
+| smECE item, Marformer / NT / Stan | 0.055 / 0.044 / 0.019 | **0.026 / 0.026 / 0.025** | the K=4000 panel's own titles |
+| smECE judge, Marformer / NT / Stan | 0.035 / 0.029 / 0.027 | **0.034 / 0.032 / 0.027** | the J=40 panel's own titles |
 
 ### LLM-Rubric (only the three models that were rerun)
 
@@ -109,6 +115,64 @@ Consequence, and it is the most consequential thing in this handover:
 | 4000 | 0.738 | 0.600 | **0.138** |
 
 The gap narrows and then widens again. See notes 1 and 2.
+
+### The calibration panels now report K=4000 and J=40, not K=500 and J=30
+
+**This is a change of reported size, decided deliberately, and it carries a prose
+obligation.** `main.tex` lines 1693/1700 now include
+`item_calibration_size4000.png` and `annot_calibration_size40.png`; the subcaptions
+and the quoted smECE values in the Calibration paragraph were updated to match.
+`make_figures.sh` was changed so a rebuild stages those sizes
+(the `cal_size` field of each `spec`).
+
+**Why the size moved.** At the old sizes the paragraph's claim was not merely stale,
+it was contradicted:
+
+| | Marformer | Marformer NT | Stan Oracle | verdict |
+|---|---|---|---|---|
+| item K=500 (old) | 0.055 | 0.044 | 0.019 | **Marformer worse, beyond its CI** |
+| item K=4000 (new) | 0.026 ± 0.017 | 0.026 ± 0.018 | 0.025 ± 0.016 | on par |
+| annot J=30 (old) | 0.035 | 0.029 | 0.027 | on par |
+| annot J=40 (new) | 0.034 ± 0.020 | 0.032 ± 0.018 | 0.027 ± 0.015 | on par |
+
+"On par" here is the convention the captions already use: the gap is smaller than
+the Marformer estimate's bootstrap half-width. The new gaps are +0.001, +0.001,
++0.006 and +0.005.
+
+**The prose still has to change, and the numbers alone do not fix it.** The sentence
+says the two Marformer variants are "both lower than" Stan. At 4000/40 they are
+*not lower* — on the item axis Marformer is nominally 0.001 **above** Stan Oracle.
+The supportable claim is **on par with**, never **better than**. The numerals were
+updated (in scope); the clause was left alone (prose) and carries a `\Claude` note
+spelling out the required surgery. **Do not ship the paragraph with the new numbers
+and the old clause** — that combination is worse than either alone.
+
+**What this costs the argument, stated plainly.** The paper chose 500/30 as
+"representative" sizes partly to show the model stays calibrated in *small* domains.
+That reading does not survive. Full grid in
+`RERUN/analysis/smece_table.py` (`--ci` for intervals); on the item axis Marformer
+is worse than the best Stan variant beyond its CI at **K=200, 300, 400, 500**, and
+on par only at K=100 and K>=1000. The judge axis is on par from J=20 up. So the
+calibration claim is **asymptotic, not uniform**, and the figure caption's phrase
+"at representative training sizes" is now doing misleading work — consider
+"largest training sizes". A sentence conceding the small-K item band is probably
+needed; that is a writing decision, not a number.
+
+K=100 is technically "on par" and should **not** be used to rescue the small-data
+reading: at 100 items the model's log-loss is 0.939 against Stan's 0.789, i.e. it is
+nearly uninformative, and a near-uniform predictor is well calibrated almost by
+construction. A reviewer will say so.
+
+**J=50 was asked for and is not usable.** Stan Oracle has no judge fit past J=40
+(`ORACLE/ANNOT` contains 10–40 only) and Marformer NT has no judge refit past 40, so
+a J=50 panel would be missing both the oracle and the NT arm — the two series the
+"on par" claim is about. Only Stan Bin/Proj/Both exist at 45 and 50. **J=40 is the
+largest judge size at which every series in the panel exists**, which is why it was
+chosen over 50. Same logic picks K=4000 on the item axis.
+
+**Both PNGs were opened and checked**, not just copied: each shows six panels with
+all series present and the smECE values in the panel titles matching the quoted
+numbers.
 
 ### smECE moved a lot, and the cause is measured
 
@@ -168,7 +232,7 @@ That baseline is off-scale by design and predates this work — do not chase it.
 `paper_figures/` into `Marformer-Paper/PLOTS/{DOMAIN3-SYNTH,REAL-LLMRUBRIC}`, which
 is where `main.tex` already points.
 
-## 4. The nine `\Claude` notes — the work that is left
+## 4. The ten `\Claude` notes — the work that is left
 
 Each is a margin note in `main.tex` (magenta). Grep `\claude{` to find them.
 
@@ -198,7 +262,8 @@ Each is a margin note in `main.tex` (magenta). Grep `\claude{` to find them.
    epoch count, so K=4000 looks cheapest. Right for "time to the reported model",
    misleading as "cost of scaling".
 7. **No Stan fit at J=50** — the judge sweep stops at J=40 (55 min). Either the
-   size or the number in that sentence is wrong; I could not tell which.
+   size or the number in that sentence is wrong; I could not tell which. This is
+   also why the judge calibration panel is J=40 and not J=50 (§3, note 10).
 8. **1 chain vs the R̂ table** — I changed the chain count because 1 chain is what
    every reported fit used. But split-R̂ from one chain is the weaker split-half
    statistic, and a 4-chain diagnostic run exists
@@ -207,6 +272,16 @@ Each is a margin note in `main.tex` (magenta). Grep `\claude{` to find them.
 9. **LLM-Rubric cannot inherit `δ_item` by reference** — it genuinely uses 0.7
    while the synthetic item axis uses 1.0, so the cross-reference in §1898 has to
    state 0.7 explicitly.
+10. **Calibration paragraph, `main.tex:1709`** — the one note that is *blocking*,
+   because the numerals around it have already been changed. The reported size moved
+   to K=4000 / J=40 and the three series are now statistically indistinguishable
+   (gaps +0.001, +0.001, +0.006, +0.005, all inside the bootstrap intervals), but
+   the sentence still says the two Marformer variants are **"both lower than"**
+   Stan. That is false — on the item axis Marformer is nominally 0.001 *above*
+   Stan Oracle. Replace the clause with an on-par statement. Also decide whether to
+   concede the small-K item band (worse than the best Stan beyond its CI at
+   K=200–500), and whether the caption's "representative training sizes" should
+   become "largest training sizes". Full detail in §3.
 
 ## 5. Things this handover does *not* cover
 
