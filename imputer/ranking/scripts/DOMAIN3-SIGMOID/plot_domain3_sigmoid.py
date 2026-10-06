@@ -1085,9 +1085,12 @@ def _metric_y_ticks(cfg: DatasetConfig, metric: str) -> tuple[list[float], tuple
     """Return y tick anchors for a single-axis compressed scale."""
     if cfg.slug == "item":
         if metric == "log_loss":
+            # Starts at 0.60, not 0.70: Stan Oracle reaches 0.600 at K=4000 once
+            # the cutoff placeholder is gone, and the old floor cut those points
+            # off the bottom of the axis.
             return (
-                [0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.30, 1.60],
-                (0.67, 1.68),
+                [0.60, 0.65, 0.70, 0.75, 0.80, 0.85, 0.90, 0.95, 1.00, 1.30, 1.60],
+                (0.57, 1.68),
             )
         return (
             [0.25, 0.30, 0.35, 0.40, 0.45, 0.50, 1.00, 1.50],
@@ -1119,7 +1122,12 @@ def _linear_metric_y_ticks(
 
     data_min, data_max = min(values), max(values)
     if metric == "log_loss":
-        lower = 0.65 if data_min < 0.75 else 0.70
+        # The floor has to follow the data. It used to be pinned at 0.65, which
+        # was safe only while the lowest series was Stan's 0.679; with Stan's
+        # real curve reaching 0.600 a fixed floor silently clips the series off
+        # the bottom instead of failing.
+        floor_tick = math.floor(data_min / 0.05) * 0.05
+        lower = min(0.65 if data_min < 0.75 else 0.70, floor_tick)
         upper = 1.05 if data_max <= 1.05 else math.ceil((data_max + 0.03) / 0.05) * 0.05
         ticks = list(np.round(np.arange(lower, upper + 0.001, 0.05), 2))
         return ticks, (lower - 0.02, upper)
@@ -1312,6 +1320,19 @@ def _plot_metric(
             ax.plot(xs_all[valid], ys_plot[valid], linestyle=linestyle, **lkw)
             ax.fill_between(xs_all[valid], lo_plot[valid], hi_plot[valid], color=color,
                             alpha=shared._series_fill_alpha(label), linewidth=0)
+
+    # A clipped series is invisible, not an error: the Stan curves ran off the
+    # bottom of this axis for a whole figure build because the floor was a
+    # constant. Say so loudly instead of shipping a figure with data outside it.
+    clipped = []
+    for label in active_series:
+        for size, v in zip(display_sizes, stats["mean"][label]):
+            if not math.isnan(v) and not (y_limits[0] <= v <= y_limits[1]):
+                clipped.append(f"{label}@{size}={v:.4f}")
+    if clipped:
+        print(f"  *** WARNING: {len(clipped)} point(s) fall outside the y-limits "
+              f"{y_limits} and will be CLIPPED from {cfg.slug}/{metric}: "
+              f"{', '.join(clipped[:6])}{' ...' if len(clipped) > 6 else ''}", flush=True)
 
     ax.set_ylim(*y_transform(y_limits))
     ax.set_yticks(y_transform(y_ticks))
