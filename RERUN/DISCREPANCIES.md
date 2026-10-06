@@ -389,12 +389,14 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
 
 ## D22 — the reported "test" metric is mostly *training*-partition cells
 
-- **Status:** **resolved 2026-10-06 for everything the paper reports.** The
-  tables and the corner scorer (`analysis/split_missing_metrics.py
-  --corner-whole`, `corner_metrics/corner.json`) have always reported the test
-  corner alone; the figures did not until 2026-10-06 — see D23. `test.py`'s
-  pooled `missing` field is unchanged and still pooled, so anything reading it
-  directly is still affected.
+- **Status:** **resolved 2026-10-06, in two passes — the first pass was
+  incomplete and was reported as done.** The tables and the corner scorer
+  (`analysis/split_missing_metrics.py --corner-whole`,
+  `corner_metrics/corner.json`) have always reported the test corner alone; the
+  figures did not until 2026-10-06 — see D23, including the second pass, which
+  found the transductive arm fixed and the non-transductive arm still pooled.
+  `test.py`'s pooled `missing` field is unchanged and still pooled, so anything
+  reading it directly is still affected.
 - **Where:** `imputer/entity_mf/test.py`, `_reconstruct` (line ~77) feeding
   `evaluate_entity_marformer_split`.
 - **What the code does:** it builds one evaluation graph from
@@ -458,9 +460,36 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
   it is never evaluated in a context-free orphan chunk. The pooled `log_loss`
   override from `best.json` is dropped under this policy — keeping it would
   reintroduce D22 for log-loss alone and leave log-loss and `mbr_l2` on different
-  populations. Verified exactly by `analysis/check_plot_corner.py`: the plot path
-  and `corner.json` agree to four decimals on item/T 2000 and 300, NT item/4000
-  and annot/T 20, n=316 both sides.
+  populations.
+
+- **The first fix caught one of four copies, and the check could not see it.**
+  That decision — whether to override the curve with `best.json`'s pooled
+  `missing.log_loss` — appeared in **four** places: the transductive collector,
+  the NT collector, and both halves of the cached path in
+  `_marformer_runtime_from_json`. Gating only the transductive collector left
+  the figures carrying the pooled metric on the whole NT arm, and left any
+  `--cache` rebuild able to revert **both** arms silently. All four now call one
+  helper, `_pooled_logloss_override`, which is the only place that reads that
+  field.
+
+  The first verification passed anyway, and the reason is worth keeping: it
+  tested `_marformer_probs_all_missing`, the probability path, which is **shared
+  by both arms and was already correct**. The number that reaches a curve is not
+  always the one that path computes. `analysis/check_plot_corner.py` was
+  rewritten to read the `*_generalization_summary.json` the build actually
+  writes and compare **every** cell against `corner.json`, exiting non-zero on
+  any mismatch; it needs no GPU, so it is the gate to run after every figure
+  build. On the pre-fix figures it reported 22/22 transductive cells agreeing to
+  four decimals, all 12 present NT cells disagreeing by −0.028 to +0.066, and 8
+  NT cells missing from the figure entirely.
+
+- **A second, independent defect on the same arm:** `ITEM_MARFORMER_NT_MAX = 500`
+  truncated the item NT curve at K=500 — a cap from when those runs did not
+  exist, introduced by a commit called "Cleanuo" with no rationale. The final run
+  has all 13 item NT cells, so the figure showed five NT points against a
+  thirteen-point table. The cap is now `None`;
+  `_available_marformer_nt_sizes` already requires both the run directory and
+  the NT bundle on disk, which is the real gate.
 - **The magnitude table below is from `replicate-01` and its SIGN DOES NOT
   GENERALISE.** There pooling was 0.094 nats *better* at K=2000, an unearned
   advantage. On `final-dual` pooling is 0.052 nats *worse* (0.7798 against
