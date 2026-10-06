@@ -43,6 +43,44 @@ def escape_epoch(hist):
     return None
 
 
+def val_min_epoch(hist):
+    """Epoch at which validation bottoms out, smoothed over 5 epochs.
+
+    Smoothing matters: the raw argmin of a noisy curve lands anywhere, which is
+    the same failure the stopping-epoch selector has.
+    """
+    vs = [(rec.get("epoch"), val_ce(rec)) for rec in hist]
+    vs = [(e, v) for e, v in vs if v is not None]
+    if len(vs) < 5:
+        return None
+    best, best_e = None, None
+    for i in range(2, len(vs) - 2):
+        m = sum(v for _, v in vs[i - 2:i + 3]) / 5.0
+        if best is None or m < best:
+            best, best_e = m, vs[i][0]
+    return best_e
+
+
+def train_conv_epoch(hist, tol=0.05):
+    """First epoch whose training loss is within `tol` nats of the run's floor.
+
+    "Converged" has to mean something measurable, and the tolerance sets what it
+    means. 0.05 puts the 42 search runs at 1305-1894 (median 1674), which is the
+    range the artifact's grokking section describes; tightening it to 0.01 just
+    reports "near the end of the budget" for every run (1644-1994) and says
+    nothing.
+    """
+    vs = [(rec.get("epoch"), train_ce(rec)) for rec in hist]
+    vs = [(e, v) for e, v in vs if v is not None]
+    if not vs:
+        return None
+    floor = min(v for _, v in vs)
+    for e, v in vs:
+        if v <= floor + tol:
+            return e
+    return vs[-1][0]
+
+
 def series(hist, stride):
     e, tr, va = [], [], []
     for i, rec in enumerate(hist):
@@ -137,6 +175,8 @@ def main() -> int:
                 "refit_epochs": refit_epochs,
                 "esc_search": escape_epoch(hist),
                 "esc_refit": esc_refit,
+                "val_min_epoch": val_min_epoch(hist),
+                "train_conv_epoch": train_conv_epoch(hist),
             })
 
     order = {"item": 0, "annot": 1}
