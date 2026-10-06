@@ -1,0 +1,14 @@
+{
+  "_comment": "Stan CPM test log-loss as published, read off Marformer-Paper/PLOTS/REAL-LLMRUBRIC/llmrubric_cpm_log_loss.png on 2026-10-05. The original fits were never migrated -- no numeric source for them survives anywhere on disk (D29), so the figure IS the reference. Values are digitised by eye and good to roughly +/-0.005, which is enough to detect a systematic shift but NOT enough to quote. Marformer's published curve is included for context; its K=10 point is above the broken axis and unreadable.",
+  "source": "PLOTS/REAL-LLMRUBRIC/llmrubric_cpm_log_loss.png",
+  "read_on": "2026-10-05",
+  "accuracy": 0.005,
+  "stan_cpm": {
+    "10": 1.435, "20": 1.475, "30": 1.230, "40": 1.212, "50": 1.205,
+    "75": 1.160, "100": 1.128, "125": 1.093, "150": 1.088, "175": 1.077
+  },
+  "marformer": {
+    "20": 1.133, "30": 1.033, "40": 1.068, "50": 1.045,
+    "75": 1.025, "100": 1.017, "125": 1.008, "150": 0.989, "175": 0.999
+  }
+}
