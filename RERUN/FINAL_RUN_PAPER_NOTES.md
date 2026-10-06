@@ -421,6 +421,49 @@ K=500. With the cap removed it runs to K=4000, where NT (0.722) and T (0.738)
 essentially coincide — if the text says anything about the two protocols
 diverging at large K, check it against the new figure.
 
+## 11. Relational attention: one sentence that does not match the code, and how to answer Jason  [independent of any experiment]
+
+Jason's margin note at `main.tex:839` asks whether to switch relational attention
+to \citet{shaw2018self}. Thread D is measuring that (`RERUN/threads/shaw-rel/`);
+these two points hold regardless of how it comes out, so they can go in now.
+
+**(a) The key-dimensionality sentence is wrong for Domain 3.** `main.tex:841`
+says we replace $\vec{k}_j$ with $[\mathbf{rel}_{ij}; \vec{k}_j]$ and that this
+"means reducing the dimensionality of the key $\vec{k}_j$ by $|\Rho|$ to make
+room for these bits." The code has two relational designs and **Domain 3 ships
+the other one**: `run_marformer_group.sh` sets `USE_PER_HEAD_REL=false`, which
+adds $|\Rho|$ extra *query* outputs and leaves the key at full width. The mode
+that reserves key dimensions (`use_per_head_rel=true`) is not what any reported
+number was produced with. Same function class, different parameter budget — but
+the sentence as written describes a model we did not run. This sits in the very
+paragraph Jason suggests shortening, so it is worth fixing either way.
+
+**(b) His point (2) is right about dynamics and should not be stated as
+capacity.** The learned key embedding contributes
+$\vec{q}^{\,h}_i \cdot \vec{a}^K_\rho = \vx_i^\top \mathbf{W}_Q^\top \vec{a}^K_\rho$,
+which is still a **linear** function of $\vx_i$ — and now has to factor through
+$\mathbf{W}_Q$. The frozen bits give each head an unconstrained $|\Rho|$-dimensional
+linear readout of $\vx_i$. So as a *score* term Shaw's version is a
+**rank-constrained** special case of ours, not a more powerful one. What it
+genuinely buys is what he says it buys, and none of it is capacity:
+
+- $\vec{a}^K_\rho$ lives in key space, so similar relations can take similar
+  embeddings;
+- an unimportant relation can go to zero in every head at once;
+- no fixed dimension budget is reserved.
+
+If the paper adopts his framing, say *better parameterisation and learning
+dynamics*, not *more powerful*. The one place "more powerful" is defensible is
+his point (1): adding the relation to the **value**
+($\vz_i = \sum_j \alpha_{ij}(\mathbf{V}\vx_j + \vec{a}^V_\rho)$) is a genuinely
+wider function class, and the shipped architecture has no analogue for it at all.
+
+**First measurement in, and it points away from his expectation about dynamics.**
+At item K=2000 the learned-key arm reaches the *same* validation loss as the bit
+arm (0.835–0.846 against 0.841) but takes much longer to get there — selected
+epoch 531/595/686 against 331. Slower to its optimum, not better at it. One cell,
+three seeds; wait for the full sweep before writing anything.
+
 ## Checklist
 
 - [ ] §1 architecture: standard block, both pieces dropped together, +0.150 note
@@ -441,5 +484,12 @@ diverging at large K, check it against the new figure.
 - [ ] §9 the ~0.13-nat Marformer-vs-Stan gap on synthetic still needs an explanation
 - [ ] §9 do NOT rerun the 6 flagged cells (that would be selection on test)
 - [ ] §10 figures were argmin-on-test; fixed, but the PUBLISHED figures have this bug
-- [ ] §10 DECIDE: figures report the pooled metric, tables report the corner — pick one
-- [ ] Rebuild figures (`make_figures.sh --run-id final-dual`, policy `last`)
+- [x] §10 DECIDE: settled — both report the test corner
+- [x] §10 figures now score the corner on BOTH arms (the first fix missed the NT arm)
+- [ ] §10 the NT curve moves by up to 0.066 and gains 8 points; check any sentence
+      about T and NT diverging at large K — they nearly coincide at K=4000
+- [ ] §11 fix the key-dimensionality sentence (main.tex:841) — Domain 3 ships the
+      extra-query-dims design, not the reduced-key one
+- [ ] §11 if adopting Shaw's framing: "better learning dynamics", NOT "more powerful"
+      (the key term is rank-constrained); the VALUE term is the one that adds capacity
+- [x] Rebuild figures (`make_figures.sh --run-id final-dual`, policy `last`)
