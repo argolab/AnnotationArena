@@ -1721,6 +1721,100 @@ transductive arm never showed the symptom (D25: no inflation) and the annotator
 axis was not re-tested.
 
 
+
+### S7 addendum, 2026-10-06 — the carve is conservative by more than "slightly"
+
+**Status: measured, 42 + 72 runs, two independent sweeps.** This revisits the
+S7 conclusion recorded in F5 ("slightly conservative, never late"; the D26
+mismatch "a seed-42 artifact"). The *direction* holds. The magnitude and the
+generality do not.
+
+Sources, both scored on the test corner (n=316) and selected only on the
+validation block:
+
+| source | design | script |
+|---|---|---|
+| `final-dual` | 42 cells, 1 seed, shipped architecture, 4 budgets per cell | `analysis/budget_table.py` |
+| `shaw-d2-s101` | 72 usable runs, 3 seeds, 4 relational-attention arms, ~15 checkpoints per run | `analysis/val_corner_divergence.py` |
+
+**The carve stops too early, in both sweeps, at ~4 and ~6.5 SE.**
+
+| statistic | `final-dual` (n=40) | `shaw-d2` (n=72) |
+|---|---|---|
+| corner regret at the dev-chosen epoch | **+0.0590 ± 0.0151** | **+0.0477 ± 0.0073** |
+| median regret | +0.0218 | +0.0171 |
+| worst single run | +0.5093 | +0.2429 |
+| smECE regret | +0.0083 ± 0.0019 | — |
+
+Direction, from the dense Shaw grid: the corner wants a **later** epoch in
+**50/72** runs (69%), mean gap **+66.3 ± 17.6** epochs, median +52. Not one run
+had the two optima coincide.
+
+**It is not an architecture effect.** All four arms agree within noise
+(regret +0.044 `bits`, +0.046 `bits_v`, +0.049 `shaw_k`, +0.051 `shaw_kv`), so
+this is a property of the carve, not of the attention design.
+
+**Seed 42 is the worst draw, but not the only one.** This is where F5's reading
+was too strong:
+
+| seed | regret | mean epoch gap | runs wanting later |
+|---|---|---|---|
+| 42 | +0.0718 | +128.6 | 19/24 |
+| 43 | +0.0381 | +30.7 | 15/24 |
+| 44 | +0.0332 | +39.6 | 16/24 |
+
+Every seed shows the same sign. Seed 42 is roughly 2x the other two, and the
+single worst run in either sweep is `item/500 s42` (val@102 → 1.0154;
+corner@424 → 0.7725; regret **+0.2429**) — the cell that prompted this
+addendum. So "seed-42 artifact" was right that the headline example is extreme
+and wrong that the effect is absent elsewhere.
+
+**It is an item-axis effect.** The annotator axis is close to clean:
+
+| axis | regret | mean gap | runs wanting later |
+|---|---|---|---|
+| item | +0.0601 ± 0.0102 | +91.5 ep | 38/48 (79%) |
+| annot | +0.0227 ± 0.0052 | +15.9 ep | 12/24 (**50%** — a coin flip) |
+
+On the annotator axis the direction is indistinguishable from chance, which is
+consistent with the carve being sound there and the item blocks being the
+problem. Not yet explained; the obvious candidate is that the item carve holds
+out 15% of the entity type whose count is being swept.
+
+**What this does and does not license.**
+
+*Does:* the carve mis-selects systematically on the item axis, in a direction
+that costs both accuracy and calibration, in two independent sweeps across four
+seeds and four architectures. F5's "never late, slightly conservative" should be
+restated, and S7's reshape is no longer closed by a single counter-example.
+
+*Does not:* fix a budget. Both regret figures are measured against an **oracle**
+argmin over the same checkpoint grid, so they are upper bounds on what any real
+selector could recover, and `fixed-200` winning on the corner in 19/42 cells is
+*not* a licence to adopt 200 — that is D14, selection on test, the bug F13 exists
+to remove. A flat 400 (the pre-F13 choice) is also not the answer: it is worse
+than the selected epoch on average (+0.0140), badly so on the annotator axis
+(**+0.0814**) and better only on the item axis (−0.0275).
+
+The legitimate routes are to choose a budget on the *validation blocks pooled
+across cells*, or to reshape the item carve (S7's original proposal) so its
+optimum tracks the corner's. Both change every final number, so neither belongs
+in this version of the paper.
+
+**Mechanism ruled out.** The val block is not a cold-start task: `carve_validation`
+with `protocol="block"` retags both the observed and the missing ratings of the
+chosen entities, and `train.py` sets `val_eval_vars = val_all`, so a val entity
+supplies its own observed ratings as context exactly as a test entity does
+(`val_missing_in_graph=False` mirrors the test setting). Whatever drives the
+divergence, it is not an asymmetry in what context the two populations get.
+
+**Two cells carry no dev curve at all.** `item/T K=100` and `annot/T J=10` log no
+validation metric — 15% of 10 judges is not a block — and `select_epochs.py`
+deliberately substitutes the axis median, flagged as `no_val_block` in
+`curves_final-dual.json`. They are excluded from every regret figure above, since
+their stopping epoch was never a dev choice.
+
+
 ---
 
 
@@ -1738,8 +1832,8 @@ of: **pending** (not started), **blocked** (waiting on a Part 1 suite),
 | F2  | One $\delta_\tau$ rule applied to all axes and domains | S2 | **ready** — δ=0.7 is within noise of the shipped value on BOTH axes (item at K=300/1000/4000; annotator at J=30, two draws, +0.0002 ±0.0008). Rule: δ=0.7 for the type generalised over, 0 for the rest. Adopted for uniformity, not for a measured gain — δ_τ is close to inert everywhere we probed it. |
 | F3  | Loss weights normalised to $1 : 1/15$, **lr left at 2e-4** (not rescaled)                                                                                        | S5         | **ready** — S5 done 2026-09-05: parity holds at the same lr, trajectories overlay within 0.003 nats. Rescaling lr would have been a real change, not a re-parameterisation. |
 | F4  | lr either tuned on validation or made scheduler-insensitive (WSD) | S3 | **dropped 2026-09-06** — lr left at 2e-4, documented as hand-chosen. Nothing points at it after S5, and WSD would break the checkpoint-prefix property the sweep depends on. Branch `side/s3-wsd` kept, not merged. |
-| F5  | Validation carve — **keep `block` as shipped**, no reshape | S7 | **ready** — S7 done 2026-09-05: the D26 mismatch is a seed-42 artifact; on two fresh draws the carve is slightly conservative, never late. |
-| F6  | Early stopping standardised across all three domains (carve → select → refit everywhere) | S7 | **unblocked** — the carve is trustworthy; proceed. |
+| F5  | Validation carve — **keep `block` as shipped**, no reshape | S7 | **ready** — S7 done 2026-09-05: the D26 mismatch is a seed-42 artifact; on two fresh draws the carve is slightly conservative, never late. **Qualified 2026-10-06** — see the S7 addendum: conservative by +0.048 to +0.059 nats on the item axis across two sweeps, 4 seeds and 4 architectures, not slightly. The shipped decision stands for this version of the paper; the reading behind it does not. |
+| F6  | Early stopping standardised across all three domains (carve → select → refit everywhere) | S7 | **unblocked** — the carve is trustworthy; proceed. **Caveat 2026-10-06** — trustworthy in the sense that it never collapses a cell, not in the sense that it finds the corner's optimum (S7 addendum). Standardising it propagates a measured item-axis bias to domains 1-2. |
 | F7  | LLM-Rubric hyperparameters recorded and paper text updated                                                                                                        | S6         | **ready** — audited 2026-09-04, full config in the S6 Result block; paper needs three numbers changed (400→300 epochs, state δ_item=0.7 and max_item=10). |
 | F8  | `test.py` hardcodes `max_item=500` — **do NOT change it to inherit from `train_config.json`** | S4 | **reversed** — see note below |
 | F9  | Domain 1 validation set carved from *training* data, not the first 50 test instances                                                                              | —          | ready   |

@@ -75,6 +75,11 @@ def test_argmin_ckpt(run_dir: Path) -> str:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--device", default="cuda")
+    ap.add_argument("--eval-max-item", type=int, default=None,
+                    help="force the evaluation chunk instead of using each run's "
+                         "trained value. replicate-01 trained at 300 and final-dual "
+                         "at 500, so comparing them at their own values confounds "
+                         "the model change with a change of evaluation context.")
     ap.add_argument("--run", default=None,
                     help="score a different run tree (e.g. replicate-01, the "
                          "pre-rerun models) to test whether retraining, rather "
@@ -91,7 +96,8 @@ def main() -> int:
     for axis, size, model, rel in CELLS:
         run_dir = RUNS / "RESULTS" / rel
         cfg = m.ITEM_CFG if axis == "item" else m.ANNOT_CFG
-        max_item = m._marformer_eval_max_item(cfg, size)
+        max_item = (a.eval_max_item if a.eval_max_item is not None
+                    else m._marformer_eval_max_item(cfg, size))
         ckpts = {"last": "last.ckpt", "test-argmin": test_argmin_ckpt(run_dir)}
         for pop in ("corner", "pooled"):
             m.METRIC_POPULATION = pop
