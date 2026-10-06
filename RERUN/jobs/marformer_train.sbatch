@@ -126,6 +126,11 @@ export DOMAIN3_MASKED_LOSS_WEIGHT="${DOMAIN3_MASKED_LOSS_WEIGHT:-15.0}"
 export DOMAIN3_OBSERVED_LOSS_WEIGHT="${DOMAIN3_OBSERVED_LOSS_WEIGHT:-1.0}"
 export DOMAIN3_LR="${DOMAIN3_LR:-2e-4}"
 export DOMAIN3_LR_SCHEDULE="${DOMAIN3_LR_SCHEDULE:-none}"
+# L2. The runner reads DOMAIN3_WEIGHT_DECAY, but until 2026-10-06 there was no
+# export line here, so a conf setting it was silently dropped and every arm
+# trained at the 0.01 default -- the same trap the block comment below records
+# for DOMAIN3_BATCH_AUGMENTATIONS. The default reproduces the shipped value.
+export DOMAIN3_WEIGHT_DECAY="${DOMAIN3_WEIGHT_DECAY:-0.01}"
 
 # Speed/optimisation knobs. run_marformer_group.sh reads these, but the per-job
 # conf is *sourced* rather than exported, so without these lines a conf setting
