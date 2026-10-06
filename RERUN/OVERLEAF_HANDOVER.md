@@ -151,6 +151,19 @@ numbers are the plotted ones by construction; `make_figures.sh` now runs it insi
 the run binding, so one command produces both. Values in
 `runs/final-dual/reports/smece.json`.
 
+**A y-axis bug the numeric gate could not see.** Making Stan's values real pushed
+Stan Oracle to 0.600 at K=4000, below a **hardcoded** axis floor (0.65 in the
+linear path, 0.67 in the compressed one), so the Stan curves were drawn *off the
+bottom of the plot*. Every number in that figure was correct, which is why
+`check_plot_corner.py` passed it — value-level verification and rendering are
+separate failure modes, and only opening the PNG caught this. Both floors now
+follow the data, and `_plot_metric` prints a loud `WARNING ... will be CLIPPED`
+naming any series that falls outside the limits.
+
+That guard currently fires **twice, expected**: `Structured Log-Linear` sits at
+2.1–2.3 nats in the two *full* figures, above the compressed scale's 1.68 top.
+That baseline is off-scale by design and predates this work — do not chase it.
+
 **Figure install:** `RERUN/make_figures.sh --run-id final-dual --install` copies
 `paper_figures/` into `Marformer-Paper/PLOTS/{DOMAIN3-SYNTH,REAL-LLMRUBRIC}`, which
 is where `main.tex` already points.
