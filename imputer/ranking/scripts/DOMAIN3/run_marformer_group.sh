@@ -158,6 +158,13 @@ ANNOTATOR_DROPOUT_RATE=0.0
 ITEM_REG_WEIGHT=0.0
 ATTRIBUTE_REG_WEIGHT=0.0
 ANNOTATOR_REG_WEIGHT=0.0
+# Relational attention design. "bits" is the shipped frozen indicator; "learned"
+# is Shaw et al. (2018) S3.1, a learned per-head embedding of the relation added
+# to the key. REL_VALUE="learned" adds Shaw's other half, the relation embedding
+# added to the value. Both default to the shipped behaviour.
+REL_KEY="${DOMAIN3_REL_KEY:-bits}"
+REL_VALUE="${DOMAIN3_REL_VALUE:-none}"
+REL_INIT="${DOMAIN3_REL_INIT:-key_scale}"
 USE_PER_HEAD_REL=false
 SCALE_SHARED_REL=true
 USE_POINTER=true
@@ -246,6 +253,7 @@ echo " TYPE_EMBEDDING_INIT : ${TYPE_EMBEDDING_INIT}"
 echo " USE_POINTER         : ${USE_POINTER}"
 echo " SCALE_SHARED_REL    : ${SCALE_SHARED_REL}"
 echo " TRANSDUCTIVE        : $([ "${PROTOCOL}" = "transductive" ] && echo "true" || echo "false")"
+echo " REL_KEY             : ${REL_KEY} (value ${REL_VALUE}, init ${REL_INIT})"
 echo " VAL_PROTOCOL        : ${VAL_PROTOCOL} (frac ${VAL_FRAC}, split seed ${VAL_SPLIT_SEED})"
 echo " BATCH_AUGMENTATIONS : ${BATCH_AUGMENTATIONS}"
 echo " TF32 / COMPILE      : ${TF32} / ${COMPILE_MODE}"
@@ -320,6 +328,9 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
         ${CODEC_FREEZE_FLAG}                               \
         --compile                "${COMPILE_MODE}"          \
         --eval-every             "${EVAL_EVERY}"            \
+        --rel-key                "${REL_KEY}"               \
+        --rel-value              "${REL_VALUE}"             \
+        --rel-init               "${REL_INIT}"              \
         --val-protocol           "${VAL_PROTOCOL}"          \
         --val-frac               "${VAL_FRAC}"              \
         --val-split-seed         "${VAL_SPLIT_SEED}"        \
