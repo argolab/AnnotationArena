@@ -110,6 +110,39 @@ Consequence, and it is the most consequential thing in this handover:
 
 The gap narrows and then widens again. See notes 1 and 2.
 
+### smECE moved a lot, and the cause is measured
+
+The regenerated panels give smECE far above the published values and **reverse the
+ordering against Stan**: at item K=500 Stan is 0.019 against Marformer 0.055 and
+NT 0.044, where the paper says Marformer and NT are "both lower". At annot J=30 all
+three overlap (0.035 / 0.029 / 0.027).
+
+I first guessed the population fix (pooled -> corner) was the cause. **It is not.**
+`RERUN/analysis/smece_decompose.py` runs the full 2x2 — (pooled, corner) x
+(argmin-on-test, F13 last) — on the rerun models *and* on the pre-rerun ones in
+`runs/replicate-01`. The published numbers are reproducible from the pre-rerun
+models under the old policy, so the attribution is established, not inferred:
+
+| cell | paper | old model, old policy | new model, old policy | current | retraining | corrections |
+|---|---|---|---|---|---|---|
+| item/500 Marformer | 0.016 | 0.0145 | 0.0586 | 0.0548 | **+0.044** | −0.004 |
+| item/500 NT | 0.016 | 0.0125 | 0.0522 | 0.0439 | **+0.040** | −0.008 |
+| annot/30 Marformer | 0.022 | 0.0194 | 0.0365 | 0.0351 | **+0.017** | −0.001 |
+| annot/30 NT | 0.014 | 0.0178 | 0.0242 | 0.0287 | **+0.006** | +0.005 |
+
+Retraining is 109%, 126%, 109% and 59% of the total change — over 100% because the
+corner correction pushes the *other* way in three of four cells. **Scoring on the
+test corner makes calibration look slightly better, not worse**, so the metric fix
+cannot explain the shift.
+
+What remains is what retraining changed: the standard Transformer block, the dual
+value stream, and F13 stopping the refit after a few hundred epochs instead of
+2000. One suggestive datum: on the pre-rerun models the *checkpoint* dominated
+calibration (annot/30 is 0.0194 at the test-argmin epoch against 0.0825 at epoch
+2000), so late training was wrecking it there; the F13 refits stop early and are
+still worse, which points at the architecture rather than the schedule. Not chased
+further — flagged in the paper note.
+
 **smECE is now serialised.** It was computed inside the calibration plotting code
 and rendered only into a plot title, so after a rerun the prose and the panel could
 drift with nothing to catch it. `RERUN/analysis/extract_smece.py` reads the same
