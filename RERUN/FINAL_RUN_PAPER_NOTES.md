@@ -345,6 +345,50 @@ previously advised rerunning the flagged cells, which was wrong.
 
 ---
 
+## 10. The figure script was selecting the checkpoint on test  [this affects the PUBLISHED figures]
+
+Found while verifying the regenerated figures against §9's tables. It is a
+**pre-existing bug**, so the figures already in the paper were built this way.
+
+`scripts/DOMAIN3-SIGMOID/plot_domain3_sigmoid.py` ran `test.py --checkpoint all`,
+scored every periodic checkpoint on **test**, and reported whichever minimised
+`missing.log_loss`. There was no option to disable it. The giveaway is the
+summary JSON: `"200": periodic-epoch=0174.ckpt`, `"300": periodic-epoch=0099.ckpt`
+where F13 requires `last.ckpt`.
+
+So the tables and the figures disagreed, with the figures the optimistic half.
+Across the 34 `final-dual` cells carrying both readings:
+
+- test-argmin better by **median 0.006 nats, max 0.047**, differing in **23 of 34**
+- worst: `Marformer/item/1000` 0.7999 (`periodic-epoch=0274`) vs **0.8470** (last);
+  `Marformer/item/300` 0.9540 (`periodic-epoch=0099`) vs **1.0000**
+
+**Fixed in code.** `--checkpoint-policy` now defaults to `last`, and
+`test-argmin` survives only to reproduce the older figures; `main()` prints which
+is in force. The 74 stale `best.json` files and the plot caches held
+test-selected values and were deleted before regenerating.
+
+**Why this matters more than 0.006 nats.** §3 tells the reader that selection no
+longer touches test. A figure built by argmin on test contradicts that sentence
+directly, whatever the magnitude. If any number in the paper's Domain 3 figures
+is quoted in the text, it moves slightly when the figures are rebuilt.
+
+### Still open: the figures use the pooled metric, the tables use the corner
+
+A second discrepancy, larger than the first, which I have **not** changed because
+it would move every published curve and that is your call:
+
+- `result_tables.py` and `corner.json` report the **test corner**
+  (`corner_whole=true`, 414 cells).
+- the figures report `TEST_RESULTS/*.json`'s `missing` field, which **pools** the
+  corner with the training partition's own held-out cells (D22/D23).
+
+The two are not comparable, and the pooled one is not comparable with Stan
+either, which is the whole reason the corner scorer exists. Example: item/T
+K=1000 is **0.767** on the corner and **0.847** pooled. Decide which the paper
+reports and make both paths use it; right now §9's tables and the figures are
+different quantities with the same axis label.
+
 ## Checklist
 
 - [ ] §1 architecture: standard block, both pieces dropped together, +0.150 note
@@ -364,4 +408,6 @@ previously advised rerunning the flagged cells, which was wrong.
 - [ ] Swap all three result tables (§9)
 - [ ] §9 the ~0.13-nat Marformer-vs-Stan gap on synthetic still needs an explanation
 - [ ] §9 do NOT rerun the 6 flagged cells (that would be selection on test)
-- [ ] Rebuild figures (`make_figures.sh --run-id final-dual`)
+- [ ] §10 figures were argmin-on-test; fixed, but the PUBLISHED figures have this bug
+- [ ] §10 DECIDE: figures report the pooled metric, tables report the corner — pick one
+- [ ] Rebuild figures (`make_figures.sh --run-id final-dual`, policy `last`)
