@@ -86,16 +86,22 @@ export DOMAIN3_EXP_PREFIX="domain3_sigmoid"
 #   outer residual none } thread 3, together: the standard Transformer block,
 #   block proj     none } h' = h + attn + ff. -0.021 nats at K=2000. Removing
 #                       either one ALONE is worse -- they only cancel as a pair.
-#   value codec typed   thread 2: per-type learned encoder/decoder in place of
-#   codec init  unit    the hand-built value slots, N(0,1) so no constant.
-#                       Parity at K=2000 and at small K on average; ~1 cell in 30
-#                       collapses at small K (B11), accepted by the user.
+#   value codec dual    REVERTED 2026-10-06. The typed codec is what makes the
+#                       model slow and erratic at leaving the uniform plateau:
+#                       it escapes at a median epoch 80 with a spread of 50-310
+#                       (sd 77), against 28-40 (sd 3.2) for the hand-built
+#                       stream across 42 cells and both block variants. When the
+#                       selected epoch lands below the escape epoch the refit
+#                       reports the uniform distribution -- 8 of 42 cells in the
+#                       first final run. Collapses: 9 of 72 cells with the codec,
+#                       0 of 42 without. The codec bought parity at best (B10),
+#                       so there is nothing on the other side of the ledger.
 export DOMAIN3_MAX_ITEM="${DOMAIN3_MAX_ITEM:-500}"
 export DOMAIN3_DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-none}"
 export DOMAIN3_INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
 export DOMAIN3_BLOCK_OUTPUT_PROJECTION="${DOMAIN3_BLOCK_OUTPUT_PROJECTION:-none}"
 export DOMAIN3_LOGIT_HIGH="${DOMAIN3_LOGIT_HIGH:-20.0}"
-export DOMAIN3_VALUE_CODEC="${DOMAIN3_VALUE_CODEC:-typed}"
+export DOMAIN3_VALUE_CODEC="${DOMAIN3_VALUE_CODEC:-dual}"
 export DOMAIN3_CODEC_INIT="${DOMAIN3_CODEC_INIT:-unit}"
 export DOMAIN3_CODEC_FREEZE="${DOMAIN3_CODEC_FREEZE:-false}"
 export DOMAIN3_TEST_MISSING_IN_GRAPH="${DOMAIN3_TEST_MISSING_IN_GRAPH:-false}"

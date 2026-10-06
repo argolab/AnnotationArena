@@ -57,7 +57,7 @@ EPOCHS="${LLMRUBRIC_EPOCHS:-300}"
 # overridable for ablations.
 DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-none}"
 BLOCK_OUTPUT_PROJECTION="${DOMAIN3_BLOCK_OUTPUT_PROJECTION:-none}"
-VALUE_CODEC="${DOMAIN3_VALUE_CODEC:-typed}"
+VALUE_CODEC="${DOMAIN3_VALUE_CODEC:-dual}"
 CODEC_INIT="${DOMAIN3_CODEC_INIT:-unit}"
 
 # VARIANT_TAG keeps arms and seeds on distinct paths. This matters more here
