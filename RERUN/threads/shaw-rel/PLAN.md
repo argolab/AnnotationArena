@@ -104,6 +104,31 @@ because it selects on test.
 left. Everything fits l40s at chunk 300 (K=4000 peaks near 37 GB of 44), and the
 new flags add nothing measurable to memory.
 
+## Two things found while the sweep was running
+
+**The 700-epoch budget is not binding** (`d2_budget_check.py`). Two cells put
+their smoothed validation argmin in the last 15% of the budget, which would be
+fatal if real — read at a truncated optimum, "worse" and "slower" are the same
+measurement, and slower is the learning-dynamics claim under test. They are not
+truncated. For `shaw_kv s44 item/2000` the argmin is 0.8399 at epoch 686 while
+the END of the curve is 0.8591, i.e. **+0.019 worse than the minimum**: the curve
+has already turned up and the argmin is wandering on a noisy, nearly flat tail.
+The other flagged cell is `bits s43 item/4000` (end +0.014 worse than its min), so
+the effect is not arm-specific either. No extra epochs bought.
+
+Worth recording for the thread's own question, though: at item/2000 the
+learned-key arm selects **much later** than the bit arm — `bits_v` at 331 against
+`shaw_kv` at 531/595/686 — while landing at the same validation loss (0.841
+against 0.835–0.846). Slower to its optimum, not worse at it. That is a direct
+measurement of the "learning dynamics" Jason's note appeals to, and it points the
+opposite way from his expectation.
+
+**annot J=10 carves no validation block** for any arm — too few annotators, the
+same limitation the final run hit at K=100 and annot/10. So `dev-sel` is
+unavailable for those 12 cells (4 arms x 3 seeds) and the annot column's
+`dev-sel` n is 6 rather than 9. `tail` and `last` still cover J=10, and
+`d2_analyse.py` prints what is missing rather than quietly dropping it.
+
 ## Status
 
 - [x] implemented, `d1_sparse_check.py` all green
