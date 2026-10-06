@@ -107,6 +107,74 @@ def corner_map(run_dir: Path) -> dict:
     return out
 
 
+def arch_of(cell_dirs) -> dict:
+    """Read the architecture out of a train_config.json the run actually wrote.
+
+    Never hard-code it. The whole reason this run exists is that the LLM-Rubric
+    arm was trained on an architecture nobody had checked against its submit
+    command, so a caption asserting a configuration from memory is exactly the
+    mistake to avoid.
+
+    Takes the Domain-3 cell directories explicitly rather than globbing the run:
+    a run tree also holds RESULTS/MARFORMER/LLM_RUBRIC, whose configs are a
+    different domain with max_item=10, and a bare rglob reports those.
+    """
+    for d in cell_dirs:
+        f = d / "train_config.json"
+        if not f.is_file():
+            continue
+        try:
+            blob = json.loads(f.read_text())
+        except (json.JSONDecodeError, OSError):
+            continue
+        m = dict(blob.get("model", {}))
+        if m:
+            # max_item is a training knob, not a model one
+            m["max_item"] = (blob.get("training") or {}).get("max_item")
+            return m
+    return {}
+
+
+def describe(cells, cell_dirs, a) -> str:
+    """Compose the artifact's tab caption from the data, not by hand.
+
+    The caption states a degeneracy count, and a count typed into prose goes
+    stale the moment a cell is rerun. Generating it means the page cannot claim a
+    number the JSON beside it contradicts.
+    """
+    import statistics as _st
+    n = len(cells)
+    deg = [c for c in cells if c["degenerate"]]
+    esc = sorted(c["esc_refit"] for c in cells if c["esc_refit"] is not None)
+    ref = sum(1 for c in cells if c["refit_epochs"])
+    m = arch_of(cell_dirs)
+    codec = m.get("value_codec", "?")
+    block = ("standard Transformer block"
+             if m.get("dual_outer_residual") == "none"
+             and m.get("block_output_projection") == "none"
+             else f"outer residual {m.get('dual_outer_residual')}, "
+                  f"block projection {m.get('block_output_projection')}")
+    stream = ("hand-built dual value stream" if codec == "dual"
+              else f"{codec} value codec ({m.get('codec_init')} init)")
+    bits = [f"{stream} with the {block}, chunk {m.get('max_item', '?')}, "
+            f"2000-epoch search, draw s101, model seed "
+            f"{a.seed}. {n} cells"
+            f"{f', {ref} refitted' if ref != n else ''}."]
+    if deg:
+        bits.append(
+            f"{len(deg)} degenerate: "
+            + ", ".join(f"{c['family']}/{c['axis']} {c['K']}" for c in deg)
+            + ". Each is a refit that never left the uniform plateau, and each "
+              "is marked on its panel.")
+    else:
+        bits.append("No degenerate cells \u2014 every refit left the uniform "
+                    "plateau, and none sits at ln 4.")
+    if esc:
+        bits.append(f"Refit escape epoch {esc[0]}\u2013{esc[-1]}, "
+                    f"median {int(_st.median(esc))}.")
+    return " ".join(bits)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-id", required=True)
@@ -135,7 +203,7 @@ def main() -> int:
             fallback[(row["family"], str(row["axis"]).lower(), int(row["size"]))] = \
                 bool(row.get("fallback"))
 
-    cells = []
+    cells, cell_dirs = [], []
     for fam_dir, fam in ((results / "MARFORMER", "Marformer"),
                          (results / "MARFORMER-NT", "MarformerNT")):
         if not fam_dir.is_dir():
@@ -149,6 +217,7 @@ def main() -> int:
             if not sh.is_file():
                 continue
             hist = json.loads(sh.read_text())
+            cell_dirs.append(sdir)
             e, tr, va = series(hist, a.search_stride)
 
             # the refit lives at the same path with the search tag swapped
@@ -182,7 +251,7 @@ def main() -> int:
     order = {"item": 0, "annot": 1}
     cells.sort(key=lambda c: (order[c["axis"]], c["family"], c["K"]))
     blob = {"uniform": round(UNIFORM, 4), "stride": a.search_stride,
-            "run_id": a.run_id, "cells": cells}
+            "run_id": a.run_id, "cells": cells, "note": describe(cells, cell_dirs, a)}
     Path(a.out).write_text(json.dumps(blob))
     n_deg = sum(1 for c in cells if c["degenerate"])
     n_ref = sum(1 for c in cells if c["refit_epochs"])
