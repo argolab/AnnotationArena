@@ -103,7 +103,11 @@ missing=()
 # Count finished training runs rather than trusting the parent directory --
 # the job scripts mkdir their output root before training starts, so an empty
 # RESULTS/MARFORMER is the normal state of a run that has not finished.
-n_runs=$(find "$(rerun_results_root "${RUN_ID}")/MARFORMER" -maxdepth 3 -type d \
+# -L so a run assembled from symlinks counts. A variant run writes its cells to
+# RESULTS/<fam>/DOMAIN3-SIGMOID/<axis>/<variant>/<seed>/<cell>, which is deeper
+# than the plot scripts' marformer_root; linking each cell up to the un-tagged
+# path is how such a run is plotted, and `-type d` does not match those links.
+n_runs=$(find -L "$(rerun_results_root "${RUN_ID}")/MARFORMER" -maxdepth 3 -type d \
               -name '*_MARFORMER' 2>/dev/null | wc -l)
 (( n_runs > 0 )) || missing+=( "trained Marformer runs under RESULTS/MARFORMER" )
 if (( ${#missing[@]} )); then
