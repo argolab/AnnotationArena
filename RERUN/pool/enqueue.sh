@@ -45,10 +45,18 @@ source "${RERUN_DIR}/config/cluster.sh"
 RUNNER_ROOT="${RUNNER_ROOT:-${RANKING_ROOT}}"
 
 next_id() {
-    local n=0
-    for f in "${POOL_ROOT}"/tasks/*.json; do
-        [[ -e "${f}" ]] || break
-        local b; b="$(basename "${f}" .json)"; (( 10#${b} > n )) && n=$(( 10#${b} ))
+    # The high-water mark has to include state/, not just tasks/. A task file
+    # that was cleaned up leaves its state behind, and a reused id then inherits
+    # it -- `.failed` makes every worker skip the new task silently (worker.sh
+    # line 54), so the cell vanishes from the sweep without an error anywhere.
+    # Seen for real: a fresh K=500 cell arrived already carrying a failure
+    # recorded 2026-09-17.
+    local n=0 f b
+    for f in "${POOL_ROOT}"/tasks/*.json "${POOL_ROOT}"/state/*; do
+        [[ -e "${f}" ]] || continue
+        b="$(basename "${f}")"; b="${b%%.*}"
+        [[ "${b}" =~ ^[0-9]+$ ]] || continue
+        (( 10#${b} > n )) && n=$(( 10#${b} ))
     done
     printf '%05d' $(( n + 1 ))
 }
@@ -124,7 +132,11 @@ for draw in "${DRAW_LIST[@]}"; do
                 # The seed MUST stay in the variant path: without it every seed
                 # writes to one directory and the last to finish wins.
                 out="$(rerun_results_root "${rid}")/MARFORMER/DOMAIN3-SIGMOID/${AXIS_DIR}/${tag}/Marformer/seed${seed}"
-                marker="${out}/DOMAIN3-SIGMOID_Item_T_${size}_MARFORMER/training_history.json"
+                # The run directory is named after the axis, so a hardcoded
+                # Item_T marker never appears for an annot sweep and every annot
+                # task looks unfinished on re-enqueue.
+                axis_tag="$([[ "${AXIS}" == "annot" ]] && echo Annot || echo Item)"
+                marker="${out}/DOMAIN3-SIGMOID_${axis_tag}_T_${size}_MARFORMER/training_history.json"
                 log="$(rerun_log_root "${rid}")/CELL-${tag}-s${seed}-K${size}.log"
                 read -r eta gb <<< "$(estimate "${size}" "${mi}" "${EP}")"
                 epenv=""; [[ -n "${EPOCHS}" ]] && epenv="DOMAIN3_EPOCHS=${EPOCHS} "
