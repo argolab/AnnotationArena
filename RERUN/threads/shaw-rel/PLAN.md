@@ -116,12 +116,13 @@ has already turned up and the argmin is wandering on a noisy, nearly flat tail.
 The other flagged cell is `bits s43 item/4000` (end +0.014 worse than its min), so
 the effect is not arm-specific either. No extra epochs bought.
 
-Worth recording for the thread's own question, though: at item/2000 the
-learned-key arm selects **much later** than the bit arm — `bits_v` at 331 against
-`shaw_kv` at 531/595/686 — while landing at the same validation loss (0.841
-against 0.835–0.846). Slower to its optimum, not worse at it. That is a direct
-measurement of the "learning dynamics" Jason's note appeals to, and it points the
-opposite way from his expectation.
+I first read the same table as saying the learned-key arm is **slower** to its
+optimum — at item/2000 it selects 531/595/686 against `bits_v` at 331, at the same
+validation loss. **That did not survive more cells.** Over the 9 cells complete in
+all four arms the median epoch to the validation optimum is `bits` 215, `shaw_k`
+184, `shaw_kv` 192, `bits_v` 215: the learned arms are if anything slightly
+*earlier*. item/2000 is one cell and I over-read it. Nothing in the data so far
+separates the arms on speed either way.
 
 **annot J=10 carves no validation block** for any arm — too few annotators, the
 same limitation the final run hit at K=100 and annot/10. So `dev-sel` is
