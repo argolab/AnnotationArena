@@ -169,6 +169,14 @@ def parse_args() -> argparse.Namespace:
                         help="Load baseline probs from npz cache if present; save on fresh run.")
     parser.add_argument("--calibration", action="store_true",
                         help="Also produce calibration reliability plots.")
+    parser.add_argument("--checkpoint-policy", choices=["last", "test-argmin"],
+                        default="last",
+                        help="last (default) reports the refit's final epoch, "
+                             "which is the F13 protocol and matches the result "
+                             "tables. test-argmin scores every periodic "
+                             "checkpoint and keeps the best ON TEST -- that is "
+                             "selection on test, and only reproduces the older "
+                             "published figures.")
     parser.add_argument("--device", default=None,
                         help="Torch device for Marformer eval; default: cuda > mps > cpu.")
     return parser.parse_args()
@@ -321,7 +329,40 @@ def _available_misspec_sizes(cfg: DatasetConfig, suffix: str) -> set[int]:
 
 # ── Marformer evaluation ──────────────────────────────────────────────────────
 
+# Which checkpoint the figures report. "last" is the F13 protocol: the refit's
+# final epoch, with the stopping epoch chosen beforehand on a validation block
+# carved out of TRAINING data. "test-argmin" is what this script used to do
+# unconditionally -- score every periodic checkpoint on test and keep the
+# minimum -- which is selection on test (D14) and the exact thing F13 exists to
+# remove. It is kept only to reproduce the previously published figures.
+CHECKPOINT_POLICY = "last"
+
+
 def _write_best_json_from_test_results(run_dir: Path) -> None:
+    """Write TEST_RESULTS/best.json: the checkpoint the figures will report.
+
+    Under the default "last" policy this is a copy of last.json, so the figures
+    agree with the tables rendered by RERUN/analysis/result_tables.py. Under
+    "test-argmin" it is the minimum over every scored checkpoint, which is
+    optimistic: measured on final-dual, by a median of 0.006 and up to 0.047
+    nats across 23 of 34 cells.
+    """
+    test_dir = run_dir / "TEST_RESULTS"
+    if CHECKPOINT_POLICY == "last":
+        last = test_dir / "last.json"
+        if not last.is_file():
+            raise RuntimeError(f"{last} missing; cannot apply the 'last' policy")
+        data = _read_json(last)
+        data["selected_from"] = "last.json"
+        data["selection_metric"] = "none (F13: last epoch of the refit)"
+        _write_json(test_dir / "best.json", data)
+        print(f"  checkpoint: last.ckpt (F13)  "
+              f"log_loss={data.get('missing', {}).get('log_loss')}")
+        return
+    _write_best_json_test_argmin(run_dir)
+
+
+def _write_best_json_test_argmin(run_dir: Path) -> None:
     test_dir = run_dir / "TEST_RESULTS"
     candidates: list[tuple[float, float, str, dict]] = []
     for path in sorted(test_dir.glob("*.json")):
@@ -1322,7 +1363,13 @@ def _plot_dataset(cfg: DatasetConfig, args: argparse.Namespace, device_name: str
 
 
 def main() -> None:
+    global CHECKPOINT_POLICY
     args = parse_args()
+    CHECKPOINT_POLICY = args.checkpoint_policy
+    print(f"checkpoint policy: {CHECKPOINT_POLICY}"
+          + ("  (F13: the refit's last epoch, matching the result tables)"
+             if CHECKPOINT_POLICY == "last"
+             else "  *** SELECTION ON TEST -- reproduces the older figures only ***"))
     device_name = _choose_device(args.device)
     if args.part in {"all", "item"}:
         _plot_dataset(ITEM_CFG, args, device_name)
