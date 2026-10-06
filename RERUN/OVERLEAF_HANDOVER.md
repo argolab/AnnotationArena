@@ -174,63 +174,51 @@ chosen over 50. Same logic picks K=4000 on the item axis.
 all series present and the smECE values in the panel titles matching the quoted
 numbers.
 
-### smECE moved a lot, and the cause is measured
+### smECE moved a lot — the cause is the standard block (measured 2026-10-06)
 
-The regenerated panels give smECE far above the published values and **reverse the
-ordering against Stan**: at item K=500 Stan is 0.019 against Marformer 0.055 and
-NT 0.044, where the paper says Marformer and NT are "both lower". At annot J=30 all
-three overlap (0.035 / 0.029 / 0.027).
+**Supersedes the earlier attribution in this document.** The published item/500
+smECE moved +0.027. Scoring the old block against the standard block at **matched
+epoch and matched 100% training data** (`RERUN/analysis/arch_sweep.py`; old =
+`replicate-01`, new = the F13 refit, only their overlapping periodic checkpoints)
+attributes **+0.023 of that to the residual→standard block change alone**, at the
+epoch F13 reports.
 
-I first guessed the population fix (pooled -> corner) was the cause. **It is not.**
-`RERUN/analysis/smece_decompose.py` runs the full 2x2 — (pooled, corner) x
-(argmin-on-test, F13 last) — on the rerun models *and* on the pre-rerun ones in
-`runs/replicate-01`. The published numbers are reproducible from the pre-rerun
-models under the old policy, so the attribution is established, not inferred:
+| cell | smECE (standard − old) | log-loss (standard − old) |
+|---|---|---|
+| annot/30 | +0.015 | **−0.017** |
+| item/200 | +0.013 | −0.002 |
+| item/400 | +0.022 | +0.012 |
+| item/500 | +0.019 | +0.004 |
+| item/1000 | +0.006 | **−0.088** |
+| item/2000 | −0.004 | **−0.021** |
 
-| cell | paper | old model, old policy | new model, old policy | current | retraining | corrections |
-|---|---|---|---|---|---|---|
-| item/500 Marformer | 0.016 | 0.0145 | 0.0586 | 0.0548 | **+0.044** | −0.004 |
-| item/500 NT | 0.016 | 0.0125 | 0.0522 | 0.0439 | **+0.040** | −0.008 |
-| annot/30 Marformer | 0.022 | 0.0194 | 0.0365 | 0.0351 | **+0.017** | −0.001 |
-| annot/30 NT | 0.014 | 0.0178 | 0.0242 | 0.0287 | **+0.006** | +0.005 |
+**It is a trade, not a bug.** The standard block costs calibration below K≈1000
+and buys real accuracy above it, which is why it was adopted (decision of
+2026-09-18). No protocol or architecture change is proposed; the final run stands.
 
-Retraining is 109%, 126%, 109% and 59% of the total change — over 100% because the
-corner correction pushes the *other* way in three of four cells. **Scoring on the
-test corner makes calibration look slightly better, not worse**, so the metric fix
-cannot explain the shift.
+**What it is NOT**, both ruled out by measurement rather than argument:
 
-What remains is what retraining changed: the standard Transformer block, the dual
-value stream, and F13 stopping the refit after a few hundred epochs instead of
-2000. One suggestive datum: on the pre-rerun models the *checkpoint* dominated
-calibration (annot/30 is 0.0194 at the test-argmin epoch against 0.0825 at epoch
-2000), so late training was wrecking it there; the F13 refits stop early and are
-still worse, which points at the architecture rather than the schedule. Not chased
-further — flagged in the paper note.
+* **not the loss of argmin-on-test selection.** `d14_mechanism.py` scored every
+  checkpoint of the old runs: test log-loss ranks checkpoints by smECE only
+  moderately (Spearman +0.37…+0.54), and at item/500 the log-loss argmin lands on
+  smECE 0.0233 against 0.0253 for a *median* checkpoint — a bonus of −0.002, not
+  −0.027. Across 42 cells (`d14_smece_gap.py`) selection is worth mean −0.006,
+  median −0.001, and is *reversed* in 9 cells.
+* **not the pooled→corner population fix**, nor the checkpoint-policy fix: the
+  2×2 ruled both out early.
 
-**smECE is now serialised.** It was computed inside the calibration plotting code
-and rendered only into a plot title, so after a rerun the prose and the panel could
-drift with nothing to catch it. `RERUN/analysis/extract_smece.py` reads the same
-payloads the panels are drawn from and calls the same `relplot` path, so the
-numbers are the plotted ones by construction; `make_figures.sh` now runs it inside
-the run binding, so one command produces both. Values in
-`runs/final-dual/reports/smece.json`.
+**Correction to what this document said before.** An earlier four-factor split
+attributed the move to training length (−0.047). That conclusion is withdrawn: the
+split's architecture term at K=500 was **interpolated from K=300 and K=2000 rather
+than measured**, and the interpolation was wrong — +0.005 interpolated against
++0.023 measured. Do not cite the four-factor table for this question;
+`arch_sweep.py` is the direct measurement.
 
-**A y-axis bug the numeric gate could not see.** Making Stan's values real pushed
-Stan Oracle to 0.600 at K=4000, below a **hardcoded** axis floor (0.65 in the
-linear path, 0.67 in the compressed one), so the Stan curves were drawn *off the
-bottom of the plot*. Every number in that figure was correct, which is why
-`check_plot_corner.py` passed it — value-level verification and rendering are
-separate failure modes, and only opening the PNG caught this. Both floors now
-follow the data, and `_plot_metric` prints a loud `WARNING ... will be CLIPPED`
-naming any series that falls outside the limits.
-
-That guard currently fires **twice, expected**: `Structured Log-Linear` sits at
-2.1–2.3 nats in the two *full* figures, above the compressed scale's 1.68 top.
-That baseline is off-scale by design and predates this work — do not chase it.
-
-**Figure install:** `RERUN/make_figures.sh --run-id final-dual --install` copies
-`paper_figures/` into `Marformer-Paper/PLOTS/{DOMAIN3-SYNTH,REAL-LLMRUBRIC}`, which
-is where `main.tex` already points.
+**Why this does not change the figures.** The calibration panels now report
+K=4000 / J=40, where the block change is harmless (+0.006 smECE at K=1000, −0.004
+at K=2000). The panels are unaffected. But the same small-K band explains the
+second symptom recorded above: Marformer loses to the best Stan variant on smECE
+beyond its CI at exactly K=200–500.
 
 ## 4. The ten `\Claude` notes — the work that is left
 
