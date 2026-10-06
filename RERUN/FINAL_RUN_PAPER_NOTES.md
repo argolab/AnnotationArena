@@ -373,21 +373,53 @@ longer touches test. A figure built by argmin on test contradicts that sentence
 directly, whatever the magnitude. If any number in the paper's Domain 3 figures
 is quoted in the text, it moves slightly when the figures are rebuilt.
 
-### Still open: the figures use the pooled metric, the tables use the corner
+### The figures now score the test corner — and the NT arm needed a second pass
 
-A second discrepancy, larger than the first, which I have **not** changed because
-it would move every published curve and that is your call:
+Both halves are fixed in code and the figures are rebuilt, so §9's tables and the
+figures are finally the same quantity. Recording how the second half was missed,
+because it changes how much weight to put on "verified":
 
-- `result_tables.py` and `corner.json` report the **test corner**
-  (`corner_whole=true`, 414 cells).
-- the figures report `TEST_RESULTS/*.json`'s `missing` field, which **pools** the
-  corner with the training partition's own held-out cells (D22/D23).
+`--metric-population` defaults to `corner`, so the Marformer payloads keep only
+`var.instance == "test"` — the population Stan was always scored on — and
+chunking protects the corner with the same `keep_whole` rule as the scorer. I
+verified that and reported D22/D23 closed. **Checking the rebuilt figures against
+the tables showed the transductive arm right and the whole non-transductive arm
+still wrong**, for two unrelated reasons:
 
-The two are not comparable, and the pooled one is not comparable with Stan
-either, which is the whole reason the corner scorer exists. Example: item/T
-K=1000 is **0.767** on the corner and **0.847** pooled. Decide which the paper
-reports and make both paths use it; right now §9's tables and the figures are
-different quantities with the same axis label.
+1. The decision to override a curve with `best.json`'s pooled `missing.log_loss`
+   lives in **four** places (the T collector, the NT collector, and both halves
+   of the cached path). I had gated one. A `--cache` rebuild would also have
+   reverted **both** arms silently.
+2. `ITEM_MARFORMER_NT_MAX = 500` truncated the item NT curve at K=500, so the
+   figure drew five NT points against a thirteen-point table.
+
+My verification passed because it tested the probability path, which both arms
+share and which was already correct — the number that reaches a curve is not
+always the one that path computes. The check now reads the summary JSON the build
+writes and compares **every** cell against `corner.json`.
+
+**What this changes in the published figures.** The transductive curve was
+already right after the first pass. The NT curve moves, by more than the
+checkpoint fix did, and **not in a consistent direction**:
+
+| cell | published (pooled) | corrected (corner) | change |
+|---|---|---|---|
+| NT item 300 | 0.957 | **0.908** | −0.049 |
+| NT item 500 | 0.912 | **0.874** | −0.038 |
+| NT annot 35 | 0.867 | **0.801** | −0.066 |
+| NT annot 20 | 0.945 | **0.883** | −0.062 |
+| NT annot 10 | 0.976 | **1.004** | **+0.028** |
+| NT item 600–4000 | *absent from the figure* | 0.929 … 0.722 | 8 new points |
+
+So the NT curve is mostly *better* once scored on the right population, but
+J=10 moves the other way — the same sign instability already recorded for
+D23. **Do not describe the pooled metric as flattering or as penalising
+Marformer.** It is the wrong population; the direction depends on the cell.
+
+One consequence for the prose: the item NT curve in the current PDF stops at
+K=500. With the cap removed it runs to K=4000, where NT (0.722) and T (0.738)
+essentially coincide — if the text says anything about the two protocols
+diverging at large K, check it against the new figure.
 
 ## Checklist
 
