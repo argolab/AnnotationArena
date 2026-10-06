@@ -1868,6 +1868,55 @@ MARFORMER-NT. That is a figure-reproducibility gap (D29), not an open question
 about the result. Nothing needs re-running to state the LLM-Rubric conclusion.
 
 
+## S9 — A selector floor: never pick a stopping epoch the refit has not reached
+
+**Status: proposed, not implemented.** Written down because it is the one loose
+end the final run left in the F13 protocol, and it is invisible unless you know
+to look for it.
+
+**The mechanism.** F13 selects the stopping epoch on the *search* run's own
+validation curve, then applies that epoch to a *fresh refit* on 100% of the
+training partition. The two runs escape the uniform plateau (ln 4 = 1.3863) at
+independent times. So if a selected epoch lands before the refit has escaped,
+the refit returns a degenerate cell — and nothing in the protocol notices,
+because selection never looks at the refit.
+
+What decides the exposure is therefore the **variance** of escape time, not its
+mean. Measured on `final-dual` (42 cells, one model seed):
+
+| arm | refit escape epoch | median | sd |
+|---|---|---|---|
+| `value_codec=dual` (ships) | 27–39 | 34 | **3.8** |
+| `value_codec=typed` | 46–310 | 80 | **77.5** |
+
+The dual stream's 19–20x tighter spread is why it ships and why 0 of 42 cells
+collapsed. It is not why the protocol is safe: the margin, not the design, is
+what bounds the risk. The closest the final run came was `annot/20`, selected
+epoch 36 against an escape at 29 — a 7-epoch margin, about 1.8 sd. A
+pre-registered prediction put that single cell at ~36% risk and it escaped.
+
+**The proposal.** Constrain the argmin to epochs at or after
+
+    (the search run's own escape epoch) + k * sd(escape)
+
+with `k` around 3, and record the floor in the epoch table so a cell that hits it
+is visible rather than silent. The floor should never be able to raise a selected
+epoch above the budget; if it would, that cell needs a longer search, not a
+clamp.
+
+**Why it has not been done.** It changes selected epochs, hence every final
+number, and the final run is settled for this version of the paper. It is also
+partly covered after the fact: degeneracy is detectable from the *training* curve
+alone (8/8 on the codec run, 0 false alarms), so `analysis/curve_qc.py` catches a
+collapsed cell and the restart rule fixes it. The floor would stop it happening
+rather than catch it afterwards.
+
+**Cost.** Nothing new to train. The escape epoch is already in
+`reports/curves_<run>.json` (`esc_search`, `esc_refit`), so the rule can be
+*replayed* against the final run's own curves to ask how many cells it would have
+moved and by how much, before anyone commits to it. Do that first — if the answer
+is "none", the floor is documentation, not a protocol change.
+
 ## The final rerun, specified
 
 The Part 1 suites decide individual knobs. This section is about the shape of
