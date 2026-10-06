@@ -21,6 +21,33 @@ class EntityMarformerConfig:
     num_ffn_layers: int = 1
     logit_high: float = 20.0
     temperature: float = 1.0
+    rel_key: str = "bits"           # How a relation enters the ATTENTION SCORE.
+                                    #   "bits"    -> shipped: rel_{ij} is a frozen {0,1}^R
+                                    #                indicator standing in for the key's
+                                    #                relational dimensions, so the score term is
+                                    #                the query's own r-th relational coordinate.
+                                    #   "learned" -> Shaw et al. (2018) S3.1: each relation gets a
+                                    #                LEARNED per-head embedding a^K_rho in key
+                                    #                space, added to the key. No dimensions are
+                                    #                reserved and the query needs no extra outputs,
+                                    #                so use_per_head_rel and scale_shared_rel are
+                                    #                inert. NOT more expressive as a score term
+                                    #                (q.a^K is still linear in x_i, and now has to
+                                    #                factor through W_Q) -- the claim is about
+                                    #                learning dynamics and parameter sharing.
+    rel_value: str = "none"         # Whether a relation also enters the VALUE.
+                                    #   "none"    -> shipped: it does not.
+                                    #   "learned" -> Shaw's other half, per head and exact:
+                                    #                z^h_i = sum_j alpha^h_ij (V^h(x_j) + a^V_rho[h]).
+                                    #                This is the half that is genuinely a wider
+                                    #                function class; use_rel_value is an older
+                                    #                head-averaged approximation of it and the two
+                                    #                are mutually exclusive.
+    rel_init: str = "key_scale"     # Init for a^K. "key_scale" -> std 1/sqrt(model_dim), the scale
+                                    # nn.Linear gives a key coordinate, so a relation starts as loud
+                                    # as a key. "zero" -> relational attention starts switched off
+                                    # and has to be grown, which is the first thing to suspect if
+                                    # the learned arm trains more slowly. a^V is always zero-init.
     use_per_head_rel: bool = True   # Per-head relational bias (each head learns own R weights); False = old shared-bias design (single shared R-dim bias added to all heads identically)
     use_pointer: bool = False       # K_aug obs-obs shared-identity pointer bias (3 extra shared Q dims, like old Marformer)
     use_rel_value: bool = False     # Relation-specific value augmentation V_{ij} = V(x_j) + sum_r e_r * edge_mask[i,j,r]

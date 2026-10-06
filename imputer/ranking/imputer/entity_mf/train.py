@@ -1071,6 +1071,34 @@ def main():
         help="Use old shared-bias relational design: single shared R-dim bias added to all heads identically.",
     )
     parser.add_argument(
+        "--rel-key", choices=["bits", "learned"], default="bits",
+        help=(
+            "How a relation enters the attention score. 'bits' is the shipped "
+            "frozen {0,1}^R indicator that stands in for the key's relational "
+            "dimensions. 'learned' is Shaw et al. (2018) S3.1: a learned per-head "
+            "embedding of the relation, added to the key, with no reserved "
+            "dimensions (which makes --no-per-head-rel and --scale-shared-rel "
+            "inert)."
+        ),
+    )
+    parser.add_argument(
+        "--rel-value", choices=["none", "learned"], default="none",
+        help=(
+            "Whether a relation also enters the value, as Shaw et al. do: "
+            "z_i = sum_j alpha_ij (V(x_j) + a^V_rho). 'learned' is per-head and "
+            "exact, computed from the sparse edge list, and zero-init. Mutually "
+            "exclusive with the older --use-rel-value approximation."
+        ),
+    )
+    parser.add_argument(
+        "--rel-init", choices=["key_scale", "zero"], default="key_scale",
+        help=(
+            "Init for the learned key-relation embedding: 'key_scale' is "
+            "std 1/sqrt(model_dim), the scale nn.Linear gives a key coordinate; "
+            "'zero' starts relational attention switched off."
+        ),
+    )
+    parser.add_argument(
         "--use-pointer",
         action="store_true",
         help="Enable K_aug obs-obs shared-identity pointer bias (like old Marformer).",
@@ -1290,6 +1318,9 @@ def main():
     config.codec_init            = args.codec_init
     config.codec_freeze          = args.codec_freeze
     config.inner_residual        = args.inner_residual
+    config.rel_key               = args.rel_key
+    config.rel_value             = args.rel_value
+    config.rel_init              = args.rel_init
     config.use_per_head_rel      = args.use_per_head_rel
     config.use_pointer           = args.use_pointer
     config.use_rel_value         = args.use_rel_value
@@ -1358,6 +1389,9 @@ def main():
             "codec_init": config.codec_init,
             "codec_freeze": config.codec_freeze,
             "inner_residual": config.inner_residual,
+            "rel_key": config.rel_key,
+            "rel_value": config.rel_value,
+            "rel_init": config.rel_init,
             "use_per_head_rel": config.use_per_head_rel,
             "use_pointer": config.use_pointer,
             "use_rel_value": config.use_rel_value,
