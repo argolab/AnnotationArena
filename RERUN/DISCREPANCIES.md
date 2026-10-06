@@ -481,7 +481,10 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
   any mismatch; it needs no GPU, so it is the gate to run after every figure
   build. On the pre-fix figures it reported 22/22 transductive cells agreeing to
   four decimals, all 12 present NT cells disagreeing by −0.028 to +0.066, and 8
-  NT cells missing from the figure entirely.
+  NT cells missing from the figure entirely. **After the fix and a rebuild (job
+  1011759) it passes on all 42 cells** — 26 item and 16 annot, both arms, every
+  difference below 0.0001 — and exits 0. That is the state the paper's figures
+  are now in.
 
 - **A second, independent defect on the same arm:** `ITEM_MARFORMER_NT_MAX = 500`
   truncated the item NT curve at K=500 — a cap from when those runs did not
