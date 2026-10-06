@@ -262,7 +262,86 @@ keys on degenerate *training* performance, so it does not fire here and should
 not be stretched to cover it. These points are real variance between two
 666-rating samples at small K, and the honest treatment is to plot them.
 
-<!-- NUMBERS -->
+## 9. The final numbers  [swap these in]
+
+Run of record `final-dual`, draw s101, model seed 42. **Test corner** log-loss,
+`corner_whole=true`. Rendered by `analysis/result_tables.py --run-id final-dual`;
+the live copy is `runs/final-dual/reports/tables.txt`.
+
+### Synthetic — item generalization
+
+| K | 100 | 200 | 300 | 400 | 500 | 600 | 700 | 800 | 900 | 1000 | 2000 | 3000 | 4000 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| Marformer (T) | 0.939 | 0.949 | 0.981 | 0.901 | 0.913 | 0.915 | 0.831 | 0.970 | 0.749 | 0.767 | 0.728 | 0.706 | 0.738 |
+| Marformer (NT) | 0.964 | 0.931 | 0.908 | 0.961 | 0.874 | 0.929 | 0.757 | 0.764 | 0.748 | 0.798 | 0.721 | 0.724 | 0.722 |
+| Stan Oracle | 0.789 | 0.747 | 0.693 | 0.688 | 0.679 | — | — | — | — | 0.642 | 0.615 | 0.607 | 0.600 |
+| Stan Bin | 0.856 | 0.833 | 0.823 | 0.814 | 0.820 | — | — | — | — | 0.816 | 0.807 | 0.817 | 0.796 |
+| Stan Proj | 0.796 | 0.759 | 0.708 | 0.698 | 0.684 | — | — | — | — | 0.655 | 0.632 | 0.625 | 0.619 |
+| Stan Both | 0.854 | 0.848 | 0.840 | 0.833 | 0.828 | — | — | — | — | 0.830 | 0.820 | 0.817 | 0.820 |
+
+### Synthetic — annotator generalization
+
+| J | 10 | 15 | 20 | 25 | 30 | 35 | 40 | 45 | 50 |
+|---|---|---|---|---|---|---|---|---|---|
+| Marformer (T) | 0.977 | 0.923 | 1.023 | 0.918 | 0.828 | 0.803 | 0.780 | 0.788 | 0.773 |
+| Marformer (NT) | 1.004 | 0.918 | 0.883 | 0.851 | 0.846 | 0.801 | 0.780 | — | — |
+| Stan Oracle | 0.789 | 0.769 | 0.757 | 0.733 | 0.707 | 0.703 | 0.680 | — | — |
+| Stan Bin | 0.856 | 0.850 | 0.859 | 0.861 | 0.838 | 0.828 | 0.816 | 0.822 | 0.798 |
+| Stan Proj | 0.796 | 0.781 | 0.775 | 0.769 | 0.731 | 0.712 | 0.707 | 0.693 | 0.673 |
+| Stan Both | 0.854 | 0.851 | 0.855 | 0.858 | 0.836 | 0.833 | 0.818 | 0.816 | 0.798 |
+
+(Stan was fit at the sizes the paper plots, hence the gaps at K=600–900 and J=45/50.
+The Stan fits live under `final-s101` and are linked into `final-dual`; both runs'
+`DATA` symlink to the same `dataseed-s101/DATA`, so they are the same draw.)
+
+### LLM-Rubric — see §8 for the table and the three caveats.
+
+### Marformer still trails Stan on the synthetic data — this is the known gap
+
+Marformer does not beat Stan Oracle or Stan Proj at any synthetic size. At K=4000
+it is 0.738 (T) / 0.722 (NT) against Stan Oracle's 0.600 — a gap of about **0.12
+to 0.14 nats** that widens slightly with K. This is the unexplained gap already
+recorded against the frozen config, not something the architecture change caused:
+the codec run had the same shape. It needs an answer in the paper, and the final
+run does not provide one.
+
+### Degeneracy: none  [this is the headline]
+
+| | typed codec (`final-s101`) | **dual + standard (`final-dual`)** |
+|---|---|---|
+| degenerate cells | **8 / 42** | **0 / 42** |
+| refit escape epoch | 46–310, median 80 | **27–39, median 34** |
+| escape **sd** | **77.5** | **3.8** |
+| worst final train loss | at ln4 | 1.195, clear of ln4 = 1.3863 |
+
+No restarts were needed, so the random-restart rule in §6 is stated in the paper
+but never exercised on these numbers. The one cell predicted to be at risk
+(`annot/20`, selected epoch 36) escaped at 29.
+
+### What the dual stream cost, measured
+
+On the 34 cells where both runs are healthy the dual stream is **better** by a
+median of 0.028 nats (better in 22 of 34, mean −0.065). Restricted to the large
+item cells, `K >= 1000`, the two are at **parity with a slight edge to the codec**
+(median +0.031 in the codec's favour, n=8). On the 8 cells the codec collapsed,
+dual gains **+0.43 to +0.48 nats** each.
+
+Honest summary for the paper: *the codec matches the hand-built stream on
+accuracy wherever there is enough data, and loses because it is unreliable.*
+
+### Six cells sit above their neighbours — report them, do not rerun them
+
+`curve_qc.py` flags 6 cells more than 0.06 nats above their neighbour median:
+item/T K=800 (+0.180), NT item K=600 (+0.114), annot/T J=20 (+0.103), NT annot
+J=10 (+0.086), NT item K=400 (+0.070), NT item K=1000 (+0.063). **None is
+degenerate** — the largest is 1.023 against ln4 = 1.386.
+
+That residual is computed **on the test corner**, so picking those cells to rerun
+and keeping the better result is selection on test. At one model seed a bump of
+this size is ordinary cell-to-cell variation. Either plot them as they are, or
+rerun *every* cell at a second seed and average. The script now says so; it
+previously advised rerunning the flagged cells, which was wrong.
+
 
 ---
 
@@ -282,5 +361,7 @@ not be stretched to cover it. These points are real variance between two
 - [ ] §8 LLM-Rubric retrained on dual; state the arm's own val split
 - [ ] §8 do not call the LLM-Rubric number a final epoch — it is val-selected
 - [ ] §8 K=10/30/150 bumps are overfitting, not degeneracy
-- [ ] Swap all three result tables
+- [ ] Swap all three result tables (§9)
+- [ ] §9 the ~0.13-nat Marformer-vs-Stan gap on synthetic still needs an explanation
+- [ ] §9 do NOT rerun the 6 flagged cells (that would be selection on test)
 - [ ] Rebuild figures (`make_figures.sh --run-id final-dual`)
