@@ -61,6 +61,11 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run-dir", required=True, help="run tree root (contains RESULTS/)")
     ap.add_argument("--eval-max-item", type=int, default=500)
+    ap.add_argument("--ckpt-stride", type=int, default=1,
+                    help="score every Nth periodic checkpoint (they are written "
+                         "every 25 epochs, so 2 = every 50). The last periodic "
+                         "checkpoint and last.ckpt are always kept, so the end of "
+                         "the budget is never dropped.")
     ap.add_argument("-o", "--out", required=True)
     ap.add_argument("--device", default="cpu")
     a = ap.parse_args()
@@ -83,6 +88,11 @@ def main():
             seed = int(sm.group(1)) if sm else 42
             ckpts = sorted(run.glob("checkpoints/periodic-epoch=*.ckpt"),
                            key=lambda p: int(re.search(r"(\d+)\.ckpt$", p.name).group(1)))
+            if a.ckpt_stride > 1 and ckpts:
+                keep = ckpts[::a.ckpt_stride]
+                if ckpts[-1] not in keep:
+                    keep.append(ckpts[-1])
+                ckpts = keep
             if (run / "checkpoints" / "last.ckpt").is_file():
                 ckpts.append(run / "checkpoints" / "last.ckpt")
             series = []
