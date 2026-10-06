@@ -458,11 +458,20 @@ his point (1): adding the relation to the **value**
 ($\vz_i = \sum_j \alpha_{ij}(\mathbf{V}\vx_j + \vec{a}^V_\rho)$) is a genuinely
 wider function class, and the shipped architecture has no analogue for it at all.
 
-**First measurement in, and it points away from his expectation about dynamics.**
-At item K=2000 the learned-key arm reaches the *same* validation loss as the bit
-arm (0.835–0.846 against 0.841) but takes much longer to get there — selected
-epoch 531/595/686 against 331. Slower to its optimum, not better at it. One cell,
-three seeds; wait for the full sweep before writing anything.
+**Early read: no arm is distinguishable from the shipped design.** Paired on the
+validation block over the 9 cells complete in all four arms, against `bits`:
+`shaw_k` −0.006 ±0.019, `shaw_kv` −0.004 ±0.019, `bits_v` −0.001 ±0.001 nats. All
+inside the 0.015 threshold. Two readings inside that: `shaw_kv` ≈ `shaw_k`, so the
+value term adds nothing on top of learned keys, and `bits_v` ≈ 0, so it adds
+nothing on its own either — which is against the prediction above, since the value
+term is the one that genuinely widens the function class. Validation, not the test
+corner, and partial; the corner numbers decide.
+
+(An earlier note here said the learned-key arm was slower to its optimum, from
+`item/2000`. Across all nine cells that is not so: median epochs to the
+validation optimum are `bits` 215, `shaw_k` 184, `shaw_kv` 192, `bits_v` 215 — if
+anything the learned arms are slightly earlier. The single-cell reading was
+over-read.)
 
 ## Checklist
 
