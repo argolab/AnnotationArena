@@ -23,8 +23,36 @@ from pathlib import Path
 RUN_RE = re.compile(r"DOMAIN3-SIGMOID_(Item|Annot)_(T|NT)_(\d+)_MARFORMER$")
 
 
+UNIFORM = 1.3862943611198906   # ln(4): a model that never left the plateau
+
+
+def collect_corner(corner_json: Path) -> dict:
+    """(family, axis, arm) -> {size: TEST-CORNER log-loss} from corner.json.
+
+    This is the metric the paper reports and the one result_tables.py renders.
+    The pooled "missing" field in TEST_RESULTS is a different number -- it mixes
+    the corner with the training partition's own held-out cells (D22/D23) -- and
+    on the codec run the two disagree enough to change the verdict: item/T
+    K=100 is 1.73 pooled and 0.97 on the corner. QC that gates the figures has
+    to read what the figures plot.
+
+    split_missing_metrics.py nests the value under "test" and carries the arm in
+    the family name ("MarformerNT"), not in a field of its own.
+    """
+    out: dict = {}
+    blob = json.loads(corner_json.read_text())
+    for row in blob.get("rows", []):
+        fam, axis, size = row.get("family"), row.get("axis"), row.get("size")
+        val = (row.get("test") or {}).get("log_loss")
+        if None in (fam, axis, size, val):
+            continue
+        arm = "NT" if fam.endswith("NT") else "T"
+        out.setdefault((fam, str(axis).lower(), arm), {})[int(size)] = float(val)
+    return out
+
+
 def collect(results_root: Path) -> dict:
-    """(family, axis, arm) -> {size: corner log-loss} from each run's TEST_RESULTS."""
+    """(family, axis, arm) -> {size: POOLED log-loss} from each run's TEST_RESULTS."""
     out: dict = {}
     for fam_dir, fam in ((results_root / "MARFORMER", "Marformer"),
                          (results_root / "MARFORMER-NT", "MarformerNT")):
@@ -60,11 +88,23 @@ def main() -> int:
                     help="nats above the neighbour median to flag. 0.06 sits "
                          "between the 0.035 paired between-arm sd and the "
                          "0.202 collapse B11 measured.")
+    ap.add_argument("--source", choices=("corner", "pooled"), default="corner",
+                    help="corner (default) reads corner_metrics/corner.json, "
+                         "the metric the paper reports; pooled reads "
+                         "TEST_RESULTS/last.json, which is not comparable.")
     a = ap.parse_args()
-    root = Path(a.rerun_dir) / "runs" / a.run_id / "RESULTS"
-    curves = collect(root)
+    run_dir = Path(a.rerun_dir) / "runs" / a.run_id
+    if a.source == "corner":
+        cj = run_dir / "corner_metrics" / "corner.json"
+        if not cj.is_file():
+            print(f"no {cj} -- run jobs/corner_score.sbatch first, or pass "
+                  f"--source pooled")
+            return 0
+        curves = collect_corner(cj)
+    else:
+        curves = collect(run_dir / "RESULTS")
     if not curves:
-        print(f"no scored runs under {root} -- nothing to check yet")
+        print(f"no scored runs for {a.run_id} -- nothing to check yet")
         return 0
 
     flagged = []
@@ -78,7 +118,11 @@ def main() -> int:
                 continue
             resid = pts[s] - st.median(nb)
             mark = ""
-            if resid > a.threshold:
+            degenerate = abs(pts[s] - UNIFORM) < 0.02
+            if degenerate:
+                mark = "   <== DEGENERATE (at ln4)"
+                flagged.append((key, s, pts[s], resid))
+            elif resid > a.threshold:
                 mark = "   <== FLAGGED"
                 flagged.append((key, s, pts[s], resid))
             print(f"  K={s:<6} {pts[s]:.4f}   resid {resid:+.4f}{mark}")
