@@ -1,0 +1,196 @@
+# Overleaf handover — Domain 3 numbers and figures refreshed, prose untouched
+
+**For the agent that updates the paper.** Everything here has been applied to the
+branch `claude/numbers-refresh` in `Marformer-Paper/`. **Nothing is pushed.**
+Pushing to Overleaf needs Tom's explicit approval, per change — approval for one
+push never carries to the next.
+
+```
+cd Marformer-Paper && git diff main..claude/numbers-refresh
+```
+
+## What was done, and what was deliberately not
+
+**Done:** numeric literals, figure files, and one figure-generation setting.
+
+**Not done:** no sentence was rewritten, no caption reworded, no section moved,
+nothing in Domains 1–2. Where a number could not move without a sentence moving
+with it, the number was left alone and a `\Claude{...}` margin note was attached
+instead. There are **nine** such notes; §4 below lists every one with its evidence
+and the decision it needs. They are the actual work left to do.
+
+One partial exception, flagged as note 8: changing "4 chains" to "1 chain" forces
+`chains`→`chain` and drops `each` / `per chain` / `total`. That is grammar dragged
+along by a number, not a rewrite, and it is the only place any prose word changed.
+Verify with:
+
+```
+git diff main..claude/numbers-refresh -- main.tex   # only numerals, macros, \claude{} calls
+```
+
+## 1. Where the numbers come from
+
+Authoritative source: `RERUN/runs/final-dual/`.
+
+| artifact | what it holds |
+|---|---|
+| `reports/tables.txt` | the three result tables, test-corner log-loss |
+| `corner_metrics/corner.json` | per-cell test-corner metric, 42 cells, the thing everything is checked against |
+| `PLOTS/*/[*_]summary.json` | exactly what each figure plots |
+| `reports/smece.json` | smECE, newly serialised (see §3) |
+| `paper_figures/` | the 17 PNGs installed into `PLOTS/` |
+
+**One command re-verifies that the figures and the tables are the same quantity:**
+
+```
+python RERUN/analysis/check_plot_corner.py     # exits 0; prints all 42 cells
+```
+
+Run it after any figure rebuild. It compares the summary JSON the build writes
+against `corner.json` cell by cell and fails on a mismatch *or* a missing cell. It
+needs no GPU. This check exists because the figures silently disagreed with the
+tables for months: `plot_domain3_sigmoid.py` re-derives evaluation rather than
+reading the pipeline's conclusions, so it carried its own copy of every eval bug.
+
+## 2. Numeric edits applied
+
+### Domain 3 synthetic
+
+| what | was | now | source |
+|---|---|---|---|
+| `δ_item`, item axis | 0.7 | **1.0** | `train_config.json` of every item refit |
+| `δ_judge`, judge axis | 0.7 | **0.8** | `train_config.json` of every judge refit |
+| Stan runtime at K=500 | ≈100 min | **≈52 min** | `item_generalization_summary.json` |
+| runtime caption | "≈100 min at 500" | **"≈52 min at 500, rising to ≈757 min at 4000"** | same |
+| Marformer judge-axis runtime | below 15 min | **below 4 min** | `annot_generalization_summary.json` (max 3.68 at J=50) |
+| Stan chains (two places) | 4 | **1** | every Stan fit, including the published ones |
+
+### LLM-Rubric (only the three models that were rerun)
+
+| quantity | was | now |
+|---|---|---|
+| Marformer @10 | 1.52 | **1.95** |
+| Stan CPM @10 | 1.44 | **1.39** |
+| Best Unigram @10 | 1.38 | 1.38 (unchanged) |
+| Marformer @50 | 1.05 | **1.12** |
+| Stan CPM @50 | 1.21 | **1.20** |
+| Marformer @175 | 0.998 | **1.007** |
+| Stan CPM @175 | 1.077 | **1.093** |
+| Best Unigram @175 | 1.112 | 1.112 (unchanged) |
+| MBR-L2 Marformer @175 | 0.52 | **0.59** |
+| MBR-L2 Stan CPM @175 | 0.74 | **0.78** |
+| runtime Marformer @175 | 18 min | **22 min** |
+| speedup vs Stan CPM | ≈9× | **≈7×** |
+
+ReMasker and MIWAE were **not** rerun; their numbers are untouched. See note 4.
+
+## 3. Figure changes
+
+**The Stan cutoff is gone.** `ITEM_STAN_CUTOFF` was `500`: beyond it the Stan
+series were drawn as a **flat dotted extension** of their K=500 value — a line
+that is not data. The rerun fits Stan Oracle *and* all three misspecified variants
+at every item size to 4000.
+
+The published figures were internally inconsistent about this: the accuracy panels
+extended K=500 flat, while the **runtime** panel plotted the real 1000–4000 fits,
+because the runtime row keyed on the display size and the metric rows keyed on the
+cutoff-mapped source size. So one figure showed Stan costing 757 min at K=4000
+while the panel beside it implied Stan had never been run there. All panels now use
+the real values.
+
+Consequence, and it is the most consequential thing in this handover:
+
+| K | Marformer | Stan Oracle | gap |
+|---|---|---|---|
+| 500 | 0.913 | 0.679 | 0.234 |
+| 1000 | 0.767 | 0.642 | 0.125 |
+| 2000 | 0.728 | 0.615 | 0.113 |
+| 3000 | 0.706 | 0.607 | 0.099 |
+| 4000 | 0.738 | 0.600 | **0.138** |
+
+The gap narrows and then widens again. See notes 1 and 2.
+
+**smECE is now serialised.** It was computed inside the calibration plotting code
+and rendered only into a plot title, so after a rerun the prose and the panel could
+drift with nothing to catch it. `RERUN/analysis/extract_smece.py` reads the same
+payloads the panels are drawn from and calls the same `relplot` path, so the
+numbers are the plotted ones by construction; `make_figures.sh` now runs it inside
+the run binding, so one command produces both. Values in
+`runs/final-dual/reports/smece.json`.
+
+**Figure install:** `RERUN/make_figures.sh --run-id final-dual --install` copies
+`paper_figures/` into `Marformer-Paper/PLOTS/{DOMAIN3-SYNTH,REAL-LLMRUBRIC}`, which
+is where `main.tex` already points.
+
+## 4. The nine `\Claude` notes — the work that is left
+
+Each is a margin note in `main.tex` (magenta). Grep `\claude{` to find them.
+
+1. **"Stan results are reported only through K=500"** — false; fits exist to 4000.
+   The cost argument survives (757 min vs 13), the claim does not.
+2. **"approaching near-oracle performance by K=4000"** — contradicted by the
+   corrected figure. Marformer 0.738 vs Stan 0.600, and the gap *widens* from 3000
+   to 4000. This is the ≈0.13-nat gap nothing explains: capacity, epoch budget and
+   forced amortisation were each tested and ruled out (`FUTURE_EXPERIMENTS.md`
+   waves 3b/3e). Either state the residual gap and leave it open, or drop the
+   convergence claim.
+3. **"non-transductive … with a small performance penalty"** — it is a crossover,
+   not a penalty: NT is better at K=2000 and 4000, worse at K=100. Two figure bugs
+   hid it (NT scored on the pooled population; item NT truncated at K=500).
+4. **LLM-Rubric paragraph** — (a) mixed provenance: three models rerun, ReMasker
+   and MIWAE not; (b) the Marformer curve is not monotone (bumps at K=30 and 150),
+   so "continues to improve" describes a curve that rises twice. The bumps are
+   overfitting, not the degeneracy failure mode — training loss is lowest where
+   test loss is worst — so no restart rule applies.
+5. **Relational attention, `main.tex:841`** — the key-dimensionality sentence
+   describes `use_per_head_rel=true`; Domain 3 ships the other design. Also, for
+   Jason's note: the learned key embedding is a **rank-constrained** special case
+   of the frozen-bit readout, so the argument for Shaw is parameterisation and
+   learning dynamics, not power. The value term is the half that widens the
+   function class. Both are implemented and measured on `side/shaw-rel`.
+6. **Runtime figure is non-monotone** — wall-clock is scaled by the *selected*
+   epoch count, so K=4000 looks cheapest. Right for "time to the reported model",
+   misleading as "cost of scaling".
+7. **No Stan fit at J=50** — the judge sweep stops at J=40 (55 min). Either the
+   size or the number in that sentence is wrong; I could not tell which.
+8. **1 chain vs the R̂ table** — I changed the chain count because 1 chain is what
+   every reported fit used. But split-R̂ from one chain is the weaker split-half
+   statistic, and a 4-chain diagnostic run exists
+   (`RERUN/side/stan_4chain.sbatch`). Say the diagnostics are 4-chain while the
+   fits are 1-chain, or recompute the table.
+9. **LLM-Rubric cannot inherit `δ_item` by reference** — it genuinely uses 0.7
+   while the synthetic item axis uses 1.0, so the cross-reference in §1898 has to
+   state 0.7 explicitly.
+
+## 5. Things this handover does *not* cover
+
+- **`RERUN/FINAL_RUN_PAPER_NOTES.md`** is the fuller set of paper changes Tom is
+  drafting himself — the F13 protocol, the standard block, why the codec does not
+  ship, the restart-on-degenerate rule, the LLM-Rubric protocol. This document is
+  only the numbers-and-figures slice of it.
+- `baseline_cutoff=1000` was left alone. The empirical baselines genuinely stop
+  there; whether to extend them is a separate question.
+- The epoch budget: 2000 is a **search** budget, not a training length. If the
+  paper states a number of epochs for Domain 3, check it against
+  `FINAL_RUN_PAPER_NOTES.md` §4.
+- Domain 3's §952 "Validation and early stopping" paragraph already describes F13
+  correctly — someone wrote it before this pass. Nothing was changed there.
+
+## 6. If you rebuild the figures yourself
+
+```
+RERUN/make_figures.sh --run-id final-dual --submit --cache --device cuda
+python RERUN/analysis/check_plot_corner.py          # must exit 0
+RERUN/make_figures.sh --run-id final-dual --install
+```
+
+Two traps, both of which have silently produced wrong figures before:
+
+- `TEST_RESULTS/best.json` is reused if present, and `--cache` reuses
+  `*_cache.npz`. Both can hold values computed under an older policy, so a policy
+  change can do nothing until they are deleted. (`--cache` is safe for the Stan
+  change specifically, because Stan payloads are always re-read from CSVs.)
+- `plot_domain3_sigmoid.py` has **separate code paths for the transductive and
+  non-transductive arms**, and the same decision can appear in several readers. The
+  pooled-metric override lived in four places; gating one left the whole NT arm
+  wrong. Check the output with `check_plot_corner.py`, not a component.

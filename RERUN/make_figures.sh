@@ -162,6 +162,17 @@ echo
 echo "== Domain 3 synthetic =========================================="
 python scripts/DOMAIN3-SIGMOID/plot_domain3_sigmoid.py "${d3_flags[@]}"
 
+# smECE is quoted in the paper's prose but the figure pipeline only ever renders
+# it into a plot title, so after a rerun the text and the panel can drift with
+# nothing to catch it. Extract it here, inside the run binding and from the same
+# payloads the panels were drawn from, so one command produces both.
+if [[ "${CALIBRATION}" == true && ( "${PART}" == all ) ]]; then
+    echo
+    echo "== smECE ======================================================="
+    python "${RERUN_DIR}/analysis/extract_smece.py" --run "${RUN_ID}" \
+        --item-size 500 --annot-size 30 || echo "  (smECE extraction failed; figures are unaffected)"
+fi
+
 collect() {  # collect <src> <dst-relative-to-stage>
     if [[ -f "$1" ]]; then
         cp "$1" "${STAGE}/$2"
