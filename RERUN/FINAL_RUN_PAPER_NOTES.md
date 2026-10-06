@@ -131,6 +131,30 @@ important half, which makes it defensible rather than a fudge:
 > **Degeneracy is detectable from the training curve alone — 8 of 8 cases caught,
 > no false alarms — so the restart criterion never looks at test data.**
 
+### What the dual stream buys, measured on the final run itself
+
+Escape epoch across all 42 search runs (first epoch with training loss below
+$\ln 4 - 0.05$):
+
+| | min | median | max | **sd** |
+|---|---|---|---|---|
+| typed codec (`final-s101`) | 46 | 80 | 310 | **77.5** |
+| **dual stream (`final-dual`)** | **27** | **34** | **43** | **4.1** |
+
+The spread falls by a factor of 19. That is the whole mechanism: the stopping
+epoch is chosen on the search run and applied to a *fresh* refit whose escape
+time is independent, so what matters is not the mean escape time but its
+variance. With escape confined to 27–43, any selected epoch above ~43 is safe by
+construction.
+
+On this run that leaves **exactly one cell exposed**: `Marformer/annot/20`, whose
+selected epoch is 36. Empirically 15 of the 42 observed escape epochs exceed 36,
+so that cell has roughly a **36% chance** of coming back degenerate. The other 41
+cells have a selected epoch above every escape epoch observed and **cannot**
+collapse. This is worth a sentence in the paper: the failure mode is not
+eliminated, it is confined to cells whose dev-selected epoch lands inside the
+escape window, which only happens at the smallest annotator counts.
+
 `RERUN/analysis/curve_qc.py` implements the check and reports any cell within
 0.02 of $\ln 4$ as DEGENERATE; it also flags cells more than 0.06 nats above
 their neighbour median.
