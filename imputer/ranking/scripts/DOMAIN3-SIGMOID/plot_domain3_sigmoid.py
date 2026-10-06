@@ -52,7 +52,13 @@ from scripts.utils import plot_domain3_generalization as shared
 
 
 ITEM_DISPLAY_SIZES = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000, 2000, 3000, 4000]
-ITEM_STAN_CUTOFF = 500
+# None = no cutoff. This was 500, a placeholder for item sizes Stan had not been
+# fitted at: beyond it the Stan series were drawn as a FLAT DOTTED extension of
+# their K=500 value, i.e. a line that is not data. The final rerun fits all four
+# Stan variants (Oracle, Bin, Proj, Both) to K=4000 -- Oracle reaches 0.600 at
+# 4000 against 0.679 at 500 -- so the placeholder understated Stan and hid that
+# it keeps improving. Setting this to an int restores the old behaviour.
+ITEM_STAN_CUTOFF: int | None = None
 # No cap. This was 500, from a time when the item NT runs above 500 did not
 # exist; it silently truncated the NT curve at K=500 even after the final run
 # produced all 13 NT cells, so the figure showed five NT points against a
@@ -1201,7 +1207,9 @@ def _plot_series_on_item_axis(
     """Plot one series on the item generalization axis.
 
     Marformer/NT: solid line only where data exists (NaN gaps handled naturally).
-    Stan Oracle/Misspecs: solid to ITEM_STAN_CUTOFF, flat dotted extension beyond.
+    Stan Oracle/Misspecs: solid to ITEM_STAN_CUTOFF, flat dotted extension beyond;
+      with ITEM_STAN_CUTOFF = None there is no extension and the real curve is
+      drawn solid over its whole range.
     Baselines: solid where present (capped at baseline_cutoff upstream).
     """
     valid = ~np.isnan(ys)
@@ -1213,7 +1221,10 @@ def _plot_series_on_item_axis(
                    linewidth=shared._series_linewidth(label),
                    alpha=shared._series_alpha(label), label=label)
     is_stan = label in {"Stan Oracle", "Stan Both", "Stan Bin", "Stan Proj"}
-    if not is_stan or np.all(display_sizes[valid] <= ITEM_STAN_CUTOFF):
+    # `None` means every Stan point is real data, so take the plain path. Comparing
+    # an array against None raises, so this guard has to come first.
+    if (not is_stan or ITEM_STAN_CUTOFF is None
+            or np.all(display_sizes[valid] <= ITEM_STAN_CUTOFF)):
         ax.plot(xs_v, ys_v, linestyle=linestyle, **line_kw)
         ax.fill_between(xs_v, lo_v, hi_v, color=color, alpha=shared._series_fill_alpha(label), linewidth=0)
         return
