@@ -47,6 +47,19 @@ MAX_ITEM="${LLMRUBRIC_MAX_ITEM:-10}"
 SEED="${LLMRUBRIC_SEED:-42}"
 EPOCHS="${LLMRUBRIC_EPOCHS:-300}"
 
+# This job calls train.py directly rather than going through
+# scripts/DOMAIN3/run_marformer_group.sh, so it does NOT inherit the final-run
+# architecture defaults the synthetic path sets -- it would silently pick up
+# argparse's defaults, which are the OLD architecture (outer residual 'all',
+# projection 'full', hand-built dual value stream). Training the real-data
+# figures on a different architecture from the synthetic ones is not defensible
+# in the paper, so the final-run values are set explicitly here and stay
+# overridable for ablations.
+DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-none}"
+BLOCK_OUTPUT_PROJECTION="${DOMAIN3_BLOCK_OUTPUT_PROJECTION:-none}"
+VALUE_CODEC="${DOMAIN3_VALUE_CODEC:-typed}"
+CODEC_INIT="${DOMAIN3_CODEC_INIT:-unit}"
+
 # VARIANT_TAG keeps arms and seeds on distinct paths. This matters more here
 # than elsewhere: the block below *deletes* the target directory before
 # training, so two arms sharing a path would not merely collide, the second
@@ -117,6 +130,10 @@ rerun_run python -u -m imputer.entity_mf.train \
     --mask-augmentations   5                       \
     --masked-loss-weight   15.0                    \
     --observed-loss-weight 1.0                     \
+    --dual-outer-residual  "${DUAL_OUTER_RESIDUAL}"      \
+    --block-output-projection "${BLOCK_OUTPUT_PROJECTION}" \
+    --value-codec          "${VALUE_CODEC}"              \
+    --codec-init           "${CODEC_INIT}"               \
     --device               cuda                    \
     --llm-annotator-id     24                      \
     --human-observed-rate  0.0                     \
