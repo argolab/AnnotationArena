@@ -132,6 +132,13 @@ export DOMAIN3_LR_SCHEDULE="${DOMAIN3_LR_SCHEDULE:-none}"
 # for DOMAIN3_BATCH_AUGMENTATIONS. The default reproduces the shipped value.
 export DOMAIN3_WEIGHT_DECAY="${DOMAIN3_WEIGHT_DECAY:-0.01}"
 
+# Shaw et al. (2018) S3.1 relational attention. The runner now defaults both
+# halves to "learned"; these lines exist so a sweep CAN override them through a
+# conf file, which is sourced rather than exported (see the block below).
+export DOMAIN3_REL_KEY="${DOMAIN3_REL_KEY:-}"
+export DOMAIN3_REL_VALUE="${DOMAIN3_REL_VALUE:-}"
+export DOMAIN3_REL_INIT="${DOMAIN3_REL_INIT:-}"
+
 # Speed/optimisation knobs. run_marformer_group.sh reads these, but the per-job
 # conf is *sourced* rather than exported, so without these lines a conf setting
 # DOMAIN3_BATCH_AUGMENTATIONS=true was silently ignored and the run used the
