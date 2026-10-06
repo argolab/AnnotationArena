@@ -198,7 +198,18 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
 
 ## D14 — Reported checkpoints are selected on the **test** set
 
-- **Status:** open
+- **Status:** **resolved 2026-10-06**, in both layers. The train/eval side was
+  fixed earlier by the F13 protocol (carve a validation block out of TRAINING,
+  select the stopping epoch on it, refit, report the refit's last epoch). The
+  **plotting layer kept its own independent copy of the bug until 2026-10-06**:
+  `plot_domain3_sigmoid.py` ran `--checkpoint all` and reported the argmin of
+  `missing.log_loss` on test, unconditionally and with no option. It now takes
+  `--checkpoint-policy`, default `last`; `test-argmin` survives only to
+  reproduce the older published figures, and `main()` prints which is in force.
+  Measured on `final-dual` over the 34 cells with both readings, test-argmin was
+  better by a **median 0.006 nats, max 0.047, differing in 23 of 34** — worst
+  `Marformer/item/1000` 0.7999 at `periodic-epoch=0274` against 0.8470 at last.
+  **The figures published before this date carry the bug.**
 - **Affects:** numbers, in every Domain 3 figure; and a methodological claim
 - **Detail:** training writes ~18 checkpoints per run (`best-*` selected on
   validation, `last`, and `periodic-*` every 25 epochs). Evaluation then
@@ -378,6 +389,12 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
 
 ## D22 — the reported "test" metric is mostly *training*-partition cells
 
+- **Status:** **resolved 2026-10-06 for everything the paper reports.** The
+  tables and the corner scorer (`analysis/split_missing_metrics.py
+  --corner-whole`, `corner_metrics/corner.json`) have always reported the test
+  corner alone; the figures did not until 2026-10-06 — see D23. `test.py`'s
+  pooled `missing` field is unchanged and still pooled, so anything reading it
+  directly is still affected.
 - **Where:** `imputer/entity_mf/test.py`, `_reconstruct` (line ~77) feeding
   `evaluate_entity_marformer_split`.
 - **What the code does:** it builds one evaluation graph from
@@ -434,6 +451,21 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
 
 ## D23 — Marformer and Stan are scored on different cell sets in the same figure
 
+- **Status:** **resolved 2026-10-06.** `plot_domain3_sigmoid.py` takes
+  `--metric-population`, default `corner`: the Marformer payloads keep only
+  `var.instance == "test"`, the population Stan was already scored on, and
+  chunking protects the corner with the same `keep_whole` rule as the scorer so
+  it is never evaluated in a context-free orphan chunk. The pooled `log_loss`
+  override from `best.json` is dropped under this policy — keeping it would
+  reintroduce D22 for log-loss alone and leave log-loss and `mbr_l2` on different
+  populations. Verified exactly by `analysis/check_plot_corner.py`: the plot path
+  and `corner.json` agree to four decimals on item/T 2000 and 300, NT item/4000
+  and annot/T 20, n=316 both sides.
+- **The magnitude table below is from `replicate-01` and its SIGN DOES NOT
+  GENERALISE.** There pooling was 0.094 nats *better* at K=2000, an unearned
+  advantage. On `final-dual` pooling is 0.052 nats *worse* (0.7798 against
+  0.7282), so correcting it moves that run's curve *down*. Describe D22/D23 in
+  the paper as the wrong population, never as a bias in a fixed direction.
 - **Where:** `scripts/DOMAIN3-SIGMOID/plot_domain3_sigmoid.py`.
   `_marformer_probs_all_missing` (line ~383) vs `_stan_probs_from_eval_dir`
   (line ~510).
