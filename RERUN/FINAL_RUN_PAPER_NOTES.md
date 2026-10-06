@@ -157,6 +157,7 @@ Rerun vs the curve digitised from the paper figure (±0.005):
 |---|---|---|---|
 | 10 | 1.435 | 1.3902 | −0.045 |
 | 20 | 1.475 | 1.2748 | **−0.200** |
+| 30 | 1.230 | 1.2303 | +0.000 |
 | 40 | 1.212 | 1.2091 | −0.003 |
 | 50 | 1.205 | 1.2039 | −0.001 |
 | 75 | 1.160 | 1.1610 | +0.001 |
@@ -165,7 +166,7 @@ Rerun vs the curve digitised from the paper figure (±0.005):
 | 150 | 1.088 | 1.0847 | −0.003 |
 | 175 | 1.077 | 1.0925 | +0.016 |
 
-Excluding K=20: median **−0.002**, both signs, 3 of 8 positive — digitisation
+Excluding K=20: median **−0.001** over 9 sizes, both signs, 4 of 9 positive — digitisation
 error plus 1-chain MCMC noise. **No systematic shift, so the rerun numbers can
 replace the published ones.**
 
@@ -175,6 +176,67 @@ that kink (1.3902 → 1.2748). A 1-chain fit on 20 items mixing badly is the
 likeliest explanation, which would mean the rerun is *fixing* a bad published
 fit rather than disagreeing with a good one. Your call whether to say anything;
 the safe move is to plot the rerun and say nothing.
+
+## 8. LLM-Rubric: retrained on `dual`, and what the arm's protocol actually is  [rewrite]
+
+The LLM-Rubric Marformer runs had been trained with the **typed codec** (verified
+from the written `train_config.json`, not the submit command). They are retrained
+on `dual` + standard block, so both domains now report the same architecture.
+The typed-codec outputs are preserved at `RESULTS/MARFORMER/LLM_RUBRIC_codec_typed`.
+
+Test log-loss, Marformer vs Stan CPM, on the 25 held-out test items:
+
+| K | 10 | 20 | 30 | 40 | 50 | 75 | 100 | 125 | 150 | 175 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| **Marformer** | 1.953 | 1.151 | 1.250 | **1.043** | 1.124 | 1.078 | **1.036** | **1.017** | 1.215 | **1.007** |
+| Stan CPM | 1.390 | 1.275 | 1.230 | 1.209 | 1.204 | 1.161 | 1.118 | 1.112 | 1.085 | 1.093 |
+
+Marformer wins from K=20 on except at K=30 and K=150, and loses badly at K=10.
+
+### The arm has a real validation split — state it, because it differs from Domain 3
+
+I went looking for test contamination here and did not find it. The bundle splits
+the 225 items **K_train / K_val = 25 / K_test = 25**, and every held-out rating
+carries an explicit `instance: "val"` or `"test"` tag: 666 ratings each, disjoint.
+Early stopping selects on the val 666 and the reported number is the test 666. So:
+
+- **LLM-Rubric model selection is legitimate** and always was. If `PAPER_EDITS_SWEEP.md`
+  B9 ("the published number is partly selected on test") was about this
+  mechanism, it does not apply to the rerun. The two sets merely have the same
+  size, which is what made it look suspicious.
+- **But the two arms use different protocols**, and the paper should not imply
+  one: Domain 3 carves a 15% block out of training and refits (F13); LLM-Rubric
+  has a dedicated 25-item val split and no refit. Both are defensible; saying so
+  costs one sentence and pre-empts the question.
+
+### A real bug to know about: `last.ckpt` is not the last epoch
+
+For every LLM-Rubric cell, `last.ckpt` is **byte-identical to `best-*.ckpt`** —
+same `epoch` and `global_step` in the file, 0 of 138 tensors differing. For K=10
+both are epoch **120**, not 299, even though training ran the full 300 epochs and
+`periodic-epoch=0299.ckpt` exists. `ModelCheckpoint`'s `save_last` stops
+refreshing `last.ckpt` after the monitored metric's last improvement.
+
+Consequences:
+
+- `test.py --checkpoint both` writes two files with **identical** numbers
+  (1.9528375115838494 in both, to every digit). `best.json` and `last.json` are
+  not two readings.
+- Anything describing the LLM-Rubric number as the final epoch is **wrong** — it
+  is the validation-selected epoch. The number is fine; the description is not.
+- **Domain 3 is unaffected.** Its refits have no `best-*.ckpt` at all, and their
+  `last.ckpt` epoch equals the history length exactly (Item_T_2000: 377/377,
+  Item_T_400: 148/148, Annot_T_30: 136/136). F13 reports a genuine last epoch.
+  Only the LLM-Rubric arm is touched.
+
+### The small-K bumps are overfitting, not degeneracy — do not restart them
+
+K=10 (1.953, worse than $\ln 4$), K=30 and K=150 sit above their neighbours. None
+is degenerate: every cell escaped the plateau, and training loss is *lowest*
+exactly where test loss is worst (K=10 trains to 0.223). The restart rule in §6
+keys on degenerate *training* performance, so it does not fire here and should
+not be stretched to cover it. These points are real variance between two
+666-rating samples at small K, and the honest treatment is to plot them.
 
 <!-- NUMBERS -->
 
@@ -192,6 +254,9 @@ the safe move is to plot the rerun and say nothing.
 - [ ] §6 restart-on-degenerate sentence + "detected from training curve only"
 - [ ] §6 selector-floor: implement or do not claim
 - [ ] §7 Stan 1 chain + 4-chain footnote (B12)
-- [ ] §7 swap LLM-Rubric Stan numbers to the rerun
+- [ ] §7 swap LLM-Rubric Stan numbers to the rerun (all 10 sizes in; K=30 matches to +0.0003)
+- [ ] §8 LLM-Rubric retrained on dual; state the arm's own val split
+- [ ] §8 do not call the LLM-Rubric number a final epoch — it is val-selected
+- [ ] §8 K=10/30/150 bumps are overfitting, not degeneracy
 - [ ] Swap all three result tables
 - [ ] Rebuild figures (`make_figures.sh --run-id final-dual`)
