@@ -24,6 +24,7 @@ RUN_RE = re.compile(r"DOMAIN3-SIGMOID_(Item|Annot)_(T|NT)_(\d+)_MARFORMER$")
 
 
 UNIFORM = 1.3862943611198906   # ln(4): a model that never left the plateau
+DEGEN_WINDOW = 0.02           # this close to ln4 == never escaped
 
 
 def collect_corner(corner_json: Path) -> dict:
@@ -118,7 +119,7 @@ def main() -> int:
                 continue
             resid = pts[s] - st.median(nb)
             mark = ""
-            degenerate = abs(pts[s] - UNIFORM) < 0.02
+            degenerate = abs(pts[s] - UNIFORM) < DEGEN_WINDOW
             if degenerate:
                 mark = "   <== DEGENERATE (at ln4)"
                 flagged.append((key, s, pts[s], resid))
@@ -129,12 +130,31 @@ def main() -> int:
 
     print()
     if flagged:
-        print(f"{len(flagged)} cell(s) flagged above {a.threshold} nats:")
-        for key, s, v, r in flagged:
-            print(f"  {key[0]}/{key[1]}/{key[2]} K={s}: {v:.4f} ({r:+.4f} vs neighbours)")
-        print("\nRerun each at a different model seed before plotting. A genuine "
-              "codec collapse reproduces as a large gap against the new seed; "
-              "a real feature of the curve does not.")
+        degen = [f for f in flagged if abs(f[2] - UNIFORM) < DEGEN_WINDOW]
+        bumps = [f for f in flagged if abs(f[2] - UNIFORM) >= DEGEN_WINDOW]
+        if degen:
+            print(f"{len(degen)} DEGENERATE cell(s) -- at ln4, the model never "
+                  f"left the uniform plateau:")
+            for key, sz, v, r in degen:
+                print(f"  {key[0]}/{key[1]}/{key[2]} K={sz}: {v:.4f}")
+            print("\n  These are safe to rerun at a different model seed. The "
+                  "same cells are identifiable from the TRAINING curve alone "
+                  "(escape epoch absent), so the restart decision does not "
+                  "depend on this test-corner reading -- confirm with "
+                  "curve_export.py and restart on that basis.")
+        if bumps:
+            print(f"\n{len(bumps)} cell(s) more than {a.threshold} nats above "
+                  f"their neighbour median, but NOT degenerate:")
+            for key, sz, v, r in bumps:
+                print(f"  {key[0]}/{key[1]}/{key[2]} K={sz}: {v:.4f} "
+                      f"({r:+.4f} vs neighbours)")
+            print("\n  *** DIAGNOSTIC ONLY -- DO NOT RERUN THESE. ***\n"
+                  "  This residual is computed on the TEST CORNER, so choosing "
+                  "which cells to rerun by it, and keeping the better result, is "
+                  "selection on test. At one model seed a bump of this size is\n"
+                  "  ordinary cell-to-cell variation. Either report them as they "
+                  "are, or rerun EVERY cell at a second seed and average -- never "
+                  "just the cells that look bad.")
         return 1
     print(f"no cell exceeds {a.threshold} nats above its neighbours")
     return 0
