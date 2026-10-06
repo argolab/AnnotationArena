@@ -169,6 +169,13 @@ def parse_args() -> argparse.Namespace:
                         help="Load baseline probs from npz cache if present; save on fresh run.")
     parser.add_argument("--calibration", action="store_true",
                         help="Also produce calibration reliability plots.")
+    parser.add_argument("--metric-population", choices=["corner", "pooled"],
+                        default="corner",
+                        help="corner (default) scores Marformer on the held-out "
+                             "test block only, the same population Stan is "
+                             "scored on. pooled mixes in the training "
+                             "partition's own missing cells (D22/D23) and only "
+                             "reproduces the older published figures.")
     parser.add_argument("--checkpoint-policy", choices=["last", "test-argmin"],
                         default="last",
                         help="last (default) reports the refit's final epoch, "
@@ -337,6 +344,19 @@ def _available_misspec_sizes(cfg: DatasetConfig, suffix: str) -> set[int]:
 # remove. It is kept only to reproduce the previously published figures.
 CHECKPOINT_POLICY = "last"
 
+# Which cells the Marformer series is scored on. "corner" is the held-out test
+# block only -- `var.instance == "test"` -- which is what Stan is already scored
+# on (`missing_ratings_indexes_in_test_instance`). "pooled" is every missing
+# token in the evaluation graph, i.e. the test block mixed with the training
+# partition's own missing cells, which is what this script used to do: D22/D23.
+#
+# Those training cells are in-domain completion on items a transductive model has
+# mostly seen, so they are easier, and their share GROWS with K -- 414 test cells
+# against 13,836 training cells at Item_T_4000, so the pooled number is 97%
+# training data there. Marformer was therefore scored on a progressively easier
+# mixture while Stan was scored on the hard task, in the same figure.
+METRIC_POPULATION = "corner"
+
 
 def _write_best_json_from_test_results(run_dir: Path) -> None:
     """Write TEST_RESULTS/best.json: the checkpoint the figures will report.
@@ -401,7 +421,42 @@ def _ensure_marformer_best_json(run_dir: Path, device_name: str) -> Path:
     return best_json
 
 
-def _chunk_variables_by_item_limit(variables: list, max_item: int) -> list[list]:
+def _chunk_variables_by_item_limit(variables: list, max_item: int,
+                                   keep_whole: set | None = None) -> list[list]:
+    """Group variables into chunks of at most `max_item` distinct items.
+
+    `keep_whole` is a set of item ids that must never be split across chunks and
+    must always share a chunk with training context. The test corner is always
+    the highest item ids, so a contiguous cut drops it at the tail, and whenever
+    the item count lands just past a chunk boundary part of the corner ends up in
+    an orphan chunk with no training context at all -- at Item_NT_4000 that put
+    239 of 414 corner cells in a 36-item chunk and they scored 1.29 against 0.86
+    for the cells that kept context. Mirrors
+    RERUN/analysis/split_missing_metrics.py::chunk_by_item.
+    """
+    if keep_whole:
+        ids = sorted({i for v in variables for i in v.item_ids})
+        protected = sorted(set(keep_whole) & set(ids))
+        rest = [i for i in ids if i not in set(protected)]
+        if protected:
+            budget = max(0, max_item - len(protected))
+            if budget <= 0:
+                groups = [set(protected)]
+                groups += [set(rest[i:i + max_item]) for i in range(0, len(rest), max_item)]
+            else:
+                groups = [set(protected) | set(rest[-budget:])]
+                head = rest[:-budget]
+                groups += [set(head[i:i + max_item]) for i in range(0, len(head), max_item)]
+            out = []
+            for keep in groups:
+                sel = [v for v in variables if all(j in keep for j in v.item_ids)]
+                if sel:
+                    out.append(sel)
+            return out or [variables]
+    return _chunk_variables_contiguous(variables, max_item)
+
+
+def _chunk_variables_contiguous(variables: list, max_item: int) -> list[list]:
     item_ids = sorted({iid for var in variables for iid in var.item_ids})
     if len(item_ids) <= max_item:
         return [variables]
@@ -432,12 +487,21 @@ def _marformer_probs_all_missing(
     num_classes = model.types["rating"].num_classes
     prob_rows: list[np.ndarray] = []
     labels: list[int] = []
-    chunks = [eval_vars] if max_item is None else _chunk_variables_by_item_limit(eval_vars, max_item)
+    corner_only = METRIC_POPULATION == "corner"
+    keep = ({i for v in eval_vars if getattr(v, "instance", None) == "test"
+             for i in v.item_ids} if corner_only else None)
+    chunks = ([eval_vars] if max_item is None
+              else _chunk_variables_by_item_limit(eval_vars, max_item, keep_whole=keep))
     for chunk_vars in chunks:
         graph = variable_list_to_entity_graph(chunk_vars, model.types)
         params = model(graph, device=device)
         for idx, var in enumerate(chunk_vars):
             if not getattr(var, "is_missing", False):
+                continue
+            # The corner is the held-out test block, the population Stan is
+            # scored on. Keeping every missing token instead pools in the
+            # training partition's own cells (D22/D23).
+            if corner_only and getattr(var, "instance", None) != "test":
                 continue
             logits = params[0, idx, 1: 1 + num_classes]
             probs = torch.softmax(logits, dim=-1).detach().cpu().numpy().astype(np.float64)
@@ -467,7 +531,13 @@ def _collect_marformer_payloads(
             run_dir, ckpt, _marformer_eval_max_item(cfg, size), device_name
         )
         payloads[size] = (ckpt, probs, labels)
-        if best.get("missing", {}).get("log_loss") is not None:
+        # best.json's "missing" field is the POOLED loss. Under the corner
+        # policy the log-loss must come from the same corner payloads as every
+        # other metric in the figure, so there is nothing to override -- using
+        # it would reintroduce D22 for log-loss alone and leave log-loss and
+        # mbr_l2 measured on different populations.
+        if (METRIC_POPULATION == "pooled"
+                and best.get("missing", {}).get("log_loss") is not None):
             logloss_override[size] = float(best["missing"]["log_loss"])
         total_s = _runtime_from_launcher(run_dir / "launcher_metadata.json", "elapsed_seconds")
         total_epochs = int(_read_json(run_dir / "train_config.json").get("training", {}).get("epochs", 300))
@@ -1363,13 +1433,19 @@ def _plot_dataset(cfg: DatasetConfig, args: argparse.Namespace, device_name: str
 
 
 def main() -> None:
-    global CHECKPOINT_POLICY
+    global CHECKPOINT_POLICY, METRIC_POPULATION
     args = parse_args()
     CHECKPOINT_POLICY = args.checkpoint_policy
+    METRIC_POPULATION = args.metric_population
+    print(f"metric population: {METRIC_POPULATION}"
+          + ("  (test corner only -- comparable with Stan)"
+             if METRIC_POPULATION == "corner"
+             else "  *** POOLED with training cells (D22/D23) ***"), flush=True)
     print(f"checkpoint policy: {CHECKPOINT_POLICY}"
           + ("  (F13: the refit's last epoch, matching the result tables)"
              if CHECKPOINT_POLICY == "last"
-             else "  *** SELECTION ON TEST -- reproduces the older figures only ***"))
+             else "  *** SELECTION ON TEST -- reproduces the older figures only ***"),
+          flush=True)
     device_name = _choose_device(args.device)
     if args.part in {"all", "item"}:
         _plot_dataset(ITEM_CFG, args, device_name)
