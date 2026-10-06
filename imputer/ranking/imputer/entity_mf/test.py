@@ -92,6 +92,9 @@ def _reconstruct(run_dir: Path) -> tuple:
     config.codec_init           = mcfg.get("codec_init", "random")
     config.codec_freeze         = mcfg.get("codec_freeze", False)
     config.inner_residual       = mcfg.get("inner_residual", "both")
+    config.rel_key              = mcfg.get("rel_key", "bits")
+    config.rel_value            = mcfg.get("rel_value", "none")
+    config.rel_init             = mcfg.get("rel_init", "key_scale")
     config.use_per_head_rel     = mcfg["use_per_head_rel"]
     config.use_pointer          = mcfg["use_pointer"]
     config.use_rel_value        = mcfg["use_rel_value"]

@@ -32,9 +32,45 @@ class RelationalAttentionBlock(nn.Module):
       scores = (Q_content @ K_content^T) / sqrt(head_dim)  +  Q_rel @ edge_mask^T
       Single shared relational bias added identically to all heads.
 
+    rel_key="learned" (Shaw et al. 2018, S3.1)
+      Supersedes BOTH modes above, which differ only in where the frozen
+      indicator bits live. Instead of a bit that j waves at i, each relation
+      gets a LEARNED embedding in key space, added to the key when i attends
+      to j:
+
+        scores[h,i,j] = q^h_i . (k^h_j + sum_{rho: i -rho-> j} a^K_rho[h]) / sqrt(hd)
+
+      The key keeps the full head_dim (no dims are reserved) and the query
+      needs no extra relational outputs, so `use_per_head_rel` and
+      `scale_shared_rel` no longer change anything: both collapse to this one
+      path. Each head reads its own slice a^K_rho[h], which is a superset of
+      Shaw's design (they share one embedding across heads per layer).
+
+      Note what this does and does not buy. The bias is q^h_i . a^K_rho =
+      x_i^T W_Q^T a^K_rho, still a LINEAR function of x_i -- so as a score
+      term it is a rank-constrained version of the bits design, not a richer
+      one: the bits give each head an unconstrained R-dim linear readout of x,
+      while this one must factor through W_Q. What it does buy is the learning
+      dynamics Shaw et al. rely on: a^K_rho lives in key space, so similar
+      relations can take similar embeddings, an unimportant relation can go to
+      zero in every head at once, and no fixed dimension budget is reserved.
+
+    rel_value="learned" (Shaw et al. 2018, S3.1, the other half)
+      The genuinely new function class: the relation also enters the VALUE,
+
+        z^h_i = sum_j alpha^h_ij (V^h(x_j) + sum_{rho: i -rho-> j} a^V_rho[h])
+
+      per head and exactly, computed from the sparse edge list. Zero-init, so
+      it is a no-op at step 0. This is the piece the shipped architecture has
+      no analogue for at all.
+
     Optional extensions (both modes):
       use_pointer:     K_aug obs-obs shared-identity bias (3 extra shared Q dims, like old Marformer).
-      use_rel_value:   V_{ij} = V(x_j) + sum_r e_r * edge_mask[i,j,r].
+      use_rel_value:   V_{ij} = V(x_j) + sum_r e_r * edge_mask[i,j,r]. The OLD
+                       approximation: one embedding shared across heads, driven
+                       by the head-AVERAGED attention, and it needs the dense
+                       [L, L, R] mask. rel_value="learned" is the exact,
+                       per-head, sparse version; the two are mutually exclusive.
       use_addone_attn: attn = exp(s) / (1 + sum_j exp(s_j)), sum <= 1.
     """
 
@@ -50,6 +86,9 @@ class RelationalAttentionBlock(nn.Module):
         use_addone_attn: bool = False,
         scale_shared_rel: bool = False,
         use_graph_mask: bool = False,
+        rel_key: str = "bits",
+        rel_value: str = "none",
+        rel_init: str = "key_scale",
     ):
         super().__init__()
         self.model_dim = model_dim
@@ -61,13 +100,42 @@ class RelationalAttentionBlock(nn.Module):
         self.use_addone_attn = use_addone_attn
         self.scale_shared_rel = scale_shared_rel
         self.use_graph_mask = use_graph_mask
+        if rel_key not in ("bits", "learned"):
+            raise ValueError(f"rel_key must be 'bits' or 'learned', got {rel_key!r}")
+        if rel_value not in ("none", "learned"):
+            raise ValueError(f"rel_value must be 'none' or 'learned', got {rel_value!r}")
+        if rel_init not in ("key_scale", "zero"):
+            raise ValueError(f"rel_init must be 'key_scale' or 'zero', got {rel_init!r}")
+        if use_rel_value and rel_value == "learned":
+            raise ValueError(
+                "use_rel_value (old head-averaged approximation) and "
+                "rel_value='learned' (Shaw's exact per-head term) both write the "
+                "same bias; pick one."
+            )
+        self.rel_key = rel_key
+        self.rel_value = rel_value
+        self.rel_init = rel_init
         assert model_dim % num_heads == 0, (
             f"model_dim {model_dim} must be divisible by num_heads {num_heads}"
         )
         self.head_dim = model_dim // num_heads
         R = num_relationships
 
-        if use_per_head_rel:
+        if rel_key == "learned":
+            # Shaw: the relation is a learned vector ADDED to the key, so the key
+            # keeps every content dimension and the query needs no relational
+            # outputs. use_per_head_rel / scale_shared_rel are inert here -- the
+            # two bit designs differ only in where the reserved dims sit.
+            self.k_content_dim = self.head_dim
+            q_out_dim = model_dim + (3 if use_pointer else 0)
+            self.Q = nn.Linear(model_dim, q_out_dim)
+            self.K = nn.Linear(model_dim, model_dim)
+            self.key_rel = nn.Parameter(torch.zeros(R, num_heads, self.head_dim))
+            if rel_init == "key_scale":
+                # The same scale nn.Linear gives a key coordinate, so a relation
+                # embedding starts out as loud as a key and no louder.
+                nn.init.normal_(self.key_rel, std=model_dim ** -0.5)
+        elif use_per_head_rel:
             # Per-head: each head has (head_dim - R) content dims + R relational dims
             self.k_content_dim = self.head_dim - R
             assert self.k_content_dim > 0, (
@@ -93,6 +161,14 @@ class RelationalAttentionBlock(nn.Module):
                 torch.zeros(R, model_dim)
             )
 
+        # Shaw's a^V: per head, exact, and always zero-init -- this one adds
+        # straight into the residual stream rather than passing through a
+        # softmax, so a random init would inject a constant at step 0.
+        if rel_value == "learned":
+            self.value_rel_h = nn.Parameter(
+                torch.zeros(R, num_heads, self.head_dim)
+            )
+
         self.dropout = nn.Dropout(dropout)
 
     def _rel_bias(self, Q_rel: torch.Tensor, edge_flat: torch.Tensor,
@@ -115,6 +191,28 @@ class RelationalAttentionBlock(nn.Module):
         out = torch.zeros(q.shape[0], L * L, device=q.device, dtype=q.dtype)
         out = out.index_add(1, edge_flat, vals)
         return out.view(*lead, L, L)
+
+    def _rel_mass(self, attn: torch.Tensor, edge_flat: torch.Tensor,
+                  edge_rel: torch.Tensor, L: int, R: int) -> torch.Tensor:
+        """
+        The attention mass each relation carries, for Shaw's value term.
+
+        mass[..., i, r] = sum_j attn[..., i, j] * edge_mask[i, j, r] -- the
+        transpose of _rel_bias: gather one attention weight per edge and
+        scatter it into an [..., L*R] accumulator keyed by (i, r) instead of
+        (i, j). Contracting j this way never builds the dense [L, L, R] mask,
+        which is 365 MiB per cached graph at L=3900, R=6.
+
+        Duplicate (i, j) pairs under different relations land in different r
+        slots, so each relation gets its own share of the same weight.
+        """
+        lead = attn.shape[:-2]
+        a = attn.reshape(-1, L * L)                                # [N, L*L]
+        vals = a[:, edge_flat]                                     # [N, nnz]
+        idx = (edge_flat // L) * R + edge_rel                      # [nnz] -> i*R + r
+        out = torch.zeros(a.shape[0], L * R, device=a.device, dtype=a.dtype)
+        out = out.index_add(1, idx, vals)
+        return out.view(*lead, L, R)
 
     def forward(
         self,
@@ -144,7 +242,25 @@ class RelationalAttentionBlock(nn.Module):
 
         V_base = self.V(x).view(B, L, H, hd).transpose(1, 2)     # [B, H, L, hd]
 
-        if self.use_per_head_rel:
+        if self.rel_key == "learned":
+            # ── Shaw et al. relational attention: learned key embeddings ──────
+            # scores[h,i,j] = q^h_i . (k^h_j + sum_{rho: i->j} a^K_rho[h]) / sqrt(hd)
+            # The second term is q . a^K contracted over the edge list, which is
+            # the same sparse scatter the bit designs use -- only what gets
+            # gathered changes.
+            Q_proj = self.Q(x)                                     # [B, L, D] or [B, L, D+3]
+            Qh = Q_proj[..., :D].view(B, L, H, hd).transpose(1, 2)  # [B, H, L, hd]
+            if self.use_pointer:
+                Q_ptr = Q_proj[..., D:]                            # [B, L, 3]
+            Kh = self.K(x).view(B, L, H, hd).transpose(1, 2)        # [B, H, L, hd]
+            # Scale Q, not the [B, H, L, L] scores: same reason as below.
+            Qh = Qh * (1.0 / math.sqrt(hd))
+            content_scores = torch.matmul(Qh, Kh.transpose(-2, -1))                  # [B, H, L, L]
+            # [B, H, L, R]: how much head h at i would like each relation.
+            rel_logits = torch.einsum("bhid,rhd->bhir", Qh, self.key_rel)
+            rel_scores = self._rel_bias(rel_logits, edge_flat, edge_rel, L)          # [B, H, L, L]
+            scores = content_scores + rel_scores
+        elif self.use_per_head_rel:
             # ── Per-head relational attention ───────────────────────────────────
             # Q: D -> D (+ 3 for pointer); split per head into [content | rel]
             Q_proj = self.Q(x)                                     # [B, L, D] or [B, L, D+3]
@@ -226,6 +342,14 @@ class RelationalAttentionBlock(nn.Module):
 
         # ── Value aggregation + optional relation value augmentation ───────────
         out = torch.matmul(attn, V_base)   # [B, H, L, hd]
+
+        if self.rel_value == "learned":
+            # Shaw's value term, exactly: z^h_i = sum_j a^h_ij (V^h(x_j) + a^V_rho[h]).
+            # sum_j a^h_ij a^V_rho[h] factors as (relation mass) x (embedding),
+            # so this costs one sparse gather and one small einsum -- no dense
+            # mask and no [L, L, D] intermediate.
+            mass = self._rel_mass(attn, edge_flat, edge_rel, L, R)                   # [B, H, L, R]
+            out = out + torch.einsum("bhir,rhd->bhid", mass, self.value_rel_h)
 
         if self.use_rel_value:
             # Contract j first to avoid materializing [L, L, D] intermediate (OOM for large graphs).
@@ -664,6 +788,9 @@ class EntityMarformer(nn.Module):
             use_addone_attn=config.use_addone_attn,
             scale_shared_rel=config.scale_shared_rel,
             use_graph_mask=config.use_graph_mask,
+            rel_key=config.rel_key,
+            rel_value=config.rel_value,
+            rel_init=config.rel_init,
         )
 
     def _dense_edge_mask(self, graph: EntityGraph, device: torch.device) -> "torch.Tensor | None":
