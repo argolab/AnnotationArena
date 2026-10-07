@@ -458,7 +458,6 @@ def _global_probs_from_observed(observed: list[dict], num_classes: int) -> np.nd
     return counts / total
 
 
-@lru_cache(maxsize=None)
 def _unigram_counts(observed, fields, num_classes):
     """Count table for one variant, keyed by the variant's fields."""
     table: dict[tuple, np.ndarray] = defaultdict(
@@ -482,6 +481,7 @@ def _unigram_predict(table, global_probs, rows, fields, num_classes, prior_stren
     return probs
 
 
+@lru_cache(maxsize=None)
 def _best_unigram_result(spec_slug: str, size: int,
                          dev_frac: float = 0.15, dev_seed: int = 7) -> dict | None:
     """Best Unigram, with the variant chosen on a held-out split rather than on test.
