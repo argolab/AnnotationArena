@@ -104,7 +104,7 @@ def main() -> int:
             s = signals.setdefault(key, [])
             s.append({"epoch": r["epoch"], **{
                 k: {kk: round(vv, 5) for kk, vv in v.items()}
-                for k, v in r.items() if k in ("train", "dev", "corner")}})
+                for k, v in r.items() if k in ("train_masked", "train_missing", "dev", "corner")}})
     for v in signals.values():
         v.sort(key=lambda r: r["epoch"])
 
@@ -119,6 +119,7 @@ def main() -> int:
         "signals": signals,
         "summary": rd("overconfidence_summary.json"),
         "dev_temp": rd("dev_temp.json"),
+        "calib": rd("calcurves.json"),
         # Only the scalars: dev_curves.json also carries 40 full 2000-epoch
         # curves, which alone is 6 MB and nothing on the page draws them.
         "divergence": [{k: v for k, v in r.items()
