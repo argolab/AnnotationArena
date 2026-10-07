@@ -43,6 +43,8 @@ from imputer.entity_mf.test import _load_checkpoint, _reconstruct
 from scripts.utils import plot_domain3_generalization as shared
 
 
+from scripts.utils.font_scale import fs, pfs, ts, scale_rcparams
+
 mpl.rcParams.update({
     "font.family": "serif",
     "font.size": 11,
@@ -64,6 +66,9 @@ mpl.rcParams.update({
     "savefig.dpi": 300,
     "savefig.bbox": "tight",
 })
+# Grow every font relative to the plot: these figures are reproduced at ~0.48
+# of the text width, so the shipped 11pt ticks land near 3pt on the page.
+scale_rcparams(mpl.rcParams)
 
 
 PROB_PREFIX = "prob_cat_"
@@ -527,7 +532,7 @@ def _style_legend_right(
     ax_leg: plt.Axes,
     source_ax: plt.Axes,
     *,
-    fontsize: float = 10.5,
+    fontsize: float = fs(10.5),
     labelspacing: float = 0.65,
     handlelength: float = 2.3,
 ) -> None:
@@ -601,9 +606,9 @@ def _finish_metric_axis(ax: plt.Axes, ylabel: str) -> None:
     ax.set_xticklabels([str(size) for size in SPEC.sizes])
     ax.set_xlabel(SPEC.x_label)
     ax.set_ylabel(ylabel)
-    ax.tick_params(axis="both", labelsize=10.5)
-    ax.xaxis.label.set_size(12.5)
-    ax.yaxis.label.set_size(12.5)
+    ax.tick_params(axis="both", labelsize=fs(10.5))
+    ax.xaxis.label.set_size(fs(12.5))
+    ax.yaxis.label.set_size(fs(12.5))
     ax.grid(True, alpha=0.35)
 
 
@@ -627,7 +632,7 @@ def _plot_mbr_l2(rows: list[dict]) -> None:
         ax.set_yticklabels([f"{tick:.2f}" for tick in ticks])
 
     _finish_metric_axis(ax, "MBR L2")
-    fig.suptitle(f"{SPEC.title_prefix}: MBR L2 (mean +/- 0.05 SD)", fontsize=16.0, y=0.985)
+    fig.suptitle(f"{SPEC.title_prefix}: MBR L2 (mean +/- 0.05 SD)", fontsize=ts(16.0), y=0.985)
     _style_legend_right(ax_leg, ax)
 
     output_path = SPEC.out_dir / "llmrubric_cpm_mbr_l2.png"
@@ -668,7 +673,10 @@ def _plot_log_loss(rows: list[dict]) -> None:
     top_upper = max(5.5, math.ceil((top_upper + 0.20) * 2.0) / 2.0)
     ax_top.set_ylim(3.5, top_upper)
 
-    bottom_ticks = np.arange(0.8, 1.51, 0.1)
+    # Stop at 1.4, not 1.5: the 1.5 label sits directly against the top panel's
+    # 3.5 across the axis break and the two collide once the type is 3x. 1.5 is
+    # the panel's upper bound, so no data point is left unlabelled.
+    bottom_ticks = np.arange(0.8, 1.45, 0.1)
     top_ticks = np.asarray([3.5, 4.5, 5.5], dtype=float)
     ax_bottom.yaxis.set_major_locator(FixedLocator(bottom_ticks))
     ax_bottom.yaxis.set_major_formatter(FixedFormatter([f"{tick:.1f}" for tick in bottom_ticks]))
@@ -685,9 +693,9 @@ def _plot_log_loss(rows: list[dict]) -> None:
     _draw_horizontal_zigzag(ax_bottom, 1.0, at_top=True)
 
     _finish_metric_axis(ax_bottom, "Test Log Loss")
-    ax_top.tick_params(axis="y", labelsize=10.5)
+    ax_top.tick_params(axis="y", labelsize=fs(10.5))
     ax_top.grid(True, alpha=0.35)
-    fig.suptitle(f"{SPEC.title_prefix}: Test Log Loss (mean +/- 0.05 SD)", fontsize=16.0, y=0.985)
+    fig.suptitle(f"{SPEC.title_prefix}: Test Log Loss (mean +/- 0.05 SD)", fontsize=ts(16.0), y=0.985)
     _style_legend_right(ax_leg, ax_bottom)
 
     output_path = SPEC.out_dir / "llmrubric_cpm_log_loss.png"
@@ -746,12 +754,12 @@ def _plot_runtime(payloads: dict[tuple[str, int], Payload]) -> list[dict]:
     ax.set_xticklabels([str(size) for size in SPEC.sizes])
     ax.set_xlabel(SPEC.x_label)
     ax.set_ylabel("Runtime (minutes)")
-    ax.tick_params(axis="both", labelsize=10.5)
-    ax.xaxis.label.set_size(12.5)
-    ax.yaxis.label.set_size(12.5)
-    fig.suptitle(f"{SPEC.title_prefix}: Runtime by {SPEC.x_label}", fontsize=16.0, y=0.98)
+    ax.tick_params(axis="both", labelsize=fs(10.5))
+    ax.xaxis.label.set_size(fs(12.5))
+    ax.yaxis.label.set_size(fs(12.5))
+    fig.suptitle(f"{SPEC.title_prefix}: Runtime by {SPEC.x_label}", fontsize=ts(16.0), y=0.98)
     ax.grid(True, alpha=0.35)
-    ax.legend(loc="best", fontsize=10.5, frameon=True, framealpha=0.9)
+    ax.legend(loc="best", fontsize=fs(10.5), frameon=True, framealpha=0.9)
 
     output_path = SPEC.out_dir / "llmrubric_cpm_runtime.png"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -768,7 +776,7 @@ def _draw_empty_calibration(ax: plt.Axes, title: str) -> None:
     ax.set_ylim(0, 1)
     ax.set_xlabel("Confidence")
     ax.set_ylabel("Accuracy")
-    ax.set_title(title, fontsize=12, fontweight="normal", pad=8)
+    ax.set_title(title, fontsize=pfs(12), fontweight="normal", pad=8)
     ax.text(0.5, 0.5, "no data", ha="center", va="center", color="0.6", transform=ax.transAxes)
 
 
@@ -777,7 +785,9 @@ def _plot_calibration(payloads: dict[tuple[str, int], Payload]) -> list[dict]:
     cal_dir = SPEC.out_dir / "calibration"
     cal_dir.mkdir(parents=True, exist_ok=True)
     for size in CALIBRATION_SIZES:
-        fig, axes = plt.subplots(2, 2, figsize=(7.3, 6.7))
+        # Grown from (7.3, 6.7): the panels need physical room for the larger
+        # type, and the grid is still reproduced at one column width.
+        fig, axes = plt.subplots(2, 2, figsize=(13.2, 12.4))
         flat_axes = axes.flatten()
         for ax, label in zip(flat_axes, CALIBRATION_SERIES):
             payload = payloads.get((label, size))
@@ -786,14 +796,17 @@ def _plot_calibration(payloads: dict[tuple[str, int], Payload]) -> list[dict]:
                 continue
             probs, labels, _source = payload
             shared._plot_ece(ax, probs, labels, label, COLORS[label])
-            ax.set_title(ax.get_title(), fontsize=12, fontweight="normal", pad=8)
+            ax.set_title(ax.get_title(), fontsize=ts(12), fontweight="normal", pad=8)
             rows.append({
                 "dataset": SPEC.slug,
                 "size": size,
                 "model": label,
                 "metric": "calibration_panel",
             })
-        fig.tight_layout(pad=0.45, w_pad=0.55, h_pad=0.8)
+        shared.share_panel_axis_labels(flat_axes, 2, 2)
+        # Padding widened with the type: at 3x the left panel's '1.0' tick and the
+        # right panel's '0.0' met at the panel boundary.
+        fig.tight_layout(pad=1.2, w_pad=2.6, h_pad=2.0)
         output_path = cal_dir / f"llmrubric_cpm_calibration_size{size}.png"
         fig.savefig(output_path, dpi=300)
         plt.close(fig)
