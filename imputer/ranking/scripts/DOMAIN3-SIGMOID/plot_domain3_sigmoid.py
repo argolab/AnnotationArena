@@ -48,6 +48,7 @@ sys.path.insert(0, str(ROOT))
 from BASELINES.structured_baselines import calibration_probs_labels, load_and_fit
 from imputer.entity_mf.data import variable_list_to_entity_graph
 from imputer.entity_mf.test import _load_checkpoint, _reconstruct
+from scripts.utils.font_scale import fs, pfs, ts
 from scripts.utils import plot_domain3_generalization as shared
 
 
@@ -1272,15 +1273,15 @@ def _plot_metric(
         legend_ratio = 1.5 if has_dense else 1.3
         left_ratio = 6.9 if has_dense else 6.7
         fig_w, fig_h = (18.2 if has_dense else 17.4), 7.15
-        tick_fs, axis_fs, title_fs = 9.5, 11.5, 14.0
-        legend_fs = 9.5 if has_dense else 10.0
+        tick_fs, axis_fs, title_fs = fs(9.5), fs(11.5), ts(14.0)
+        legend_fs = fs(9.5) if has_dense else fs(10.0)
         legend_ls, legend_hl = (0.52 if has_dense else 0.62), (2.0 if has_dense else 2.2)
     else:
         legend_ratio = 1.7 if has_dense else 1.4
         left_ratio = 6.3 if has_dense else 6.5
         fig_w, fig_h = (17.8 if has_dense else 17.0), 7.6
-        tick_fs, axis_fs, title_fs = 10.5, 12.5, 16.0
-        legend_fs = 10.0 if has_dense else 11.0
+        tick_fs, axis_fs, title_fs = fs(10.5), fs(12.5), ts(16.0)
+        legend_fs = fs(10.0) if has_dense else fs(11.0)
         legend_ls, legend_hl = (0.58 if has_dense else 0.7), (2.2 if has_dense else 2.4)
 
     if compressed_y:
@@ -1372,10 +1373,10 @@ def _plot_runtime(cfg: DatasetConfig, rows: list[dict], output_path: Path) -> No
 
     if cfg.slug == "annot":
         fig, ax = plt.subplots(figsize=(14.0, 5.45))
-        tick_fs, axis_fs, title_fs, legend_fs = 9.5, 11.5, 14.0, 9.75
+        tick_fs, axis_fs, title_fs, legend_fs = fs(9.5), fs(11.5), ts(14.0), fs(9.75)
     else:
         fig, ax = plt.subplots(figsize=(13.0, 5.9))
-        tick_fs, axis_fs, title_fs, legend_fs = 10.5, 12.5, 16.0, 10.5
+        tick_fs, axis_fs, title_fs, legend_fs = fs(10.5), fs(12.5), ts(16.0), fs(10.5)
 
     for label in ("Marformer", "Stan Oracle"):
         xs: list[float] = []
@@ -1440,15 +1441,20 @@ def _plot_calibration(
             continue
         ncols = 4 if len(payloads_for_size) > 6 else 3
         nrows = math.ceil(len(payloads_for_size) / ncols)
-        fig, axes = plt.subplots(nrows, ncols, figsize=(3.65 * ncols, 3.35 * nrows))
+        # Grown from 3.65x3.35 per panel for the same reason as the LLM-Rubric
+        # grid: at one column width a panel is ~1.6in and the larger type needs room.
+        fig, axes = plt.subplots(nrows, ncols, figsize=(6.6 * ncols, 6.1 * nrows))
         axes = np.atleast_1d(axes).flatten()
         for ax, (title, payload, color_key) in zip(axes, payloads_for_size):
             probs, labels = payload
             shared._plot_ece(ax, probs, labels, title, COLORS.get(color_key, "#888888"))
-            ax.set_title(ax.get_title(), fontsize=12, fontweight="normal", pad=8)
+            ax.set_title(ax.get_title(), fontsize=ts(12), fontweight="normal", pad=8)
         for ax in axes[len(payloads_for_size):]:
             ax.axis("off")
-        fig.tight_layout(pad=0.45, w_pad=0.55, h_pad=0.8)
+        shared.share_panel_axis_labels(axes, nrows, ncols)
+        # Padding widened with the type: at 3x the left panel's '1.0' tick and the
+        # right panel's '0.0' met at the panel boundary.
+        fig.tight_layout(pad=1.2, w_pad=2.6, h_pad=2.0)
         out_path = cal_dir / f"{cfg.slug}_calibration_size{size}.png"
         fig.savefig(out_path, dpi=300)
         plt.close(fig)

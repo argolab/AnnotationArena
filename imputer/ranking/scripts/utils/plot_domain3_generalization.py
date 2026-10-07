@@ -36,6 +36,8 @@ from imputer.entity_mf.data import variable_list_to_entity_graph
 from imputer.entity_mf.test import _load_checkpoint, _reconstruct
 
 
+from scripts.utils.font_scale import fs, pfs, ts, scale_rcparams
+
 mpl.rcParams.update({
     "font.family": "serif",
     "font.size": 11,
@@ -57,6 +59,9 @@ mpl.rcParams.update({
     "savefig.dpi": 300,
     "savefig.bbox": "tight",
 })
+# Grow every font relative to the plot: these figures are reproduced at ~0.48
+# of the text width, so the shipped 11pt ticks land near 3pt on the page.
+scale_rcparams(mpl.rcParams)
 
 rp.config.use_tex_fonts = False
 
@@ -658,12 +663,15 @@ def _plot_ece(ax: plt.Axes, probs: np.ndarray, labels: np.ndarray, title: str, c
     )
     for txt in ax.texts:
         txt.remove()
-    ax.set_title(f"{title}\nsmECE = {ce:.3f} ± {ci_w:.3f}", fontsize=14, fontweight="bold", pad=10)
+    # ts(), not pfs(): this title is two lines of ~20 characters and at pfs(14)
+    # it is wider than the panel -- measured, the "smECE = ..." lines of adjacent
+    # panels overlapped. Tick and axis text keep the full panel scale.
+    ax.set_title(f"{title}\nsmECE = {ce:.3f} ± {ci_w:.3f}", fontsize=ts(14), fontweight="bold", pad=10)
     ax.set_xlim(0, 1)
     ax.set_ylim(0, 1)
-    ax.tick_params(labelsize=11)
-    ax.xaxis.label.set_size(12)
-    ax.yaxis.label.set_size(12)
+    ax.tick_params(labelsize=pfs(11))
+    ax.xaxis.label.set_size(pfs(12))
+    ax.yaxis.label.set_size(pfs(12))
 
 
 def _collect_metric_series(
@@ -1043,7 +1051,7 @@ def _plot_metric_broken(
 
     ax_bottom.set_xlabel(spec.x_label)
     ax_bottom.set_ylabel(ylabel)
-    fig.suptitle(_wrapped_metric_title(title), fontsize=16, y=0.985)
+    fig.suptitle(_wrapped_metric_title(title), fontsize=ts(16), y=0.985)
     ax_bottom.set_xticks(spec.sizes)
     ax_bottom.set_xticklabels(_x_tick_labels(spec))
     ax_bottom.set_xlim(spec.sizes[0] - 1.0, spec.sizes[-1] + 1.0)
@@ -1211,7 +1219,7 @@ def _plot_calibration_grid(spec: DatasetSpec) -> list[dict]:
 
         fig.suptitle(
             f"{spec.title_prefix}: Calibration at {size} {spec.x_label}",
-            fontsize=18,
+            fontsize=pfs(18),
             y=0.98,
         )
         fig.tight_layout(rect=[0.0, 0.0, 1.0, 0.92], pad=1.0, w_pad=1.8, h_pad=2.0)
@@ -1295,3 +1303,20 @@ def main(use_summary: bool = False) -> None:
 
 if __name__ == "__main__":
     main()
+
+
+def share_panel_axis_labels(axes, nrows: int, ncols: int) -> None:
+    """Keep axis labels only on the outer edge of a calibration grid.
+
+    Each panel repeats the same pair of labels, which is affordable at 11pt and
+    not at 45. The grid is reproduced at about 0.48 of the text width, so a 2x2
+    panel is ~1.6in on the page; measured on the first 3x render, the repeated
+    labels and titles overlapped the axes entirely. Dropping the interior copies
+    frees the space the larger type needs without shrinking the type.
+    """
+    flat = list(axes)
+    for i, ax in enumerate(flat):
+        if i % ncols != 0:
+            ax.set_ylabel("")
+        if i // ncols != nrows - 1:
+            ax.set_xlabel("")
