@@ -70,6 +70,7 @@ def metrics_figure(d: dict, out: Path):
     panels = [("log_loss", "Test Missing Log Loss", "Test Missing Log Loss"),
               ("mbr_l2", "Test Missing MBR L2", "Test Missing MBR L2")]
     fig, axes = plt.subplots(1, 2, figsize=(19, 9.0), layout="constrained")
+    fig.get_layout_engine().set(w_pad=0.10, h_pad=0.10)
     for ax, (key, title, ylab) in zip(axes, panels):
         for lk, label, color, marker in LENSES:
             ax.plot(layers, [r[lk][key] for r in d["layers"]],
@@ -97,6 +98,10 @@ def calibration_figure(d: dict, out: Path, cols=None):
     fig, axes = plt.subplots(len(LENSES), len(cols),
                              figsize=(7.4 * len(cols), 6.6 * len(LENSES)),
                              layout="constrained")
+    # constrained_layout's default outer pad is 3pt, which a bold two-line panel
+    # title at this scale sits right on: check_figure_clipping.py found a 35px
+    # run of ink on the top edge. Pad the figure, do not shrink the title.
+    fig.get_layout_engine().set(w_pad=0.10, h_pad=0.10)
     for r, (lk, lname, color, _) in enumerate(LENSES):
         for c, li in enumerate(cols):
             ax = axes[r][c]
