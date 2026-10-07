@@ -459,7 +459,53 @@ def _global_probs_from_observed(observed: list[dict], num_classes: int) -> np.nd
 
 
 @lru_cache(maxsize=None)
-def _best_unigram_result(spec_slug: str, size: int) -> dict | None:
+def _unigram_counts(observed, fields, num_classes):
+    """Count table for one variant, keyed by the variant's fields."""
+    table: dict[tuple, np.ndarray] = defaultdict(
+        lambda: np.zeros(num_classes, dtype=np.float64))
+    for row in observed:
+        key = tuple(row[field] for field in fields)
+        dist = row.get("rating_dist")
+        if dist is not None:
+            table[key] += np.asarray(dist, dtype=np.float64)
+        else:
+            table[key][int(row["value"]) - 1] += 1.0
+    return dict(table)
+
+
+def _unigram_predict(table, global_probs, rows, fields, num_classes, prior_strength=1.0):
+    probs = np.zeros((len(rows), num_classes), dtype=np.float64)
+    for i, row in enumerate(rows):
+        counts = table.get(tuple(row[field] for field in fields))
+        probs[i] = (global_probs if counts is None
+                    else (counts + prior_strength * global_probs) / (counts.sum() + prior_strength))
+    return probs
+
+
+def _best_unigram_result(spec_slug: str, size: int,
+                         dev_frac: float = 0.15, dev_seed: int = 7) -> dict | None:
+    """Best Unigram, with the variant chosen on a held-out split rather than on test.
+
+    The eight variants differ in how finely they condition, so "pick the best one"
+    is a model-selection step and needs held-out data like any other. It used to
+    be scored directly against the test labels and argmin'd, which is the same
+    error as D14: the baseline got to see the answers.
+
+    This mirrors the protocol used for the Marformer (see RERUN/submit_validation.sh):
+
+      1. hold out `dev_frac` of the OBSERVED pool, seeded, never touching test;
+      2. fit each variant's counts on the remaining observed cells;
+      3. pick the variant with the lowest dev log-loss;
+      4. MERGE THE DEV CELLS BACK and refit that one variant on the full pool;
+      5. predict the test corner with it.
+
+    So the selected variant is fitted on exactly as much data as before -- only
+    the choice of variant costs held-out information, and only transiently.
+
+    The dev cells are observed cells rather than naturally-missing ones, which is
+    the same stand-in the Marformer's MCAR masking makes: a masked observed cell
+    is the available proxy for a missing one.
+    """
     bundle = _bundle(spec_slug, size)
     observed = bundle.get("observed_ratings", [])
     test_idxs, labels = _test_missing_indices_and_labels(bundle)
@@ -469,46 +515,45 @@ def _best_unigram_result(spec_slug: str, size: int) -> dict | None:
 
     num_classes = max(max(r["value"] for r in observed), max(r["value"] for r in test_missing))
     global_probs = _global_probs_from_observed(observed, num_classes)
-    prior_strength = 1.0
 
-    counts_by_variant: dict[str, dict[tuple, np.ndarray]] = {}
-    for name, fields in UNIGRAM_VARIANTS.items():
-        table: dict[tuple, np.ndarray] = defaultdict(lambda: np.zeros(num_classes, dtype=np.float64))
-        for row in observed:
-            key = tuple(row[field] for field in fields)
-            dist = row.get("rating_dist")
-            if dist is not None:
-                table[key] += np.asarray(dist, dtype=np.float64)
-            else:
-                table[key][int(row["value"]) - 1] += 1.0
-        counts_by_variant[name] = dict(table)
+    # 1. seeded dev carve of the observed pool
+    rng = np.random.default_rng(dev_seed)
+    order = rng.permutation(len(observed))
+    n_dev = int(round(len(observed) * dev_frac))
+    dev_rows = [observed[i] for i in order[:n_dev]]
+    fit_rows = [observed[i] for i in order[n_dev:]]
 
-    best: dict | None = None
-    for name, fields in UNIGRAM_VARIANTS.items():
-        probs = np.zeros((len(test_missing), num_classes), dtype=np.float64)
-        table = counts_by_variant[name]
-        for i, row in enumerate(test_missing):
-            key = tuple(row[field] for field in fields)
-            counts = table.get(key)
-            if counts is None:
-                probs[i] = global_probs
-            else:
-                probs[i] = (counts + prior_strength * global_probs) / (counts.sum() + prior_strength)
+    best_name, best_dev = None, None
+    if dev_rows and fit_rows:
+        dev_labels = np.asarray([int(r["value"]) - 1 for r in dev_rows], dtype=np.int64)
+        fit_global = _global_probs_from_observed(fit_rows, num_classes)
+        for name, fields in UNIGRAM_VARIANTS.items():
+            # 2-3. fit on the reduced pool, score on dev
+            table = _unigram_counts(fit_rows, fields, num_classes)
+            probs = _unigram_predict(table, fit_global, dev_rows, fields, num_classes)
+            dev_nll = float(np.mean(_per_example_nll(probs, dev_labels)))
+            if best_dev is None or dev_nll < best_dev:
+                best_name, best_dev = name, dev_nll
+    else:
+        # too few observed cells to carve: fall back to the most-pooled variant
+        # rather than silently reintroducing selection on test.
+        best_name = "global"
 
-        nll = _per_example_nll(probs, labels)
-        mse = _per_example_mse(probs, labels)
-        result = {
-            "variant": name,
-            "fields": list(fields),
-            "probs": probs,
-            "labels": labels,
-            "mean_log_loss": float(np.mean(nll)),
-            "mean_mbr_l2": float(np.mean(mse)),
-        }
-        if best is None or result["mean_log_loss"] < best["mean_log_loss"]:
-            best = result
-
-    return best
+    # 4-5. merge dev back, refit the chosen variant on everything, predict test
+    fields = UNIGRAM_VARIANTS[best_name]
+    table = _unigram_counts(observed, fields, num_classes)
+    probs = _unigram_predict(table, global_probs, test_missing, fields, num_classes)
+    nll = _per_example_nll(probs, labels)
+    mse = _per_example_mse(probs, labels)
+    return {
+        "variant": best_name,
+        "fields": list(fields),
+        "probs": probs,
+        "labels": labels,
+        "dev_log_loss": best_dev,
+        "mean_log_loss": float(np.mean(nll)),
+        "mean_mbr_l2": float(np.mean(mse)),
+    }
 
 
 def _per_example_nll(probs: np.ndarray, labels: np.ndarray) -> np.ndarray:

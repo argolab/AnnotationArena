@@ -18,6 +18,9 @@ import argparse, importlib.util, json, sys
 from pathlib import Path
 
 RANK = Path("/weka/scratch/jhu/jeisner1/xwang397/Marformer/imputer/ranking")
+# The run to gate. Hardcoded to final-dual until 2026-10-06, which silently
+# gated the WRONG run once final-v2 figures existed -- it passed, on the old
+# run's numbers, while the new figures went unchecked. Pass --run-dir.
 RUNS = Path("/weka/scratch/jhu/jeisner1/xwang397/Marformer/RERUN/runs/final-dual")
 TOL = 0.0006          # the tables print 3 decimals, so this is rounding only
 
@@ -112,11 +115,22 @@ def probs_path(corner: dict) -> bool:
     return ok
 
 
+def _set_run(run_dir: str) -> None:
+    global RUNS
+    RUNS = Path(run_dir)
+    if not (RUNS / "corner_metrics/corner.json").is_file():
+        raise SystemExit(f"no corner_metrics/corner.json under {RUNS} -- run jobs/corner_score.sbatch first")
+    print(f"gating run: {RUNS.name}")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--run-dir", default=str(RUNS),
+                    help="run tree to gate (default: the historical final-dual)")
     ap.add_argument("--probs-path", action="store_true",
                     help="also re-run the plot's GPU probability path on six cells")
     a = ap.parse_args()
+    _set_run(a.run_dir)
     corner = load_corner()
     ok = end_to_end(corner)
     if a.probs_path:

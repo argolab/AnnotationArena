@@ -1341,6 +1341,15 @@ def _plot_metric(
     ax.set_xlim(-0.4, len(display_sizes) - 0.6)
     ax.set_xticks(xs_all)
     ax.set_xticklabels([str(s) for s in display_sizes])
+    # At 3x type the four-digit sizes are wider than their slots and 1000/2000/
+    # 3000/4000 run into each other, so the labels lean once they stop fitting.
+    # Measured on the rendered PNG, not assumed: the threshold is the widest
+    # label, not the tick count.
+    if max(len(str(s)) for s in display_sizes) >= 4:
+        for lbl in ax.get_xticklabels():
+            lbl.set_rotation(38)
+            lbl.set_ha("right")
+            lbl.set_rotation_mode("anchor")
     ax.set_xlabel(cfg.x_label)
     ax.set_ylabel(ylabel)
     fig.suptitle(title, fontsize=title_fs, y=0.982 if cfg.slug == "annot" else 0.985)

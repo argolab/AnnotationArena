@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import random
 import math
 import re
 import sys
@@ -54,6 +55,7 @@ sys.path.insert(0, str(REPO))
 from imputer.data import DataConverter                                    # noqa: E402
 from imputer.entity_mf.data import variable_list_to_entity_graph           # noqa: E402
 from imputer.entity_mf.test import _load_checkpoint                        # noqa: E402
+from imputer.entity_mf.masking import MCARMasking, MCARConfig               # noqa: E402
 from imputer.entity_mf.validation import _entity_key                       # noqa: E402
 
 EPOCH_RE = re.compile(r"periodic-epoch=(\d+)\.ckpt$")
@@ -116,21 +118,39 @@ def reconstruct(run_dir: Path):
     return model, types, part, train_cfg, protocol, vs
 
 
-def split_graphs(part, corner_whole: bool):
+def split_graphs(part, mask_rate: float = 0.15, mask_seed: int = 0):
     """(name, graph variables, predicate selecting the cells to score).
 
-    train   in-sample: the training partition's own missing cells.
-    dev     exactly train.py's `val_eval_vars` under the block protocol --
-            val_all, which brings its own observed context (train.py ~line 180).
-    corner  the paper's test metric: the whole test block in one graph with
-            training context, never split across chunks (D22/D23).
+    train_masked  THE TRAINING OBJECTIVE'S OWN POPULATION. The loss is computed
+                  on observed training cells that MCAR masking has hidden for
+                  this step -- not on the training partition's missing cells,
+                  which carry no label into the loss at all. So "what does the
+                  model look like in-sample" means masked observed cells, and
+                  anything else answers a different question. The same
+                  MCARMasking the trainer uses is replayed here under a fixed
+                  seed, at the trained masking_rate, and the masked cells
+                  (status 1) are the ones scored.
+    dev           exactly train.py's `val_eval_vars` under the block protocol --
+                  val_all, which brings its own observed context (train.py ~180).
+    corner        the paper's test metric: the whole test block in one graph
+                  with training context, never split across chunks (D22/D23).
+
+    Each split is scored on its own graph, the way training and evaluation each
+    build their own; the three are not slices of one forward pass.
     """
     out = []
     tr_o, tr_m = part[("train", "observed")], part[("train", "missing")]
     va_o, va_m = part[("val", "observed")], part[("val", "missing")]
     te_o, te_m = part[("test", "observed")], part[("test", "missing")]
+
+    if tr_o:
+        random.seed(mask_seed)                      # MCARMasking draws from `random`
+        masked = MCARMasking(MCARConfig(masking_rate=mask_rate)).mask(tr_o)
+        hidden = {id(v) for v in masked if getattr(v, "status", None) == 1}
+        if hidden:
+            out.append(("train_masked", masked + tr_m, hidden))
     if tr_m:
-        out.append(("train", tr_o + tr_m, set(map(id, tr_m))))
+        out.append(("train_missing", tr_o + tr_m, set(map(id, tr_m))))
     if va_m and va_o:
         out.append(("dev", va_o + va_m, set(map(id, va_m))))
     if te_m:
@@ -241,7 +261,10 @@ def main() -> int:
     ap.add_argument("--stride", type=int, default=1,
                     help="score every Nth periodic checkpoint (they are 25 epochs apart)")
     ap.add_argument("--max-epoch", type=int, default=None)
-    ap.add_argument("--splits", default="train,dev,corner")
+    ap.add_argument("--splits", default="train_masked,train_missing,dev,corner")
+    ap.add_argument("--mask-rate", type=float, default=None,
+                    help="default: the rate this run trained at")
+    ap.add_argument("--mask-seed", type=int, default=0)
     ap.add_argument("-o", "--out", required=True)
     a = ap.parse_args()
 
@@ -255,8 +278,9 @@ def main() -> int:
         model, types, part, train_cfg, protocol, vs = reconstruct(run)
         model.to(device).eval()
         max_item = train_cfg.get("max_item")
-        graphs = [g for g in split_graphs(part, True) if g[0] in want]
-        print(f"  protocol={protocol} max_item={max_item} "
+        rate = a.mask_rate if a.mask_rate is not None else train_cfg.get("masking_rate", 0.15)
+        graphs = [g for g in split_graphs(part, rate, a.mask_seed) if g[0] in want]
+        print(f"  protocol={protocol} max_item={max_item} mask_rate={rate} "
               + " ".join(f"{n}:{len(ids)}" for n, _, ids in graphs), flush=True)
 
         ckpts = []
@@ -279,7 +303,7 @@ def main() -> int:
                     row[name] = s
             out.append(row)
             d = row.get("dev") or row.get("corner") or {}
-            t = row.get("train") or {}
+            t = row.get("train_masked") or row.get("train_missing") or {}
             print(f"  ep{ep:<5} train nll={t.get('nll', float('nan')):.4f} "
                   f"ent={t.get('ent', float('nan')):.3f} | "
                   f"dev nll={d.get('nll', float('nan')):.4f} "
