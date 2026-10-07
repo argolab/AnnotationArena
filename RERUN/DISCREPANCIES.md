@@ -124,16 +124,23 @@ Started 2026-08-25 while tracing the figure→script map ([FIGURES.md](FIGURES.m
 
 ## D8 — Logit Lens appendix has no code
 
-- **Status:** open
+- **Status:** resolved (code) / open (numbers) — 2026-10-07
 - **Affects:** reproducibility of 2 figures and ~10 quoted numbers
 - **Detail:** the appendix reports Param Lens / Tuned Param Lens / Tuned 80d-Lens
   results at Domain 3, item generalization, T=500, L=8, on 414 held-out
   test-missing ratings, with specific values (log-loss 1.386 → 0.566 at layer 1;
   smECE 0.163 → 0.027). No `lens`, `layerwise`, or tuned-probe code exists in
   either repository, so the analysis ran from a script that was never committed.
-- **To resolve:** recover the script, or reimplement — the appendix describes
-  the method in enough detail (linear probes, 300 epochs, AdamW, KL to the final
-  model's predictions, on a held-out set of training-missing ratings).
+- **Resolved how:** reimplemented from the method description as
+  `RERUN/analysis/logit_lens.py` + `plot_logit_lens.py`, gated so its final layer
+  must reproduce `corner_metrics/corner.json` exactly. The original script was
+  never recovered.
+- **Still open:** the appendix's numbers do not replicate on final-v2 — not one of
+  them — and three of its claims are contradicted. The quoted 414 cells is not a
+  population this run has (the corner is 316 at every K). The difference cannot be
+  attributed without a new training run, because the appendix's model predates
+  every rerun and the population, the two eval bugs, the F13 protocol and the
+  architecture all differ at once. See [reports/LOGIT_LENS.md](reports/LOGIT_LENS.md).
 
 ## D9 — `scripts/README.md` says LLM-Rubric data cannot be regenerated
 
