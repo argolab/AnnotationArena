@@ -34,6 +34,13 @@ RANK = Path("/weka/scratch/jhu/jeisner1/xwang397/Marformer/imputer/ranking")
 sys.path.insert(0, str(RANK / "scripts"))
 sys.path.insert(0, str(RANK))
 
+# Type is NOT scaled down for this appendix. Text being too large for a figure is
+# never the thing to fix -- these are printed small and the whole point of
+# DOMAIN3_FONT_SCALE is that they stay readable there. When a label overran the
+# canvas on an early render the answer was to give the figure the room it needs,
+# not to shrink the label: every figsize below is sized so the 3x labels fit, and
+# constrained_layout reserves the legend a column of its own.
+
 from utils.font_scale import scale_rcparams, fs, ts, pfs   # noqa: E402
 import relplot as rp                                        # noqa: E402
 
@@ -58,13 +65,11 @@ rp.config.use_tex_fonts = False
 
 def metrics_figure(d: dict, out: Path):
     layers = [r["layer"] for r in d["layers"]]
-    # Title carries the full name; the y label is kept SHORT on purpose. At
-    # DOMAIN3_FONT_SCALE=3 a 21-character rotated label is ~420pt of type against
-    # a ~360pt axes, so it runs off the canvas and the saved bbox clips it -- the
-    # same way a long x label overruns its panel. Short label, full title.
-    panels = [("log_loss", "Test Missing Log Loss", "Log loss"),
-              ("mbr_l2", "Test Missing MBR L2", "MBR L2 risk")]
-    fig, axes = plt.subplots(1, 2, figsize=(17, 6.6), layout="constrained")
+    # The shipped figure's own titles and axis labels, kept verbatim so the
+    # appendix text and captions still describe what is on the page.
+    panels = [("log_loss", "Test Missing Log Loss", "Test Missing Log Loss"),
+              ("mbr_l2", "Test Missing MBR L2", "Test Missing MBR L2")]
+    fig, axes = plt.subplots(1, 2, figsize=(19, 9.0), layout="constrained")
     for ax, (key, title, ylab) in zip(axes, panels):
         for lk, label, color, marker in LENSES:
             ax.plot(layers, [r[lk][key] for r in d["layers"]],
@@ -90,7 +95,7 @@ def calibration_figure(d: dict, out: Path, cols=None):
     cols = cols or [0, L // 2, L]
     labels = np.asarray(d["labels"])
     fig, axes = plt.subplots(len(LENSES), len(cols),
-                             figsize=(6.8 * len(cols), 5.8 * len(LENSES)),
+                             figsize=(7.4 * len(cols), 6.6 * len(LENSES)),
                              layout="constrained")
     for r, (lk, lname, color, _) in enumerate(LENSES):
         for c, li in enumerate(cols):
@@ -105,12 +110,9 @@ def calibration_figure(d: dict, out: Path, cols=None):
                                 plot_labels=True, legend=False)
             for t in ax.texts:
                 t.remove()
-            # ts(11), not ts(14): the title is two ~21-character lines centred on
-            # the AXES, so at ts(14) the right-hand column's smECE interval runs
-            # past the figure edge and is clipped. Measured on this grid.
             ax.set_title(f"{lname} L{li}\nsmECE = {diag['ce']:.3f} "
                          f"± {diag.get('ce_ci_width', 0.0):.3f}",
-                         fontsize=ts(11), fontweight="bold", pad=10)
+                         fontsize=ts(14), fontweight="bold", pad=10)
             ax.set_xlim(0, 1); ax.set_ylim(0, 1)
             ax.tick_params(labelsize=pfs(11))
             ax.xaxis.label.set_size(pfs(12)); ax.yaxis.label.set_size(pfs(12))
