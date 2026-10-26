@@ -7,6 +7,10 @@ then builds item-expansion and annotator-expansion training sets that grow
 toward that block, each in transductive and non-transductive variants. Item
 expansion bundles are written as item-split configs (K_train/K_test/K_val);
 annotator expansion bundles as annotator-split configs (K/J_train/J_test).
+
+With --observed-rate the observed/missing partition is redrawn before splitting
+(see _remask_nested). Without it the bundle's own partition is used unchanged,
+which is the shipped behaviour.
 """
 
 from __future__ import annotations
@@ -25,6 +29,65 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 from STAN.stan_code.pipeline.bundle import GroundTruthBundle
 from STAN.stan_code.pipeline.configs import AnnotatorSplitConfig, DataGenConfig, STAN_TYPE_REQUIRED
 from STAN.stan_code.pipeline.io import save_bundle, save_configs, save_json
+
+
+def _remask_nested(bundle: GroundTruthBundle, observed_rate: float, mask_seed: int) -> Dict[str, Any]:
+    """
+    Redraw the observed/missing partition of `bundle` at a new observation rate,
+    in place, MCAR over all_ratings -- the same mechanism apply_mcar_protocol
+    uses at generation time, just with the rate as an argument.
+
+    The permutation depends only on (mask_seed, len(all_ratings)), so calling
+    this on the same base bundle at rates 0.15 / 0.50 / 0.85 yields *nested*
+    observed sets:
+
+        observed(0.15) subset observed(0.50) subset observed(0.85)
+
+    and therefore nested missing sets the other way round. That is the whole
+    point of remasking rather than regenerating: the three density cells share
+    one generative draw -- identical latent scores, embeddings and annotator
+    parameters -- so they differ only in which cells are revealed, and the
+    across-draw variance (~0.09 nats on a corner score, DISCREPANCIES.md D23)
+    cancels instead of being paid three times over.
+
+    Selected indices are sorted before materialising, so both output lists keep
+    the bundle's original row order. Nesting is a property of set membership and
+    is unaffected by that.
+    """
+    if not 0.0 < observed_rate < 1.0:
+        raise ValueError(f"--observed-rate must be in (0, 1), got {observed_rate}")
+
+    rows = bundle.all_ratings
+    n_total = len(rows)
+    if n_total == 0:
+        raise ValueError("base bundle has no ratings to remask")
+    # observed/missing loaded from JSON are copies, not aliases of all_ratings,
+    # so the partition has to be rebuilt from all_ratings by index.
+    n_obs = int(round(n_total * observed_rate))
+    order = np.random.default_rng(mask_seed).permutation(n_total)
+    obs_idx = set(order[:n_obs].tolist())
+
+    bundle.observed_ratings = [r for i, r in enumerate(rows) if i in obs_idx]
+    bundle.missing_ratings = [r for i, r in enumerate(rows) if i not in obs_idx]
+    bundle.missing_ratings_indexes_in_test_instance = [
+        i for i, r in enumerate(bundle.missing_ratings) if r["instance"] == "test"
+    ]
+
+    def by_instance(rs: Sequence[Dict[str, Any]], inst: str) -> int:
+        return sum(1 for r in rs if r["instance"] == inst)
+
+    return {
+        "observed_rate": observed_rate,
+        "mask_seed": mask_seed,
+        "n_total": n_total,
+        "n_observed": len(bundle.observed_ratings),
+        "n_missing": len(bundle.missing_ratings),
+        "realised_rate": len(bundle.observed_ratings) / n_total,
+        "train_observed": by_instance(bundle.observed_ratings, "train"),
+        "train_missing": by_instance(bundle.missing_ratings, "train"),
+        "test_observed": by_instance(bundle.observed_ratings, "test"),
+        "test_missing": by_instance(bundle.missing_ratings, "test"),
+    }
 
 
 def _parse_sizes(text: str) -> List[int]:
@@ -434,6 +497,13 @@ def main() -> None:
     parser.add_argument("--annot-nt-sizes", default="5,10,15,20")
     parser.add_argument("--test-items", type=int, default=50)
     parser.add_argument("--test-annotators", type=int, default=5)
+    parser.add_argument("--observed-rate", type=float, default=None,
+                        help="Redraw the observed/missing partition MCAR at this observed "
+                             "fraction before splitting. Omit to use the bundle's own "
+                             "partition (shipped behaviour).")
+    parser.add_argument("--mask-seed", type=int, default=20261017,
+                        help="Seed for --observed-rate. Hold it FIXED across rates to get "
+                             "nested masks; that is what makes the density cells paired.")
     args = parser.parse_args()
 
     input_dir = Path(args.input_dir)
@@ -443,6 +513,18 @@ def main() -> None:
     bundle = GroundTruthBundle.from_dict(_load_json(input_dir / "data_bundle.json"))
     cfg = _load_json(input_dir / "configs.json")
     dg = cfg.get("datagen", cfg)
+
+    remask_summary: Dict[str, Any] | None = None
+    if args.observed_rate is not None:
+        remask_summary = _remask_nested(bundle, args.observed_rate, args.mask_seed)
+        # configs.json is written from `dg`, so the rate has to be corrected here
+        # or every downstream reader is told 0.5 regardless of what was drawn.
+        dg["mcar_missing_rate"] = 1.0 - args.observed_rate
+        print("remasked base bundle: "
+              f"observed {remask_summary['n_observed']}/{remask_summary['n_total']} "
+              f"({remask_summary['realised_rate']:.4f}) at mask_seed={args.mask_seed}")
+        print(f"  train obs/missing: {remask_summary['train_observed']}/{remask_summary['train_missing']}"
+              f"   test obs/missing: {remask_summary['test_observed']}/{remask_summary['test_missing']}")
 
     total_items = int(dg["K_train"]) + int(dg.get("K_val", 0)) + int(dg["K_test"])
     total_annots = int(dg["J"])
@@ -536,6 +618,7 @@ def main() -> None:
         "item_nt_sizes": _parse_sizes(args.item_nt_sizes),
         "annot_trans_sizes": _parse_sizes(args.annot_trans_sizes),
         "annot_nt_sizes": _parse_sizes(args.annot_nt_sizes),
+        "remask": remask_summary,
     }
     save_json(metadata, output_root / "domain3_metadata.json")
 

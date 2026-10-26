@@ -24,6 +24,24 @@ set -euo pipefail
 RERUN_DIR="${RERUN_DIR:-/weka/scratch/jhu/jeisner1/xwang397/Marformer/RERUN}"
 source "${RERUN_DIR}/config/cluster.sh"
 rerun_activate_env
+# Job parameters may arrive in a conf file (submit_phase1.sh), not only as
+# exported env.
+if [[ -n "${RERUN_CONF:-}" ]]; then
+    # shellcheck disable=SC1090
+    source "${RERUN_CONF}"
+fi
+# CELL_RUN_IDS makes the array axis the run id, so a multi-cell thread scores
+# all its cells from one job. See the same block in jobs/marformer_train.sbatch.
+if [[ -n "${CELL_RUN_IDS:-}" ]]; then
+    IFS=',' read -r -a _CELL_LIST <<< "${CELL_RUN_IDS}"
+    _CELL_IDX="${SLURM_ARRAY_TASK_ID:-0}"
+    [[ "${_CELL_IDX}" -lt "${#_CELL_LIST[@]}" ]] || {
+        echo "FATAL: array task ${_CELL_IDX} outside CELL_RUN_IDS (${#_CELL_LIST[@]} cells)" >&2
+        exit 1; }
+    SCORE_RUN="${_CELL_LIST[${_CELL_IDX}]}"
+    echo "[cell-array] task ${_CELL_IDX} -> SCORE_RUN=${SCORE_RUN}"
+fi
+
 : "${SCORE_RUN:?}"
 cd "$(dirname "${RERUN_DIR}")"
 export OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-8}"

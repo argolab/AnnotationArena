@@ -11,10 +11,17 @@ set -euo pipefail
 RERUN_DIR=/weka/scratch/jhu/jeisner1/xwang397/Marformer/RERUN
 source "${RERUN_DIR}/config/cluster.sh"
 rerun_activate_env
+# ReMasker needs timm, which is not in the conda env and cannot be pip-installed
+# from a compute node (no network). It is vendored instead: --no-deps into a
+# side directory so nothing in the shared env moves, with torchvision pinned to
+# 0.25.0 because that is the build that matches torch 2.10 -- the latest wheel
+# loads but then dies with "operator torchvision::nms does not exist".
+export PYTHONPATH="/weka/scratch/jhu/jeisner1/xwang397/Marformer/RERUN/vendor/pylibs:${PYTHONPATH:-}"
 cd /weka/scratch/jhu/jeisner1/xwang397/Marformer/imputer/ranking
 export OMP_NUM_THREADS=16
 SPLIT="${SPLIT:-LLMRubric_225_25_9_175}"
 # One split each, to price the full 2x10 grid before committing to it.
+set +e
 for M in remasker miwae; do
   case "$M" in
     remasker) EP=300  ARGS="--embed-dim 32 --depth 4 --num-heads 4 --decoder-depth 2 --mask-ratio 0.5 --weight-decay 0.05" ;;

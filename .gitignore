@@ -371,3 +371,18 @@ RERUN/reports/build/
 # snapshots of the worker scripts. The pool's source lives in RERUN/pool/*.
 RERUN/pool/queue/state/
 RERUN/pool/queue/rev_*/
+
+# Training-speed benchmark outputs: ~2.9G of Lightning checkpoints and their run
+# trees. Regenerable from RERUN/bench/run_bench.sh; never belonged in the repo.
+RERUN/bench/out/
+*.ckpt
+
+# Vendored python wheels, installed on demand into the torch env
+RERUN/vendor/
+
+# Per-task Slurm stdout/stderr for the observation-density sweep (15M); the
+# collected numbers live in obs-density/out
+RERUN/threads/obs-density/logs/
+
+# Scratch space for artifact drafts
+RERUN/.tmp-artifact/
