@@ -110,6 +110,11 @@ dep() { [[ -n "$1" && "$1" != "DRYRUN" ]] && echo "--dependency=afterok:$1" || e
 
 IFS=',' read -r -a SEED_LIST <<< "${SEEDS}"
 SEARCH_JOBS=""
+# EXTRA_DEP lets a caller gate the search stage on a job of its own -- the
+# obs-density thread generates each cell's DATA in a prior array task and needs
+# the chain queued in one go rather than polled for. Empty by default, so
+# nothing changes for existing callers.
+EXTRA_DEP="${EXTRA_DEP:-}"
 
 # ------------------------------------------------------------------ search
 if [[ "${STAGE}" == "all" || "${STAGE}" == "search" ]]; then
@@ -127,7 +132,8 @@ if [[ "${STAGE}" == "all" || "${STAGE}" == "search" ]]; then
                        "DATA_RUN_ID=${RUN_ID}")"
             jid="$(submit "${name}" "${conf}" -p "${GPU_PARTITION}" -c "${GPU_CPUS}" \
                           --mem="${GPU_MEM}" -t "${GPU_TIME}" ${EXCLUDE_ARG} \
-                          --array="0-$((n-1))" "${RERUN_DIR}/jobs/marformer_train.sbatch")"
+                          --array="0-$((n-1))" $(dep "${EXTRA_DEP}") \
+                          "${RERUN_DIR}/jobs/marformer_train.sbatch")"
             echo "search : ${name} (${n} tasks) job ${jid}"
             SEARCH_JOBS="${SEARCH_JOBS:+${SEARCH_JOBS}:}${jid}"
         done

@@ -37,6 +37,30 @@ fi
 export REQUIRE_GPU=1
 rerun_activate_env
 
+# ---------------------------------------------------------------- cell arrays
+# CELL_RUN_IDS switches the array axis from "size" to "run id": each task picks
+# its own RUN_ID out of the list and does the single size in SIZES. The
+# obs-density thread needs this because its 18 cells are 18 runs at ONE size,
+# and one array of 18 schedules where 18 arrays of 1 would just queue (the
+# account runs ~10 jobs at a time -- see the task-pool notes).
+# EPOCH_TABLE_NAME, if given, resolves to that file inside the task's own run
+# dir, because the epoch key (FAMILY|AXIS|SIZE|SEED) is identical across cells
+# and a shared table would collide.
+# Empty by default, so every existing submission behaves exactly as before.
+if [[ -n "${CELL_RUN_IDS:-}" ]]; then
+    IFS=',' read -r -a _CELL_LIST <<< "${CELL_RUN_IDS}"
+    _CELL_IDX="${SLURM_ARRAY_TASK_ID:-0}"
+    [[ "${_CELL_IDX}" -lt "${#_CELL_LIST[@]}" ]] || {
+        echo "FATAL: array task ${_CELL_IDX} outside CELL_RUN_IDS (${#_CELL_LIST[@]} cells)" >&2
+        exit 1; }
+    RUN_ID="${_CELL_LIST[${_CELL_IDX}]}"
+    DATA_RUN_ID="${DATA_RUN_ID:-${RUN_ID}}"
+    [[ -n "${EPOCH_TABLE_NAME:-}" ]] && EPOCH_TABLE="$(rerun_run_dir "${RUN_ID}")/${EPOCH_TABLE_NAME}"
+    # SIZES holds a single entry in this mode; the array index is spent on cells.
+    SLURM_ARRAY_TASK_ID=0
+    echo "[cell-array] task ${_CELL_IDX} -> RUN_ID=${RUN_ID}"
+fi
+
 : "${RUN_ID:?RUN_ID is required}"
 RESULTS_ROOT="$(rerun_results_root "${RUN_ID}")"
 

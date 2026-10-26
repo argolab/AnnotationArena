@@ -10,6 +10,7 @@ this repo (no codenames, no internal shorthand).
 | `context-window/` | **1. Context window size** | How many items should one forward pass see, at training and at evaluation time? |
 | `value-codec/` | **2. Typed value codec** | Can the hand-built parameter stream be replaced by a learned per-type encoder/decoder without losing accuracy? |
 | `block-projection/` | **3. Block output projection** | Is the extra `d -> d` linear at the end of each block doing any work, or can it be folded away? |
+| `obs-density/` | **4. Observation density** | Does Marformer still impute, and hold its position against Stan, when 15% or 85% of cells are observed rather than 50%? (opened 2026-10-17) |
 
 Conventions inherited from the September sweep (`../FUTURE_EXPERIMENTS.md`
 Part 0) and not renegotiated here:

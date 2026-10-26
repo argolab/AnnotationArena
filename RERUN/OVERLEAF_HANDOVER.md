@@ -163,12 +163,36 @@ reading: at 100 items the model's log-loss is 0.939 against Stan's 0.789, i.e. i
 nearly uninformative, and a near-uniform predictor is well calibrated almost by
 construction. A reviewer will say so.
 
-**J=50 was asked for and is not usable.** Stan Oracle has no judge fit past J=40
-(`ORACLE/ANNOT` contains 10–40 only) and Marformer NT has no judge refit past 40, so
-a J=50 panel would be missing both the oracle and the NT arm — the two series the
-"on par" claim is about. Only Stan Bin/Proj/Both exist at 45 and 50. **J=40 is the
-largest judge size at which every series in the panel exists**, which is why it was
-chosen over 50. Same logic picks K=4000 on the item axis.
+**J=50: IN FLIGHT, and the J=40 panel is a placeholder until it lands.** Stan Oracle
+had no judge fit past J=40 (`ORACLE/ANNOT` held 10–40 only) and Marformer NT had no
+judge refit past 40, so a J=50 panel would have been missing both the oracle and the
+NT arm — the two series the "on par" claim is about. Rather than truncate the paper
+to J=40, the four missing runs were launched on 2026-10-06 under the **same F13
+protocol and the same architecture** as the rest of the final run:
+
+| job | what | status |
+|---|---|---|
+| 1014858 (array 0–1) | Stan Oracle annot J=45, J=50 | running, ~55–60 min each |
+| 1014869 → 1014871 → 1014872 → 1014873 | Marformer NT annot J=45/50: search → select → refit → eval | chained |
+
+Settings were recovered from the run's own stored confs, not guessed: `value_codec=dual`,
+`dual_outer_residual=none`, `block_output_projection=none`, `max_item=500`,
+`val_frac=0.15`, `val_split_seed=7`, `search_epochs=2000`, `select per-run`, `smooth 5`,
+seed 42.
+
+**Until they land:** the calibration figure shows J=40, flagged by a `\Claude` note on
+`fig:dom3-cal`, and the judge curves in `fig:dom3-results` stop at J=40 for Stan Oracle
+and Marformer NT. **Those gaps are missing data, not measured ceilings.** The J=40
+numbers themselves are measured and correct.
+
+**When they land:** switch `make_figures.sh`'s annot `cal_size` from 40 to 50, rebuild,
+re-read the three judge-axis smECE values off the new panel, update the subcaption to
+J=50, and delete the PENDING note.
+
+**One check that must not be skipped:** the select stage rewrites `valblock_epochs.json`
+for all 42 existing cells, not just the two new ones. A backup is at
+`valblock_epochs.json.bak-before-4550`; diff it and confirm 42 entries are unchanged and
+2 added. If any existing cell's selected epoch moved, every downstream number shifts.
 
 **Both PNGs were opened and checked**, not just copied: each shows six panels with
 all series present and the smECE values in the panel titles matching the quoted
@@ -220,7 +244,7 @@ at K=2000). The panels are unaffected. But the same small-K band explains the
 second symptom recorded above: Marformer loses to the best Stan variant on smECE
 beyond its CI at exactly K=200–500.
 
-## 4. The ten `\Claude` notes — the work that is left
+## 4. The eleven `\Claude` notes — the work that is left
 
 Each is a margin note in `main.tex` (magenta). Grep `\claude{` to find them.
 
