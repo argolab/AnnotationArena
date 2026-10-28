@@ -31,7 +31,16 @@ FLAGS = [
     ("use_addone_attn", True),
     ("use_graph_mask", True),
     ("use_deviation_norm", True),
-    ("use_param_output_head", True),
+    # Codecs: one entry per kind and per half, so a spec whose half is silently
+    # ignored (an encoder that never reaches the stream, a decoder whose output
+    # never reaches the loss) shows up as INERT.
+    ("value_codec", "linear"),
+    ("value_codec", "mlp"),
+    ("value_codec", "slice/linear"),
+    ("value_codec", "linear/slice"),
+    ("value_codec", "linear:width=8"),
+    ("value_codec", "linear:width=8,reserve"),
+    ("type_codecs", {"rating": "mlp"}),
     ("use_pointer", False),          # default is on in the runners; turn it off
     ("scale_shared_rel", False),
 ]

@@ -59,6 +59,8 @@ DUAL_OUTER_RESIDUAL="${DOMAIN3_DUAL_OUTER_RESIDUAL:-none}"
 BLOCK_OUTPUT_PROJECTION="${DOMAIN3_BLOCK_OUTPUT_PROJECTION:-none}"
 VALUE_CODEC="${DOMAIN3_VALUE_CODEC:-dual}"
 CODEC_INIT="${DOMAIN3_CODEC_INIT:-unit}"
+TYPE_CODEC_FLAGS=""                       # space-separated TYPE=SPEC overrides
+for tc in ${DOMAIN3_TYPE_CODECS:-}; do TYPE_CODEC_FLAGS="${TYPE_CODEC_FLAGS} --type-codec ${tc}"; done
 
 # VARIANT_TAG keeps arms and seeds on distinct paths. This matters more here
 # than elsewhere: the block below *deletes* the target directory before
@@ -134,6 +136,7 @@ rerun_run python -u -m imputer.entity_mf.train \
     --block-output-projection "${BLOCK_OUTPUT_PROJECTION}" \
     --value-codec          "${VALUE_CODEC}"              \
     --codec-init           "${CODEC_INIT}"               \
+    ${TYPE_CODEC_FLAGS}                                  \
     --device               cuda                    \
     --llm-annotator-id     24                      \
     --human-observed-rate  0.0                     \

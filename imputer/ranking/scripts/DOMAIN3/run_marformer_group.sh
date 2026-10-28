@@ -135,9 +135,15 @@ INNER_RESIDUAL="${DOMAIN3_INNER_RESIDUAL:-both}"
 BLOCK_OUTPUT_PROJECTION="${DOMAIN3_BLOCK_OUTPUT_PROJECTION:-none}"
 BLOCK_PROJ_FREEZE="${DOMAIN3_BLOCK_PROJ_FREEZE:-false}"
 LOGIT_HIGH="${DOMAIN3_LOGIT_HIGH:-20.0}"
+# Codec spec for every variable type (see imputer/entity_mf/value_codecs.py):
+# "dual"/"slice" is the shipped stream, "typed"/"linear" the learned codec,
+# e.g. "linear:width=8" or "slice/mlp". CODEC_INIT / CODEC_FREEZE are the
+# legacy knobs and only mean something next to "typed".
 VALUE_CODEC="${DOMAIN3_VALUE_CODEC:-dual}"
 CODEC_INIT="${DOMAIN3_CODEC_INIT:-unit}"
 CODEC_FREEZE="${DOMAIN3_CODEC_FREEZE:-false}"
+# Per-type overrides, space-separated TYPE=SPEC, e.g. "rating=mlp:hidden=64".
+TYPE_CODECS="${DOMAIN3_TYPE_CODECS:-}"
 # Transductive only. Put test_missing in the training graph as status-0 nodes
 # (no labels, no loss), the way train_missing already is, so test items are
 # structurally identical to training items. Default off = shipped behaviour.
@@ -230,6 +236,8 @@ BLOCK_FREEZE_FLAG=""
 [ "${BLOCK_PROJ_FREEZE}" = "true" ] && BLOCK_FREEZE_FLAG="--block-output-projection-freeze"
 CODEC_FREEZE_FLAG=""
 [ "${CODEC_FREEZE}" = "true" ] && CODEC_FREEZE_FLAG="--codec-freeze"
+TYPE_CODEC_FLAGS=""
+for tc in ${TYPE_CODECS}; do TYPE_CODEC_FLAGS="${TYPE_CODEC_FLAGS} --type-codec ${tc}"; done
 OVERWRITE_FLAG=""
 [ "${OVERWRITE_EXISTING}" = "true" ] && OVERWRITE_FLAG="--overwrite-existing-data"
 TRANSDUCTIVE_FLAG=""
@@ -338,6 +346,7 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
         --value-codec            "${VALUE_CODEC}"           \
         --codec-init             "${CODEC_INIT}"            \
         ${CODEC_FREEZE_FLAG}                               \
+        ${TYPE_CODEC_FLAGS}                                \
         --compile                "${COMPILE_MODE}"          \
         --eval-every             "${EVAL_EVERY}"            \
         --rel-key                "${REL_KEY}"               \
@@ -382,6 +391,7 @@ for RAW_SIZE in "${SIZE_LIST[@]}"; do
     "logit_high": ${LOGIT_HIGH},
     "value_codec": "${VALUE_CODEC}",
     "codec_init": "${CODEC_INIT}",
+    "type_codecs": "${TYPE_CODECS}",
     "inner_residual": "${INNER_RESIDUAL}",
     "seed": ${SEED},
     "embedding_dim": ${EMBEDDING_DIM},
