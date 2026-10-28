@@ -13,6 +13,7 @@ from .config import EntityMarformerConfig
 from .data import EntityGraph
 from .fastgraph import graph_tensors
 from .types import EntityType
+from .value_codecs import build_codecs, planned_reserved_tail, resolve_specs
 
 
 class RelationalAttentionBlock(nn.Module):
@@ -380,15 +381,41 @@ def _init_type_embedding(p: nn.Parameter, mode: str, feature_dim: int) -> None:
         )
 
 
+def _rename_legacy_codec_keys(state_dict, prefix, *_args, **_kwargs) -> None:
+    """Load a checkpoint written before codecs were modules of their own.
+
+    The typed codec used to keep its halves in two flat dicts,
+    value_encoders.<type> and value_decoders.<type>. The layout of the weights
+    is unchanged -- T was already column 0 of the encoder -- so this is a rename.
+    The old shared output head (use_param_output_head) has no per-type
+    counterpart to rename into, and no checkpoint ever used it.
+    """
+    moves = {"value_encoders.": "codecs.{}.encoder.proj.",
+             "value_decoders.": "codecs.{}.decoder.probe."}
+    for key in list(state_dict):
+        if not key.startswith(prefix):
+            continue
+        rest = key[len(prefix):]
+        for old, new in moves.items():
+            if rest.startswith(old):
+                type_name, _, leaf = rest[len(old):].partition(".")
+                state_dict[prefix + new.format(type_name) + leaf] = state_dict.pop(key)
+
+
 class EntityMarformer(nn.Module):
     """
     Entity Marformer.
 
-    Layer-0: [feature_centroid + deviation | value] (feature_dim + param_dim = model_dim),
-             where the value is either the hand-built parameter row (value_codec="dual")
-             or a learned per-type encoding of it (value_codec="typed").
-    Blocks:  attn+FFN on combined; explicit proj_out and W_param residuals back to each stream.
-    Output:  the param stream at layer L, or the typed decoder applied to the whole stream.
+    Layer-0: x = type_centroid + entity_deviation + codec.encode(value), per token.
+    Blocks:  attn+FFN on the residual stream, split at feature_dim for the
+             optional outer residual / output projection.
+    Output:  codec.decode(stream at layer L), per variable type.
+
+    How each variable type's value enters and leaves the stream is its codec's
+    business (value_codecs.py). The shipped dual stream is the slice codec: the
+    value is copied into the last global_param_dim dimensions -- which the
+    centroids are narrowed to stay out of -- and read back out of them. The
+    typed codec is the linear one.
     """
 
     def __init__(
@@ -404,20 +431,13 @@ class EntityMarformer(nn.Module):
         self.use_pointer = config.use_pointer
         self.use_rel_value = config.use_rel_value
         self.use_addone_attn = config.use_addone_attn
-        self.use_param_output_head = config.use_param_output_head
         # Set by enable_compile(); None means run the eager block stack.
         self._compiled_blocks = None
         # Set by enable_amp(); None means run the block stack in fp32.
         self._amp_dtype = None
         self.dual_outer_residual = getattr(config, "dual_outer_residual", "all")
         self.inner_residual = getattr(config, "inner_residual", "both")
-        self.value_codec = getattr(config, "value_codec", "dual")
-        self.codec_init = getattr(config, "codec_init", "random")
-        self.codec_freeze = bool(getattr(config, "codec_freeze", False))
-        if self.value_codec not in ("dual", "typed"):
-            raise ValueError(
-                f"Unknown value_codec: {self.value_codec!r}. Choose 'dual' or 'typed'."
-            )
+        self.default_codec_spec, self.type_codec_specs = resolve_specs(config)
         self.block_output_projection = getattr(config, "block_output_projection", "full")
         if self.block_output_projection not in ("full", "none"):
             raise ValueError(
@@ -466,12 +486,17 @@ class EntityMarformer(nn.Module):
         )
         self.feature_dim = self.model_dim - self.param_dim
 
-        # With the typed codec the whole vector is one stream, so a type
-        # centroid and an entity deviation are model_dim wide rather than
-        # feature_dim wide. feature_dim itself is left alone: the block stack
-        # still splits at the same place, which is what keeps the two
-        # architectures comparable layer for layer.
-        self.embed_dim = self.model_dim if self.value_codec == "typed" else self.feature_dim
+        # Whatever trailing range a codec's encoder owns, no centroid or deviation
+        # may write into at layer 0. The slice codec owns global_param_dim
+        # dimensions, which is why the dual stream's centroids have always been
+        # feature_dim wide; a learned codec owns none and the centroids are the
+        # full model_dim. feature_dim itself is left alone either way: the block
+        # stack still splits at the same place, which keeps the architectures
+        # comparable layer for layer.
+        self.reserved_tail = planned_reserved_tail(
+            types, model_dim=self.model_dim, global_param_dim=self.global_param_dim,
+            default_spec=self.default_codec_spec, type_specs=self.type_codec_specs)
+        self.embed_dim = self.model_dim - self.reserved_tail
 
         self.type_embeddings = nn.ParameterDict(
             {name: nn.Parameter(torch.empty(1, self.embed_dim)) for name in types.keys()}
@@ -488,27 +513,15 @@ class EntityMarformer(nn.Module):
 
         self.deviation_norm = NormLayer(self.embed_dim)
 
-        if self.value_codec == "typed":
-            # One encoder and one decoder per VARIABLE type. The encoder has
-            # no bias: the type centroid above is the bias, shared with the
-            # entity types so every token is "centroid + something".
-            # The decoder is untied from the encoder and never predicts the
-            # wildcard, so it emits C outputs for a type of param_dim 1 + C.
-            self.value_encoders = nn.ModuleDict()
-            self.value_decoders = nn.ModuleDict()
-            for name, t in types.items():
-                if not getattr(t, "is_variable", False) or t.param_dim <= 1:
-                    continue
-                self.value_encoders[name] = nn.Linear(t.param_dim, self.model_dim, bias=False)
-                self.value_decoders[name] = nn.Linear(self.model_dim, t.param_dim - 1)
-            self._init_value_codec(types)
-
-        if self.use_param_output_head:
-            self.param_output_head = nn.Sequential(
-                nn.Linear(self.model_dim, 128),
-                nn.ReLU(),
-                nn.Linear(128, self.param_dim),
-            )
+        # One codec per variable type, built where the typed codec's modules
+        # always were so a seed draws the same weights it always did.
+        self.codecs = nn.ModuleDict(build_codecs(
+            types, model_dim=self.model_dim, global_param_dim=self.global_param_dim,
+            default_spec=self.default_codec_spec, type_specs=self.type_codec_specs,
+            logit_high=config.logit_high))
+        built = max((c.reserved_tail for c in self.codecs.values()), default=0)
+        assert built == self.reserved_tail, (built, self.reserved_tail)
+        self._register_load_state_dict_pre_hook(_rename_legacy_codec_keys)
 
         blocks: List[nn.Module] = []
         for _ in range(config.num_layers):
@@ -534,212 +547,10 @@ class EntityMarformer(nn.Module):
                         prm.requires_grad_(False)
 
 
-    def _init_value_codec(self, types: Dict[str, EntityType]) -> None:
-        """Initialise the per-type encoders and decoders.
-
-        "random" is the real configuration: a Gaussian encoder into R^d and a
-        default-initialised decoder out of it.
-
-        "aligned" is the diagnostic. It places the encoder in the LAST 1 + C
-        dimensions of R^d and has the decoder read the last C, which is exactly
-        where the dual stream keeps its value slice -- so with the codec frozen
-        the two architectures are the same function. The scale factor matters
-        and is easy to get wrong: the dual stream's layer 0 writes 1.0 in the
-        wildcard slot but `logit_high` in the observed class's slot, so the
-        aligned encoder is diag(1, logit_high, ..., logit_high), not the
-        identity.
-        """
-        for name, enc in self.value_encoders.items():
-            dec = self.value_decoders[name]
-            P = types[name].param_dim
-            C = P - 1
-            logit_high = float(getattr(types[name], "logit_high", self.config.logit_high))
-            if self.codec_init == "random":
-                nn.init.normal_(enc.weight.data, mean=0.0, std=0.02)
-                continue
-            if self.codec_init == "scaled":
-                # Same random code as "random", but at the magnitude the residual
-                # stream actually expects. The hand-built stream writes
-                # logit_high (20.0) into an observed value's slot, so the value
-                # arrives with L2 norm 20; a N(0, 0.02) encoder delivers ~0.02 --
-                # three orders of magnitude quieter. The debug ladder showed that
-                # is the whole problem: an aligned encoder matches the shipped
-                # model to within noise, a random one is 0.087 worse, and a random
-                # one that cannot adapt is 0.274 worse. std = logit_high /
-                # sqrt(model_dim) gives an output norm of about logit_high, so the
-                # code is random but arrives at the right volume.
-                nn.init.normal_(enc.weight.data, mean=0.0,
-                                std=logit_high / math.sqrt(self.model_dim))
-                continue
-            if self.codec_init == "unit":
-                # The scale question, stripped of the magic number. "scaled" works
-                # but reads logit_high to do it, so the hand-built constant is
-                # still in the loop -- which defeats half the point of learning
-                # the code. N(0, 1) has no constant in it at all: output norm is
-                # sqrt(model_dim) ~= 8.9, against 20 for the hand-built slot and
-                # 0.18 for the old default. If this matches, the requirement is
-                # only "loud enough", not "exactly logit_high", and logit_high
-                # can leave the codec path entirely.
-                nn.init.normal_(enc.weight.data, mean=0.0, std=1.0)
-                continue
-            if self.codec_init == "orthogonal":
-                # Loud AND well separated. "scaled" fixed the magnitude and
-                # removed the systematic penalty, but left roughly one run in six
-                # at small K landing somewhere training never leaves -- a
-                # Gaussian draw can start with two rating levels pointing in
-                # nearly the same direction, which is a bad code to be stuck
-                # with when there is little data to correct it. Orthonormal
-                # columns scaled to logit_high give every value its own
-                # direction at the magnitude the stream expects, with no
-                # hand-written layout: which direction each value gets is still
-                # arbitrary.
-                nn.init.orthogonal_(enc.weight.data)
-                enc.weight.data.mul_(logit_high)
-                continue
-            if self.codec_init != "aligned":
-                raise ValueError(
-                    f"Unknown codec_init: {self.codec_init!r}. "
-                    "Choose 'random', 'scaled', 'orthogonal' or 'aligned'."
-                )
-            enc.weight.data.zero_()
-            base = self.model_dim - P
-            enc.weight.data[base, 0] = 1.0                       # wildcard bit, unscaled
-            for j in range(C):
-                enc.weight.data[base + 1 + j, 1 + j] = logit_high
-            dec.weight.data.zero_()
-            for j in range(C):
-                dec.weight.data[j, base + 1 + j] = 1.0
-            dec.bias.data.zero_()
-
-        if self.codec_init == "aligned":
-            # The codec owns the last global_param_dim dimensions of the stream,
-            # so nothing else may write there at layer 0 -- including the
-            # centroids of the ENTITY types, which have no encoder of their own.
-            # Leaving those random was the one thing standing between this
-            # configuration and exact agreement with the dual stream.
-            for p in self.type_embeddings.values():
-                p.data[:, self.model_dim - self.param_dim :] = 0.0
-            for p in self.deviation_tables.values():
-                p.data[:, self.model_dim - self.param_dim :] = 0.0
-
-        if self.codec_freeze:
-            for mod in list(self.value_encoders.values()) + list(self.value_decoders.values()):
-                for p in mod.parameters():
-                    p.requires_grad_(False)
-
-        if self.codec_init == "aligned" and self.codec_freeze:
-            # Freezing the codec makes the FORWARD pass identical to the dual
-            # stream, but not training. The typed architecture is strictly more
-            # permissive at layer 0: its centroids and entity deviations are
-            # model_dim wide, so gradient can push them into the value slice --
-            # somewhere the dual stream's narrower centroids cannot reach. Left
-            # alone they drift by ~1e-4 per step and the two architectures
-            # separate. Pinning the tail restores an exact identity, which is
-            # what makes this configuration usable as a control.
-            tail = self.model_dim - self.param_dim
-
-            def _pin_tail(grad: torch.Tensor) -> torch.Tensor:
-                g = grad.clone()
-                g[..., tail:] = 0.0
-                return g
-
-            # Handles kept so the equivalence test can lift the pin and measure
-            # what it is worth.
-            self._tail_pin_hooks = [
-                p.register_hook(_pin_tail)
-                for p in list(self.type_embeddings.values())
-                + list(self.deviation_tables.values())
-            ]
-
-    def _build_initial_typed_stream(
-        self,
-        graph: EntityGraph,
-        device: torch.device,
-        status: torch.Tensor | None = None,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
-        """Layer 0 for the typed codec, single stream, returned pre-split.
-
-        x = type_centroid + entity_deviation + encoder(value encoding)
-
-        The split into (features, params) at feature_dim is bookkeeping only --
-        the block stack immediately concatenates them again. Keeping the same
-        signature as the dual builder is what lets the two share every block.
-
-        status is [B, L] for the batched path and None for the single-mask path.
-        """
-        gt = graph_tensors(graph, self.types, self.param_dim, device)
-        gt.refresh(graph)
-        B = 1 if status is None else status.shape[0]
-
-        type_mat = torch.cat([self.type_embeddings[n] for n in gt.type_names], dim=0)  # [T, D]
-        x = type_mat.index_select(0, gt.type_ids).unsqueeze(0)                         # [1, L, D]
-        if B > 1:
-            x = x.expand(B, -1, -1)
-
-        for name, pos in gt.dev_positions.items():
-            table = self.deviation_tables.get(name, None)
-            if table is None:
-                continue
-            variation = self.types[name].variation
-            dev = table.index_select(0, gt.dev_entity_ids[name])                       # [M, D]
-            dev = dev.unsqueeze(0).expand(B, -1, -1)
-            if self.training and variation.dropout_rate > 0:
-                keep = (torch.rand(B, dev.shape[1], 1, device=device) >= variation.dropout_rate)
-                dev = dev * keep.to(dev.dtype)
-            if self.config.use_deviation_norm:
-                dev = self.deviation_norm(dev)
-            x = x.index_add(1, pos, dev)
-
-        # Hidden tokens present their wildcard encoding, observed ones their
-        # one-hot. Same selection rule as the dual stream's value row.
-        hidden = (gt.hidden.unsqueeze(0) if status is None
-                  else (gt.is_variable.unsqueeze(0) & (status != 2)))
-        value = torch.where(hidden.unsqueeze(-1), gt.mask_row, gt.simple_obs)          # [B, L, P]
-
-        for name, enc in self.value_encoders.items():
-            sel = (gt.type_ids == gt.type_names.index(name))
-            if not bool(sel.any()):
-                continue
-            pos = sel.nonzero(as_tuple=False).squeeze(-1)
-            P = self.types[name].param_dim
-            contrib = enc(value.index_select(1, pos)[..., :P])                         # [B, M, D]
-            x = x.index_add(1, pos, contrib)
-
-        return x[..., : self.feature_dim], x[..., self.feature_dim :], None
-
-    def _decode_typed(self, combined: torch.Tensor, graph: EntityGraph,
-                      device: torch.device) -> torch.Tensor:
-        """Per-type decode of the final residual stream.
-
-        Returns the same [B, L, global_param_dim] carrier every other part of the
-        codebase expects, with each type's C logits written into slots 1..C --
-        the slice the loss and the evaluation path already read. The decoder
-        itself is R^d -> R^C; the carrier is only where its output is parked.
-        """
-        gt = graph_tensors(graph, self.types, self.param_dim, device)
-        B, L, _ = combined.shape
-        out = torch.zeros(B, L, self.global_param_dim, device=device, dtype=combined.dtype)
-        for name, dec in self.value_decoders.items():
-            sel = (gt.type_ids == gt.type_names.index(name))
-            if not bool(sel.any()):
-                continue
-            pos = sel.nonzero(as_tuple=False).squeeze(-1)
-            logits = dec(combined.index_select(1, pos))                                # [B, M, C]
-            carrier = torch.zeros(B, pos.shape[0], self.global_param_dim,
-                                  device=device, dtype=combined.dtype)
-            carrier[..., 1 : 1 + logits.shape[-1]] = logits
-            out = out.index_add(1, pos, carrier)
-        return out
-
-    def _forward_typed(self, graph: EntityGraph, device: torch.device,
-                       status: torch.Tensor | None = None) -> torch.Tensor:
-        features, params, attn_mask = self._build_initial_typed_stream(graph, device, status)
-        edge_flat, edge_rel = graph.build_edge_index(device)
-        edge_mask = self._dense_edge_mask(graph, device)
-        K_aug = self._get_k_aug(graph, device)
-        combined = self._run_blocks(features, params, edge_flat, edge_rel,
-                                    attn_mask, K_aug, edge_mask)
-        return self._decode_typed(combined, graph, device)
+    @property
+    def codec_summary(self) -> Dict[str, str]:
+        """{type: canonical spec}, the form train_config.json records."""
+        return {name: c.spec.render() for name, c in self.codecs.items()}
 
     def enable_compile(self, mode: str = "default") -> None:
         """
@@ -754,7 +565,7 @@ class EntityMarformer(nn.Module):
         if mode in ("", "none"):
             self._compiled_blocks = None
             return
-        self._compiled_blocks = torch.compile(self._dual_blocks, mode=mode, dynamic=False)
+        self._compiled_blocks = torch.compile(self._blocks, mode=mode, dynamic=False)
 
     def enable_amp(self, dtype: str = "none") -> None:
         """
@@ -769,7 +580,7 @@ class EntityMarformer(nn.Module):
                            "fp16": torch.float16}[dtype]
 
     def _run_blocks(self, *core_args) -> torch.Tensor:
-        core = self._compiled_blocks if self._compiled_blocks is not None else self._dual_blocks
+        core = self._compiled_blocks if self._compiled_blocks is not None else self._blocks
         if self._amp_dtype is None:
             return core(*core_args)
         with torch.autocast("cuda", dtype=self._amp_dtype):
@@ -841,52 +652,86 @@ class EntityMarformer(nn.Module):
         self,
         graph: EntityGraph,
         device: torch.device,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        status: torch.Tensor | None = None,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
-        Build initial feature and param streams from the EntityGraph (dual-stream path).
+        Layer 0, returned split at feature_dim as the block stack expects.
+
+            x = type_centroid + entity_deviation + codec.encode(value)
+
+        The centroid and deviation are embed_dim wide and padded with zeros up to
+        model_dim, so they stay out of whatever range the codecs own. Each codec
+        then adds its encoding of its own tokens' values: T for a hidden token,
+        the value for a revealed one, from whichever source the codec reads.
 
         Everything here except `status` is fixed by the graph topology, so it is
-        precomputed once per graph by GraphTensors and this becomes a handful of
+        precomputed once per graph by GraphTensors and this is a handful of
         gathers. See _build_initial_streams_ref for the original per-token loop;
         test_equiv.py asserts the two agree.
 
+        status is [B, L] for the batched path and None to use the graph's own.
+
         Returns:
-            features:  [1, L, feature_dim]
-            params:    [1, L, param_dim]
-            attn_mask: [1, L]
+            features:  [B, L, feature_dim]
+            params:    [B, L, param_dim]
+            attn_mask: None -- every token is real, and returning None instead
+                       of an all-true mask skips a masked_fill over the
+                       [B, H, L, L] score tensor per layer.
         """
         gt = graph_tensors(graph, self.types, self.param_dim, device)
-        gt.refresh(graph)
+        if status is None:
+            gt.refresh(graph)
+        B = 1 if status is None else status.shape[0]
 
-        type_mat = torch.cat([self.type_embeddings[n] for n in gt.type_names], dim=0)  # [T, F]
-        features = type_mat.index_select(0, gt.type_ids)                               # [L, F]
+        type_mat = torch.cat([self.type_embeddings[n] for n in gt.type_names], dim=0)  # [T, E]
+        x = type_mat.index_select(0, gt.type_ids).unsqueeze(0)                         # [1, L, E]
+        if B > 1:
+            x = x.expand(B, -1, -1)
 
         for name, pos in gt.dev_positions.items():
             table = self.deviation_tables.get(name, None)
             if table is None:
                 continue
             variation = self.types[name].variation
-            dev = table.index_select(0, gt.dev_entity_ids[name])                       # [M, F]
+            dev = table.index_select(0, gt.dev_entity_ids[name])                       # [M, E]
+            dev = dev.unsqueeze(0).expand(B, -1, -1)
             if self.training and variation.dropout_rate > 0:
-                # One independent Bernoulli draw per token, as in the reference
-                # loop -- but as a single kernel instead of M `.item()` syncs.
-                keep = (torch.rand(dev.shape[0], 1, device=device) >= variation.dropout_rate)
+                # One independent Bernoulli draw per token and per augmentation,
+                # as a single kernel instead of M `.item()` syncs.
+                keep = (torch.rand(B, dev.shape[1], 1, device=device) >= variation.dropout_rate)
                 dev = dev * keep.to(dev.dtype)
             if self.config.use_deviation_norm:
                 dev = self.deviation_norm(dev)
-            features = features.index_add(0, pos, dev)
+            x = x.index_add(1, pos, dev)
 
-        params = torch.where(gt.hidden.unsqueeze(-1), gt.mask_row, gt.param_obs)       # [L, P]
-        # No padding: every token is real. Returning None instead of an all-true
-        # mask skips a masked_fill over the [B, H, L, L] score tensor per layer.
-        return features.unsqueeze(0), params.unsqueeze(0), None
+        if self.reserved_tail:
+            x = F.pad(x, (0, self.reserved_tail))                                     # [B, L, D]
+
+        rows: Dict[str, torch.Tensor] = {}
+        for name, codec in self.codecs.items():
+            pos = gt.slices[name].positions
+            if not pos.numel():
+                continue
+            src = codec.value_source
+            if src not in rows:
+                rows[src] = gt.value_rows(src, status)                                 # [B, L, P]
+            x = x.index_add(1, pos, codec.encode(rows[src].index_select(1, pos)))
+
+        return x[..., : self.feature_dim], x[..., self.feature_dim :], None
 
     def _build_initial_streams_ref(
         self,
         graph: EntityGraph,
         device: torch.device,
     ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Original per-token implementation. Kept as the equivalence reference."""
+        """Original per-token implementation. Kept as the equivalence reference.
+
+        It is the dual stream's layer 0 written out by hand, so it is only a
+        reference for the slice codec.
+        """
+        if any(c.spec.encoder.kind != "slice" or c.value_source != "hand_built"
+               for c in self.codecs.values()):
+            raise NotImplementedError("the reference loop only knows the slice codec")
         L = graph.num_tokens
         features = torch.zeros(1, L, self.feature_dim, device=device)
         params   = torch.zeros(1, L, self.param_dim,   device=device)
@@ -923,10 +768,7 @@ class EntityMarformer(nn.Module):
         """
         if device is None:
             device = next(self.parameters()).device
-
-        if self.value_codec == "typed":
-            return self._forward_typed(graph, device)
-        return self._forward_dual(graph, device)
+        return self._forward(graph, device)
 
     def forward_batched(
         self,
@@ -955,46 +797,39 @@ class EntityMarformer(nn.Module):
         """
         if device is None:
             device = next(self.parameters()).device
-        if self.value_codec == "typed":
-            return self._forward_typed(graph, device, status)
+        return self._forward(graph, device, status)
 
-        features, params, attn_mask = self._build_initial_streams_batched(graph, status, device)
+    def _forward(self, graph: EntityGraph, device: torch.device,
+                 status: torch.Tensor | None = None) -> torch.Tensor:
+        features, params, attn_mask = self._build_initial_streams(graph, device, status)
         edge_flat, edge_rel = graph.build_edge_index(device)
         edge_mask = self._dense_edge_mask(graph, device)
         K_aug = self._get_k_aug(graph, device)
-        return self._run_blocks(features, params, edge_flat, edge_rel, attn_mask, K_aug, edge_mask)
+        combined = self._run_blocks(features, params, edge_flat, edge_rel,
+                                    attn_mask, K_aug, edge_mask)
+        return self._decode(combined, graph, device)
 
-    def _build_initial_streams_batched(
-        self,
-        graph: EntityGraph,
-        status: torch.Tensor,
-        device: torch.device,
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Batched counterpart of _build_initial_streams; see forward_batched."""
+    def _decode(self, combined: torch.Tensor, graph: EntityGraph,
+                device: torch.device) -> torch.Tensor:
+        """Per-type decode of the final residual stream.
+
+        Returns the [B, L, global_param_dim] carrier the loss and evaluation
+        read, each type's C logits in slots 1..C (slot 0 is T's place in the
+        extended domain and is never predicted). Entity tokens, which have no
+        value, are left at zero.
+        """
         gt = graph_tensors(graph, self.types, self.param_dim, device)
-        B, L = status.shape
-
-        type_mat = torch.cat([self.type_embeddings[n] for n in gt.type_names], dim=0)  # [T, F]
-        features = type_mat.index_select(0, gt.type_ids).unsqueeze(0).expand(B, -1, -1)
-
-        for name, pos in gt.dev_positions.items():
-            table = self.deviation_tables.get(name, None)
-            if table is None:
+        B, L, _ = combined.shape
+        out = combined.new_zeros(B, L, self.global_param_dim)
+        for name, codec in self.codecs.items():
+            pos = gt.slices[name].positions
+            if not pos.numel():
                 continue
-            variation = self.types[name].variation
-            dev = table.index_select(0, gt.dev_entity_ids[name])                       # [M, F]
-            dev = dev.unsqueeze(0).expand(B, -1, -1)
-            if self.training and variation.dropout_rate > 0:
-                # Independent draws per augmentation as well as per token.
-                keep = (torch.rand(B, dev.shape[1], 1, device=device) >= variation.dropout_rate)
-                dev = dev * keep.to(dev.dtype)
-            if self.config.use_deviation_norm:
-                dev = self.deviation_norm(dev)
-            features = features.index_add(1, pos, dev)
-
-        hidden = gt.is_variable.unsqueeze(0) & (status != 2)                           # [B, L]
-        params = torch.where(hidden.unsqueeze(-1), gt.mask_row, gt.param_obs)          # [B, L, P]
-        return features, params, None                                                  # no padding
+            logits = codec.decode(combined.index_select(1, pos))                       # [B, M, C]
+            carrier = logits.new_zeros(B, pos.shape[0], self.global_param_dim)
+            carrier[..., 1 : 1 + logits.shape[-1]] = logits
+            out = out.index_add(1, pos, carrier)
+        return out
 
     def _outer_residual_mode(self, layer_idx: int, num_blocks: int) -> str:
         """How this layer combines its projection with the outer stream.
@@ -1019,15 +854,7 @@ class EntityMarformer(nn.Module):
             "'none', 'none_id', or 'not_last_id'."
         )
 
-    def _forward_dual(self, graph: EntityGraph, device: torch.device) -> torch.Tensor:
-        """Dual-stream forward pass (original architecture)."""
-        features, params, attn_mask = self._build_initial_streams(graph, device=device)
-        edge_flat, edge_rel = graph.build_edge_index(device)
-        edge_mask = self._dense_edge_mask(graph, device)
-        K_aug = self._get_k_aug(graph, device)
-        return self._run_blocks(features, params, edge_flat, edge_rel, attn_mask, K_aug, edge_mask)
-
-    def _dual_blocks(
+    def _blocks(
         self,
         features: torch.Tensor,
         params: torch.Tensor,
@@ -1036,15 +863,23 @@ class EntityMarformer(nn.Module):
         attn_mask: torch.Tensor | None,
         K_aug: torch.Tensor | None,
         edge_mask: torch.Tensor | None = None,
+        trace: List[torch.Tensor] | None = None,
     ) -> torch.Tensor:
         """
-        The block stack, as a pure tensor -> tensor function.
+        The block stack, as a pure tensor -> tensor function. Returns the
+        residual stream at layer L, [B, L, model_dim].
 
-        Split out of _forward_dual so it can be handed to torch.compile: the
+        Split out of _forward so it can be handed to torch.compile: the
         graph-dependent work (which is Python, and cannot be traced) all happens
         before this point, and everything from here is fixed-shape tensor code.
+
+        `trace`, if given, receives the stream at every depth 0..L. It is how the
+        logit lens reads intermediate layers through the very same arithmetic,
+        rather than through a copy of it that can drift.
         """
-        combined = torch.cat([features, params], dim=-1)  # [1, L, model_dim]
+        combined = torch.cat([features, params], dim=-1)  # [B, L, model_dim]
+        if trace is not None:
+            trace.append(combined)
         num_blocks = len(self.blocks)
         for layer_idx, block in enumerate(self.blocks):
             # Inner residual stream. "both" is the shipped architecture; dropping
@@ -1091,11 +926,7 @@ class EntityMarformer(nn.Module):
                 features = combined[..., : self.feature_dim] + feat_update
                 params   = combined[..., self.feature_dim :] + param_update
             combined = torch.cat([features, params], dim=-1)
+            if trace is not None:
+                trace.append(combined)
 
-        if self.use_param_output_head:
-            return self.param_output_head(combined)
-        if self.value_codec == "typed":
-            # The decoder reads the whole residual vector, not just the slice the
-            # dual stream calls "params".
-            return combined
-        return params
+        return combined

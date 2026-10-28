@@ -32,6 +32,7 @@ from .model import EntityMarformer
 from .eval import compute_trainable_loss, evaluate_entity_marformer_split, EntityEvalResults
 from .masking import MaskingStrategy, build_default_masking_strategy
 from .validation import carve_validation, summarise as summarise_validation
+from .value_codecs import parse_type_codecs, render_codecs
 
 
 def _save_json(data: Any, path: Path) -> None:
@@ -1020,30 +1021,32 @@ def main():
         ),
     )
     parser.add_argument(
-        "--value-codec", choices=["dual", "typed"], default="dual",
+        "--value-codec", default="slice", metavar="SPEC",
         help=(
-            "How a variable's value enters and leaves the residual stream. 'dual' "
-            "is the shipped hand-built parameter stream. 'typed' learns, per "
-            "variable type, an encoder from the value's binary encoding (wildcard "
-            "bit + one-hot over C classes) into R^d and a separate untied decoder "
-            "R^d -> R^C read out with a softmax. The block stack is identical."
+            "How every variable type's value enters and leaves the residual "
+            "stream (see imputer/entity_mf/value_codecs.py). 'slice' (default) is "
+            "the shipped dual stream: the hand-built row is copied into a reserved "
+            "range and read back out of it. 'linear' learns a projection into the "
+            "stream and a linear probe out of it (the typed codec); 'mlp' does the "
+            "same with an MLP. 'enc/dec' picks the halves separately, e.g. "
+            "'slice/mlp'; options follow a colon, e.g. 'linear:init=unit,width=8'. "
+            "The old names 'dual' and 'typed' are still accepted."
         ),
+    )
+    parser.add_argument(
+        "--type-codec", action="append", default=[], metavar="TYPE=SPEC",
+        help="Override --value-codec for one type, e.g. rating=mlp:hidden=64. Repeatable.",
     )
     parser.add_argument(
         "--codec-init", choices=["random", "unit", "scaled", "orthogonal", "aligned"], default="unit",
         help=(
-            "Typed codec only. 'scaled' (default) draws the encoder at "
-            "std = logit_high / sqrt(model_dim) so the value reaches the stream "
-            "at the magnitude the hand-built slots use; 'unit' is plain N(0,1), "
-            "which carries no constant; 'random' is the old N(0,0.02) default "
-            "and reproduces the regression; 'aligned' places the encoder in the "
-            "last 1+C dimensions and reads the last C back, which reproduces the "
-            "dual stream exactly when frozen."
+            "Legacy, --value-codec typed only: the same as 'linear:init=X'. A "
+            "codec spec carries its own init."
         ),
     )
     parser.add_argument(
         "--codec-freeze", action="store_true",
-        help="Typed codec only. Hold the encoders and decoders at their initial values.",
+        help="Legacy, --value-codec typed only: the same as 'linear:freeze'.",
     )
     parser.add_argument(
         "--dual-outer-residual",
@@ -1315,6 +1318,7 @@ def main():
     config.block_output_projection_freeze = args.block_output_projection_freeze
     config.logit_high            = args.logit_high
     config.value_codec           = args.value_codec
+    config.type_codecs           = parse_type_codecs(args.type_codec)[1]
     config.codec_init            = args.codec_init
     config.codec_freeze          = args.codec_freeze
     config.inner_residual        = args.inner_residual
@@ -1385,7 +1389,11 @@ def main():
             "dual_outer_residual": config.dual_outer_residual,
             "block_output_projection": config.block_output_projection,
             "block_output_projection_freeze": config.block_output_projection_freeze,
-            "value_codec": config.value_codec,
+            # The resolved specs, in canonical form, are what reconstruction
+            # reads; the legacy names are kept beside them so an older checkout
+            # can still tell which architecture this was.
+            **render_codecs(model.default_codec_spec, model.type_codec_specs),
+            "codecs": model.codec_summary,
             "codec_init": config.codec_init,
             "codec_freeze": config.codec_freeze,
             "inner_residual": config.inner_residual,
@@ -1400,7 +1408,6 @@ def main():
             "use_deviation_norm": config.use_deviation_norm,
             "scale_shared_rel": config.scale_shared_rel,
             "use_graph_mask": config.use_graph_mask,
-            "use_param_output_head": config.use_param_output_head,
             "logit_high": config.logit_high,
             "temperature": config.temperature,
             "global_param_dim": model.global_param_dim,

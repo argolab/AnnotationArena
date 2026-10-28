@@ -88,9 +88,18 @@ def _reconstruct(run_dir: Path) -> tuple:
     config.block_output_projection = mcfg.get("block_output_projection", "full")
     config.block_output_projection_freeze = mcfg.get("block_output_projection_freeze", False)
     config.logit_high           = mcfg.get("logit_high", 20.0)
+    # Codecs. A run written since codecs became specs records "type_codecs" next
+    # to a canonical "value_codec" spec, and that is the whole story. An older
+    # run records value_codec in {"dual", "typed"} and, for "typed", the init in
+    # codec_init -- which runs predating that field never wrote, and which then
+    # meant the old N(0, 0.02) default, hence "random" here and not the config's
+    # current default.
     config.value_codec          = mcfg.get("value_codec", "dual")
-    config.codec_init           = mcfg.get("codec_init", "random")
-    config.codec_freeze         = mcfg.get("codec_freeze", False)
+    if "type_codecs" in mcfg:
+        config.type_codecs      = dict(mcfg["type_codecs"])
+    else:
+        config.codec_init       = mcfg.get("codec_init", "random")
+        config.codec_freeze     = mcfg.get("codec_freeze", False)
     config.inner_residual       = mcfg.get("inner_residual", "both")
     config.rel_key              = mcfg.get("rel_key", "bits")
     config.rel_value            = mcfg.get("rel_value", "none")

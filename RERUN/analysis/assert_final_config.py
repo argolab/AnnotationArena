@@ -39,7 +39,6 @@ COMMON = {
     ("model",    "dual_outer_residual"):   "none",
     ("model",    "block_output_projection"): "none",
     ("model",    "inner_residual"):        "both",
-    ("model",    "value_codec"):           "dual",
     ("model",    "codec_init"):            "unit",
     # full Shaw et al. 2018 S3.1 relational attention, both halves
     ("model",    "rel_key"):               "learned",
@@ -53,6 +52,21 @@ PER_AXIS = {
               ("training", "annotator_dropout_rate"): 0.7},
 }
 SEARCH = {("training", "epochs"): 2000, ("training", "val_protocol"): "block"}
+
+
+# The rating type's codec, as it actually ran. Checked on the resolved form, so
+# a run recorded as value_codec="dual" (before codecs were specs) and one
+# recorded as codecs={"rating": "slice"} (after) both pass -- they are the same
+# architecture, bit for bit -- and anything else fails.
+WANT_RATING_CODEC = "slice"
+
+
+def rating_codec(cfg: dict) -> str:
+    m = cfg.get("model", {})
+    if "codecs" in m:
+        return m["codecs"].get("rating", "<missing>")
+    old = m.get("value_codec", "<missing>")
+    return {"dual": "slice"}.get(old, old)
 
 
 def get(cfg: dict, path: tuple):
@@ -85,6 +99,9 @@ def scan(root: Path, variant: str) -> tuple[int, list]:
         n += 1
         label = f"{axis}/{m.group(2)}/{m.group(3)}"
         check(cfg, COMMON, "common", bad, label)
+        if rating_codec(cfg) != WANT_RATING_CODEC:
+            bad.append(f"{label}  rating codec: got {rating_codec(cfg)!r}, "
+                       f"spec says {WANT_RATING_CODEC!r}  [common]")
         check(cfg, PER_AXIS[axis], "per-axis", bad, label)
         if variant.endswith("search"):
             check(cfg, SEARCH, "search stage", bad, label)
@@ -110,7 +127,7 @@ def main() -> int:
             return 1
         if not a.watch or (a.expect and n >= a.expect):
             print(f"OK: {n} cells match the spec "
-                  f"({len(COMMON)} common + 2 per-axis"
+                  f"({len(COMMON) + 1} common + 2 per-axis"
                   + (f" + {len(SEARCH)} search" if a.variant.endswith('search') else "") + " keys each)")
             return 0
         print(f"  {n} cells so far, all matching; waiting for {a.expect} ...", flush=True)

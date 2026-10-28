@@ -42,10 +42,17 @@ OUT = Path(__file__).resolve().parent / "out/b2_equivalence.json"
 TOL = 1e-4          # float32 over 8 blocks, against outputs of scale ~20
 
 
-def build_typed(dual, types, n_rel, *, init="aligned", freeze=True, scale=True):
-    """A typed-codec twin of `dual` sharing every parameter they have in common."""
+def build_typed(dual, types, n_rel, *, init="aligned", freeze=True, scale=True,
+                reserve=True):
+    """A linear-codec twin of `dual` sharing every parameter they have in common.
+
+    reserve=False is the configuration the tail-pin hooks used to rescue: the
+    aligned codec without its claim on the value range, so the centroids are
+    model_dim wide and gradient can reach into the slots the codec writes.
+    """
     cfg = copy.deepcopy(dual.config)
-    cfg.value_codec, cfg.codec_init, cfg.codec_freeze = "typed", init, freeze
+    cfg.value_codec = (f"linear:init={init}" + (",freeze" if freeze else "")
+                       + ("" if reserve else ",reserve=false"))
     torch.manual_seed(0)
     m = EntityMarformer(cfg, types, num_relationships=n_rel)
     sd = dual.state_dict()
@@ -61,8 +68,9 @@ def build_typed(dual, types, n_rel, *, init="aligned", freeze=True, scale=True):
             w = own[k].clone(); w[..., : v.shape[-1]] = v; own[k] = w
     m.load_state_dict(own, strict=True)
     if not scale:   # the literal proposal: an identity encoder, no logit_high
-        for name, enc in m.value_encoders.items():
-            enc.weight.data[enc.weight.data != 0] = 1.0
+        for codec in m.codecs.values():
+            w = codec.encoder.proj.weight.data
+            w[w != 0] = 1.0
     return m
 
 
@@ -116,7 +124,7 @@ def main() -> None:
         a1, b1 = dual(graph1, device=dev), typed1(graph1, device=dev)
     res["forward_max_abs_diff_scale1"] = float(
         (a1[:, vt1, 1 : 1 + C] - b1[:, vt1, 1 : 1 + C]).abs().max())
-    enc1 = typed1.value_encoders["rating"].weight.data
+    enc1 = typed1.codecs["rating"].encoder.proj.weight.data
     res["scale1_encoder_is_plain_injection"] = bool(
         ((enc1 == 0) | (enc1 == 1)).all())
     for t in dual.types.values():
@@ -142,10 +150,7 @@ def main() -> None:
 
     def train_drift(pin_tail: bool) -> list[float]:
         d2 = copy.deepcopy(dual).to(dev).train()
-        t2 = build_typed(dual, dual.types, n_rel).to(dev).train()
-        if not pin_tail:
-            for h in getattr(t2, "_tail_pin_hooks", []):
-                h.remove()
+        t2 = build_typed(dual, dual.types, n_rel, reserve=pin_tail).to(dev).train()
         od = torch.optim.AdamW([p for p in d2.parameters() if p.requires_grad], lr=2e-4)
         ot = torch.optim.AdamW([p for p in t2.parameters() if p.requires_grad], lr=2e-4)
         diffs = []
@@ -164,9 +169,10 @@ def main() -> None:
 
     step_diffs = train_drift(pin_tail=True)
     res["shared_parameter_drift_over_5_steps"] = step_diffs
-    # What the pin is worth: the typed codec's centroids and deviations are
-    # model_dim wide, so without it gradient reaches into the value slice, which
-    # the dual stream's narrower centroids cannot do.
+    # What the reservation is worth: without it the codec's centroids and
+    # deviations are model_dim wide, so gradient reaches into the value slice,
+    # which the dual stream's narrower centroids cannot do. (This used to be a
+    # gradient hook pinning the tail; the reservation makes it structural.)
     res["drift_if_embedding_tail_not_pinned"] = train_drift(pin_tail=False)
 
     print(json.dumps(res, indent=1))

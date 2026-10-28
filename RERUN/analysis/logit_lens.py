@@ -9,9 +9,10 @@ appendix's own method description, run against final-v2 so the numbers belong to
 the architecture the paper now reports (standard block: dual_outer_residual=none
 with block_output_projection=none).
 
-Why the lens is meaningful here at all.  With value_codec=dual the residual
-stream is [features ; params] and the model's output logits are read straight out
-of `params[1 : 1+C]` -- the same slots at every depth, never re-projected.  So
+Why the lens is meaningful here at all.  With the slice codec (the dual stream)
+the residual stream is [features ; params] and the model's output logits are read
+straight out of `params[1 : 1+C]` -- the same slots at every depth, never
+re-projected.  So
 `params` is literally a distribution at every layer, and reading it at layer l is
 the parameter-stream analogue of a logit lens.  Under the standard block the
 per-layer update is h' = h + attn + ff, so the stream is additive and the layer-0
@@ -72,58 +73,28 @@ def load_shared():
 # ── layerwise capture ────────────────────────────────────────────────────────
 @torch.no_grad()
 def layer_streams(model, graph, device):
-    """Replay _dual_blocks, keeping (features, params) at every depth 0..L.
+    """The residual stream at every depth 0..L, as (features, params) pairs.
 
-    This duplicates the block arithmetic rather than hooking it, because the
-    residual adds happen in _dual_blocks itself and not inside any submodule, so
-    there is nothing to hang a hook on.  Duplicated arithmetic can drift from the
-    real forward pass, so the caller asserts the final layer against model(graph)
-    bit-for-bit; if the architecture ever changes under this script, that assert
-    is what catches it instead of a plausible-looking wrong curve.
+    Read through the model's own block stack (EntityMarformer._blocks with a
+    trace), not a copy of its arithmetic: a copy is what can drift from the real
+    forward pass, and the caller's gate below is then all that stands between a
+    changed architecture and a plausible-looking wrong curve.
     """
-    if model.value_codec != "dual" or model.use_param_output_head:
+    rating = model.codecs["rating"]
+    if rating.spec.encoder.kind != "slice" or rating.spec.decoder.kind != "slice":
         raise SystemExit(
-            f"this lens reads the dual param stream; got value_codec="
-            f"{model.value_codec!r} use_param_output_head={model.use_param_output_head}")
+            "the Param Lens reads the range the slice codec copies the value into; "
+            f"this model's rating codec is {rating.spec.render()!r}")
 
     features, params, attn_mask = model._build_initial_streams(graph, device=device)
     edge_flat, edge_rel = graph.build_edge_index(device)
     edge_mask = model._dense_edge_mask(graph, device)
     K_aug = model._get_k_aug(graph, device)
-
-    streams = [(features, params)]
-    combined = torch.cat([features, params], dim=-1)
-    nb = len(model.blocks)
-    for layer_idx, block in enumerate(model.blocks):
-        normed_attn = block["norm_1"](combined)
-        attn_out = block["attn"](normed_attn, edge_flat=edge_flat, edge_rel=edge_rel,
-                                 attn_mask=attn_mask, K_aug=K_aug, edge_mask=edge_mask)
-        combined = combined + attn_out if model.inner_residual == "both" else attn_out
-
-        normed_ff = block["norm_2"](combined)
-        z_ff = block["ff"](normed_ff)
-        combined = combined + z_ff if model.inner_residual in ("both", "ff_only") else z_ff
-
-        if model.block_output_projection == "full":
-            feat_update = block["dropout_2"](block["proj_out"](combined))
-            param_update = block["dropout_2"](block["W_param"](combined))
-        else:
-            upd = block["dropout_2"](combined)
-            feat_update = upd[..., : model.feature_dim]
-            param_update = upd[..., model.feature_dim:]
-
-        mode = model._outer_residual_mode(layer_idx, nb)
-        if mode == "add_h":
-            features = features + feat_update
-            params = params + param_update
-        elif mode == "replace":
-            features, params = feat_update, param_update
-        else:                                            # add_c
-            features = combined[..., : model.feature_dim] + feat_update
-            params = combined[..., model.feature_dim:] + param_update
-        combined = torch.cat([features, params], dim=-1)
-        streams.append((features, params))
-    return streams
+    trace = []
+    model._blocks(features, params, edge_flat, edge_rel, attn_mask, K_aug, edge_mask,
+                  trace=trace)
+    fd = model.feature_dim
+    return [(h[..., :fd], h[..., fd:]) for h in trace]
 
 
 @torch.no_grad()
@@ -148,9 +119,10 @@ def collect(model, eval_vars, max_item, device):
     for chunk in chunk_by_item(eval_vars, max_item, keep_whole=keep or None):
         graph = variable_list_to_entity_graph(chunk, model.types)
         streams = layer_streams(model, graph, device)
-        # gate the replay against the shipped forward pass
+        # gate the traced stream against the shipped forward pass, through the
+        # model's own readout
         ref = model(graph, device=device)
-        got = streams[-1][1]
+        got = model._decode(torch.cat(streams[-1], -1), graph, device)
         if not torch.equal(ref, got):
             d = float((ref - got).abs().max())
             raise SystemExit(f"layer replay diverged from model(graph): max|d|={d:.3e}")

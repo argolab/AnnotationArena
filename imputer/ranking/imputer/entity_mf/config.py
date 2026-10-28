@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass
@@ -56,30 +56,30 @@ class EntityMarformerConfig:
     use_deviation_norm: bool = False     # Apply LayerNorm to deviation before adding to type centroid (bounds deviation scale)
     scale_shared_rel: bool = False       # In shared-bias mode: scale rel_scores by 1/sqrt(head_dim), matching per-head normalization
     use_graph_mask: bool = False         # Hard graph attention mask: allow attention only where edge_mask or K_aug pointer exists (+ self)
-    use_param_output_head: bool = False  # Predict final params from the last combined hidden state instead of using the residual param stream directly
-    value_codec: str = "dual"            # How a variable's value enters and leaves the residual stream.
-                                         #   "dual"  -> shipped: a hand-built parameter stream carries the value,
-                                         #              and its final value IS the prediction.
-                                         #   "typed" -> a learned per-type encoder maps the value's binary
-                                         #              encoding (wildcard bit + one-hot over C classes) into
-                                         #              R^d, and a separate untied decoder maps R^d -> R^C,
-                                         #              read out with a softmax. The block stack is identical.
-    codec_init: str = "unit"             # "unit" -> Gaussian encoder at std 1.0. The default because it
-                                         #           carries no constant at all: output norm sqrt(d)~=8.9,
-                                         #           and B10 measured it at parity with the dual stream at
-                                         #           K=2000 (-0.009 +/-0.003, n=6). The requirement is
-                                         #           "loud enough", not "exactly logit_high".
-                                         # "scaled" -> Gaussian encoder at std logit_high/sqrt(d), so the
-                                         #             value arrives at the magnitude the stream expects.
-                                         #             This is the default because "random" (std 0.02) is
-                                         #             ~1000x too quiet and costs 0.09 nats; see
-                                         #             threads/PLAN.md, thread 2.
-                                         # "random" -> Gaussian encoder at std 0.02, default Linear decoder.
-                                         #             Kept only to reproduce the regression.
-                                         # "aligned" -> encoder writes into the last 1+C dimensions and the
-                                         #              decoder reads the last C, reproducing the dual stream
-                                         #              exactly (see threads/value-codec/b2_equivalence.py).
-    codec_freeze: bool = False           # Hold the encoder and decoder fixed at their initial values.
+    use_param_output_head: bool = False  # Legacy: equivalent to a decoder spec of "mlp:hidden=128"
+                                         # (per type now, where it used to be one shared head).
+    value_codec: str = "slice"           # How every variable type's value enters and leaves the
+                                         # residual stream, as a codec spec -- see value_codecs.py
+                                         # for the grammar. Encoder and decoder are chosen
+                                         # independently ("enc/dec"); one half means both alike.
+                                         #   "slice"           -> shipped: the hand-built row is
+                                         #                        copied into the last
+                                         #                        global_param_dim dimensions and
+                                         #                        read back out of them (the dual
+                                         #                        stream; "dual" is accepted).
+                                         #   "linear[:init=X]" -> a learned projection into the
+                                         #                        stream and a linear probe out of
+                                         #                        it (the typed codec; "typed" is
+                                         #                        accepted, and reads codec_init).
+                                         #   "mlp[:hidden=H]"  -> the same with an MLP each way.
+                                         #   ":width=T"        -> a learned codec confined to the
+                                         #                        last T dimensions.
+    type_codecs: dict = field(default_factory=dict)
+                                         # Per-type overrides, {type_name: spec}.
+    codec_init: str = "unit"             # Legacy: the init for value_codec="typed" only. A spec
+                                         # carries its own (linear:init=X); the choices and what
+                                         # they measured are documented on LinearEncoder.
+    codec_freeze: bool = False           # Legacy: value_codec="typed" only; a spec says "freeze".
     dual_outer_residual: str = "all"     # Dual-stream only. Which layers keep the OUTER residual add (features/params += proj(combined)).
                                          #   "all"      -> baseline: every layer adds (double residual stream: inner on `combined`, outer on features/params)
                                          #   "not_last" -> every layer but the last adds; the last layer emits only [proj_out; W_param](combined)

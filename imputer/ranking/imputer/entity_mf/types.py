@@ -43,9 +43,20 @@ class EntityType(ABC):
     Abstract base class for all entity/variable types.
 
     Two major roles:
-      1) Input adapter: encode raw observation into parameter-stream vector.
-      2) Loss adapter: compute loss on predicted parameters for tokens of this type.
+      1) Input adapter: say what the token's VALUE is (build_value), and,
+         optionally, a hand-built encoding of it (build_param) that the slice
+         codec copies into the stream verbatim.
+      2) Loss adapter: compute loss on predicted logits for tokens of this type.
+
+    How a value becomes a vector in the residual stream is not the type's
+    business -- that is the codec's (see value_codecs.py).
+
+    A variable type with C values has an EXTENDED domain of C + 1: the C values
+    plus a placeholder T ("top") that a masked or missing token takes. T is at
+    index 0, so param_dim = 1 + C is the extended domain's size.
     """
+
+    TOP_INDEX = 0
 
     name: str
     is_variable: bool
@@ -58,17 +69,32 @@ class EntityType(ABC):
         self.param_dim = param_dim
         self.variation = variation or VariationConfig(enabled=False, num_entities=0, reg_weight=0.0)
 
-    def build_simple_value(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
+    @staticmethod
+    def _is_hidden(raw_data: Dict[str, Any]) -> bool:
+        return bool(raw_data.get("is_missing", False)) or bool(raw_data.get("is_masked", False))
+
+    def build_value(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
         """
-        Binary value representation mirroring build_param but with {0, 1} values.
-        Currently unused by the standard model path; entity types return zeros.
+        The token's value as a distribution over the extended domain {T, v_1..v_C}.
+
+        A hidden token is a point mass on T (index 0); an observed one a point
+        mass on its value, or a soft row when the type takes soft input. This is
+        what a learned encoder is handed -- T is a value like any other, and the
+        encoder decides what it looks like in the stream.
+
+        Entity types carry no value and return zeros.
         """
         return torch.zeros(global_param_dim, device=device)
 
     @abstractmethod
     def build_param(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
         """
-        Convert raw observation payload into a parameter-stream vector. (Single token)
+        The type's HAND-BUILT encoding of the token's value. (Single token)
+
+        Only the slice codec reads this: it is the fixed row the dual stream
+        copies into its reserved range, with T written as 1.0 in slot 0 and an
+        observed value as logit_high in its own slot. Learned codecs read
+        build_value instead and never see logit_high.
 
         Args:
             raw_data: Dict payload stored on the token (type-specific).
@@ -218,18 +244,29 @@ class RatingVariableType(EntityType):
         self.llm_input_dist = llm_input_dist
         self.ce_loss = nn.CrossEntropyLoss(reduction="none")
 
-    def build_simple_value(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
-        """Binary encoding: mask_bit=1 or one-hot class with 1.0 (no logit_high scaling)."""
-        p = torch.zeros(global_param_dim, device=device)
-        is_missing = bool(raw_data.get("is_missing", False))
-        is_masked = bool(raw_data.get("is_masked", False))
-        if is_missing or is_masked:
-            p[0] = 1.0
-            return p
+    def build_value(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
+        """Point mass on T if hidden; else on the rating, or the soft row with llm_input_dist."""
+        v = torch.zeros(global_param_dim, device=device)
+        if self._is_hidden(raw_data):
+            v[self.TOP_INDEX] = 1.0
+            return v
+        if self.llm_input_dist:
+            # Same rule as build_param: a soft label enters as itself. A learned
+            # encoder is linear in this row, so it receives the label's
+            # expectation of the per-value codes.
+            rating_dist = raw_data.get("rating_dist", None)
+            if rating_dist is not None:
+                dist_t = torch.tensor(rating_dist, dtype=torch.float32, device=device)
+                if dist_t.shape[0] == self.num_classes and not self._is_one_hot(dist_t):
+                    v[1 : 1 + self.num_classes] = dist_t
+                    return v
         rating_value = raw_data.get("rating_value", None)
-        if rating_value is not None and 0 <= rating_value < self.num_classes:
-            p[1 + rating_value] = 1.0
-        return p
+        if rating_value is None:
+            raise ValueError("rating_value must be provided for observed ratings")
+        if not (0 <= rating_value < self.num_classes):
+            raise ValueError(f"rating_value {rating_value} out of range [0, {self.num_classes})")
+        v[1 + rating_value] = 1.0
+        return v
 
     def build_param(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
         p = torch.zeros(global_param_dim, device=device)
@@ -438,6 +475,23 @@ class PairwiseRankingVariableType(EntityType):
         self.max_rank_size = max_rank_size
         self.logit_high = float(logit_high)
         self.pl_loss = PlackettLuceLoss()
+
+    def build_value(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
+        """Point mass on T if hidden; else on which of the two items won.
+
+        This type had no value encoding before, so a learned codec was handed an
+        all-zero row for every ranking token -- observed and hidden alike.
+        """
+        v = torch.zeros(global_param_dim, device=device)
+        if self._is_hidden(raw_data):
+            v[self.TOP_INDEX] = 1.0
+            return v
+        order = raw_data.get("ranking_order", None)
+        if order is None or len(order) == 0:
+            raise ValueError("ranking_order must be provided for observed rankings")
+        order = list(order)[: self.max_rank_size]
+        v[1 if order[0] < order[1] else 2] = 1.0
+        return v
 
     def build_param(self, raw_data: Dict[str, Any], device: torch.device, global_param_dim: int) -> torch.Tensor:
         p = torch.zeros(global_param_dim, device=device)

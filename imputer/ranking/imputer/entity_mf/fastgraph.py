@@ -69,50 +69,35 @@ class GraphTensors:
         self.type_ids = type_ids.to(device)
         self.entity_ids = entity_ids.to(device)
 
-        # Param stream. build_param's output depends on raw_data and on whether
-        # the token is currently masked/missing; the masked/missing answer is
-        # always the same "mask bit" vector, so precompute the observed answer
-        # and select between them at call time.
-        param_obs = torch.zeros(L, global_param_dim)
-        mask_row = torch.zeros(L, global_param_dim)
+        # Value rows, from both of the type's sources (see value_codecs.py):
+        #   hand_built -- build_param, the fixed row the slice codec copies
+        #   value      -- build_value, the distribution over {T, v_1..v_C} a
+        #                 learned codec encodes
+        # Either source's row depends on raw_data and on whether the token is
+        # currently hidden, and the hidden answer is always the token's encoding
+        # of T. So both answers are precomputed and selected at call time.
+        P = global_param_dim
+        rows = {s: (torch.zeros(L, P), torch.zeros(L, P)) for s in ("hand_built", "value")}
         is_variable = torch.zeros(L, dtype=torch.bool)
         for i, tok in enumerate(tokens):
             t = types[tok.type_name]
             if not getattr(t, "is_variable", False):
                 continue
             is_variable[i] = True
-            mask_row[i, 0] = 1.0
             raw = tok.raw_data or {}
+            hidden = dict(raw, is_masked=True)
+            cpu = torch.device("cpu")
+            rows["hand_built"][0][i] = t.build_param(hidden, device=cpu, global_param_dim=P)
+            rows["value"][0][i] = t.build_value(hidden, device=cpu, global_param_dim=P)
             if raw.get("is_missing", False):
-                # A missing token is never un-masked, so its observed row is
-                # never selected; and asking build_param for it would raise.
+                # A missing token is never revealed, so its observed row is never
+                # selected; and asking the type for it would raise.
                 continue
-            unmasked = dict(raw)
-            unmasked["is_masked"] = False
-            param_obs[i] = t.build_param(unmasked, device=torch.device("cpu"),
-                                         global_param_dim=global_param_dim).cpu()
-        self.param_obs = param_obs.to(device)
-        self.mask_row = mask_row.to(device)
+            shown = dict(raw, is_masked=False)
+            rows["hand_built"][1][i] = t.build_param(shown, device=cpu, global_param_dim=P)
+            rows["value"][1][i] = t.build_value(shown, device=cpu, global_param_dim=P)
+        self.rows = {s: (top.to(device), obs.to(device)) for s, (top, obs) in rows.items()}
         self.is_variable = is_variable.to(device)
-
-        # The typed value codec reads the same token through build_simple_value
-        # (wildcard bit, then a one-hot over the classes) instead of build_param
-        # (wildcard bit, then logit_high in the observed class). Precomputed the
-        # same way so the codec's layer 0 is a gather, not a Python loop.
-        simple_obs = torch.zeros(L, global_param_dim)
-        for i, tok in enumerate(tokens):
-            t = types[tok.type_name]
-            if not getattr(t, "is_variable", False):
-                continue
-            raw = tok.raw_data or {}
-            if raw.get("is_missing", False):
-                continue
-            unmasked = dict(raw)
-            unmasked["is_masked"] = False
-            simple_obs[i] = t.build_simple_value(
-                unmasked, device=torch.device("cpu"),
-                global_param_dim=global_param_dim).cpu()
-        self.simple_obs = simple_obs.to(device)
 
         # Deviation lookups, one index tensor per type that has a table.
         # Annotator id per token (-1 for entity tokens), for structured masking.
@@ -262,6 +247,18 @@ class GraphTensors:
     def hidden(self) -> torch.Tensor:
         """True where the token's value must not be revealed (masked or missing)."""
         return self.is_variable & (self._status != 2)
+
+    def value_rows(self, source: str, status: torch.Tensor | None = None) -> torch.Tensor:
+        """Every token's current value row from `source`, as [B, L, global_param_dim].
+
+        A hidden token gets its encoding of T, a revealed one its value. With
+        status=None the graph's own statuses decide (B = 1); the batched training
+        path passes one [B, L] status row per mask augmentation.
+        """
+        top, obs = self.rows[source]
+        hidden = (self.hidden.unsqueeze(0) if status is None
+                  else self.is_variable.unsqueeze(0) & (status != 2))
+        return torch.where(hidden.unsqueeze(-1), top, obs)
 
 
 def graph_tensors(graph: EntityGraph, types: Dict[str, EntityType],
