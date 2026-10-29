@@ -54,7 +54,8 @@ Spec grammar
     opt   := key "=" value | key          a bare key means key=true
 
 Options, per half (unknown keys are an error, not a silent default):
-    init=      encoder init: unit | scaled | orthogonal | random | aligned
+    init=      unit (N(0,1), the default for every encoder and decoder weight)
+               | scaled | orthogonal | aligned
     width=     learned codecs: write into / read from only the LAST `width`
                dimensions of the stream (default: all of them)
     freeze     hold this half at its initial value
@@ -88,7 +89,12 @@ import torch.nn as nn
 KINDS = ("slice", "linear", "mlp")
 # The two names the flags used before encode and decode were separable.
 KIND_ALIASES = {"dual": "slice", "typed": "linear"}
-INITS = ("unit", "scaled", "orthogonal", "random", "aligned")
+# Every learned encoder and decoder weight is drawn N(0, 1) unless a spec asks
+# for one of the other two loud inits or the aligned control. There is no
+# N(0, 0.02) option: at that scale the value reaches the stream ~1000x quieter
+# than the hand-built row and the codec cost 0.09 nats (value-codec thread B3);
+# a quiet probe likewise starves the decoder's gradient.
+INITS = ("unit", "scaled", "orthogonal", "aligned")
 SOURCES = ("hand_built", "value")
 
 
@@ -281,6 +287,19 @@ def parse_type_codecs(entries, default: str = "slice") -> tuple:
     return default_spec, overrides
 
 
+def _normal_init(module: nn.Module) -> None:
+    """N(0, 1) for every Linear weight in `module`, zero for every bias.
+
+    The one init rule for codecs: no PyTorch default (kaiming-uniform, std
+    ~1/sqrt(fan_in)) and no N(0, 0.02) anywhere in an encoder or a decoder.
+    """
+    for m in module.modules():
+        if isinstance(m, nn.Linear):
+            nn.init.normal_(m.weight, mean=0.0, std=1.0)
+            if m.bias is not None:
+                nn.init.zeros_(m.bias)
+
+
 # ── encoders ─────────────────────────────────────────────────────────────────
 
 class ValueEncoder(nn.Module, ABC):
@@ -381,12 +400,9 @@ class LinearEncoder(ValueEncoder):
     codec. No bias: the type centroid every token already carries is the bias,
     which keeps "centroid + something" true of every token in the stream.
 
-    The init is a statement about how LOUD a value arrives, and it is kept
-    independent of the width: "unit" gives a column norm of sqrt(model_dim)
-    whatever `width` is, "scaled" and "orthogonal" give logit_high. Otherwise a
-    sweep over the width would also be a sweep over the value's magnitude, which
-    the codec thread showed is worth 0.09 nats on its own. At full width every
-    init draws exactly the numbers it always did.
+    Weights are N(0, 1) by default ("unit"), whatever the width, so each
+    coordinate of the code is unit scale. "scaled" and "orthogonal" instead fix
+    a column's norm at logit_high.
     """
 
     def __init__(self, *, model_dim: int, param_dim: int, global_param_dim: int,
@@ -416,16 +432,11 @@ class LinearEncoder(ValueEncoder):
 
     def _init_weights(self, global_param_dim: int, logit_high: float) -> None:
         w = self.proj.weight.data
-        if self.init == "random":
-            # The old default. ~1000x quieter than the row the slice codec
-            # copies, and it costs ~0.09 nats; kept to reproduce that regression.
-            nn.init.normal_(w, mean=0.0, std=0.02)
-        elif self.init == "unit":
-            # No constant anywhere: a column's norm is sqrt(model_dim) ~ 8.9,
-            # against 20 for the hand-built slot and 0.18 for "random". This is
-            # the default because it measured at parity -- the requirement is
-            # "loud enough", not "exactly logit_high".
-            nn.init.normal_(w, mean=0.0, std=math.sqrt(self.model_dim / self.width))
+        if self.init == "unit":
+            # N(0, 1), at every width. A column's norm is then sqrt(width): 8.9
+            # at the full 80, 2.2 at width 5. Each coordinate arrives at unit
+            # scale, which is what the pre-norm blocks see.
+            nn.init.normal_(w, mean=0.0, std=1.0)
         elif self.init == "scaled":
             # A column's norm is logit_high, i.e. the magnitude the stream gets
             # from the hand-built row. Works, but reads logit_high to do it.
@@ -458,9 +469,10 @@ class MLPEncoder(ValueEncoder):
     """A small network from the value row into the last `width` dimensions.
 
     Hidden layers carry a bias; the output layer does not, for the same reason
-    LinearEncoder has none. `init` is honoured as the same target magnitude the
-    linear encoder uses, measured on the output rather than read off a weight
-    distribution, since with a ReLU in the way it is not a closed form.
+    LinearEncoder has none. Every weight is N(0, 1) and every bias zero; with
+    "scaled" or "orthogonal" the output layer is then rescaled so a value
+    arrives at norm logit_high, measured rather than derived since with a ReLU
+    in the way it is not a closed form.
     """
 
     def __init__(self, *, model_dim: int, param_dim: int, global_param_dim: int,
@@ -486,19 +498,16 @@ class MLPEncoder(ValueEncoder):
         self._freeze = spec.freeze
 
     def initialize(self) -> None:
-        self._rescale_output(self._logit_high)
+        _normal_init(self.net)
+        if self.init != "unit":
+            self._rescale_output(self._logit_high)
         if self._freeze:
             for p in self.parameters():
                 p.requires_grad_(False)
 
     def _rescale_output(self, logit_high: float) -> None:
         """Scale the output layer so a point-mass value arrives at the target norm."""
-        target = {
-            "unit": math.sqrt(self.model_dim),
-            "scaled": float(logit_high),
-            "orthogonal": float(logit_high),
-            "random": 0.02 * math.sqrt(self.model_dim),
-        }[self.init]
+        target = float(logit_high)              # "scaled" / "orthogonal"
         with torch.no_grad():
             probe = torch.eye(self.param_dim)
             norm = float(self.net(probe).norm(dim=-1).mean())
@@ -523,6 +532,9 @@ class ValueDecoder(nn.Module, ABC):
     """
 
     num_values: int
+
+    def initialize(self) -> None:
+        """Draw any random init. Called once, after every codec is constructed."""
 
     @abstractmethod
     def forward(self, hidden: torch.Tensor) -> torch.Tensor:
@@ -565,15 +577,22 @@ class LinearDecoder(ValueDecoder):
         self.num_values = int(param_dim) - 1
         self.width = _resolve_width(spec, int(model_dim), int(global_param_dim))
         self.probe = nn.Linear(self.width, self.num_values)
-        if spec.init == "aligned":
+        self.init = spec.init
+        self._global_param_dim = int(global_param_dim)
+        self._freeze = spec.freeze
+
+    def initialize(self) -> None:
+        if self.init == "aligned":
             # The readout half of the aligned control: read the same slots the
             # aligned encoder wrote, with unit weight and no bias.
-            base = self.width - int(global_param_dim)
+            base = self.width - self._global_param_dim
             self.probe.weight.data.zero_()
             for j in range(self.num_values):
                 self.probe.weight.data[j, base + 1 + j] = 1.0
             self.probe.bias.data.zero_()
-        if spec.freeze:
+        else:
+            _normal_init(self.probe)
+        if self._freeze:
             for p in self.parameters():
                 p.requires_grad_(False)
 
@@ -599,7 +618,11 @@ class MLPDecoder(ValueDecoder):
             if i < len(widths) - 2:
                 layers.append(nn.ReLU())
         self.net = nn.Sequential(*layers)
-        if spec.freeze:
+        self._freeze = spec.freeze
+
+    def initialize(self) -> None:
+        _normal_init(self.net)
+        if self._freeze:
             for p in self.parameters():
                 p.requires_grad_(False)
 
@@ -704,6 +727,8 @@ def build_codecs(types: Mapping[str, Any], *, model_dim: int, global_param_dim: 
             logit_high=float(getattr(t, "logit_high", logit_high)))
     for codec in codecs.values():
         codec.encoder.initialize()
+    for codec in codecs.values():
+        codec.decoder.initialize()
     unknown = set(type_specs) - set(codecs)
     if unknown:
         known = ", ".join(sorted(codecs)) or "(none)"
@@ -767,7 +792,12 @@ def resolve_specs(config: Any) -> tuple:
     codec_init = getattr(config, "codec_init", None)
     codec_freeze = bool(getattr(config, "codec_freeze", False))
     if raw == "typed":
-        text = f"linear:init={codec_init or 'unit'}" + (",freeze" if codec_freeze else "")
+        # An old typed run may record the retired N(0, 0.02) init. Rebuilding it
+        # is only ever a prelude to loading its checkpoint, which overwrites
+        # every codec weight, so it is rebuilt with the N(0, 1) init instead.
+        # New training cannot ask for "random": train.py no longer offers it.
+        init = "unit" if codec_init in (None, "random") else codec_init
+        text = f"linear:init={init}" + (",freeze" if codec_freeze else "")
     else:
         if codec_freeze:
             raise ValueError("codec_freeze only applies to value_codec='typed'; with a "

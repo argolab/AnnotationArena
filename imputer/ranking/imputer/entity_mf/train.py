@@ -1038,7 +1038,7 @@ def main():
         help="Override --value-codec for one type, e.g. rating=mlp:hidden=64. Repeatable.",
     )
     parser.add_argument(
-        "--codec-init", choices=["random", "unit", "scaled", "orthogonal", "aligned"], default="unit",
+        "--codec-init", choices=["unit", "scaled", "orthogonal", "aligned"], default="unit",
         help=(
             "Legacy, --value-codec typed only: the same as 'linear:init=X'. A "
             "codec spec carries its own init."
