@@ -78,7 +78,13 @@ domain3_setup_env() {
         # shellcheck disable=SC1090
         source "${HOME}/.bashrc"
     fi
-    if command -v module >/dev/null 2>&1; then
+    # Only load the module when there is no conda on the PATH yet. Loading it
+    # over an active env re-points python: since the cluster's standard/2024.10
+    # module tree, anaconda3/2024.02-1 resolves to a different (spack intel)
+    # install whose python is put ahead of the env's, and every training then
+    # dies with "No module named 'torch'". RERUN's rerun_activate_env already
+    # guards the same way.
+    if ! command -v conda >/dev/null 2>&1 && command -v module >/dev/null 2>&1; then
         module load anaconda3/2024.02-1 >/dev/null 2>&1 || true
     fi
     if command -v conda >/dev/null 2>&1; then
