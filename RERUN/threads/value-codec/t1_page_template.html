@@ -1,0 +1,296 @@
+<title>Codec Width Sweep</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:opsz,wght@8..60,500;8..60,600&family=Public+Sans:wght@300;400;600&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+:root{
+  --ground:#F1F4F3; --surface:#FFFFFF; --sunken:#E6EBE9; --ink:#15201C; --ink-2:#4F5D57; --ink-3:#7E8B85;
+  --rule:#D3DCD8; --grid:#E7ECEA;
+  --train:#3D5A73; --dev:#B47A16; --test:#1E7B62; --estar:#A8432F;
+  --better:#2F7D4F; --worse:#A8432F; --better-bg:#DDEFE3; --worse-bg:#F5E0DA;
+  --display:"Source Serif 4",Georgia,"Times New Roman",serif;
+  --body:"Public Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"JetBrains Mono",ui-monospace,Menlo,Consolas,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  color-scheme:dark;
+  --ground:#111816; --surface:#18211E; --sunken:#202B27; --ink:#E4ECE8; --ink-2:#A9B8B1; --ink-3:#78877F;
+  --rule:#2B3833; --grid:#222D29;
+  --train:#7FA3C2; --dev:#D9A23F; --test:#45B595; --estar:#E07A63;
+  --better:#5DBB82; --worse:#E07A63; --better-bg:#173226; --worse-bg:#3A1F19;
+}}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#111816; --surface:#18211E; --sunken:#202B27; --ink:#E4ECE8; --ink-2:#A9B8B1; --ink-3:#78877F;
+  --rule:#2B3833; --grid:#222D29;
+  --train:#7FA3C2; --dev:#D9A23F; --test:#45B595; --estar:#E07A63;
+  --better:#5DBB82; --worse:#E07A63; --better-bg:#173226; --worse-bg:#3A1F19;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:var(--body);font-weight:300;font-size:16px;line-height:1.6;
+  margin:0;padding-inline:20px;padding-block:0 80px}
+.wrap{max-width:1120px;margin:0 auto;display:flex;flex-direction:column;gap:40px;padding-top:48px}
+h1{font-family:var(--display);font-weight:600;font-size:clamp(30px,5vw,44px);line-height:1.1;margin:0 0 14px;text-wrap:balance;letter-spacing:-.01em}
+h2{font-family:var(--display);font-weight:600;font-size:24px;line-height:1.25;margin:0 0 6px;text-wrap:balance}
+p{margin:0 0 12px;max-width:70ch}
+.lede{font-size:18px;color:var(--ink-2);max-width:66ch}
+.eyebrow{font-family:var(--mono);font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--test);margin:0 0 12px}
+.meta{display:flex;flex-wrap:wrap;gap:4px 20px;font-family:var(--mono);font-size:12px;color:var(--ink-3);margin-top:16px}
+.status{font-family:var(--mono);font-size:12.5px;color:var(--ink-2);background:var(--sunken);padding:8px 12px;border-radius:3px;align-self:flex-start}
+section{display:flex;flex-direction:column;gap:14px}
+.sub{color:var(--ink-2);font-size:15px}
+.mono,td,th{font-variant-numeric:tabular-nums}
+.controls{display:flex;flex-wrap:wrap;gap:10px 22px;align-items:center}
+.ctl{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ctl .lab{font-family:var(--mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+.seg{display:inline-flex;flex-wrap:wrap;border:1px solid var(--rule);border-radius:4px;overflow:hidden}
+.seg button{font-family:var(--mono);font-size:12.5px;padding:5px 10px;background:transparent;color:var(--ink-2);border:0;border-right:1px solid var(--rule);cursor:pointer}
+.seg button:last-child{border-right:0}
+.seg button[aria-pressed="true"]{background:var(--ink);color:var(--surface)}
+.seg button:focus-visible{outline:2px solid var(--test);outline-offset:-2px}
+.tablewrap{overflow-x:auto;background:var(--surface);border:1px solid var(--rule);border-radius:4px}
+table{border-collapse:collapse;width:100%;min-width:640px;font-size:13.5px}
+th,td{padding:8px 12px;text-align:right;border-bottom:1px solid var(--grid);white-space:nowrap}
+th:first-child,td:first-child{text-align:left}
+thead th{font-family:var(--mono);font-size:10.5px;letter-spacing:.07em;text-transform:uppercase;color:var(--ink-3);font-weight:400;border-bottom:1px solid var(--rule)}
+td{font-family:var(--mono);font-size:13px}
+td .w{display:block;font-size:11px;color:var(--ink-3)}
+td.better{background:var(--better-bg);color:var(--better)}
+td.worse{background:var(--worse-bg);color:var(--worse)}
+tr.group th{font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2);text-align:left;background:var(--sunken);font-weight:400}
+td.armname{font-family:var(--body);font-size:14px}
+td.armname small{color:var(--ink-3);margin-left:6px;font-size:12px}
+tr.ref td{color:var(--ink-2)}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:13px;color:var(--ink-2)}
+.legend span{display:inline-flex;align-items:center;gap:7px}
+.sw{width:20px;height:0;border-top:2.5px solid;flex:none}
+.gridwrap{overflow-x:auto}
+.grid{display:grid;grid-template-columns:118px repeat(4,minmax(170px,1fr));gap:8px;min-width:820px}
+.colhd{font-family:var(--mono);font-size:12px;color:var(--ink-2);align-self:end;padding:0 4px 2px}
+.colhd small{display:block;color:var(--ink-3);font-size:10.5px}
+.rowhd{font-size:13.5px;align-self:center;line-height:1.3}
+.rowhd small{display:block;color:var(--ink-3);font-family:var(--mono);font-size:10.5px}
+.grouphd{grid-column:1/-1;font-family:var(--mono);font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-2);border-top:1px solid var(--rule);padding-top:8px;margin-top:6px}
+.mini{background:var(--surface);border:1px solid var(--rule);border-radius:3px;padding:7px 8px 4px}
+.mini .hd{display:flex;justify-content:space-between;align-items:baseline;gap:6px;font-family:var(--mono);font-size:11.5px;margin-bottom:2px}
+.mini .hd .d{font-size:11px}
+.mini .hd .d.better{color:var(--better)} .mini .hd .d.worse{color:var(--worse)} .mini .hd .d.par{color:var(--ink-3)}
+.mini.empty{display:flex;align-items:center;justify-content:center;color:var(--ink-3);font-family:var(--mono);font-size:11px;min-height:120px}
+svg{display:block;width:100%;height:auto}
+.ax{font-family:var(--mono);font-size:8.5px;fill:var(--ink-3)}
+.notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px}
+.notes h3{font-size:15px;font-weight:600;margin:0 0 6px}
+.notes p{font-size:14.5px;color:var(--ink-2)}
+code{font-family:var(--mono);font-size:.88em;background:var(--sunken);padding:1px 5px;border-radius:2px}
+footer{color:var(--ink-3);font-size:13px;border-top:1px solid var(--rule);padding-top:16px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+
+<div class="wrap">
+<header>
+  <p class="eyebrow">Domain 3 &middot; value codec &middot; item axis, transductive</p>
+  <h1>Does a narrower codec trade overfitting for capacity?</h1>
+  <p class="lede">The learned linear codec writes a variable's value into the residual stream and reads its logits back out with a probe. Here it is confined to the last <em>T</em> of the stream's 80 dimensions, for T from 5 to 80, with and without the type centroids giving those dimensions up. Every arm is compared, run for run, against the hand-built dual stream.</p>
+  <div class="meta">
+    <span>K = 100, 300, 500, 1000 items</span>
+    <span>2 data draws &times; 3 model seeds</span>
+    <span>400 epochs &middot; chunk 500</span>
+    <span>metric: corner log-loss, nats</span>
+    <span>codec weights N(0, 1)</span>
+  </div>
+</header>
+
+<p class="status" id="status"></p>
+
+<section>
+  <h2>Against the dual stream</h2>
+  <p class="sub">Mean paired difference in test log-loss over six runs (two draws &times; three seeds), &plusmn; two standard errors. Negative is better than the dual stream. A cell is shaded only when the interval excludes zero. The small figure under each mean is the <strong>worst</strong> single run, which is where the codec's earlier failures showed up: the mean of 30 cells looked fine while one cell was 0.20 nats off.</p>
+  <div class="controls">
+    <div class="ctl"><span class="lab">test loss read at</span>
+      <div class="seg" id="metricSeg" role="group" aria-label="Which test loss to compare">
+        <button type="button" data-m="head" aria-pressed="true">dev-selected epoch</button>
+        <button type="button" data-m="tail" aria-pressed="false">last 5 checkpoints</button>
+      </div></div>
+  </div>
+  <div class="tablewrap"><table id="sumTable"></table></div>
+  <p class="sub" id="sumNote"></p>
+</section>
+
+<section>
+  <h2>Every run, drawn small</h2>
+  <p class="sub">One panel per arm and size. The slate line is the training objective, the ochre dashed line is the held-out dev split scored every epoch, and the teal points are test log-loss at each 25-epoch checkpoint. The vertical rule is the epoch the shipped selector picks from the dev curve. Each panel's title gives its test loss and, on the right, the difference from the dual stream. Panels in a column share one vertical scale, so overfitting can be compared down a column.</p>
+  <div class="controls">
+    <div class="ctl"><span class="lab">runs shown</span><div class="seg" id="runSeg" role="group" aria-label="Which runs to draw"></div></div>
+  </div>
+  <div class="legend">
+    <span><i class="sw" style="border-top-color:var(--train)"></i>training (masked cells)</span>
+    <span><i class="sw" style="border-top-color:var(--dev);border-top-style:dashed"></i>dev split</span>
+    <span><i class="sw" style="border-top-color:var(--test)"></i>test (corner)</span>
+    <span><i class="sw" style="border-top-color:var(--estar);border-top-width:1.5px"></i>dev-selected epoch</span>
+    <span><i class="sw" style="border-top-color:var(--ink-3);border-top-style:dotted;border-top-width:1.5px"></i>uniform, ln 4 = 1.386</span>
+  </div>
+  <div class="gridwrap"><div class="grid" id="grid"></div></div>
+</section>
+
+<section>
+  <h2>How it was run</h2>
+  <div class="notes">
+    <div><h3>The arms</h3><p><code>T = 80</code> is the full-width linear codec. Narrower arms project the value into the last T dimensions only, and the probe reads only those. In the <em>reserved</em> arms the type centroids and entity deviations are narrowed to 80 &minus; T, so nothing else writes into the codec's dimensions at layer 0. <code>T = 5, reserved</code> has exactly the dual stream's geometry, with the hand-built copy replaced by a learned map.</p></div>
+    <div><h3>Initialisation</h3><p>Every encoder and probe weight is drawn N(0, 1), biases zero. Each coordinate of a width-T code therefore has unit scale, so a narrow code is quieter in total than a wide one (norm &radic;T) and starts with smaller logits.</p></div>
+    <div><h3>The dev split and the selected epoch</h3><p>15% of observed training cells are hidden and scored every epoch (the mcar carve, split seed 7, identical in every arm). The selector is the shipped one: five-point centred smoothing, argmin, floor of 25 epochs. There is no refit, so every run trains on 85% of its observed training cells, in every arm alike.</p></div>
+    <div><h3>K = 100 has no dev curve</h3><p>At K = 100 the training partition is empty: every observed cell belongs to the test items, which transductive training conditions on. The carve finds nothing to hide, so those panels show training and test only, and their test loss is the mean of the last five checkpoints.</p></div>
+    <div><h3>The test number</h3><p>Corner log-loss: the test block's missing cells, scored with test items kept whole at evaluation chunk 500, the paper's population. At the dev-selected epoch it is interpolated on the 25-epoch checkpoint grid, as the early-stopping analysis did.</p></div>
+    <div><h3>What is not here</h3><p>K = 2000 and above, where the full-width codec previously matched the dual stream, are not in this sweep. Runs are 400 epochs at the final architecture (standard block, learned relational attention), not the 2000-epoch search the final run uses.</p></div>
+  </div>
+</section>
+
+<footer>Source: <code>RERUN/threads/value-codec/</code> on branch <code>side/value-encoding</code>: <code>arms_t1_width.json</code> (arms), <code>t1_score.py</code> (scoring), <code>t1_page.py</code> (this page).</footer>
+</div>
+
+<script>
+const P = /*PAYLOAD*/null;
+const NS = "http://www.w3.org/2000/svg";
+const el = (n, a = {}, txt) => { const e = document.createElementNS(NS, n); for (const k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; return e; };
+const h = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+const f3 = v => v == null ? "—" : v.toFixed(3);
+const sg = v => v == null ? "—" : (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(3);
+const LN4 = Math.log(4);
+const state = { metric: "head", run: "all" };
+const armInfo = Object.fromEntries(P.arms.map(([k, name, fam]) => [k, { name, fam }]));
+const groups = [["Reference", ["codec_dual"]],
+  ["Codec shares its dimensions with the centroids", ["lin_T80", "lin_T32", "lin_T16", "lin_T8", "lin_T5"]],
+  ["Codec reserves its dimensions", ["lin_T32_res", "lin_T16_res", "lin_T8_res", "lin_T5_res"]]];
+
+document.getElementById("status").textContent = P.nRuns >= P.expected
+  ? `All ${P.expected} runs scored.`
+  : `${P.nRuns} of ${P.expected} runs scored so far; cells and panels without runs are empty.`;
+
+function cls(s) {
+  if (!s || s.mean == null || s.se == null) return "";
+  if (s.mean - 2 * s.se > 0) return "worse";
+  if (s.mean + 2 * s.se < 0) return "better";
+  return "";
+}
+
+function drawTable() {
+  const t = document.getElementById("sumTable"); t.innerHTML = "";
+  const thead = h("thead"); const tr = h("tr");
+  tr.appendChild(h("th", null, "arm"));
+  P.sizes.forEach(K => tr.appendChild(h("th", null, `K = ${K}`)));
+  thead.appendChild(tr); t.appendChild(thead);
+  const tb = h("tbody");
+  for (const [g, arms] of groups) {
+    const gr = h("tr", "group"); const th = h("th", null, g); th.colSpan = 1 + P.sizes.length; gr.appendChild(th); tb.appendChild(gr);
+    for (const arm of arms) {
+      const r = h("tr", arm === "codec_dual" ? "ref" : "");
+      r.appendChild(h("td", "armname", `${armInfo[arm].name}${armInfo[arm].fam ? `<small>${armInfo[arm].fam}</small>` : ""}`));
+      for (const K of P.sizes) {
+        const s = P.summary[`${arm}|${K}|${state.metric}`];
+        let td;
+        if (arm === "codec_dual") td = h("td", null, s && s.level != null ? `${f3(s.level)}<span class="w">absolute, n=${s.n}</span>` : "—");
+        else if (!s || s.mean == null) td = h("td", null, "—");
+        else td = h("td", cls(s), `${sg(s.mean)} <span style="opacity:.75">&plusmn;${s.se != null ? (2 * s.se).toFixed(3) : "—"}</span><span class="w">worst ${sg(s.worst)} &middot; n=${s.n}</span>`);
+        r.appendChild(td);
+      }
+      tb.appendChild(r);
+    }
+  }
+  t.appendChild(tb);
+  document.getElementById("sumNote").textContent = state.metric === "head"
+    ? "At K = 100 there is no dev curve, so that column always uses the last five checkpoints."
+    : "Read at the last five checkpoints, with no selection: what a fixed 400-epoch budget gives.";
+}
+
+function shownRuns(arm, K) {
+  return P.runs.filter(r => r.arm === arm && r.K === K && (state.run === "all" || `${r.draw}-${r.seed}` === state.run));
+}
+
+// one vertical scale per column, from everything drawn in it, trimmed so one
+// diverging dev curve cannot flatten the other nine panels
+const colScale = {};
+function computeScales() {
+  for (const K of P.sizes) {
+    const vals = [];
+    P.runs.filter(r => r.K === K && (state.run === "all" || `${r.draw}-${r.seed}` === state.run)).forEach(r => {
+      r.train.forEach(p => vals.push(p[1])); r.dev.forEach(p => vals.push(p[1])); r.test.forEach(p => vals.push(p[1]));
+    });
+    if (!vals.length) { colScale[K] = [0.5, 1.6]; continue; }
+    vals.sort((a, b) => a - b);
+    const lo = vals[0], hi = Math.max(vals[Math.floor(vals.length * 0.985)], LN4 + 0.05);
+    const pad = (hi - lo) * 0.06;
+    colScale[K] = [lo - pad, hi + pad];
+  }
+}
+
+function panel(arm, K) {
+  const rs = shownRuns(arm, K);
+  if (!rs.length) { const e = h("div", "mini empty", "not yet scored"); return e; }
+  const box = h("div", "mini");
+  const W = 220, H = 118, m = { l: 26, r: 4, t: 4, b: 14 }, iw = W - m.l - m.r, ih = H - m.t - m.b;
+  const [lo, hi] = colScale[K];
+  const sx = e => m.l + (e / 400) * iw, sy = v => m.t + ih - ((Math.min(Math.max(v, lo), hi) - lo) / (hi - lo)) * ih;
+  const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, role: "img", "aria-label": `${armInfo[arm].name} ${armInfo[arm].fam} at K=${K}: training, dev and test curves` });
+  const clip = `c${arm}${K}`;
+  const defs = el("defs"); const cp = el("clipPath", { id: clip }); cp.appendChild(el("rect", { x: m.l, y: m.t, width: iw, height: ih, fill: "#000" })); defs.appendChild(cp); svg.appendChild(defs);
+  // grid + axis labels
+  const ticks = 3;
+  for (let i = 0; i <= ticks; i++) {
+    const v = lo + (hi - lo) * i / ticks, y = sy(v);
+    svg.appendChild(el("line", { x1: m.l, x2: m.l + iw, y1: y, y2: y, stroke: "var(--grid)", "stroke-width": 1 }));
+    svg.appendChild(el("text", { x: m.l - 3, y: y + 3, "text-anchor": "end", class: "ax", fill: "var(--ink-3)" }, v.toFixed(1)));
+  }
+  [0, 200, 400].forEach(e => svg.appendChild(el("text", { x: sx(e), y: H - 3, "text-anchor": e === 0 ? "start" : e === 400 ? "end" : "middle", class: "ax", fill: "var(--ink-3)" }, e)));
+  if (LN4 > lo && LN4 < hi) svg.appendChild(el("line", { x1: m.l, x2: m.l + iw, y1: sy(LN4), y2: sy(LN4), stroke: "var(--ink-3)", "stroke-width": 1, "stroke-dasharray": "1.5 2.5" }));
+  const g = el("g", { "clip-path": `url(#${clip})` }); svg.appendChild(g);
+  const single = rs.length === 1, op = single ? 1 : 0.55, sw = single ? 1.6 : 0.9;
+  const line = (pts, color, dash, w, o) => { if (!pts.length) return;
+    g.appendChild(el("path", { d: pts.map((p, i) => (i ? "L" : "M") + sx(p[0]).toFixed(1) + " " + sy(p[1]).toFixed(1)).join(" "),
+      fill: "none", stroke: color, "stroke-width": w, "stroke-dasharray": dash || "none", opacity: o, "stroke-linejoin": "round" })); };
+  for (const r of rs) {
+    line(r.train, "var(--train)", null, sw, op);
+    line(r.dev, "var(--dev)", "3 2", sw, op);
+    line(r.test, "var(--test)", null, sw, op);
+    if (single) r.test.forEach(p => g.appendChild(el("circle", { cx: sx(p[0]), cy: sy(p[1]), r: 1.8, fill: "var(--test)" })));
+    if (r.eStar != null) g.appendChild(el("line", { x1: sx(r.eStar), x2: sx(r.eStar), y1: m.t, y2: m.t + ih, stroke: "var(--estar)", "stroke-width": single ? 1.2 : 0.7, opacity: single ? 0.9 : 0.45 }));
+  }
+  // title: test loss and the paired difference from the dual stream
+  let loss, delta;
+  if (single) {
+    const r = rs[0]; loss = r.head;
+    const ref = P.runs.find(x => x.arm === "codec_dual" && x.K === K && x.draw === r.draw && x.seed === r.seed);
+    delta = ref && arm !== "codec_dual" ? r.head - ref.head : null;
+  } else {
+    const s = P.summary[`${arm}|${K}|head`]; loss = s.level; delta = arm !== "codec_dual" ? s.mean : null;
+  }
+  const s = P.summary[`${arm}|${K}|head`];
+  const dcls = delta == null ? "par" : single ? (Math.abs(delta) < 0.015 ? "par" : delta > 0 ? "worse" : "better") : (cls(s) || "par");
+  const hd = h("div", "hd", `<span>test ${f3(loss)}</span><span class="d ${dcls}">${delta == null ? (arm === "codec_dual" ? "reference" : "") : "Δ " + sg(delta)}</span>`);
+  box.appendChild(hd); box.appendChild(svg);
+  return box;
+}
+
+function drawGrid() {
+  computeScales();
+  const grid = document.getElementById("grid"); grid.innerHTML = "";
+  grid.appendChild(h("div"));
+  P.sizes.forEach(K => grid.appendChild(h("div", "colhd", `K = ${K}<small>${K === 100 ? "no dev split; test is tail-averaged" : "test at the dev-selected epoch"}</small>`)));
+  for (const [g, arms] of groups) {
+    grid.appendChild(h("div", "grouphd", g));
+    for (const arm of arms) {
+      grid.appendChild(h("div", "rowhd", `${armInfo[arm].name}${armInfo[arm].fam ? `<small>${armInfo[arm].fam}</small>` : ""}`));
+      P.sizes.forEach(K => grid.appendChild(panel(arm, K)));
+    }
+  }
+}
+
+function seg(id, items, key, redraw) {
+  const s = document.getElementById(id);
+  if (!s.children.length) items.forEach(([v, label]) => { const b = h("button", null, label); b.type = "button"; b.dataset.v = v; s.appendChild(b); });
+  [...s.children].forEach(b => {
+    b.setAttribute("aria-pressed", String((b.dataset.v || b.dataset.m) === state[key]));
+    b.onclick = () => { state[key] = b.dataset.v || b.dataset.m; seg(id, items, key, redraw); redraw(); };
+  });
+}
+const runIds = [...new Set(P.runs.map(r => `${r.draw}-${r.seed}`))].sort();
+seg("runSeg", [["all", "all six"], ...runIds.map(r => [r, r.replace("-", " · seed ")])], "run", drawGrid);
+seg("metricSeg", [], "metric", drawTable);
+drawTable(); drawGrid();
+</script>
