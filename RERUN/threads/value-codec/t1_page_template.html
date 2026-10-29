@@ -76,6 +76,9 @@ tr.ref td{color:var(--ink-2)}
 .mini.empty{display:flex;align-items:center;justify-content:center;color:var(--ink-3);font-family:var(--mono);font-size:11px;min-height:120px}
 svg{display:block;width:100%;height:auto}
 .ax{font-family:var(--mono);font-size:8.5px;fill:var(--ink-3)}
+.findings ul{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:10px;max-width:76ch}
+.findings li{color:var(--ink-2)}
+.findings li strong{color:var(--ink);font-weight:600}
 .notes{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:20px}
 .notes h3{font-size:15px;font-weight:600;margin:0 0 6px}
 .notes p{font-size:14.5px;color:var(--ink-2)}
@@ -99,6 +102,25 @@ footer{color:var(--ink-3);font-size:13px;border-top:1px solid var(--rule);paddin
 </header>
 
 <p class="status" id="status"></p>
+
+<section class="findings">
+  <h2>What the sweep shows</h2>
+  <ul>
+    <li><strong>No width beats the dual stream at any size.</strong> The best arms are T = 5 and T = 8: at parity at K = 100 (&minus;0.03 &plusmn; 0.04 nats) and 0.03 to 0.09 nats worse from K = 300 up. Full width (T = 80) is 0.22 to 0.29 nats worse at every K.</li>
+    <li><strong>Narrowing does reduce overfitting.</strong> From its best checkpoint to epoch 400, test loss rises 0.07 to 0.19 nats at T = 80 and 0.01 to 0.07 at T = 5. The dual stream rises 0.01 to 0.02 from K = 300 up and 0.12 at K = 100.</li>
+    <li><strong>The width comparison is confounded by the probe's initialisation.</strong> With every probe weight drawn N(0, 1), the starting logits grow with &radic;T, so a wide codec starts badly over-confident: training loss at the first epoch is 20 nats at T = 80, 6 at T = 8, 4 at T = 5, and 1.6 for the dual stream. Every codec arm is still well behind at epoch 100, and T = 80's <em>training</em> minimum stays above the dual stream's. The wide codec is spending its budget recovering from a saturated start, not overfitting. Part of &ldquo;narrower is better&rdquo; is therefore &ldquo;starts less saturated&rdquo;.</li>
+    <li><strong>Reserving the dimensions has no consistent effect</strong> on the mean, in either direction.</li>
+    <li><strong>The single-run failures are still there.</strong> The worst run in a cell is 0.5 to 1.0 nats off in several cells (T = 16 at K = 500: +1.02), the same seed-dependent blow-up the earlier codec runs showed.</li>
+    <li><strong>Earlier full-width runs disagree with this one.</strong> With PyTorch's default probe initialisation, the full-width codec was at parity at K = 2000 and 0.015 nats worse on average at K &le; 300 (threads B10, B11). Here it is 0.25 worse. The probe's initialisation is the leading suspect for that gap.</li>
+  </ul>
+</section>
+
+<section>
+  <h2>How far behind each arm starts</h2>
+  <p class="sub">Mean of six runs. Training loss at the first epoch, the lowest training loss reached, and test loss at the first checkpoints and at its best. The codec arms start over-confident in proportion to their width and are still catching up a hundred epochs in.</p>
+  <div class="controls"><div class="ctl"><span class="lab">size</span><div class="seg" id="startSeg" role="group" aria-label="Training size for the start-of-training table"></div></div></div>
+  <div class="tablewrap"><table id="startTable"></table></div>
+</section>
 
 <section>
   <h2>Against the dual stream</h2>
@@ -153,7 +175,7 @@ const h = (tag, cls, html) => { const e = document.createElement(tag); if (cls) 
 const f3 = v => v == null ? "—" : v.toFixed(3);
 const sg = v => v == null ? "—" : (v >= 0 ? "+" : "−") + Math.abs(v).toFixed(3);
 const LN4 = Math.log(4);
-const state = { metric: "head", run: "all" };
+const state = { metric: "head", run: "all", K: "300" };
 const armInfo = Object.fromEntries(P.arms.map(([k, name, fam]) => [k, { name, fam }]));
 const groups = [["Reference", ["codec_dual"]],
   ["Codec shares its dimensions with the centroids", ["lin_T80", "lin_T32", "lin_T16", "lin_T8", "lin_T5"]],
@@ -208,13 +230,16 @@ function shownRuns(arm, K) {
 const colScale = {};
 function computeScales() {
   for (const K of P.sizes) {
-    const vals = [];
+    // The first epochs start near 2.8 nats and would claim most of the axis;
+    // leave them out so the region where overfitting shows (0.7-1.5) is legible.
+    const all = [], held = [];
     P.runs.filter(r => r.K === K && (state.run === "all" || `${r.draw}-${r.seed}` === state.run)).forEach(r => {
-      r.train.forEach(p => vals.push(p[1])); r.dev.forEach(p => vals.push(p[1])); r.test.forEach(p => vals.push(p[1]));
+      r.train.forEach(p => { if (p[0] >= 20) all.push(p[1]); });
+      r.dev.concat(r.test).forEach(p => { if (p[0] >= 20) { all.push(p[1]); held.push(p[1]); } });
     });
-    if (!vals.length) { colScale[K] = [0.5, 1.6]; continue; }
-    vals.sort((a, b) => a - b);
-    const lo = vals[0], hi = Math.max(vals[Math.floor(vals.length * 0.985)], LN4 + 0.05);
+    if (!all.length) { colScale[K] = [0.5, 1.6]; continue; }
+    all.sort((a, b) => a - b); held.sort((a, b) => a - b);
+    const lo = all[0], hi = Math.max(held[Math.floor((held.length - 1) * 0.97)], LN4 + 0.08);
     const pad = (hi - lo) * 0.06;
     colScale[K] = [lo - pad, hi + pad];
   }
@@ -292,5 +317,26 @@ function seg(id, items, key, redraw) {
 const runIds = [...new Set(P.runs.map(r => `${r.draw}-${r.seed}`))].sort();
 seg("runSeg", [["all", "all six"], ...runIds.map(r => [r, r.replace("-", " · seed ")])], "run", drawGrid);
 seg("metricSeg", [], "metric", drawTable);
-drawTable(); drawGrid();
+
+const startState = { get K() { return Number(state.K); } };
+function drawStart() {
+  const t = document.getElementById("startTable"); t.innerHTML = "";
+  const hd = h("thead"); const tr = h("tr");
+  ["arm", "train, epoch 0", "train, lowest", "test @ 25", "test @ 50", "test @ 100", "test, best"].forEach(x => tr.appendChild(h("th", null, x)));
+  hd.appendChild(tr); t.appendChild(hd);
+  const tb = h("tbody"); const mean = a => a.reduce((x, y) => x + y, 0) / a.length;
+  for (const [g, arms] of groups) for (const arm of arms) {
+    const rs = P.runs.filter(r => r.arm === arm && r.K === startState.K); if (!rs.length) continue;
+    const at = e => mean(rs.map(r => (r.test.find(p => p[0] === e) || [0, NaN])[1]));
+    const r = h("tr", arm === "codec_dual" ? "ref" : "");
+    r.appendChild(h("td", "armname", `${armInfo[arm].name}${armInfo[arm].fam ? `<small>${armInfo[arm].fam}</small>` : ""}`));
+    [mean(rs.map(r => r.train[0][1])), mean(rs.map(r => Math.min(...r.train.map(p => p[1])))), at(25), at(50), at(100), mean(rs.map(r => r.best))]
+      .forEach((v, i) => r.appendChild(h("td", null, i === 0 ? v.toFixed(2) : v.toFixed(3))));
+    tb.appendChild(r);
+  }
+  t.appendChild(tb);
+}
+
+seg("startSeg", P.sizes.map(K => [String(K), `K = ${K}`]), "K", drawStart);
+drawTable(); drawGrid(); drawStart();
 </script>
